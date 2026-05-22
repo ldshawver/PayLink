@@ -210,7 +210,7 @@ export function isWorkerRole(role: string): boolean {
  */
 export function canAccessPlatformConsole(
   role: string | null | undefined,
-  _companyId?: number | null | undefined,
+  _companyId?: string | number | null | undefined,
 ): boolean {
   if (!role) return false;
   return isPlatformRole(role);

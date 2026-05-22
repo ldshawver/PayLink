@@ -1126,6 +1126,34 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // AI App Doctor reports table
+    await run("app_doctor_reports table", sql`CREATE TABLE IF NOT EXISTS app_doctor_reports (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      user_id VARCHAR,
+      source TEXT NOT NULL DEFAULT 'runtime',
+      severity TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'open',
+      title TEXT NOT NULL,
+      error_message TEXT NOT NULL,
+      stack_trace TEXT,
+      route TEXT,
+      context_json TEXT,
+      fingerprint TEXT,
+      occurrence_count INTEGER NOT NULL DEFAULT 1,
+      ai_summary TEXT,
+      ai_root_cause TEXT,
+      ai_suggested_fix TEXT,
+      ai_patch TEXT,
+      recommended_files TEXT,
+      risk_level TEXT,
+      pr_url TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("app_doctor_reports fingerprint index", sql`CREATE INDEX IF NOT EXISTS idx_app_doctor_reports_fingerprint ON app_doctor_reports(company_id, fingerprint)`);
+    await run("app_doctor_reports company index", sql`CREATE INDEX IF NOT EXISTS idx_app_doctor_reports_company ON app_doctor_reports(company_id, created_at DESC)`);
+
     // Portal access tokens table
     await run("payment_method_configs table", sql`CREATE TABLE IF NOT EXISTS payment_method_configs (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -84,6 +84,7 @@ const MyFeedbackPage = lazy(() => import("@/pages/MyFeedbackPage"));
 const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
+const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
   return (
@@ -191,6 +192,7 @@ function AuthenticatedRouter() {
         <Route path="/app/kpi-goals">{() => <RoleGuard roles={["admin", "manager"]}><KpiGoalsPage /></RoleGuard>}</Route>
         <Route path="/app/mfa-settings" component={MfaSettingsPage} />
         <Route path="/app/privacy-audit-log">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><PrivacyAuditLogPage /></StrictRoleGuard>}</Route>
+        <Route path="/app/app-doctor">{() => <RoleGuard roles={["admin", "manager"]}><AppDoctorPage /></RoleGuard>}</Route>
         <Route path="/app/feedback-admin">{() => <RoleGuard roles={["admin", "manager"]}><FeedbackAdminPage /></RoleGuard>}</Route>
         <Route path="/app/my-feedback" component={MyFeedbackPage} />
         <Route component={NotFound} />
@@ -252,6 +254,7 @@ function AuthenticatedLayout() {
 
   return (
     <>
+      <RuntimeErrorReporter />
       <SidebarProvider style={style as React.CSSProperties}>
         <div className="flex h-screen w-full overflow-hidden">
           <AppSidebar />
@@ -270,6 +273,59 @@ function AuthenticatedLayout() {
       <FeedbackButton />
     </>
   );
+}
+
+function RuntimeErrorReporter() {
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (!user) return;
+    const sent = new Set<string>();
+    const postReport = (payload: Record<string, any>) => {
+      const message = String(payload.message || "");
+      const key = `${payload.source}:${message.slice(0, 180)}:${payload.route || window.location.pathname}`;
+      if (sent.has(key)) return;
+      sent.add(key);
+      fetch("/api/app-doctor/reports", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          severity: "high",
+          route: window.location.pathname + window.location.search,
+          context: { userAgent: navigator.userAgent, url: window.location.href },
+          ...payload,
+        }),
+      }).catch(() => {});
+    };
+
+    const onError = (event: ErrorEvent) => {
+      postReport({
+        source: "frontend_runtime",
+        title: event.message || "Frontend runtime error",
+        message: event.message || "Frontend runtime error",
+        stack: event.error?.stack || null,
+      });
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason: any = event.reason;
+      postReport({
+        source: "frontend_unhandled_rejection",
+        title: reason?.message || "Unhandled promise rejection",
+        message: reason?.message || String(reason || "Unhandled promise rejection"),
+        stack: reason?.stack || null,
+      });
+    };
+
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
+  }, [user]);
+
+  return null;
 }
 
 // ─── Platform Console Router & Layout ────────────────────────────────────────

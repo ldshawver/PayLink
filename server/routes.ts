@@ -954,7 +954,7 @@ export async function registerRoutes(
     console.error("[MIGRATION] Payroll lifecycle migration error:", migErr);
   }
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -4701,11 +4701,19 @@ export async function registerRoutes(
 
   // ── Stripe Treasury Routes ─────────────────────────────────────────────────
 
+  async function resolveTreasuryCompanyId(req: Request, source: "query" | "body" = "query"): Promise<{ companyId: string | null; user: any }> {
+    const user = await storage.getUser(req.session.userId!);
+    const requestedCompanyId = source === "body" ? req.body?.companyId : req.query.companyId;
+    const requested = Array.isArray(requestedCompanyId) ? requestedCompanyId[0] : requestedCompanyId;
+    const companyId = isPlatformUser(user?.role) ? (requested || user?.companyId || null) : (user?.companyId || null);
+    return { companyId, user };
+  }
+
   app.get("/api/treasury/status", requireAuth, requireRole("admin"), requireFeature("tenant.finance.treasury"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return res.status(400).json({ message: "No company associated with this account" });
-      const company = await storage.getCompany(user.companyId);
+      const { companyId } = await resolveTreasuryCompanyId(req);
+      if (!companyId) return res.status(400).json({ message: "No company associated with this account. Platform admins must select a company." });
+      const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
 
       const { getOrCreateFinancialAccount } = await import("./treasury.js");
@@ -4725,9 +4733,8 @@ export async function registerRoutes(
 
   app.post("/api/treasury/setup", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      // Platform admins may pass a companyId in the request body; company admins use their own
-      const companyId = isPlatformUser(user?.role) ? (req.body?.companyId || user?.companyId) : user?.companyId;
+      // Platform admins may pass a companyId in the request body; company admins use their own.
+      const { companyId } = await resolveTreasuryCompanyId(req, "body");
       if (!companyId) {
         return res.status(400).json({
           message: "No company associated with this account. Platform admins must pass a companyId in the request body."
@@ -4769,10 +4776,10 @@ export async function registerRoutes(
 
   app.get("/api/treasury/transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return res.status(400).json({ message: "No company" });
+      const { companyId } = await resolveTreasuryCompanyId(req);
+      if (!companyId) return res.status(400).json({ message: "No company associated with this account. Platform admins must select a company." });
       const payrollRunId = req.query.payrollRunId as string | undefined;
-      const transactions = await storage.getTreasuryOutboundPayments(user.companyId, payrollRunId);
+      const transactions = await storage.getTreasuryOutboundPayments(companyId, payrollRunId);
       res.json(transactions);
     } catch (error: any) {
       console.error("Treasury transactions error:", error);
@@ -4782,9 +4789,9 @@ export async function registerRoutes(
 
   app.post("/api/treasury/sync", requireAuth, requireRole("admin"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return res.status(400).json({ message: "No company" });
-      const company = await storage.getCompany(user.companyId);
+      const { companyId } = await resolveTreasuryCompanyId(req, "body");
+      if (!companyId) return res.status(400).json({ message: "No company associated with this account. Platform admins must select a company." });
+      const company = await storage.getCompany(companyId);
       if (!company?.stripeFinancialAccountId) return res.status(400).json({ message: "Treasury not set up" });
 
       const { listOutboundPayments } = await import("./treasury.js");
@@ -9288,15 +9295,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           messages: [{
             role: "user",
             content: [
-              { type: "text", text: "Extract from this receipt/invoice: vendor name, date (YYYY-MM-DD), subtotal, tax amount, total amount, payment method, individual line items (description, quantity, unit price, total). Also suggest a category from: Office Supplies, Materials, Tools & Equipment, Travel, Lodging, Meals, Mileage, Fuel, Software & Subscriptions, Marketing & Advertising, Professional Services, Permits & Fees, Shipping & Postage, Utilities, Phone & Internet, Training & Education, Client Expense, Project Expense, Repair & Maintenance, Other. Return JSON: { vendor, date, subtotal, taxAmount, totalAmount, paymentMethod, category, lineItems: [{ description, quantity, unitPrice, total }], confidence }." },
-              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+              { type: "text", text: "Read the uploaded receipt or invoice image and extract only visible facts. Return strict JSON with this shape: { \"vendor\": string|null, \"date\": \"YYYY-MM-DD\"|null, \"subtotal\": number|null, \"taxAmount\": number|null, \"totalAmount\": number|null, \"amount\": number|null, \"paymentMethod\": string|null, \"category\": string|null, \"description\": string|null, \"businessPurpose\": string|null, \"lineItems\": [{ \"description\": string, \"quantity\": number|null, \"unitPrice\": number|null, \"total\": number|null }], \"confidence\": number }. Pick category from: Office Supplies, Materials, Tools & Equipment, Travel, Lodging, Meals, Mileage, Fuel, Software & Subscriptions, Marketing & Advertising, Professional Services, Permits & Fees, Shipping & Postage, Utilities, Phone & Internet, Training & Education, Client Expense, Project Expense, Repair & Maintenance, Other. Use null for unreadable fields; do not guess totals." },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}`, detail: "high" } },
             ],
           }],
+          response_format: { type: "json_object" },
           max_tokens: 1500,
         }),
       });
 
       const result: any = await response.json();
+      if (!response.ok) {
+        console.error("AI scan OpenAI error:", result);
+        return res.status(502).json({ message: result?.error?.message || "AI extraction provider failed" });
+      }
       const content = result.choices?.[0]?.message?.content || "{}";
       let extracted;
       try {
@@ -9849,7 +9861,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Resolve payee name from worker if not supplied
       const workerRow = pgRow<any>(await db.execute(sql`
-        SELECT u.username, u.first_name, u.last_name FROM workers w
+        SELECT u.username, w.first_name, w.last_name FROM workers w
         LEFT JOIN users u ON u.worker_id = w.id
         WHERE w.id = ${inv.contractor_id} LIMIT 1
       `));
@@ -12044,8 +12056,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const { name, signatureData, role } = req.body;
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.worker_id || null;
+      const wRes = await db.execute(sql`SELECT worker_id, email, company_id FROM users WHERE id = ${req.session.userId}`);
+      const currentUserRow = wRes.rows[0] as any;
+      const workerId = currentUserRow?.worker_id || null;
+      const currentUserCompanyId = currentUserRow?.company_id || null;
+      const currentUserEmail = typeof currentUserRow?.email === "string" ? currentUserRow.email.trim().toLowerCase() : null;
 
       const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contract = contractRes.rows[0] as any;
@@ -12067,6 +12082,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const registeredSignerRes = await db.execute(sql`
         SELECT id FROM contract_signers
         WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+        UNION ALL
+        SELECT id FROM contract_signers
+        WHERE contract_id = ${req.params.id}
+          AND status = 'pending'
+          AND email IS NOT NULL
+          AND lower(email) = ${currentUserEmail}
+          AND ${currentUserEmail} IS NOT NULL
+          AND (${currentUserCompanyId} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id})
+        LIMIT 1
       `);
       const registeredSigner = registeredSignerRes.rows[0] as any;
 
@@ -12076,8 +12100,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       let signer;
       if (registeredSigner) {
-        // Update existing registered signer record
-        const updated = await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${signatureData || null}, ip_address = ${req.ip || null} WHERE id = ${registeredSigner.id} RETURNING *`);
+        // Update existing registered signer record. If the signer was invited by
+        // email only, bind the signature back to the authenticated user.
+        const updated = await db.execute(sql`
+          UPDATE contract_signers
+          SET status = 'signed',
+              signed_at = NOW(),
+              signature_data = ${signatureData || null},
+              ip_address = ${req.ip || null},
+              user_id = COALESCE(user_id, ${req.session.userId}),
+              worker_id = COALESCE(worker_id, ${workerId})
+          WHERE id = ${registeredSigner.id}
+          RETURNING *
+        `);
         signer = updated.rows[0];
       } else {
         // Insert new signer record (contractor or company admin signing without pre-registration)
@@ -21657,6 +21692,219 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // ══════════════════════════════════════════════════════════════════════
+  // AI APP DOCTOR
+  // Captures runtime errors, asks AI for a safe diagnosis/proposed patch,
+  // and notifies tenant admins/owners for review. It does not auto-deploy.
+  // ══════════════════════════════════════════════════════════════════════
+  async function notifyAppDoctorReviewers(companyId: string, reportId: string, title: string, severity: string) {
+    const actionUrl = `/app/app-doctor?id=${reportId}`;
+    await db.execute(sql`
+      INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read)
+      SELECT ${companyId}, u.id, 'app_doctor_review',
+             ${`AI App Doctor: ${title}`},
+             ${`A ${severity} issue was detected. Review the AI diagnosis and proposed fix before creating or pushing a PR.`},
+             ${actionUrl}, FALSE
+      FROM users u
+      WHERE u.company_id = ${companyId}
+        AND u.role IN ('admin','tenant_owner','tenant_admin','tenant_finance_admin','platform_admin','platform_super_admin')
+      LIMIT 20
+    `);
+  }
+
+  async function analyzeAppDoctorReport(reportId: string): Promise<any | null> {
+    const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+    if (!report) return null;
+
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const xaiApiKey = process.env.XAI_API_KEY;
+    const aiApiKey = openaiApiKey || xaiApiKey;
+    if (!aiApiKey) {
+      await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET status = 'needs_ai_config',
+            ai_summary = 'AI analysis is unavailable because OPENAI_API_KEY or XAI_API_KEY is not configured.',
+            updated_at = NOW()
+        WHERE id = ${reportId}
+      `);
+      return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+    }
+
+    const { default: OpenAI } = await import("openai");
+    const useXai = !openaiApiKey && !!xaiApiKey;
+    const openai = new OpenAI({
+      apiKey: aiApiKey,
+      ...(useXai ? { baseURL: "https://api.x.ai/v1" } : {}),
+    });
+    const model = process.env.APP_DOCTOR_MODEL || (useXai ? "grok-3-mini" : "gpt-4o-mini");
+
+    const completion = await openai.chat.completions.create({
+      model,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: "You are MyPayLink's AI App Doctor. Diagnose payroll/HR/finance SaaS runtime errors safely. Never recommend auto-deploying changes. Return strict JSON only.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            task: "Diagnose this app error and propose a safe code fix for human review.",
+            safetyRules: [
+              "Do not claim the fix was applied.",
+              "Do not recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls.",
+              "If more information is needed, say what logs/files/tests to inspect.",
+              "Patch text may be pseudocode or a focused diff suggestion, but must be reviewable by an engineer.",
+            ],
+            expectedJson: {
+              summary: "short user-facing diagnosis",
+              rootCause: "likely technical cause",
+              suggestedFix: "what should change",
+              proposedPatch: "reviewable patch/diff/pseudocode",
+              recommendedFiles: ["paths to inspect or change"],
+              testsToRun: ["commands or flows"],
+              riskLevel: "low|medium|high|critical",
+            },
+            report: {
+              source: report.source,
+              severity: report.severity,
+              title: report.title,
+              errorMessage: report.error_message,
+              stackTrace: report.stack_trace,
+              route: report.route,
+              context: report.context_json,
+              occurrenceCount: report.occurrence_count,
+            },
+          }),
+        },
+      ],
+      temperature: 0.2,
+      max_tokens: 1800,
+    });
+
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
+    } catch {
+      parsed = { summary: completion.choices?.[0]?.message?.content || "AI returned an unreadable response." };
+    }
+
+    await db.execute(sql`
+      UPDATE app_doctor_reports
+      SET status = 'ai_review_ready',
+          ai_summary = ${parsed.summary || null},
+          ai_root_cause = ${parsed.rootCause || null},
+          ai_suggested_fix = ${parsed.suggestedFix || null},
+          ai_patch = ${parsed.proposedPatch || null},
+          recommended_files = ${JSON.stringify({ files: parsed.recommendedFiles || [], tests: parsed.testsToRun || [] })},
+          risk_level = ${parsed.riskLevel || null},
+          updated_at = NOW()
+      WHERE id = ${reportId}
+    `);
+
+    return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+  }
+
+  app.get("/api/app-doctor/reports", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const companyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
+      if (!companyId && !isPlatformUser(user?.role)) return res.status(400).json({ message: "No company context" });
+      const rows = companyId
+        ? pgRows<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE company_id = ${companyId} ORDER BY created_at DESC LIMIT 100`))
+        : pgRows<any>(await db.execute(sql`SELECT * FROM app_doctor_reports ORDER BY created_at DESC LIMIT 100`));
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch App Doctor reports") });
+    }
+  });
+
+  app.post("/api/app-doctor/reports", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = req.body?.companyId || user?.companyId || null;
+      const rawMessage = String(req.body?.message || req.body?.errorMessage || "Unknown app error").slice(0, 4000);
+      const stackTrace = req.body?.stack ? String(req.body.stack).slice(0, 12000) : null;
+      const route = req.body?.route ? String(req.body.route).slice(0, 500) : null;
+      const source = req.body?.source ? String(req.body.source).slice(0, 80) : "runtime";
+      const severity = ["low", "medium", "high", "critical"].includes(req.body?.severity) ? req.body.severity : "medium";
+      const title = String(req.body?.title || rawMessage.split("\n")[0] || "Runtime error").slice(0, 240);
+      const fingerprint = crypto.createHash("sha256").update([companyId || "platform", source, route || "", rawMessage.slice(0, 800), stackTrace?.slice(0, 1200) || ""].join("|")).digest("hex");
+
+      let report = pgRow<any>(await db.execute(sql`
+        SELECT * FROM app_doctor_reports
+        WHERE fingerprint = ${fingerprint}
+          AND (${companyId}::varchar IS NULL OR company_id = ${companyId})
+        ORDER BY created_at DESC
+        LIMIT 1
+      `));
+
+      if (report) {
+        report = pgRow<any>(await db.execute(sql`
+          UPDATE app_doctor_reports
+          SET occurrence_count = occurrence_count + 1,
+              updated_at = NOW(),
+              status = CASE WHEN status = 'reviewed' THEN 'reopened' ELSE status END
+          WHERE id = ${report.id}
+          RETURNING *
+        `));
+      } else {
+        report = pgRow<any>(await db.execute(sql`
+          INSERT INTO app_doctor_reports
+            (company_id, user_id, source, severity, status, title, error_message, stack_trace, route, context_json, fingerprint)
+          VALUES
+            (${companyId}, ${req.session.userId || null}, ${source}, ${severity}, 'open', ${title}, ${rawMessage}, ${stackTrace}, ${route}, ${JSON.stringify(req.body?.context || {})}, ${fingerprint})
+          RETURNING *
+        `));
+      }
+
+      if (companyId && report?.id) {
+        await notifyAppDoctorReviewers(companyId, report.id, title, severity).catch((err) => console.error("[AppDoctor] notify failed:", err));
+      }
+
+      if (req.body?.autoAnalyze !== false && report?.id) {
+        analyzeAppDoctorReport(report.id).catch((err) => console.error("[AppDoctor] AI analysis failed:", err));
+      }
+
+      res.status(report?.occurrence_count > 1 ? 200 : 201).json(report);
+    } catch (e: any) {
+      console.error("[AppDoctor] report failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create App Doctor report") });
+    }
+  });
+
+  app.post("/api/app-doctor/reports/:id/analyze", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const report = await analyzeAppDoctorReport(String(req.params.id));
+      if (!report) return res.status(404).json({ message: "Report not found" });
+      res.json(report);
+    } catch (e: any) {
+      console.error("[AppDoctor] analyze failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "AI analysis failed") });
+    }
+  });
+
+  app.patch("/api/app-doctor/reports/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const reportId = String(req.params.id);
+      const { status, prUrl } = req.body || {};
+      const allowedStatus = ["open", "ai_review_ready", "reviewed", "pr_requested", "fixed", "ignored", "reopened"];
+      const result = pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET status = COALESCE(${allowedStatus.includes(status) ? status : null}, status),
+            pr_url = COALESCE(${prUrl || null}, pr_url),
+            updated_at = NOW()
+        WHERE id = ${reportId}
+        RETURNING *
+      `));
+      if (!result) return res.status(404).json({ message: "Report not found" });
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to update App Doctor report") });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
   // VENDOR PORTAL (PUBLIC - no auth required, token-based)
   // ══════════════════════════════════════════════════════════════════════
   app.post("/api/portal/generate-token", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
@@ -30795,15 +31043,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           if (!adminEmail && proposal.company_id) {
             const adminRes = await db.execute(sql`
               SELECT u.email,
-                     COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') AS full_name
+                     COALESCE(w.first_name, '') || ' ' || COALESCE(w.last_name, '') AS full_name
               FROM users u
+              LEFT JOIN workers w ON w.id = u.worker_id
               WHERE u.company_id = ${proposal.company_id}
                 AND u.role IN ('admin', 'tenant_admin', 'tenant_owner')
                 AND u.email IS NOT NULL
               ORDER BY u.created_at ASC
               LIMIT 1
             `);
-            const adminRow = firstRow<{ email: string; full_name: string }>(adminRes);
+            const adminRow = firstRow<{ email: string; full_name: string }>(adminRes as any);
             if (adminRow?.email) {
               adminEmail = adminRow.email;
               if (adminRow.full_name?.trim()) adminName = adminRow.full_name.trim();

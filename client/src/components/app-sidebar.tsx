@@ -450,6 +450,13 @@ const TENANT_NAV: NavGroup[] = [
         items: [],
       },
       {
+        label: "AI App Doctor",
+        icon: Code,
+        url: "/app/app-doctor",
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"],
+        items: [],
+      },
+      {
         label: "Tenant Permissions",
         icon: UserCog,
         url: "/app/role-management",

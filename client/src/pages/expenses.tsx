@@ -44,6 +44,31 @@ function formatCurrency(v: string | number | null | undefined) {
   return `$${parseFloat(String(v)).toFixed(2)}`;
 }
 
+function extractedNumber(value: any): string {
+  if (value == null || value === "") return "";
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : "";
+}
+
+function summarizeLineItems(items: any[] | undefined): string {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  return items
+    .map(item => item?.description)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(", ");
+}
+
+function normalizeExpensePaymentMethod(value: any): string {
+  const raw = String(value || "").toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("cash")) return "cash";
+  if (raw.includes("check") || raw.includes("cheque")) return "check";
+  if (raw.includes("company")) return "company_card";
+  if (raw.includes("card") || raw.includes("visa") || raw.includes("mastercard") || raw.includes("amex") || raw.includes("debit") || raw.includes("credit")) return "personal_card";
+  return "other";
+}
+
 function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }: any) {
   const { toast } = useToast();
   const [form, setForm] = useState({
@@ -88,13 +113,23 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
       const data = await res.json();
       setAiResult(data.extracted);
       if (data.extracted) {
+        const extracted = data.extracted;
+        const lineItemSummary = summarizeLineItems(extracted.lineItems);
         setForm(f => ({
           ...f,
-          vendor: data.extracted.vendor || f.vendor,
-          amount: data.extracted.totalAmount?.toString() || data.extracted.amount?.toString() || f.amount,
-          expenseDate: data.extracted.date || f.expenseDate,
+          vendor: extracted.vendor || f.vendor,
+          amount: extractedNumber(extracted.totalAmount) || extractedNumber(extracted.amount) || f.amount,
+          expenseDate: extracted.date || f.expenseDate,
+          description: extracted.description || lineItemSummary || f.description,
+          businessPurpose: extracted.businessPurpose || f.businessPurpose,
+          paymentMethodUsed: normalizeExpensePaymentMethod(extracted.paymentMethod) || f.paymentMethodUsed,
+          subtotal: extractedNumber(extracted.subtotal) || undefined,
+          taxAmount: extractedNumber(extracted.taxAmount) || undefined,
+          lineItems: Array.isArray(extracted.lineItems) ? JSON.stringify(extracted.lineItems) : undefined,
+          aiExtractedJson: JSON.stringify(extracted),
+          aiConfidenceScore: extractedNumber(extracted.confidence) || undefined,
         }));
-        const matchCat = categories.find((c: any) => c.name.toLowerCase() === data.extracted.category?.toLowerCase());
+        const matchCat = categories.find((c: any) => c.name.toLowerCase() === extracted.category?.toLowerCase());
         if (matchCat) setForm(f => ({ ...f, categoryId: matchCat.id }));
       }
       toast({ title: "AI extraction complete" });
@@ -291,10 +326,15 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
       if (!res.ok) throw new Error("Failed");
       const data = await res.json();
       if (data.extracted) {
+        const extracted = data.extracted;
+        const lineItemSummary = summarizeLineItems(extracted.lineItems);
         setForm(f => ({
-          ...f, amount: data.extracted.totalAmount?.toString() || f.amount,
-          invoiceDate: data.extracted.date || f.invoiceDate,
-          description: data.extracted.vendor || f.description,
+          ...f,
+          amount: extractedNumber(extracted.totalAmount) || extractedNumber(extracted.amount) || f.amount,
+          invoiceDate: extracted.date || f.invoiceDate,
+          description: extracted.description || extracted.vendor || lineItemSummary || f.description,
+          notes: lineItemSummary || f.notes,
+          lineItems: Array.isArray(extracted.lineItems) ? JSON.stringify(extracted.lineItems) : undefined,
         }));
       }
       toast({ title: "AI extraction complete" });

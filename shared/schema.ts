@@ -3011,6 +3011,36 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 
+// ── AI App Doctor ──────────────────────────────────────────
+export const appDoctorReports = pgTable("app_doctor_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  userId: varchar("user_id"),
+  source: text("source").notNull().default("runtime"),
+  severity: text("severity").notNull().default("medium"),
+  status: text("status").notNull().default("open"),
+  title: text("title").notNull(),
+  errorMessage: text("error_message").notNull(),
+  stackTrace: text("stack_trace"),
+  route: text("route"),
+  contextJson: text("context_json"),
+  fingerprint: text("fingerprint"),
+  occurrenceCount: integer("occurrence_count").notNull().default(1),
+  aiSummary: text("ai_summary"),
+  aiRootCause: text("ai_root_cause"),
+  aiSuggestedFix: text("ai_suggested_fix"),
+  aiPatch: text("ai_patch"),
+  recommendedFiles: text("recommended_files"),
+  riskLevel: text("risk_level"),
+  prUrl: text("pr_url"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertAppDoctorReportSchema = createInsertSchema(appDoctorReports).omit({ id: true, createdAt: true, updatedAt: true });
+export type AppDoctorReport = typeof appDoctorReports.$inferSelect;
+export type InsertAppDoctorReport = z.infer<typeof insertAppDoctorReportSchema>;
+
 // ── Portal Access Tokens ──────────────────────────────────────────
 export const portalAccessTokens = pgTable("portal_access_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -14,6 +14,7 @@ import {
   DollarSign, ArrowUpRight, ArrowDownLeft, Clock, XCircle,
   Landmark, Zap, ShieldCheck, Send,
 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 
 interface TreasuryBalance {
   cash: number;
@@ -52,6 +53,11 @@ interface TreasuryTransaction {
   errorMessage: string | null;
   stripeRawStatus: string | null;
   createdAt: string;
+}
+
+interface CompanyOption {
+  id: string;
+  name: string;
 }
 
 function FeatureStatus({ label, status }: { label: string; status: string | undefined }) {
@@ -98,7 +104,7 @@ interface PayrollRun {
 // Parse a raw fetch error (which may be "400: {\"message\":\"...\"}") into a clean string
 function parseApiError(err: Error): string {
   const raw = err.message || "";
-  const jsonMatch = raw.match(/^\d+:\s*(\{.*\})\s*$/s);
+  const jsonMatch = raw.match(/^\d+:\s*(\{[\s\S]*\})\s*$/);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[1]);
@@ -110,28 +116,61 @@ function parseApiError(err: Error): string {
 
 export default function TreasuryPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [syncing, setSyncing] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [disburseResult, setDisburseResult] = useState<any>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+
+  const isPlatformUser = (user?.role || "").startsWith("platform_");
+
+  const companiesQuery = useQuery<CompanyOption[]>({
+    queryKey: ["/api/companies"],
+    enabled: isPlatformUser,
+  });
+
+  useEffect(() => {
+    if (user?.companyId && !selectedCompanyId) {
+      setSelectedCompanyId(user.companyId);
+      return;
+    }
+    if (isPlatformUser && !selectedCompanyId && companiesQuery.data?.length) {
+      setSelectedCompanyId(companiesQuery.data[0].id);
+    }
+  }, [companiesQuery.data, isPlatformUser, selectedCompanyId, user?.companyId]);
+
+  const companyQuery = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : "";
 
   const statusQuery = useQuery<TreasuryStatus>({
-    queryKey: ["/api/treasury/status"],
+    queryKey: ["/api/treasury/status", selectedCompanyId],
+    queryFn: async () => {
+      const res = await fetch(`/api/treasury/status${companyQuery}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+    enabled: !isPlatformUser || !!selectedCompanyId,
     retry: false,
   });
   const txQuery = useQuery<TreasuryTransaction[]>({
-    queryKey: ["/api/treasury/transactions"],
+    queryKey: ["/api/treasury/transactions", selectedCompanyId],
+    queryFn: async () => {
+      const res = await fetch(`/api/treasury/transactions${companyQuery}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+    enabled: !isPlatformUser || !!selectedCompanyId,
     retry: false,
   });
   const runsQuery = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
 
   const setupMutation = useMutation({
     mutationFn: async () => {
-      return apiRequest("POST", "/api/treasury/setup").then(r => r.json());
+      return apiRequest("POST", "/api/treasury/setup", selectedCompanyId ? { companyId: selectedCompanyId } : {}).then(r => r.json());
     },
     onSuccess: (data) => {
       setSetupError(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/treasury/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/treasury/status", selectedCompanyId] });
       toast({ title: "Treasury set up successfully", description: `Financial Account: ${data.financialAccount?.id}` });
     },
     onError: (err: Error) => {
@@ -146,8 +185,8 @@ export default function TreasuryPage() {
       return apiRequest("POST", `/api/payroll-runs/${runId}/disburse-stripe`).then(r => r.json());
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/treasury/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions", selectedCompanyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/treasury/status", selectedCompanyId] });
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
       setDisburseResult(data);
       if (data.success) {
@@ -164,8 +203,8 @@ export default function TreasuryPage() {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const result = await apiRequest("POST", "/api/treasury/sync").then(r => r.json());
-      queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions"] });
+      const result = await apiRequest("POST", "/api/treasury/sync", selectedCompanyId ? { companyId: selectedCompanyId } : {}).then(r => r.json());
+      queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions", selectedCompanyId] });
       toast({ title: `Sync complete — ${result.updated} transactions updated` });
     } catch (err: any) {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
@@ -190,6 +229,21 @@ export default function TreasuryPage() {
             Real-time ACH direct deposit for employee payroll using Stripe Treasury
           </p>
         </div>
+        {isPlatformUser && (
+          <div className="w-72 space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Company</label>
+            <Select value={selectedCompanyId} onValueChange={(value) => { setSelectedCompanyId(value); setSetupError(null); }}>
+              <SelectTrigger data-testid="select-treasury-company">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {(companiesQuery.data || []).map(company => (
+                  <SelectItem key={company.id} value={company.id}>{company.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         {connected && (
           <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing} data-testid="button-treasury-sync">
             {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
@@ -237,7 +291,7 @@ export default function TreasuryPage() {
                 </AlertDescription>
               </Alert>
             )}
-            <Button onClick={() => { setSetupError(null); setupMutation.mutate(); }} disabled={setupMutation.isPending} data-testid="button-treasury-setup" size="lg">
+            <Button onClick={() => { setSetupError(null); setupMutation.mutate(); }} disabled={setupMutation.isPending || (isPlatformUser && !selectedCompanyId)} data-testid="button-treasury-setup" size="lg">
               {setupMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
               Set Up Treasury Financial Account
             </Button>
