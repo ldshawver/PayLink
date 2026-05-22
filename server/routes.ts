@@ -10471,7 +10471,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = (result.rows ?? (result as any))[0];
       if (!proposal) return res.status(404).json({ message: "Not found" });
       const isOwner = user?.workerId === proposal.contractor_id;
-      const isManager = ["admin", "manager", "supervisor"].includes(user?.role || "");
+      const isManager = ["admin", "owner", "manager", "supervisor"].includes(user?.role || "") ||
+        (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
       if (!isOwner && isOwner === false && !["submitted", "approved", "rejected"].includes(proposal.status)) {
         // Only manager can act on proposals they didn't create (unless it's a status-only override)
@@ -11813,7 +11814,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Shared helper: verify proposal access (contractor owns it OR admin of company) ──
   async function assertProposalAccess(proposalId: string, sessionUserId: string): Promise<{ prop: any; isAdmin: boolean } | null> {
     const user = await storage.getUser(sessionUserId);
-    const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+    const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
     const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${proposalId}`);
     const prop = propRes.rows[0] as any;
     if (!prop) return null;
@@ -12162,10 +12163,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // (c) a platform admin (owns all tenants), or
       // (d) a registered signer in contract_signers
       const isPlatformAdmin = (user?.role || "").startsWith("platform_");
-      const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "supervisor" ||
+      const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
         (user?.role || "").startsWith("tenant_") || isPlatformAdmin;
       const isContractor = workerId && contract.contractor_id === workerId;
-      // Platform admins can sign any company's contract; tenant roles must belong to the same company
+      // Platform admins can sign any company's contract; tenant/owner roles must belong to the same company
       const isCompanyAdmin = isAdmin && (isPlatformAdmin || user?.companyId === contract.company_id);
 
       const registeredSignerRes = await db.execute(sql`

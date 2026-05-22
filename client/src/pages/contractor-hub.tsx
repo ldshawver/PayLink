@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, Component } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -29,6 +29,38 @@ import {
   FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+
+// ─── Error Boundary ──────────────────────────────────────────────────────────
+class ProposalErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error?: Error }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch() {}
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-8 text-center gap-4">
+          <AlertCircle className="h-10 w-10 text-destructive" />
+          <div>
+            <p className="font-semibold text-sm">Something went wrong loading this view.</p>
+            <p className="text-xs text-muted-foreground mt-1">{this.state.error?.message || "Unexpected error"}</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => this.setState({ hasError: false })}>
+            Try again
+          </Button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -2297,6 +2329,7 @@ function ProposalBuilder({
     </Dialog>
     <Sheet open={open} onOpenChange={() => onClose()}>
       <SheetContent side="right" className="!w-screen !max-w-none h-screen p-0 flex flex-col" data-testid="sheet-proposal-editor">
+      <ProposalErrorBoundary>
         <SheetHeader className="px-6 py-3 border-b shrink-0">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -2521,6 +2554,20 @@ function ProposalBuilder({
 
             {/* ── Details Tab ── */}
             <TabsContent value="details" className="m-0 p-6 space-y-4">
+              {/* Revision requested banner — shows what admin asked contractor to fix */}
+              {!isNew && !isAdmin && proposal?.status === "revision_requested" && (
+                <div className="flex gap-3 rounded-lg border border-orange-300 bg-orange-50 dark:bg-orange-950/30 p-4" data-testid="banner-revision-notes-builder">
+                  <RotateCcw className="h-5 w-5 text-orange-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-orange-800 dark:text-orange-300 text-sm">Revision Requested</p>
+                    {(proposal as any)?.rejectionReason ? (
+                      <p className="text-sm text-orange-700 dark:text-orange-400 mt-1 whitespace-pre-wrap">{(proposal as any).rejectionReason}</p>
+                    ) : (
+                      <p className="text-sm text-orange-700 dark:text-orange-400 mt-1">Please update your proposal and resubmit for review.</p>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <Label>Proposal Title *</Label>
@@ -3079,6 +3126,7 @@ function ProposalBuilder({
             </TabsContent>
           </ScrollArea>
         </Tabs>
+      </ProposalErrorBoundary>
       </SheetContent>
     </Sheet>
     </>
@@ -4701,7 +4749,7 @@ function DocumentsSection() {
   const [emailSending, setEmailSending] = useState<string | null>(null);
   const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
   const { data: docSectionUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
-  const canArchive = docSectionUser?.role === "admin" || docSectionUser?.role === "manager" ||
+  const canArchive = docSectionUser?.role === "admin" || docSectionUser?.role === "owner" || docSectionUser?.role === "manager" ||
     (docSectionUser?.role || "").startsWith("tenant_") || (docSectionUser?.role || "").startsWith("platform_");
 
   type DocRow = {
@@ -5669,7 +5717,7 @@ function SettingsSection() {
   const [notifDirty, setNotifDirty] = useState(false);
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" || currentUser?.role === "supervisor" ||
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "owner" || currentUser?.role === "manager" || currentUser?.role === "supervisor" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
   const isPlatformUser = (currentUser?.role || "").startsWith("platform_");
   const isPlatformAdmin = currentUser?.role === "platform_super_admin" || currentUser?.role === "platform_admin";
@@ -6433,7 +6481,7 @@ export default function ContractorHubPage() {
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [newProposal, setNewProposal] = useState(false);
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/me"] });
-  const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "supervisor" ||
+  const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
 
   const { data: proposals = [], isLoading: proposalsLoading } = useQuery<Proposal[]>({

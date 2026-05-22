@@ -85,6 +85,7 @@ const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
+const MarketingHomePage = lazy(() => import("@/pages/marketing-home"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
   return (
@@ -633,9 +634,13 @@ function AppContent() {
   }
 
   if (!user) {
-    // Root URL → time-clock kiosk login; all other unauthenticated paths → main login
+    // Root URL → approved marketing homepage; /clock-in handled above; all other paths → main login
     if (location === "/") {
-      return <RedirectToTimeClock />;
+      return (
+        <Suspense fallback={<PageLoader />}>
+          <MarketingHomePage />
+        </Suspense>
+      );
     }
     return (
       <BiometricGate>
