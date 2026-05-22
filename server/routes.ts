@@ -16401,6 +16401,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   // ── Check PDF / Void / Reprint ────────────────────────────────────────────
 
+  // Sanitize any string for pdf-lib standard fonts (WinAnsiEncoding / Latin-1).
+  // Replaces common Unicode typography with ASCII equivalents, then strips any
+  // remaining character outside the printable ASCII + Latin-1 Supplement range
+  // so pdf-lib never throws "WinAnsiEncoding cannot encode" on database data.
+  function sanitizeForPdf(s: string | null | undefined): string {
+    if (!s) return "";
+    return String(s)
+      .replace(/[\u2018\u2019\u02BC]/g, "'")        // smart single quotes / apostrophe
+      .replace(/[\u201C\u201D]/g,        '"')        // smart double quotes
+      .replace(/[\u2013\u2014\u2015]/g,  "-")        // en/em/horizontal dashes
+      .replace(/\u2026/g,                "...")      // horizontal ellipsis
+      .replace(/\u00A0/g,                " ")        // non-breaking space → regular space
+      .replace(/\u00AD/g,                "")         // soft hyphen → remove
+      .replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");      // everything outside Latin-1 → ?
+  }
+
   function numToWords(num: number): string {
     const ones = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
     const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
@@ -16593,10 +16609,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const ytdNet   = isCalibration ? 8708.89 : Number(item?.ytdNet        || 0);
 
     // Worker fields (overridden by vendorCheck for AP/vendor checks)
-    const wName         = isCalibration ? "John Q Employee"    : params.vendorCheck ? params.vendorCheck.payeeName : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim();
-    const wStreet       = isCalibration ? "123 Employee Street": params.vendorCheck ? (params.vendorCheck.payeeAddress || "") : (worker?.address || "");
-    const wCityStateZip = isCalibration ? "Anytown, CA 90210"  : params.vendorCheck ? (params.vendorCheck.payeeCityStateZip || "") :
-      [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" ");
+    const wName         = isCalibration ? "John Q Employee"    : sanitizeForPdf(params.vendorCheck ? params.vendorCheck.payeeName : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim());
+    const wStreet       = isCalibration ? "123 Employee Street": sanitizeForPdf(params.vendorCheck ? (params.vendorCheck.payeeAddress || "") : (worker?.address || ""));
+    const wCityStateZip = isCalibration ? "Anytown, CA 90210"  : sanitizeForPdf(params.vendorCheck ? (params.vendorCheck.payeeCityStateZip || "") :
+      [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" "));
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
     const isContractor  = isCalibration
@@ -16604,12 +16620,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : (worker?.compensationType === "contractor" || worker?.compensationType === "1099");
 
     // Company fields
-    const coName  = isCalibration ? "ACME Corporation"  : (company?.name    || "");
-    const coAddr1 = isCalibration ? "123 Main Street"   : (company?.address || "");
-    const coAddr2 = isCalibration ? "Anytown, CA 90210" :
-      [[company?.city, company?.state].filter(Boolean).join(", "), company?.zip].filter(Boolean).join(" ");
-    const coPhone = isCalibration ? "(555) 555-0100"    : (company?.phone || "");
-    const coEin   = isCalibration ? "12-3456789"        : (company?.ein   || "");
+    const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
+    const coAddr1 = isCalibration ? "123 Main Street"   : sanitizeForPdf(company?.address || "");
+    const coAddr2 = isCalibration ? "Anytown, CA 90210" : sanitizeForPdf(
+      [[company?.city, company?.state].filter(Boolean).join(", "), company?.zip].filter(Boolean).join(" "));
+    const coPhone = isCalibration ? "(555) 555-0100"    : sanitizeForPdf(company?.phone || "");
+    const coEin   = isCalibration ? "12-3456789"        : sanitizeForPdf(company?.ein   || "");
 
     // Calibration guide — only drawn in calibration mode
     const drawGuide = (x: number, y: number, w: number, h: number, label: string) => {
@@ -16693,8 +16709,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // ── Bank block — top-center (center x 4.25in) ────────────────────────
     // Bank name: template config takes priority; fall back to remittance source institution field.
-    const bankName    = isCalibration ? "Bank of America"                           : (cfg.bankName    || (remittanceSource as any)?.bankName || "");
-    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : (cfg.bankAddress || "");
+    const bankName    = isCalibration ? "Bank of America"                           : sanitizeForPdf(cfg.bankName    || (remittanceSource as any)?.bankName || "");
+    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || "");
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
       const bnaW = bankAddress.length * 3.7;
@@ -16789,7 +16805,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     //    Must not enter MICR clear band (starts y 2.875in from check top)
     const memoLabelY = z1y(2.65);
     const memoLineY  = z1y(2.72);
-    const memoText   = params.vendorCheck?.memo ? params.vendorCheck.memo : (pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "");
+    const memoText   = sanitizeForPdf(params.vendorCheck?.memo ? params.vendorCheck.memo : (pStart && pEnd && pStart !== "N/A" && pEnd !== "N/A" ? `Pay period ${pStart} - ${pEnd}` : ""));
     drawGuide(z1x(0.30), memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
     page.drawText("MEMO:",   { x: z1x(0.30), y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
     page.drawText(memoText,  { x: z1x(0.80), y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
@@ -16858,7 +16874,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
     // Company + EIN
-    const coEinLine = coEin ? `${coName} — EIN: ${coEin}` : coName;
+    const coEinLine = coEin ? `${coName} - EIN: ${coEin}` : coName;
     page.drawText(coEinLine, { x: psX, y: checkBot - 30 + paystubOffY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
     // Period dates
     page.drawText(`Pay Period Start: ${pStart}`, { x: psX, y: checkBot - 42 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
@@ -17459,8 +17475,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `inline; filename="checks-${runId.slice(0, 8)}.pdf"`);
       res.send(Buffer.from(pdfBytes));
     } catch (err: any) {
-      console.error("[checksBatchPDF]", err);
-      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate checks PDF") });
+      console.error("[checksBatchPDF] ERROR:", err?.message || err, err?.stack);
+      res.status(500).json({ message: err?.message || "Failed to generate checks PDF" });
     }
   });
 
@@ -17608,8 +17624,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `inline; filename="reprint-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
       res.send(Buffer.from(pdfBytes));
     } catch (err: any) {
-      console.error("[reprintCheck]", err);
-      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate reprint PDF") });
+      console.error("[reprintCheck] ERROR:", err?.message || err, err?.stack);
+      res.status(500).json({ message: err?.message || "Failed to generate reprint PDF" });
     }
   });
 
