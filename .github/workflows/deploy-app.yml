@@ -20,7 +20,10 @@ jobs:
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
           command_timeout: 30m
-          script_stop: true
+          # Let the shell script decide which non-zero checks are fatal.
+          # appleboy's script_stop treats optional probes like "sudo -n true"
+          # as hard failures before the script can enter its fallback branch.
+          script_stop: false
           script: |
             set -e
             echo "Starting deployment..."
