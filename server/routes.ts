@@ -963,6 +963,40 @@ export async function registerRoutes(
     if (req.method === "GET" || publicWritePaths.some(p => req.path.startsWith(p))) return next();
     requireActiveSubscription(req, res, next);
   });
+  app.use("/api", (req, res, next) => {
+    if (req.path.startsWith("/app-doctor/")) return next();
+    let captured = false;
+    const capture = (body?: any) => {
+      if (captured || res.statusCode < 500) return;
+      captured = true;
+      const message = typeof body === "string"
+        ? body
+        : body?.message || body?.error || `API request failed with HTTP ${res.statusCode}`;
+      setImmediate(() => {
+        recordAppDoctorReport(req, {
+          source: "api_500_response",
+          severity: res.statusCode >= 500 ? "high" : "medium",
+          title: `${req.method} ${req.originalUrl} failed`,
+          message: String(message).slice(0, 4000),
+          route: req.originalUrl,
+          context: { method: req.method, statusCode: res.statusCode },
+          autoAnalyze: true,
+        }).catch((err) => console.error("[AppDoctor] API failure capture failed:", err));
+      });
+    };
+    const originalJson = res.json.bind(res);
+    res.json = ((body?: any) => {
+      capture(body);
+      return originalJson(body);
+    }) as typeof res.json;
+    const originalSend = res.send.bind(res);
+    res.send = ((body?: any) => {
+      capture(body);
+      return originalSend(body);
+    }) as typeof res.send;
+    res.on("finish", () => capture());
+    next();
+  });
 
   // ── Feature gate middleware — applied to entire path groups ──────────────────
   // requireFeature() is a hoisted function declaration defined later in this file.
@@ -21751,6 +21785,67 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Captures runtime errors, asks AI for a safe diagnosis/proposed patch,
   // and notifies tenant admins/owners for review. It does not auto-deploy.
   // ══════════════════════════════════════════════════════════════════════
+  async function recordAppDoctorReport(req: Request, input: {
+    companyId?: string | null;
+    userId?: string | null;
+    source?: string;
+    severity?: string;
+    title?: string;
+    message?: string;
+    stack?: string | null;
+    route?: string | null;
+    context?: any;
+    autoAnalyze?: boolean;
+  }) {
+    const user = req.session?.userId ? await storage.getUser(req.session.userId).catch(() => null) : null;
+    const requestedCompanyId = input.companyId || null;
+    const companyId = isPlatformUser(user?.role) ? requestedCompanyId : (user?.companyId || null);
+    const rawMessage = String(input.message || "Unknown app error").slice(0, 4000);
+    const stackTrace = input.stack ? String(input.stack).slice(0, 12000) : null;
+    const route = input.route ? String(input.route).slice(0, 500) : null;
+    const source = input.source ? String(input.source).slice(0, 80) : "runtime";
+    const severity = ["low", "medium", "high", "critical"].includes(input.severity || "") ? input.severity! : "medium";
+    const title = String(input.title || rawMessage.split("\n")[0] || "Runtime error").slice(0, 240);
+    const fingerprint = crypto.createHash("sha256").update([companyId || "platform", source, route || "", rawMessage.slice(0, 800), stackTrace?.slice(0, 1200) || ""].join("|")).digest("hex");
+
+    let report = pgRow<any>(await db.execute(sql`
+      SELECT * FROM app_doctor_reports
+      WHERE fingerprint = ${fingerprint}
+        AND (${companyId}::varchar IS NULL OR company_id = ${companyId})
+      ORDER BY created_at DESC
+      LIMIT 1
+    `));
+
+    if (report) {
+      report = pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET occurrence_count = occurrence_count + 1,
+            updated_at = NOW(),
+            status = CASE WHEN status = 'reviewed' THEN 'reopened' ELSE status END
+        WHERE id = ${report.id}
+        RETURNING *
+      `));
+    } else {
+      report = pgRow<any>(await db.execute(sql`
+        INSERT INTO app_doctor_reports
+          (company_id, user_id, source, severity, status, title, error_message, stack_trace, route, context_json, fingerprint)
+        VALUES
+          (${companyId}, ${input.userId || req.session?.userId || null}, ${source}, ${severity}, 'open', ${title}, ${rawMessage}, ${stackTrace}, ${route}, ${JSON.stringify(input.context || {})}, ${fingerprint})
+        RETURNING *
+      `));
+    }
+
+    if (companyId && report?.id) {
+      await notifyAppDoctorReviewers(companyId, report.id, title, severity).catch((err) => console.error("[AppDoctor] notify failed:", err));
+    }
+
+    if (input.autoAnalyze !== false && report?.id) {
+      analyzeAppDoctorReport(report.id).catch((err) => console.error("[AppDoctor] AI analysis failed:", err));
+    }
+
+    return report;
+  }
+
   async function notifyAppDoctorReviewers(companyId: string, reportId: string, title: string, severity: string) {
     const actionUrl = `/app/app-doctor?id=${reportId}`;
     await db.execute(sql`
@@ -21761,7 +21856,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
              ${actionUrl}, FALSE
       FROM users u
       WHERE u.company_id = ${companyId}
-        AND u.role IN ('admin','tenant_owner','tenant_admin','tenant_finance_admin','platform_admin','platform_super_admin')
+        AND u.role IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','platform_admin','platform_super_admin')
       LIMIT 20
     `);
   }
@@ -21876,50 +21971,17 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.post("/api/app-doctor/reports", requireAuth, async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      const companyId = req.body?.companyId || user?.companyId || null;
-      const rawMessage = String(req.body?.message || req.body?.errorMessage || "Unknown app error").slice(0, 4000);
-      const stackTrace = req.body?.stack ? String(req.body.stack).slice(0, 12000) : null;
-      const route = req.body?.route ? String(req.body.route).slice(0, 500) : null;
-      const source = req.body?.source ? String(req.body.source).slice(0, 80) : "runtime";
-      const severity = ["low", "medium", "high", "critical"].includes(req.body?.severity) ? req.body.severity : "medium";
-      const title = String(req.body?.title || rawMessage.split("\n")[0] || "Runtime error").slice(0, 240);
-      const fingerprint = crypto.createHash("sha256").update([companyId || "platform", source, route || "", rawMessage.slice(0, 800), stackTrace?.slice(0, 1200) || ""].join("|")).digest("hex");
-
-      let report = pgRow<any>(await db.execute(sql`
-        SELECT * FROM app_doctor_reports
-        WHERE fingerprint = ${fingerprint}
-          AND (${companyId}::varchar IS NULL OR company_id = ${companyId})
-        ORDER BY created_at DESC
-        LIMIT 1
-      `));
-
-      if (report) {
-        report = pgRow<any>(await db.execute(sql`
-          UPDATE app_doctor_reports
-          SET occurrence_count = occurrence_count + 1,
-              updated_at = NOW(),
-              status = CASE WHEN status = 'reviewed' THEN 'reopened' ELSE status END
-          WHERE id = ${report.id}
-          RETURNING *
-        `));
-      } else {
-        report = pgRow<any>(await db.execute(sql`
-          INSERT INTO app_doctor_reports
-            (company_id, user_id, source, severity, status, title, error_message, stack_trace, route, context_json, fingerprint)
-          VALUES
-            (${companyId}, ${req.session.userId || null}, ${source}, ${severity}, 'open', ${title}, ${rawMessage}, ${stackTrace}, ${route}, ${JSON.stringify(req.body?.context || {})}, ${fingerprint})
-          RETURNING *
-        `));
-      }
-
-      if (companyId && report?.id) {
-        await notifyAppDoctorReviewers(companyId, report.id, title, severity).catch((err) => console.error("[AppDoctor] notify failed:", err));
-      }
-
-      if (req.body?.autoAnalyze !== false && report?.id) {
-        analyzeAppDoctorReport(report.id).catch((err) => console.error("[AppDoctor] AI analysis failed:", err));
-      }
+      const report = await recordAppDoctorReport(req, {
+        companyId: req.body?.companyId || null,
+        source: req.body?.source,
+        severity: req.body?.severity,
+        title: req.body?.title,
+        message: req.body?.message || req.body?.errorMessage,
+        stack: req.body?.stack,
+        route: req.body?.route,
+        context: req.body?.context || {},
+        autoAnalyze: req.body?.autoAnalyze,
+      });
 
       res.status(report?.occurrence_count > 1 ? 200 : 201).json(report);
     } catch (e: any) {

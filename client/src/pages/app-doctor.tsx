@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Bot, Bug, CheckCircle2, GitPullRequest, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { Bot, Bug, CheckCircle2, GitPullRequest, Loader2, RefreshCw, ShieldAlert, Siren } from "lucide-react";
 
 type AppDoctorReport = {
   id: string;
@@ -26,7 +26,7 @@ type AppDoctorReport = {
   ai_root_cause?: string | null;
   ai_suggested_fix?: string | null;
   ai_patch?: string | null;
-  recommended_files?: string | null;
+  recommended_files?: unknown;
   risk_level?: string | null;
   pr_url?: string | null;
   created_at: string;
@@ -42,8 +42,9 @@ function statusVariant(status: string): "default" | "secondary" | "outline" | "d
   return "outline";
 }
 
-function parseRecommended(value?: string | null) {
+function parseRecommended(value?: unknown) {
   if (!value) return { files: [], tests: [] };
+  if (typeof value === "object") return value as { files?: string[]; tests?: string[] };
   try { return JSON.parse(value); } catch { return { files: [], tests: [] }; }
 }
 
@@ -90,6 +91,25 @@ export default function AppDoctorPage() {
     },
   });
 
+  const testMutation = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/app-doctor/reports", {
+      companyId: selectedCompanyId || user?.companyId,
+      source: "app_doctor_self_test",
+      severity: "low",
+      title: "App Doctor self-test",
+      message: "This is a test report generated from the App Doctor review page.",
+      route: "/app/app-doctor",
+      context: { triggeredBy: user?.id || user?.username || "current_user" },
+      autoAnalyze: false,
+    }).then(r => r.json()),
+    onSuccess: (report: AppDoctorReport) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/reports"] });
+      setSelectedId(report.id);
+      toast({ title: "Test report created", description: "App Doctor is receiving reports." });
+    },
+    onError: (e: any) => toast({ title: "Test report failed", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -110,6 +130,10 @@ export default function AppDoctorPage() {
             </SelectContent>
           </Select>
         )}
+        <Button variant="outline" onClick={() => testMutation.mutate()} disabled={testMutation.isPending || (isPlatform && !selectedCompanyId)}>
+          {testMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Siren className="h-4 w-4 mr-1" />}
+          Send Test Report
+        </Button>
       </div>
 
       <Alert>
@@ -126,6 +150,11 @@ export default function AppDoctorPage() {
             <CardDescription>{reports.length} recent report{reports.length === 1 ? "" : "s"}</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
+            {reportsQuery.isError && (
+              <div className="m-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                Failed to load App Doctor reports: {(reportsQuery.error as Error)?.message || "Unknown error"}
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>

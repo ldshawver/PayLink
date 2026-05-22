@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, useCallback } from "react";
+import { Component, lazy, Suspense, useEffect, useState, useCallback } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -92,6 +92,56 @@ function PageLoader() {
       <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
     </div>
   );
+}
+
+class AppErrorBoundary extends Component<{ children: React.ReactNode; area?: string }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    fetch("/api/app-doctor/reports", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "react_error_boundary",
+        severity: "critical",
+        title: error.message || "React render failure",
+        message: error.message || "React render failure",
+        stack: `${error.stack || ""}\n\nComponent stack:\n${info.componentStack || ""}`.trim(),
+        route: window.location.pathname + window.location.search,
+        context: { area: this.props.area || "app", url: window.location.href, userAgent: navigator.userAgent },
+      }),
+    }).catch(() => {});
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <div className="max-w-xl rounded-lg border bg-background p-6 shadow-sm">
+          <h2 className="text-lg font-semibold">Something went wrong</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            App Doctor captured this crash for admin review. You can reload the page or open App Doctor to review the report.
+          </p>
+          <pre className="mt-4 max-h-40 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
+            {this.state.error.message}
+          </pre>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+            <a className="rounded-md border px-3 py-2 text-sm font-medium" href="/app/app-doctor">
+              Open App Doctor
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
 
 // Client-side role expansion — maps new explicit role names to legacy aliases for RoleGuard
@@ -263,7 +313,9 @@ function AuthenticatedLayout() {
             <MobileHeader />
             <main className="flex-1 overflow-y-auto overflow-x-hidden">
               <div ref={containerRef} className="page-transition-container">
-                <AuthenticatedRouter />
+                <AppErrorBoundary area="tenant_app">
+                  <AuthenticatedRouter />
+                </AppErrorBoundary>
               </div>
             </main>
             <UpgradeModal />
@@ -360,6 +412,7 @@ function PlatformRouter() {
           <Route path="/platform/billing" component={BillingPage} />
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
           <Route path="/platform/audit" component={PlatformAuditPage} />
+          <Route path="/platform/app-doctor" component={AppDoctorPage} />
           <Route path="/platform/gdpr-inventory" component={GdprInventoryPage} />
           <Route path="/platform/privacy-audit-log" component={PrivacyAuditLogPage} />
           <Route path="/platform/breach-response" component={BreachResponsePage} />
@@ -414,7 +467,9 @@ function PlatformLayout() {
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <PlatformHeader />
           <main className="flex-1 overflow-y-auto overflow-x-hidden">
-            <PlatformRouter />
+            <AppErrorBoundary area="platform_console">
+              <PlatformRouter />
+            </AppErrorBoundary>
           </main>
         </div>
       </div>

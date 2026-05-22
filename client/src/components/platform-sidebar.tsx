@@ -29,6 +29,7 @@ import {
   ClipboardList,
   FileCheck2,
   Users,
+  Bot,
 } from "lucide-react";
 import {
   Sidebar,
@@ -211,6 +212,13 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
           { title: "Tenant Overview", url: "/platform/audit", icon: Building2 },
           { title: "Export Audit Bundle", url: "/platform/audit", icon: FileText },
         ],
+      },
+      {
+        label: "AI App Doctor",
+        icon: Bot,
+        url: "/platform/app-doctor",
+        module: "oversight",
+        items: [],
       },
     ],
   },
