@@ -26,7 +26,7 @@ import {
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
-  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban
+  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -2101,6 +2101,29 @@ function ProposalBuilder({
     onError: (e: any) => toast({ title: e?.message || "Resend failed", variant: "destructive" }),
   });
 
+  const [replyingToEventId, setReplyingToEventId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyNotifyClient, setReplyNotifyClient] = useState(false);
+
+  const replyMutation = useMutation({
+    mutationFn: ({ message, notifyClient }: { message: string; notifyClient: boolean }) =>
+      apiRequest("POST", `/api/contractor-proposals/${proposalId}/reply`, { message, notifyClient }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposalId, "events"] });
+      setReplyingToEventId(null);
+      setReplyText("");
+      setReplyNotifyClient(false);
+      if (data?.emailStatus === "sent") {
+        toast({ title: "Reply sent", description: "Your reply was recorded and the client was notified by email." });
+      } else if (data?.emailStatus === "failed") {
+        toast({ title: "Reply recorded", description: "Reply saved, but the client email notification failed.", variant: "destructive" });
+      } else {
+        toast({ title: "Reply recorded", description: "Reply saved. No client email notification was sent." });
+      }
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to send reply", variant: "destructive" }),
+  });
+
   function handleMarkSent() {
     const existingEmail = form.clientEmail ?? current.clientEmail ?? "";
     setSendEmailDraft(existingEmail);
@@ -2897,9 +2920,16 @@ function ProposalBuilder({
                     {events.map((ev, i) => (
                       <div key={ev.id} className="flex gap-3">
                         <div className="flex flex-col items-center">
-                          <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0", ev.eventType === "client_message" ? "bg-violet-100" : ev.eventType === "email_resent" ? "bg-blue-100" : "bg-primary/10")}>
+                          <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0",
+                            ev.eventType === "client_message" ? "bg-violet-100" :
+                            ev.eventType === "admin_reply" ? "bg-emerald-100" :
+                            ev.eventType === "email_resent" ? "bg-blue-100" :
+                            "bg-primary/10"
+                          )}>
                             {ev.eventType === "client_message"
                               ? <MessageSquare className="h-3.5 w-3.5 text-violet-600" />
+                              : ev.eventType === "admin_reply"
+                              ? <Reply className="h-3.5 w-3.5 text-emerald-600" />
                               : ev.eventType === "email_resent"
                               ? <Mail className="h-3.5 w-3.5 text-blue-600" />
                               : <History className="h-3.5 w-3.5 text-primary" />}
@@ -2907,10 +2937,41 @@ function ProposalBuilder({
                           {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                         </div>
                         <div className="pb-4 flex-1">
-                          <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : ev.eventType === "email_resent" ? "Email Resent" : ev.eventType.replace(/_/g, " ")}</p>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium capitalize">
+                              {ev.eventType === "client_message" ? "Client Message" :
+                               ev.eventType === "admin_reply" ? "Admin Reply" :
+                               ev.eventType === "email_resent" ? "Email Resent" :
+                               ev.eventType.replace(/_/g, " ")}
+                            </p>
+                            {isAdmin && ev.eventType === "client_message" && proposalId && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 text-xs px-2"
+                                onClick={() => {
+                                  if (replyingToEventId === ev.id) {
+                                    setReplyingToEventId(null);
+                                    setReplyText("");
+                                  } else {
+                                    setReplyingToEventId(ev.id);
+                                    setReplyText("");
+                                    setReplyNotifyClient(false);
+                                  }
+                                }}
+                                data-testid={`btn-reply-event-${ev.id}`}
+                              >
+                                <Reply className="h-3 w-3 mr-1" />
+                                Reply
+                              </Button>
+                            )}
+                          </div>
                           <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
                           {ev.notes && ev.eventType === "client_message" && (
                             <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
+                          )}
+                          {ev.notes && ev.eventType === "admin_reply" && (
+                            <p className="text-xs mt-1 px-2 py-1.5 rounded bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 whitespace-pre-wrap">{ev.notes}</p>
                           )}
                           {ev.notes && (ev.eventType === "sent" || ev.eventType === "email_resent") && (() => {
                             const parts = ev.notes.split(" | Portal: ");
@@ -2944,7 +3005,52 @@ function ProposalBuilder({
                               </div>
                             );
                           })()}
-                          {ev.notes && ev.eventType !== "sent" && ev.eventType !== "email_resent" && ev.eventType !== "client_message" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
+                          {ev.notes && ev.eventType !== "sent" && ev.eventType !== "email_resent" && ev.eventType !== "client_message" && ev.eventType !== "admin_reply" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
+                          {isAdmin && replyingToEventId === ev.id && (
+                            <div className="mt-2 space-y-2 border border-border rounded-md p-3 bg-muted/30">
+                              <Textarea
+                                placeholder="Type your reply to the client..."
+                                value={replyText}
+                                onChange={e => setReplyText(e.target.value)}
+                                className="text-xs min-h-[80px] resize-none"
+                                data-testid="textarea-reply"
+                              />
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  id={`notify-client-${ev.id}`}
+                                  checked={replyNotifyClient}
+                                  onChange={e => setReplyNotifyClient(e.target.checked)}
+                                  className="h-3.5 w-3.5"
+                                  data-testid="checkbox-notify-client"
+                                />
+                                <label htmlFor={`notify-client-${ev.id}`} className="text-xs text-muted-foreground cursor-pointer select-none">
+                                  Notify client by email
+                                </label>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  disabled={!replyText.trim() || replyMutation.isPending}
+                                  onClick={() => replyMutation.mutate({ message: replyText, notifyClient: replyNotifyClient })}
+                                  data-testid="btn-submit-reply"
+                                >
+                                  {replyMutation.isPending ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Reply className="h-3 w-3 mr-1.5" />}
+                                  Send Reply
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 text-xs"
+                                  onClick={() => { setReplyingToEventId(null); setReplyText(""); }}
+                                  data-testid="btn-cancel-reply"
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}

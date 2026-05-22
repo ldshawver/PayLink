@@ -11334,6 +11334,61 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to resend email" }); }
   });
 
+  // POST /api/contractor-proposals/:id/reply — admin sends a reply to a client message
+  app.post("/api/contractor-proposals/:id/reply", requireAuth, async (req, res) => {
+    try {
+      const auth = await authorizeProposalAccess(req.params.id, (req.session as any).userId);
+      if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
+
+      if (!isManagerRole(auth.user?.role)) {
+        return res.status(403).json({ message: "Admin or manager role required to reply to client messages." });
+      }
+
+      const { message, notifyClient } = req.body as { message: string; notifyClient?: boolean };
+      if (!message || typeof message !== "string" || !message.trim()) {
+        return res.status(400).json({ message: "Reply message is required." });
+      }
+
+      const proposal = auth.proposal;
+
+      await logProposalEvent(req.params.id, "admin_reply", proposal.status, proposal.status, req, undefined, undefined, message.trim());
+
+      let emailStatus: "sent" | "failed" | "skipped" = "skipped";
+      if (notifyClient && proposal.client_email) {
+        try {
+          const { sendGenericNotificationEmail } = await import("./notifications");
+          const recipientName = proposal.client_name || "Valued Client";
+          const proposalTitle = proposal.title || "Proposal";
+          const baseUrl = getAppBaseUrl(req);
+          const portalUrl = proposal.share_token
+            ? `${baseUrl}/proposal/${req.params.id}?token=${proposal.share_token}`
+            : undefined;
+
+          const emailResult = await sendGenericNotificationEmail({
+            recipientName,
+            email: proposal.client_email,
+            title: `New Reply on Proposal: ${proposalTitle}`,
+            body: `You have received a reply regarding your proposal <strong>${proposalTitle}</strong>:<br><br><em>${message.trim()}</em>${portalUrl ? `<br><br>You can view the proposal using the button below.` : ""}`,
+            actionUrl: portalUrl,
+          });
+
+          if (emailResult.sent) {
+            emailStatus = "sent";
+            console.log(`[Proposals] Reply email sent to ${proposal.client_email} for proposal ${req.params.id}`);
+          } else {
+            emailStatus = "failed";
+            console.error(`[Proposals] Reply email to ${proposal.client_email} failed: ${emailResult.error}`);
+          }
+        } catch (emailErr: any) {
+          emailStatus = "failed";
+          console.error(`[Proposals] Failed to send reply email for proposal ${req.params.id}:`, emailErr.message);
+        }
+      }
+
+      res.json({ message: "Reply recorded", emailStatus });
+    } catch (e) { res.status(500).json({ message: "Failed to record reply" }); }
+  });
+
   // POST /api/contractor-proposals/:id/share-token — generate (or return existing) share token (admin only)
   app.post("/api/contractor-proposals/:id/share-token", requireAuth, async (req, res) => {
     try {
