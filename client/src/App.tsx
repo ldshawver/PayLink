@@ -578,6 +578,10 @@ function AppContent() {
   }
 
   if (!user) {
+    // Root URL → time-clock kiosk login; all other unauthenticated paths → main login
+    if (location === "/") {
+      return <RedirectToTimeClock />;
+    }
     return (
       <BiometricGate>
         <RedirectToLogin />
@@ -612,6 +616,14 @@ function RedirectToLogin() {
   const [, setLocation] = useLocation();
   useEffect(() => {
     setLocation("/login");
+  }, [setLocation]);
+  return <PageLoader />;
+}
+
+function RedirectToTimeClock() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation("/time-clock");
   }, [setLocation]);
   return <PageLoader />;
 }

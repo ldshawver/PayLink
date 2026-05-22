@@ -621,8 +621,12 @@ export default function ExpensesPage() {
   });
 
   function openInvoicePrintCheck(inv: any) {
+    const contractorWorker = workers.find((w: any) => w.id === inv.contractorId);
+    const resolvedPayeeName = inv.payeeName || inv.contractorName ||
+      (contractorWorker ? `${contractorWorker.firstName || ""} ${contractorWorker.lastName || ""}`.trim() : "") ||
+      "";
     setInvoicePrintForm({
-      payeeName: inv.payeeName || inv.contractorName || "",
+      payeeName: resolvedPayeeName,
       payeeAddress: "",
       payeeCityStateZip: "",
       checkNumber: inv.paymentReference || "",
