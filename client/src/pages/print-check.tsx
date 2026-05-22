@@ -2229,7 +2229,7 @@ export default function PrintCheckPage() {
     const singleItemId = checkItemsWithValidation.length === 1 ? checkItemsWithValidation[0]?.item?.id : undefined;
     const pdfUrl = (workerFilter && singleItemId)
       ? `/api/checks/${singleItemId}/pdf`
-      : `/api/payroll-runs/${runId}/checks-pdf`;
+      : `/api/payroll-runs/${runId}/checks-pdf${isPacketMode ? "?packet=1" : ""}`;
     try {
       const pdfRes = await fetch(pdfUrl, { credentials: "include" });
       if (!pdfRes.ok) {

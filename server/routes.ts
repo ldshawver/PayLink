@@ -17334,11 +17334,194 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Payroll packet summary page (server-side PDF) ───────────────────────────
+  async function renderSummaryPdf(params: {
+    run: { payDate?: string | null; periodStart?: string | null; periodEnd?: string | null; status?: string | null };
+    allItems: Array<Record<string, unknown>>;
+    workerMap: Record<string, { first_name: string; last_name: string }>;
+    company: { name?: string | null; ein?: string | null } | null;
+  }): Promise<Uint8Array> {
+    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { run, allItems, workerMap, company } = params;
+    const doc = await PDFDocument.create();
+    const hv  = await doc.embedFont(StandardFonts.Helvetica);
+    const hvB = await doc.embedFont(StandardFonts.HelveticaBold);
+    const pageW = 612, pageH = 792, mL = 43, mR = 43, mT = 36, mB = 36, cW = pageW - mL - mR;
+    const fmtDate = (d: string | null | undefined): string => {
+      if (!d) return "—";
+      const parts = String(d).split("T")[0].split("-");
+      return parts.length === 3 ? `${parts[1]}/${parts[2]}/${parts[0]}` : String(d);
+    };
+    const fmt = (v: unknown): string =>
+      Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const page = doc.addPage([pageW, pageH]);
+    let y = pageH - mT;
+    const dt = (text: string, x: number, yp: number, sz: number, font = hv, col = rgb(0, 0, 0)) =>
+      page.drawText(String(text), { x, y: yp, size: sz, font, color: col });
+    const dl = (x1: number, y1: number, x2: number, y2: number, th = 0.5, col = rgb(0, 0, 0)) =>
+      page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: th, color: col });
+
+    // Header
+    dt("PAYROLL PACKET", mL, y - 14, 16, hvB);
+    const cLine = company ? `${company.name || ""}${company.ein ? `  —  EIN: ${company.ein}` : ""}` : "";
+    dt(cLine, mL, y - 26, 10, hv, rgb(0.25, 0.25, 0.25));
+    const payDate = run.payDate ? fmtDate(run.payDate) : "—";
+    dt(`Pay Date: ${payDate}`, pageW - mR - 130, y - 14, 10, hvB);
+    dt(`Period: ${fmtDate(run.periodStart)} – ${fmtDate(run.periodEnd)}`, pageW - mR - 130, y - 25, 8, hv, rgb(0.35, 0.35, 0.35));
+    dt(`Status: ${(run.status || "").toUpperCase()}`, pageW - mR - 130, y - 34, 8, hv, rgb(0.35, 0.35, 0.35));
+    y -= 43; dl(mL, y, pageW - mR, y, 2); y -= 14;
+
+    // Payroll Summary stats
+    const totalGross = allItems.reduce((s, i) => s + Number(i.gross_pay || 0), 0);
+    const totalDed   = allItems.reduce((s, i) => s + Number(i.deductions || 0), 0);
+    const totalNet   = allItems.reduce((s, i) => s + Number(i.net_pay || 0), 0);
+    const totalReg   = allItems.reduce((s, i) => s + Number(i.regular_hours || 0), 0);
+    const totalOt    = allItems.reduce((s, i) => s + Number(i.overtime_hours || 0), 0);
+    const totalDtH   = allItems.reduce((s, i) => s + Number(i.double_time_hours || 0), 0);
+    dt("PAYROLL SUMMARY", mL, y, 11, hvB);
+    y -= 4; dl(mL, y, pageW - mR, y, 0.5, rgb(0.3, 0.3, 0.3)); y -= 12;
+    const stats: [string, string][] = [
+      ["Total Workers", String(allItems.length)],
+      ["Total Regular Hrs", totalReg.toFixed(2)],
+      ["Total Overtime Hrs", totalOt.toFixed(2)],
+      ["Total Double Time Hrs", totalDtH.toFixed(2)],
+      ["Total Gross Pay", `$${fmt(totalGross)}`],
+      ["Total Deductions", `$${fmt(totalDed)}`],
+      ["Total Net Pay", `$${fmt(totalNet)}`],
+      ["Funding Required", `$${fmt(totalNet)}`],
+    ];
+    const colW = cW / 4, boxH = 26;
+    for (let i = 0; i < stats.length; i++) {
+      const col = i % 4, row = Math.floor(i / 4);
+      const bx = mL + col * colW, by = y - row * (boxH + 4);
+      page.drawRectangle({ x: bx, y: by - boxH + 2, width: colW - 4, height: boxH, borderColor: rgb(0.82, 0.82, 0.82), borderWidth: 0.5, color: rgb(1, 1, 1) });
+      dt(stats[i][0], bx + 4, by - 7,  7,  hv, rgb(0.45, 0.45, 0.45));
+      dt(stats[i][1], bx + 4, by - 17, 11, hvB);
+    }
+    y -= Math.ceil(stats.length / 4) * (boxH + 4) + 14;
+
+    // Payment Method Totals
+    const byMethod = (pred: (m: unknown) => boolean) => allItems.filter(i => pred(i.payment_method));
+    const checkItemsS  = byMethod(m => !m || m === "check");
+    const achItemsS    = byMethod(m => m === "direct_deposit");
+    const cashItemsS   = byMethod(m => m === "cash");
+    const tradeItemsS  = byMethod(m => m === "trade");
+    const otherItemsS  = byMethod(m => !!m && !["check","direct_deposit","cash","trade"].includes(m as string));
+    const sumNet = (arr: typeof allItems) => arr.reduce((s, i) => s + Number(i.net_pay || 0), 0);
+    const mLabel = (m: unknown) => {
+      if (!m || m === "check") return "Check";
+      if (m === "direct_deposit") return "Direct Deposit / ACH";
+      if (m === "cash") return "Cash";
+      if (m === "trade") return "Trade / Non-Cash";
+      return String(m);
+    };
+    dt("PAYMENT METHOD TOTALS", mL, y, 11, hvB);
+    y -= 4; dl(mL, y, pageW - mR, y, 0.5, rgb(0.3, 0.3, 0.3)); y -= 12;
+    dt("Method", mL + 4, y, 9, hvB);
+    dt("Count", mL + cW * 0.68, y, 9, hvB);
+    dt("Total Net", pageW - mR - 58, y, 9, hvB);
+    y -= 4; dl(mL, y, pageW - mR, y, 1); y -= 10;
+    const pmRows: [string, number, number][] = [
+      ...(checkItemsS.length  > 0 ? [["Check", checkItemsS.length, sumNet(checkItemsS)] as [string, number, number]] : []),
+      ...(achItemsS.length    > 0 ? [["Direct Deposit / ACH", achItemsS.length, sumNet(achItemsS)] as [string, number, number]] : []),
+      ...(cashItemsS.length   > 0 ? [["Cash", cashItemsS.length, sumNet(cashItemsS)] as [string, number, number]] : []),
+      ...(tradeItemsS.length  > 0 ? [["Trade / Non-Cash", tradeItemsS.length, sumNet(tradeItemsS)] as [string, number, number]] : []),
+      ...(otherItemsS.length  > 0 ? [["Other", otherItemsS.length, sumNet(otherItemsS)] as [string, number, number]] : []),
+    ];
+    for (const [label, cnt, tot] of pmRows) {
+      dt(label, mL + 4, y, 9, hv);
+      dt(String(cnt), mL + cW * 0.68 + 4, y, 9, hv);
+      const ts = `$${fmt(tot)}`;
+      dt(ts, pageW - mR - hv.widthOfTextAtSize(ts, 9), y, 9, hv);
+      y -= 3; dl(mL, y, pageW - mR, y, 0.3, rgb(0.9, 0.9, 0.9)); y -= 9;
+    }
+    dl(mL, y + 2, pageW - mR, y + 2, 1.5); y -= 2;
+    dt("TOTAL", mL + 4, y, 9, hvB);
+    dt(String(allItems.length), mL + cW * 0.68 + 4, y, 9, hvB);
+    const tnStr = `$${fmt(totalNet)}`;
+    dt(tnStr, pageW - mR - hvB.widthOfTextAtSize(tnStr, 9), y, 9, hvB);
+    y -= 18;
+
+    // Transaction Run — All Workers
+    dt("PAYROLL TRANSACTION RUN — ALL WORKERS", mL, y, 11, hvB);
+    y -= 4; dl(mL, y, pageW - mR, y, 0.5, rgb(0.3, 0.3, 0.3)); y -= 12;
+    type ColDef = { label: string; x: number; w: number; align?: "right" | "center" };
+    const cols: ColDef[] = [
+      { label: "Worker",      x: mL + 2,   w: 100 },
+      { label: "Type",        x: mL + 104, w: 38  },
+      { label: "Reg Hrs",     x: mL + 144, w: 42,  align: "right"  },
+      { label: "OT Hrs",      x: mL + 188, w: 36,  align: "right"  },
+      { label: "Gross",       x: mL + 226, w: 58,  align: "right"  },
+      { label: "Deductions",  x: mL + 286, w: 58,  align: "right"  },
+      { label: "Net Pay",     x: mL + 346, w: 62,  align: "right"  },
+      { label: "Method",      x: mL + 410, w: 62,  align: "center" },
+      { label: "Check #",     x: mL + 474, w: 52,  align: "center" },
+    ];
+    const tx = (text: string, c: ColDef, yp: number, font = hv) => {
+      const sz = 8;
+      const tw = font.widthOfTextAtSize(text, sz);
+      const xp = !c.align ? c.x : c.align === "right" ? c.x + c.w - tw : c.x + (c.w - tw) / 2;
+      dt(text, xp, yp, sz, font);
+    };
+    for (const c of cols) tx(c.label, c, y, hvB);
+    y -= 4; dl(mL, y, pageW - mR, y, 1.5); y -= 10;
+    let gT = 0, dT = 0, nT = 0;
+    for (let idx = 0; idx < allItems.length; idx++) {
+      if (y < mB + 28) {
+        dt(`… and ${allItems.length - idx} more workers (see Payroll Reports for full detail)`, mL + 2, y, 7, hv, rgb(0.5, 0.5, 0.5));
+        break;
+      }
+      const item = allItems[idx];
+      const wr = workerMap[item.worker_id as string];
+      let wn = wr ? `${wr.first_name} ${wr.last_name}` : String(item.worker_id || "—");
+      const fullWn = wn;
+      while (wn.length > 2 && hv.widthOfTextAtSize(wn, 8) > 98) wn = wn.slice(0, -1);
+      if (wn !== fullWn) wn += "…";
+      const gross = Number(item.gross_pay || 0), ded = Number(item.deductions || 0), net = Number(item.net_pay || 0);
+      gT += gross; dT += ded; nT += net;
+      if (idx % 2 === 1) page.drawRectangle({ x: mL, y: y - 2, width: cW, height: 10, color: rgb(0.975, 0.975, 0.975) });
+      tx(wn, cols[0], y);
+      tx(String(item.pay_type || "hourly").slice(0, 8), cols[1], y);
+      tx(Number(item.regular_hours || 0).toFixed(2), cols[2], y);
+      tx(Number(item.overtime_hours || 0).toFixed(2), cols[3], y);
+      tx(`$${fmt(gross)}`, cols[4], y);
+      tx(`$${fmt(ded)}`, cols[5], y);
+      tx(`$${fmt(net)}`, cols[6], y, hvB);
+      tx(mLabel(item.payment_method), cols[7], y);
+      tx(String(item.check_number || "—"), cols[8], y);
+      y -= 3; dl(mL, y, pageW - mR, y, 0.3, rgb(0.9, 0.9, 0.9)); y -= 8;
+    }
+    dl(mL, y + 2, pageW - mR, y + 2, 1.5); y -= 2;
+    dt("TOTALS", cols[0].x, y, 8, hvB);
+    tx(`$${fmt(gT)}`, cols[4], y, hvB);
+    tx(`$${fmt(dT)}`, cols[5], y, hvB);
+    tx(`$${fmt(nT)}`, cols[6], y, hvB);
+    y -= 16;
+
+    // ACH batch section
+    if (achItemsS.length > 0 && y > mB + 32) {
+      dt("ACH / DIRECT DEPOSIT BATCH", mL, y, 11, hvB);
+      y -= 4; dl(mL, y, pageW - mR, y, 0.5, rgb(0.3, 0.3, 0.3)); y -= 12;
+      dt(`Employees via ACH: ${achItemsS.length}`, mL + 2, y, 9, hv);
+      dt(`ACH Total: $${fmt(sumNet(achItemsS))}`, mL + 140, y, 9, hv);
+      dt(`Effective Date: ${payDate}`, mL + 270, y, 9, hv);
+      const bs = run.status === "paid" ? "Settled" : run.status === "processed" ? "Approved — Pending Settlement" : "Pending";
+      dt(`Batch Status: ${bs}`, mL + 390, y, 9, hv);
+    }
+
+    // Footer
+    dl(mL, mB + 10, pageW - mR, mB + 10, 0.5, rgb(0.8, 0.8, 0.8));
+    const ft = `Payroll Packet  —  ${company?.name || ""}  —  Printed ${new Date().toLocaleDateString("en-US")}  —  CONFIDENTIAL`;
+    dt(ft, pageW / 2 - hv.widthOfTextAtSize(ft, 7) / 2, mB + 2, 7, hv, rgb(0.6, 0.6, 0.6));
+    return doc.save();
+  }
+
   // GET /api/payroll-runs/:id/checks-pdf — all checks for a run as merged PDF
   app.get("/api/payroll-runs/:id/checks-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const runId = req.params.id;
       const isCalibration = req.query.mode === "calibration" || req.query.mode === "test";
+      const isPacket = req.query.packet === "1";
 
       const run = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${runId}`));
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -17442,7 +17625,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       }
 
-      const pdfBytes = await merged.save();
+      let pdfBytes = await merged.save();
+
+      // When printing a payroll packet, prepend the summary cover page
+      if (isPacket && !isCalibration && items.length > 0) {
+        const allItemsRaw = pgRows<Record<string, unknown>>(await db.execute(sql`
+          SELECT * FROM payroll_items WHERE payroll_run_id = ${runId} ORDER BY check_number
+        `));
+        // Top up workerMap with any non-check workers
+        const allWIds = [...new Set(allItemsRaw.map(i => i.worker_id as string).filter(Boolean))];
+        const missing = allWIds.filter(id => !workerMap[id]);
+        if (missing.length > 0) {
+          const mList = sql.join(missing.map(id => sql`${id}`), sql`, `);
+          for (const w of pgRows<CheckWorkerRow>(await db.execute(sql`SELECT * FROM workers WHERE id IN (${mList})`))) workerMap[w.id] = w;
+        }
+        const summaryBytes = await renderSummaryPdf({ run: runNorm, allItems: allItemsRaw, workerMap, company: coNorm });
+        const { PDFDocument: PDF2 } = await import("pdf-lib");
+        const finalDoc    = await PDF2.create();
+        const loadedSumm  = await PDF2.load(summaryBytes);
+        const loadedChecks = await PDF2.load(pdfBytes);
+        const [summaryPg] = await finalDoc.copyPages(loadedSumm, [0]);
+        finalDoc.addPage(summaryPg);
+        for (const pg of await finalDoc.copyPages(loadedChecks, loadedChecks.getPageIndices())) finalDoc.addPage(pg);
+        pdfBytes = await finalDoc.save();
+      }
+
       const userId   = req.session.userId;
       const totalAmt = items.reduce((s, i) => s + Number(i.net_pay || 0), 0);
 
@@ -17473,7 +17680,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `inline; filename="checks-${runId.slice(0, 8)}.pdf"`);
+      res.setHeader("Content-Disposition", `inline; filename="${isPacket ? "payroll-packet" : "checks"}-${runId.slice(0, 8)}.pdf"`);
       res.send(Buffer.from(pdfBytes));
     } catch (err: any) {
       console.error("[checksBatchPDF] ERROR:", err?.message || err, err?.stack);
