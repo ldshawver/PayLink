@@ -39,6 +39,15 @@ export function serveStatic(app: Express) {
         });
       }
     }
+    // Root marketing page
+    app.get("/", (_req, res, next) => {
+      const indexFile = path.join(marketingPath, "index.html");
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        next();
+      }
+    });
   }
 
   // ── React SPA catch-all (app pages, login, clock-in, etc.) ───────────────
