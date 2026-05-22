@@ -432,7 +432,9 @@ export default function ExpensesPage() {
   const { data: reimbursements = [] } = useQuery<any[]>({ queryKey: ["/api/payroll-reimbursements"], queryFn: async () => { const r = await fetch("/api/payroll-reimbursements", { credentials: "include" }); return r.ok ? r.json() : []; } });
   const { data: recurringTemplates = [] } = useQuery<any[]>({ queryKey: ["/api/recurring-expenses"], queryFn: async () => { const r = await fetch("/api/recurring-expenses", { credentials: "include" }); return r.ok ? r.json() : []; } });
 
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager";
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
+    currentUser?.role === "owner" || currentUser?.role === "supervisor" ||
+    (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
   const myWorkerId = currentUser?.workerId;
   const isContractor = currentUser?.workerType === "contractor";
 

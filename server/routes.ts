@@ -157,6 +157,9 @@ function expandRoleForGuard(role: string): string[] {
   if (role === "platform_support" || role === "platform_implementation") {
     return ["admin", "manager", role];
   }
+  if (role === "owner") {
+    return ["admin", "owner"];
+  }
   if (["tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin"].includes(role)) {
     return ["admin", role];
   }
