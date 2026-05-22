@@ -16865,6 +16865,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // ── Paystub / vendor-check info (right column of Zone 2) ────────────────
     // vcMemo declared here so it is accessible in both Zone 2 and Zone 3 sections
     const vcMemo = params.vendorCheck?.memo || "";
+    // earnRows/totalHrs hoisted here so Zone 3 can reference them regardless of branch taken in Zone 2
+    type ERow = [string, string, string, string, string];
+    const earnRows: ERow[] = [];
+    let totalHrs = 0;
     if (!params.vendorCheck) {
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
@@ -16897,9 +16901,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (showYtdTotals) page.drawText("YTD", { x: psC5, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     psY -= 13;
 
-    type ERow = [string, string, string, string, string];
-    const earnRows: ERow[] = [];
-    let totalHrs = 0;
     if (isCalibration) {
       earnRows.push(["Regular",         "80.00", "$15.45/hr", `$${fmtMoney(grossPay)}`, `$${fmtMoney(ytdGross)}`]);
       earnRows.push(["Overtime (1.5x)", "2.50",  "$23.18/hr", "$57.95",                 "—"]);
@@ -27616,7 +27617,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             LEFT JOIN jobs j ON j.id = w.default_branch_id
             WHERE r.company_id = ${companyId}
               AND r.status = 'pending'
-              AND r.worker_id = ANY(${workerFilter}::text[])
+              AND r.worker_id = ANY(ARRAY[${sql.raw(workerFilter.map((id: string) => "'" + id + "'").join(","))}])
             ORDER BY r.requested_at DESC
             LIMIT 50
           `);
@@ -27681,7 +27682,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
               AND e.clock_in IS NOT NULL
               AND e.clock_out IS NULL
               AND e.date < ${today}
-              AND e.worker_id = ANY(${workerFilter}::text[])
+              AND e.worker_id = ANY(ARRAY[${sql.raw(workerFilter.map((id: string) => "'" + id + "'").join(","))}])
             ORDER BY e.date DESC
             LIMIT 20
           `);
@@ -27740,7 +27741,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
             WHERE e.company_id = ${companyId}
               AND e.status = 'pending'
-              AND e.worker_id = ANY(${workerFilter}::text[])
+              AND e.worker_id = ANY(ARRAY[${sql.raw(workerFilter.map((id: string) => "'" + id + "'").join(","))}])
               AND (e.overtime_hours::numeric > 4 OR e.is_unscheduled = TRUE OR e.date < ${today})
             ORDER BY e.date DESC
             LIMIT 20
@@ -27806,7 +27807,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             WHERE e.company_id = ${companyId}
               AND e.status = 'pending'
               AND e.source = 'manual'
-              AND e.worker_id = ANY(${workerFilter}::text[])
+              AND e.worker_id = ANY(ARRAY[${sql.raw(workerFilter.map((id: string) => "'" + id + "'").join(","))}])
             ORDER BY e.date DESC
             LIMIT 20
           `);
@@ -27865,7 +27866,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
             WHERE tp.company_id = ${companyId}
               AND tp.punch_type = 'break_start'
-              AND tp.worker_id = ANY(${workerFilter}::text[])
+              AND tp.worker_id = ANY(ARRAY[${sql.raw(workerFilter.map((id: string) => "'" + id + "'").join(","))}])
               AND NOT EXISTS (
                 SELECT 1 FROM time_punches tp2
                 WHERE tp2.worker_id = tp.worker_id
@@ -28104,7 +28105,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           LEFT JOIN jobs j ON j.id = w.default_branch_id
           WHERE r.company_id = ${companyId}
             AND r.status = 'pending'
-            AND r.worker_id = ANY(${allowedWorkerIds}::text[])
+            AND r.worker_id = ANY(ARRAY[${sql.raw(allowedWorkerIds!.map((id: string) => "'" + id + "'").join(","))}])
           ORDER BY r.requested_at ASC
           LIMIT 20
         `);
@@ -28163,7 +28164,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
           WHERE r.company_id = ${companyId}
             AND r.status = 'pending'
-            AND r.worker_id = ANY(${allowedWorkerIds}::text[])
+            AND r.worker_id = ANY(ARRAY[${sql.raw(allowedWorkerIds!.map((id: string) => "'" + id + "'").join(","))}])
           ORDER BY r.created_at ASC
           LIMIT 20
         `);
