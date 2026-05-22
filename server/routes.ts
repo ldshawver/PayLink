@@ -9411,7 +9411,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/expenses/:id/print-check — generate vendor check PDF + mark expense as paid
-  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const expRow = pgRow<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
@@ -9869,7 +9869,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-invoices/:id/print-check — generate vendor check PDF
-  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const inv = pgRow<any>(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`));
