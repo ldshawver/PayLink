@@ -12051,11 +12051,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Authorization: caller must be either:
       // (a) the contractor on this contract, or
-      // (b) an admin/manager of the company on this contract, or
-      // (c) a registered signer in contract_signers
-      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      // (b) an admin/manager/supervisor of the company on this contract, or
+      // (c) a platform admin (owns all tenants), or
+      // (d) a registered signer in contract_signers
+      const isPlatformAdmin = (user?.role || "").startsWith("platform_");
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "supervisor" ||
+        (user?.role || "").startsWith("tenant_") || isPlatformAdmin;
       const isContractor = workerId && contract.contractor_id === workerId;
-      const isCompanyAdmin = isAdmin && user?.companyId === contract.company_id;
+      // Platform admins can sign any company's contract; tenant roles must belong to the same company
+      const isCompanyAdmin = isAdmin && (isPlatformAdmin || user?.companyId === contract.company_id);
 
       const registeredSignerRes = await db.execute(sql`
         SELECT id FROM contract_signers
