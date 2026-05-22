@@ -24,6 +24,8 @@ import {
   Plus,
   Scale,
   MapPin,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -581,6 +583,7 @@ function CheckPrintCalibrationSection() {
     queryKey: ["/api/remittance-sources"],
   });
   const [micrStatus, setMicrStatus] = useState<"checking" | "ok" | "missing">("checking");
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
 
   useEffect(() => {
     document.fonts.ready.then(async () => {
@@ -712,7 +715,21 @@ function CheckPrintCalibrationSection() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => window.open(`/api/checks/calibration-pdf?remittanceSourceId=${src.id}`, "_blank")}
+                        onClick={() => setPreviewingId(previewingId === src.id ? null : src.id)}
+                        data-testid={`button-preview-check-${src.id}`}
+                      >
+                        {previewingId === src.id
+                          ? <><EyeOff className="h-3.5 w-3.5 mr-1.5" />Hide Preview</>
+                          : <><Eye className="h-3.5 w-3.5 mr-1.5" />Preview</>}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const url = `/api/checks/calibration-pdf?remittanceSourceId=${src.id}`;
+                          const win = window.open(url, "_blank");
+                          if (win) { win.onload = () => { try { win.print(); } catch { /* non-fatal */ } }; }
+                        }}
                         data-testid={`button-test-check-${src.id}`}
                       >
                         <Printer className="h-3.5 w-3.5 mr-1.5" />Print Test Check
@@ -723,6 +740,32 @@ function CheckPrintCalibrationSection() {
                     Positive vertical = shift down · Negative = shift up · Positive horizontal = shift right · Negative = shift left.
                     Print a test check on plain paper, overlay on check stock to measure the offset, then enter the difference here.
                   </p>
+                  {previewingId === src.id && (
+                    <div className="mt-3 rounded-md border bg-muted/30 overflow-hidden" data-testid={`preview-frame-${src.id}`}>
+                      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-muted/50">
+                        <span className="text-xs font-medium text-muted-foreground">Test Check Preview — {src.name}</span>
+                        <Button
+                          size="sm" variant="ghost" className="h-6 text-xs px-2"
+                          onClick={() => {
+                            const url = `/api/checks/calibration-pdf?remittanceSourceId=${src.id}`;
+                            const win = window.open(url, "_blank");
+                            if (win) { win.onload = () => { try { win.print(); } catch { /* non-fatal */ } }; }
+                          }}
+                          data-testid={`button-print-from-preview-${src.id}`}
+                        >
+                          <Printer className="h-3 w-3 mr-1" />Print
+                        </Button>
+                      </div>
+                      <iframe
+                        key={src.id}
+                        src={`/api/checks/calibration-pdf?remittanceSourceId=${src.id}`}
+                        className="w-full border-0"
+                        style={{ height: "500px" }}
+                        title={`Calibration preview — ${src.name}`}
+                        data-testid={`iframe-preview-${src.id}`}
+                      />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             );

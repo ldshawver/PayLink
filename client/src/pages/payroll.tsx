@@ -66,6 +66,95 @@ function fmtPeriodDate(d: string) {
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+function PayrollAuditBanner({
+  draft, processed, approvedUnlocked, getCompanyName,
+}: {
+  draft: PayrollRun[]; processed: PayrollRun[]; approvedUnlocked: PayrollRun[];
+  getCompanyName: (id: string) => string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const total = draft.length + processed.length + approvedUnlocked.length;
+  const fmtDate = (d: string | null | undefined) =>
+    d ? new Date(String(d)).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
+
+  const groups: { label: string; desc: string; runs: PayrollRun[]; color: string }[] = [
+    {
+      label: "Not Processed",
+      desc: "Draft — needs to be run/processed before approval",
+      runs: draft,
+      color: "text-amber-700 dark:text-amber-300",
+    },
+    {
+      label: "Awaiting Approval",
+      desc: "Processed — ready for manager approval",
+      runs: processed,
+      color: "text-orange-700 dark:text-orange-300",
+    },
+    {
+      label: "Approved, Not Locked",
+      desc: "Approved — ACH/checks not yet issued or locked",
+      runs: approvedUnlocked,
+      color: "text-blue-700 dark:text-blue-300",
+    },
+  ].filter(g => g.runs.length > 0);
+
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-4" data-testid="payroll-audit-banner">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+              {total} payroll run{total !== 1 ? "s" : ""} need attention
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+              {draft.length > 0 && <span className="mr-3">· {draft.length} not processed</span>}
+              {processed.length > 0 && <span className="mr-3">· {processed.length} awaiting approval</span>}
+              {approvedUnlocked.length > 0 && <span className="mr-3">· {approvedUnlocked.length} approved but not locked</span>}
+            </p>
+          </div>
+        </div>
+        <Button
+          size="sm" variant="ghost"
+          className="text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30 shrink-0 h-7 px-2"
+          onClick={() => setExpanded(e => !e)}
+          data-testid="button-audit-expand"
+        >
+          {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          <span className="ml-1 text-xs">{expanded ? "Hide" : "Show"}</span>
+        </Button>
+      </div>
+
+      {expanded && (
+        <div className="mt-3 space-y-3">
+          {groups.map(g => (
+            <div key={g.label}>
+              <p className={`text-xs font-semibold uppercase tracking-wide mb-1.5 ${g.color}`}>
+                {g.label} ({g.runs.length})
+                <span className="ml-2 font-normal normal-case opacity-75">— {g.desc}</span>
+              </p>
+              <div className="space-y-1">
+                {g.runs.map(r => (
+                  <div key={r.id} className="flex items-center justify-between text-xs bg-white/60 dark:bg-black/20 rounded px-3 py-1.5 gap-2" data-testid={`audit-run-${r.id}`}>
+                    <span className="font-medium truncate">{getCompanyName(r.companyId)}</span>
+                    <span className="text-muted-foreground shrink-0">
+                      {r.periodStart && r.periodEnd ? `${fmtDate(String(r.periodStart))} – ${fmtDate(String(r.periodEnd))}` : "—"}
+                    </span>
+                    <Badge variant="outline" className="text-xs shrink-0 capitalize">{r.status}</Badge>
+                    <span className="font-mono text-muted-foreground shrink-0">
+                      ${Number(r.totalGross || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProcessPayrollTab() {
   const { toast } = useToast();
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
@@ -175,6 +264,11 @@ function ProcessPayrollTab() {
 
   const totalRuns = payrollRuns.length;
   const totalPayroll = payrollRuns.reduce((sum, r) => sum + Number(r.totalGross || 0), 0);
+
+  const auditDraft = payrollRuns.filter(r => r.status === "draft");
+  const auditProcessed = payrollRuns.filter(r => r.status === "processed");
+  const auditApprovedUnlocked = payrollRuns.filter(r => r.status === "approved" && !r.isLocked);
+  const auditTotal = auditDraft.length + auditProcessed.length + auditApprovedUnlocked.length;
 
   const getCompanyName = (id: string) => companies.find(c => c.id === id)?.name || id;
   const getWorkerName = (id: string) => {
@@ -296,6 +390,14 @@ function ProcessPayrollTab() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── Payroll Audit Warning ──────────────────────────────────────── */}
+      {auditTotal > 0 && <PayrollAuditBanner
+        draft={auditDraft}
+        processed={auditProcessed}
+        approvedUnlocked={auditApprovedUnlocked}
+        getCompanyName={getCompanyName}
+      />}
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
