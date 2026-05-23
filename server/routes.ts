@@ -9893,14 +9893,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
       }
 
-      // Resolve payee name from worker if not supplied
+      // Resolve payee name from the worker record only. The users table does
+      // not carry first_name/last_name in production, so keep this path away
+      // from users aliases entirely.
       const workerRow = pgRow<any>(await db.execute(sql`
-        SELECT u.username, w.first_name, w.last_name FROM workers w
-        LEFT JOIN users u ON u.worker_id = w.id
+        SELECT w.first_name, w.last_name, w.email, w.work_email, w.home_email
+        FROM workers w
         WHERE w.id = ${inv.contractor_id} LIMIT 1
       `));
       const defaultPayeeName = workerRow
-        ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || workerRow.username || "Contractor"
+        ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || "Contractor"
         : "Contractor";
 
       const {

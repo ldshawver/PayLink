@@ -597,7 +597,7 @@ export default function ExpensesPage() {
   const invoicePrintMutation = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: typeof invoicePrintForm }) => {
       const res = await fetch(`/api/contractor-invoices/${id}/print-check`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", cache: "no-store",
         body: JSON.stringify({
           payeeName: form.payeeName,
           payeeAddress: form.payeeAddress,
@@ -607,7 +607,17 @@ export default function ExpensesPage() {
           amount: parseFloat(form.amount),
         }),
       });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      if (!res.ok) {
+        let message = "Failed to print invoice check";
+        try {
+          const e = await res.json();
+          message = e?.message || message;
+        } catch {
+          message = await res.text().catch(() => message);
+        }
+        if (res.status === 401) message = "Your session is not authenticated. Please refresh, sign in again, and retry printing the check.";
+        throw new Error(message);
+      }
       return res.blob();
     },
     onSuccess: (blob) => {
