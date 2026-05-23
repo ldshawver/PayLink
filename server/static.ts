@@ -18,9 +18,6 @@ export function serveStatic(app: Express) {
     );
   }
 
-  // ── React app static assets (hashed filenames, takes priority) ────────────
-  app.use(express.static(distPath));
-
   // ── Marketing site static assets (css, js, assets, images) ───────────────
   const marketingPath = path.resolve(process.cwd(), "public-site", "public");
   if (fs.existsSync(marketingPath)) {
@@ -49,6 +46,11 @@ export function serveStatic(app: Express) {
       }
     });
   }
+
+  // ── React app static assets (hashed filenames) ────────────────────────────
+  // Keep index serving disabled here so the React build cannot preempt the
+  // approved public marketing homepage at /.
+  app.use(express.static(distPath, { index: false }));
 
   // ── React SPA catch-all (app pages, login, clock-in, etc.) ───────────────
   // Exclude static asset paths so missing files return 404 instead of index.html.

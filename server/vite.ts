@@ -1,4 +1,4 @@
-import { type Express } from "express";
+import express, { type Express } from "express";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
@@ -7,6 +7,10 @@ import path from "path";
 import { nanoid } from "nanoid";
 
 const viteLogger = createLogger();
+const MARKETING_PAGES = [
+  "demo", "features", "pricing", "security", "contact",
+  "vendor-portal", "terms", "privacy", "signup", "clock",
+];
 
 export async function setupVite(server: Server, app: Express) {
   const serverOptions = {
@@ -30,6 +34,27 @@ export async function setupVite(server: Server, app: Express) {
   });
 
   app.use(vite.middlewares);
+
+  const marketingPath = path.resolve(process.cwd(), "public-site", "public");
+  if (fs.existsSync(marketingPath)) {
+    app.use(express.static(marketingPath, { index: false }));
+    for (const page of MARKETING_PAGES) {
+      const htmlFile = path.join(marketingPath, `${page}.html`);
+      if (fs.existsSync(htmlFile)) {
+        app.get(`/${page}`, (_req, res) => {
+          res.sendFile(htmlFile);
+        });
+      }
+    }
+    app.get("/", (_req, res, next) => {
+      const indexFile = path.join(marketingPath, "index.html");
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        next();
+      }
+    });
+  }
 
   app.use("/{*path}", async (req, res, next) => {
     const url = req.originalUrl;
