@@ -79,7 +79,13 @@ export function serveStatic(app: Express) {
       return next();
     }
     const appShell = path.resolve(distPath, "app.html");
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.sendFile(fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html"));
+    const shellPath = fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html");
+    const headers: Record<string, string> = {
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    };
+    if (req.path === "/login") {
+      headers["Clear-Site-Data"] = '"cache", "storage"';
+    }
+    res.sendFile(shellPath, { headers });
   });
 }
