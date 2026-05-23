@@ -338,6 +338,8 @@ export const users = pgTable("users", {
   role: text("role").default("admin"),
   companyId: varchar("company_id"),
   workerId: varchar("worker_id"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
   isActive: boolean("is_active").default(true),
   /** AES-256-GCM encrypted TOTP secret (base32). Null = MFA not enrolled. */
   totpSecret: text("totp_secret"),

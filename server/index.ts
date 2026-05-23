@@ -3142,6 +3142,8 @@ Thank you,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
     await run("workers.person_id", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS person_id VARCHAR REFERENCES persons(id)`);
+    await run("users.first_name", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT`);
+    await run("users.last_name", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT`);
 
     // ── Task 2: All 15 pay categories — new payroll_items columns ─────────────
     await run("payroll_items.salary_pay",       sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS salary_pay NUMERIC DEFAULT 0`);
