@@ -65,8 +65,8 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /* ── CTA: Clock In / Clock Out → real private app ─────────────────────── */
-  var APP_CLOCK_URL = 'https://app.mypaylink.app/clock-in';
-  var APP_LOGIN_URL = 'https://app.mypaylink.app/login';
+  var APP_CLOCK_URL = '/app.html?route=%2Fclock-in';
+  var APP_LOGIN_URL = '/app.html?route=%2Flogin';
 
   if (btnIn) {
     btnIn.addEventListener('click', function() {

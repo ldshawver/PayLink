@@ -1,3 +1,13 @@
+(function bridgeAppRoutes() {
+  var appExact = ['/login', '/clock-in', '/time-clock', '/signing-complete'];
+  var path = window.location.pathname;
+  var isAppRoute = appExact.indexOf(path) !== -1 || path === '/app' || path.indexOf('/app/') === 0 || path === '/platform' || path.indexOf('/platform/') === 0;
+  if (!isAppRoute || path === '/app.html') return;
+
+  var route = path + window.location.search + window.location.hash;
+  window.location.replace('/app.html?route=' + encodeURIComponent(route));
+})();
+
 document.addEventListener('DOMContentLoaded', () => {
 
   /* ── Scroll-driven card scale ──────────────────────────────────────────── */
