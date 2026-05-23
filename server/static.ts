@@ -12,6 +12,7 @@ const MARKETING_PAGES = [
 
 function resolveMarketingPath() {
   const candidates = [
+    path.resolve(__dirname, "public"),
     path.resolve(__dirname, "marketing-public"),
     path.resolve(process.cwd(), "public-site", "public"),
     path.resolve(__dirname, "public-site", "public"),
@@ -58,9 +59,9 @@ export function serveStatic(app: Express) {
   }
 
   // ── React app static assets (hashed filenames) ────────────────────────────
-  // Keep index serving disabled here so the React build cannot preempt the
-  // approved public marketing homepage at /.
-  app.use(express.static(distPath, { index: false }));
+  // index.html is the approved public marketing homepage. The React app shell
+  // is preserved as app.html and used by the SPA catch-all below.
+  app.use(express.static(distPath));
 
   // ── React SPA catch-all (app pages, login, clock-in, etc.) ───────────────
   // Exclude static asset paths so missing files return 404 instead of index.html.
@@ -71,6 +72,7 @@ export function serveStatic(app: Express) {
     if (STATIC_ASSET_PREFIXES.some(p => req.path.startsWith(p)) || API_ROUTES.has(req.path)) {
       return next();
     }
-    res.sendFile(path.resolve(distPath, "index.html"));
+    const appShell = path.resolve(distPath, "app.html");
+    res.sendFile(fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html"));
   });
 }

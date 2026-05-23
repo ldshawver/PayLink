@@ -73,9 +73,13 @@ async function buildAll() {
   });
 
   console.log("copying marketing site...");
+  await copyFile(
+    resolve(projectRoot, "dist", "public", "index.html"),
+    resolve(projectRoot, "dist", "public", "app.html"),
+  );
   await cp(
     resolve(projectRoot, "public-site", "public"),
-    resolve(projectRoot, "dist", "marketing-public"),
+    resolve(projectRoot, "dist", "public"),
     { recursive: true },
   );
 
