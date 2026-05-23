@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, normalizeApiError } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -92,6 +92,7 @@ function StatusBadge({ status }: { status: string }) {
 
 interface PayrollRun {
   id: string;
+  companyId?: string;
   periodStart: string;
   periodEnd: string;
   status: string;
@@ -104,6 +105,8 @@ interface PayrollRun {
 // Parse a raw fetch error (which may be "400: {\"message\":\"...\"}") into a clean string
 function parseApiError(err: Error): string {
   const raw = err.message || "";
+  const statusMatch = raw.match(/^\d+:\s*(.+)$/s);
+  if (statusMatch && !statusMatch[1].trim().startsWith("{")) return statusMatch[1].trim();
   const jsonMatch = raw.match(/^\d+:\s*(\{[\s\S]*\})\s*$/);
   if (jsonMatch) {
     try {
@@ -112,6 +115,16 @@ function parseApiError(err: Error): string {
     } catch {}
   }
   return raw;
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  try {
+    const res = await fetch(url, { credentials: "include", cache: "no-store" });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    return res.json();
+  } catch (error) {
+    throw normalizeApiError(error);
+  }
 }
 
 export default function TreasuryPage() {
@@ -141,13 +154,12 @@ export default function TreasuryPage() {
   }, [companiesQuery.data, isPlatformUser, selectedCompanyId, user?.companyId]);
 
   const companyQuery = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : "";
+  const noCompanySelected = isPlatformUser && !selectedCompanyId;
 
   const statusQuery = useQuery<TreasuryStatus>({
     queryKey: ["/api/treasury/status", selectedCompanyId],
     queryFn: async () => {
-      const res = await fetch(`/api/treasury/status${companyQuery}`, { credentials: "include" });
-      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-      return res.json();
+      return fetchJson<TreasuryStatus>(`/api/treasury/status${companyQuery}`);
     },
     enabled: !isPlatformUser || !!selectedCompanyId,
     retry: false,
@@ -155,14 +167,23 @@ export default function TreasuryPage() {
   const txQuery = useQuery<TreasuryTransaction[]>({
     queryKey: ["/api/treasury/transactions", selectedCompanyId],
     queryFn: async () => {
-      const res = await fetch(`/api/treasury/transactions${companyQuery}`, { credentials: "include" });
-      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-      return res.json();
+      return fetchJson<TreasuryTransaction[]>(`/api/treasury/transactions${companyQuery}`);
     },
     enabled: !isPlatformUser || !!selectedCompanyId,
     retry: false,
   });
-  const runsQuery = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
+  const runsQuery = useQuery<PayrollRun[]>({
+    queryKey: ["/api/payroll-runs", selectedCompanyId],
+    queryFn: async () => {
+      return fetchJson<PayrollRun[]>(`/api/payroll-runs${companyQuery}`);
+    },
+    enabled: !noCompanySelected,
+  });
+
+  useEffect(() => {
+    setSelectedRunId("");
+    setDisburseResult(null);
+  }, [selectedCompanyId]);
 
   const setupMutation = useMutation({
     mutationFn: async () => {
@@ -174,7 +195,7 @@ export default function TreasuryPage() {
       toast({ title: "Treasury set up successfully", description: `Financial Account: ${data.financialAccount?.id}` });
     },
     onError: (err: Error) => {
-      const msg = parseApiError(err);
+      const msg = parseApiError(normalizeApiError(err));
       setSetupError(msg);
       toast({ title: "Setup failed", description: msg, variant: "destructive" });
     },
@@ -182,7 +203,7 @@ export default function TreasuryPage() {
 
   const disburseMutation = useMutation({
     mutationFn: async (runId: string) => {
-      return apiRequest("POST", `/api/payroll-runs/${runId}/disburse-stripe`).then(r => r.json());
+      return apiRequest("POST", `/api/payroll-runs/${runId}/disburse-stripe`, selectedCompanyId ? { companyId: selectedCompanyId } : {}).then(r => r.json());
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions", selectedCompanyId] });
@@ -196,7 +217,7 @@ export default function TreasuryPage() {
       }
     },
     onError: (err: Error) => {
-      toast({ title: "Disbursement failed", description: err.message, variant: "destructive" });
+      toast({ title: "Disbursement failed", description: parseApiError(normalizeApiError(err)), variant: "destructive" });
     },
   });
 
@@ -207,7 +228,7 @@ export default function TreasuryPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions", selectedCompanyId] });
       toast({ title: `Sync complete — ${result.updated} transactions updated` });
     } catch (err: any) {
-      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+      toast({ title: "Sync failed", description: parseApiError(normalizeApiError(err)), variant: "destructive" });
     } finally {
       setSyncing(false);
     }
@@ -245,7 +266,7 @@ export default function TreasuryPage() {
           </div>
         )}
         {connected && (
-          <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing} data-testid="button-treasury-sync">
+          <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing || noCompanySelected} data-testid="button-treasury-sync">
             {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
             Sync Status
           </Button>
@@ -291,7 +312,7 @@ export default function TreasuryPage() {
                 </AlertDescription>
               </Alert>
             )}
-            <Button onClick={() => { setSetupError(null); setupMutation.mutate(); }} disabled={setupMutation.isPending || (isPlatformUser && !selectedCompanyId)} data-testid="button-treasury-setup" size="lg">
+            <Button onClick={() => { setSetupError(null); setupMutation.mutate(); }} disabled={setupMutation.isPending || noCompanySelected} data-testid="button-treasury-setup" size="lg">
               {setupMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
               Set Up Treasury Financial Account
             </Button>
@@ -402,7 +423,7 @@ export default function TreasuryPage() {
                 </div>
                 <Button
                   data-testid="button-disburse-treasury"
-                  disabled={!selectedRunId || disburseMutation.isPending || fa?.features["outbound_payments.ach"] !== "active"}
+                  disabled={!selectedRunId || noCompanySelected || disburseMutation.isPending || fa?.features["outbound_payments.ach"] !== "active"}
                   onClick={() => selectedRunId && disburseMutation.mutate(selectedRunId)}
                 >
                   {disburseMutation.isPending

@@ -15,7 +15,7 @@ precacheAndRoute(self.__WB_MANIFEST);
 // (e.g. index.html served for /fonts/micrenc.ttf before the static-asset
 // catch-all was fixed) are purged and the fonts load correctly.
 self.addEventListener("activate", (event: ExtendableEvent) => {
-  const LEGACY_CACHES = ["static-assets-cache"];
+  const LEGACY_CACHES = ["static-assets-cache", "api-cache"];
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => LEGACY_CACHES.includes(k)).map((k) => caches.delete(k)))
@@ -71,20 +71,6 @@ registerRoute(
       cacheName: "gstatic-fonts-cache",
       plugins: [
         new ExpirationPlugin({ maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 }),
-        new CacheableResponsePlugin({ statuses: [0, 200] }),
-      ],
-    })
-  )
-);
-
-registerRoute(
-  new Route(
-    ({ url }) => url.pathname.startsWith("/api/"),
-    new NetworkFirst({
-      cacheName: "api-cache",
-      networkTimeoutSeconds: 10,
-      plugins: [
-        new ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 60 * 5 }),
         new CacheableResponsePlugin({ statuses: [0, 200] }),
       ],
     })

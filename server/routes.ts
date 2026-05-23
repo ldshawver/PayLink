@@ -4735,10 +4735,17 @@ export async function registerRoutes(
 
   // ── Stripe Treasury Routes ─────────────────────────────────────────────────
 
-  async function resolveTreasuryCompanyId(req: Request, source: "query" | "body" = "query"): Promise<{ companyId: string | null; user: any }> {
+  function firstString(value: unknown): string | null {
+    if (Array.isArray(value)) return typeof value[0] === "string" ? value[0] : null;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
+  async function resolveTreasuryCompanyId(req: Request): Promise<{ companyId: string | null; user: any }> {
     const user = await storage.getUser(req.session.userId!);
-    const requestedCompanyId = source === "body" ? req.body?.companyId : req.query.companyId;
-    const requested = Array.isArray(requestedCompanyId) ? requestedCompanyId[0] : requestedCompanyId;
+    const requested =
+      firstString(req.body?.companyId) ||
+      firstString(req.query.companyId) ||
+      firstString(req.headers["x-company-id"]);
     const companyId = isPlatformUser(user?.role) ? (requested || user?.companyId || null) : (user?.companyId || null);
     return { companyId, user };
   }
@@ -4746,7 +4753,7 @@ export async function registerRoutes(
   app.get("/api/treasury/status", requireAuth, requireRole("admin"), requireFeature("tenant.finance.treasury"), async (req, res) => {
     try {
       const { companyId } = await resolveTreasuryCompanyId(req);
-      if (!companyId) return res.status(400).json({ message: "No company associated with this account. Platform admins must select a company." });
+      if (!companyId) return res.status(400).json({ code: "COMPANY_CONTEXT_REQUIRED", message: "Select a company before viewing Treasury." });
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
 
@@ -4768,10 +4775,11 @@ export async function registerRoutes(
   app.post("/api/treasury/setup", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req, res) => {
     try {
       // Platform admins may pass a companyId in the request body; company admins use their own.
-      const { companyId } = await resolveTreasuryCompanyId(req, "body");
+      const { companyId } = await resolveTreasuryCompanyId(req);
       if (!companyId) {
         return res.status(400).json({
-          message: "No company associated with this account. Platform admins must pass a companyId in the request body."
+          code: "COMPANY_CONTEXT_REQUIRED",
+          message: "Select a company before setting up Treasury."
         });
       }
       const company = await storage.getCompany(companyId);
@@ -4811,7 +4819,7 @@ export async function registerRoutes(
   app.get("/api/treasury/transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId } = await resolveTreasuryCompanyId(req);
-      if (!companyId) return res.status(400).json({ message: "No company associated with this account. Platform admins must select a company." });
+      if (!companyId) return res.status(400).json({ code: "COMPANY_CONTEXT_REQUIRED", message: "Select a company before viewing Treasury transactions." });
       const payrollRunId = req.query.payrollRunId as string | undefined;
       const transactions = await storage.getTreasuryOutboundPayments(companyId, payrollRunId);
       res.json(transactions);
@@ -4823,8 +4831,8 @@ export async function registerRoutes(
 
   app.post("/api/treasury/sync", requireAuth, requireRole("admin"), async (req, res) => {
     try {
-      const { companyId } = await resolveTreasuryCompanyId(req, "body");
-      if (!companyId) return res.status(400).json({ message: "No company associated with this account. Platform admins must select a company." });
+      const { companyId } = await resolveTreasuryCompanyId(req);
+      if (!companyId) return res.status(400).json({ code: "COMPANY_CONTEXT_REQUIRED", message: "Select a company before syncing Treasury." });
       const company = await storage.getCompany(companyId);
       if (!company?.stripeFinancialAccountId) return res.status(400).json({ message: "Treasury not set up" });
 
@@ -4856,15 +4864,15 @@ export async function registerRoutes(
 
   app.post("/api/payroll-runs/:id/disburse-stripe", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return res.status(400).json({ message: "No company" });
-      const company = await storage.getCompany(user.companyId);
-      if (!company) return res.status(404).json({ message: "Company not found" });
-      if (!company.stripeFinancialAccountId) return res.status(400).json({ message: "Stripe Treasury is not set up. Go to Treasury settings to enable it." });
-
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
-      if (run.companyId !== user.companyId) return res.status(403).json({ message: "Not authorized" });
+      const { companyId, user } = await resolveTreasuryCompanyId(req);
+      const effectiveCompanyId = companyId || (isPlatformUser(user?.role) ? run.companyId : null);
+      if (!effectiveCompanyId) return res.status(400).json({ code: "COMPANY_CONTEXT_REQUIRED", message: "Select a company before disbursing payroll." });
+      if (run.companyId !== effectiveCompanyId) return res.status(403).json({ message: "Payroll run does not belong to the selected company" });
+      const company = await storage.getCompany(effectiveCompanyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+      if (!company.stripeFinancialAccountId) return res.status(400).json({ message: "Stripe Treasury is not set up. Go to Treasury settings to enable it." });
       if (run.status !== "processed" && run.status !== "approved") return res.status(400).json({ message: "Payroll run must be processed and approved before disbursing" });
       if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before disbursing" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });

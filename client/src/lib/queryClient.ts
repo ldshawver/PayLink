@@ -17,10 +17,32 @@ function resolveUrl(url: string): string {
   return `${API_BASE_URL}${url}`;
 }
 
+async function readApiErrorMessage(res: Response): Promise<string> {
+  const text = (await res.text()) || res.statusText;
+  if (!text) return res.statusText || "Request failed";
+
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed?.message === "string") return parsed.message;
+    if (typeof parsed?.error === "string") return parsed.error;
+  } catch {
+    // Keep the raw response text for non-JSON errors.
+  }
+
+  return text;
+}
+
+export function normalizeApiError(error: unknown): Error {
+  if (error instanceof TypeError) {
+    return new Error("Network error: PayLink could not reach the server. Please refresh and try again.");
+  }
+  return error instanceof Error ? error : new Error("Unexpected request error");
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const message = await readApiErrorMessage(res);
+    throw new Error(`${res.status}: ${message}`);
   }
 }
 
@@ -29,15 +51,20 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const res = await fetch(resolveUrl(url), {
-    method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
-  });
+  try {
+    const res = await fetch(resolveUrl(url), {
+      method,
+      headers: data ? { "Content-Type": "application/json" } : {},
+      body: data ? JSON.stringify(data) : undefined,
+      credentials: "include",
+      cache: "no-store",
+    });
 
-  await throwIfResNotOk(res);
-  return res;
+    await throwIfResNotOk(res);
+    return res;
+  } catch (error) {
+    throw normalizeApiError(error);
+  }
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
@@ -47,9 +74,15 @@ export const getQueryFn: <T>(options: {
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
     const path = queryKey.join("/") as string;
-    const res = await fetch(resolveUrl(path), {
-      credentials: "include",
-    });
+    let res: Response;
+    try {
+      res = await fetch(resolveUrl(path), {
+        credentials: "include",
+        cache: "no-store",
+      });
+    } catch (error) {
+      throw normalizeApiError(error);
+    }
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
