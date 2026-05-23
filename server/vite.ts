@@ -12,6 +12,14 @@ const MARKETING_PAGES = [
   "vendor-portal", "terms", "privacy", "signup", "clock",
 ];
 
+function resolveMarketingPath() {
+  const candidates = [
+    path.resolve(process.cwd(), "public-site", "public"),
+    path.resolve(__dirname, "..", "public-site", "public"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
 export async function setupVite(server: Server, app: Express) {
   const serverOptions = {
     middlewareMode: true,
@@ -35,8 +43,8 @@ export async function setupVite(server: Server, app: Express) {
 
   app.use(vite.middlewares);
 
-  const marketingPath = path.resolve(process.cwd(), "public-site", "public");
-  if (fs.existsSync(marketingPath)) {
+  const marketingPath = resolveMarketingPath();
+  if (marketingPath) {
     app.use(express.static(marketingPath, { index: false }));
     for (const page of MARKETING_PAGES) {
       const htmlFile = path.join(marketingPath, `${page}.html`);
