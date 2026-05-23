@@ -72,8 +72,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest("POST", "/api/auth/login", { username, password });
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    onSuccess: async (data: AuthUser) => {
+      if (data?.id) {
+        queryClient.setQueryData(["/api/auth/me"], data);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], exact: true });
     },
   });
 
@@ -82,8 +85,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest("POST", "/api/auth/pin-login", { employeeNumber, pin });
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    onSuccess: async (data: AuthUser) => {
+      if (data?.id) {
+        queryClient.setQueryData(["/api/auth/me"], data);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], exact: true });
     },
   });
 

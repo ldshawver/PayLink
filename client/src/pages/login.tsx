@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import type { AuthUser } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -148,6 +150,7 @@ function PunchButton({
 
 function AdminLoginForm() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -164,6 +167,14 @@ function AdminLoginForm() {
   const [mfaToken, setMfaToken] = useState("");
   const [mfaError, setMfaError] = useState("");
   const [mfaLoading, setMfaLoading] = useState(false);
+
+  async function finishAuthenticatedLogin(data: AuthUser & { mfaEnrollmentRequired?: boolean }, path = "/app") {
+    if (data?.id) {
+      queryClient.setQueryData(["/api/auth/me"], data);
+    }
+    await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], exact: true });
+    setLocation(path);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -186,10 +197,9 @@ function AdminLoginForm() {
         setMfaPending({ userId: data.userId });
       } else if (res.ok && data.mfaEnrollmentRequired) {
         // MFA is company-enforced but not yet enrolled — session granted, redirect to enroll
-        await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-        window.location.href = "/app/mfa-settings";
+        await finishAuthenticatedLogin(data, "/app/mfa-settings");
       } else if (res.ok) {
-        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        await finishAuthenticatedLogin(data);
       } else {
         setError(data.message || "Invalid username or password");
       }
@@ -215,11 +225,11 @@ function AdminLoginForm() {
         body: JSON.stringify({ userId: mfaPending!.userId, token: mfaToken }),
         credentials: "include",
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setMfaPending(null);
-        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        await finishAuthenticatedLogin(data);
       } else {
-        const data = await res.json();
         setMfaError(data.message || "Invalid code. Try again.");
         setMfaToken("");
       }

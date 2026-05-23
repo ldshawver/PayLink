@@ -24,6 +24,10 @@
 3. **`/clock-in` must remain a separate route** — it must not replace the marketing homepage.
 4. **`marketing-home.tsx` hero section, CTA section, and features grid** must not be removed or replaced with login/clock-in UI without explicit admin sign-off.
 
+## External Builder Guardrail
+
+Replit, AI builders, and automated website generators must treat the approved marketing homepage as locked production content. They may only edit `client/src/pages/marketing-home.tsx` or the public `"/"` route when the request explicitly asks to change the marketing website. Login, clock-in, app dashboard, onboarding, sales, or SaaS/platform work must not rewrite the marketing homepage.
+
 ## How to Intentionally Update the Marketing Page
 
 1. Edit `client/src/pages/marketing-home.tsx` directly.
@@ -38,6 +42,6 @@ This flag is informational — the actual protection is enforced by the routing 
 
 ## Last Approved
 
-Commit: `b5ea87a56fa2064d24c935f8ef034d71d76e577e`  
-Date: 2026-05-21  
-Author: Admin-approved marketing homepage restore
+Commit: `d99a3477e27a0468ce671481bd2ceaffbbda276e`  
+Date: 2026-05-23  
+Author: Admin-approved current marketing homepage
