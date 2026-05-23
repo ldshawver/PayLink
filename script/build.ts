@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, copyFile } from "fs/promises";
+import { cp, rm, readFile, copyFile } from "fs/promises";
 import { execSync } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -71,6 +71,13 @@ async function buildAll() {
     ...viteConfig,
     configFile: false,
   });
+
+  console.log("copying marketing site...");
+  await cp(
+    resolve(projectRoot, "public-site", "public"),
+    resolve(projectRoot, "dist", "marketing-public"),
+    { recursive: true },
+  );
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));

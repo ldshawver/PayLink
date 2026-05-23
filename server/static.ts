@@ -12,7 +12,9 @@ const MARKETING_PAGES = [
 
 function resolveMarketingPath() {
   const candidates = [
+    path.resolve(__dirname, "marketing-public"),
     path.resolve(process.cwd(), "public-site", "public"),
+    path.resolve(__dirname, "public-site", "public"),
     path.resolve(__dirname, "..", "public-site", "public"),
   ];
   return candidates.find((candidate) => fs.existsSync(candidate));
