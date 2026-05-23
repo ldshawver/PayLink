@@ -214,11 +214,10 @@ function AuthenticatedRouter() {
         <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
         <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
         <Route path="/app/billing">{() => <PlatformRedirect to="/platform/billing" />}</Route>
-        {/* Platform-owner routes — redirect to /platform/* */}
-        <Route path="/app/deal-pipeline">{() => <PlatformRedirect to="/platform/deal-pipeline" />}</Route>
-        <Route path="/app/onboarding-projects">{() => <PlatformRedirect to="/platform/onboarding-projects" />}</Route>
+        <Route path="/app/deal-pipeline" component={DealPipelinePage} />
+        <Route path="/app/onboarding-projects" component={OnboardingProjectsPage} />
         <Route path="/app/onboarding-templates">{() => <PlatformRedirect to="/platform/onboarding-templates" />}</Route>
-        <Route path="/app/engagement-feed">{() => <PlatformRedirect to="/platform/engagement-feed" />}</Route>
+        <Route path="/app/engagement-feed" component={EngagementFeedPage} />
         <Route path="/app/license-requests">{() => <PlatformRedirect to="/platform/license-requests" />}</Route>
         <Route path="/app/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
         <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />

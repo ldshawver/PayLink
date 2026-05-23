@@ -59,6 +59,7 @@ import {
   PlusCircle,
   Trash2,
   RefreshCw,
+  Repeat,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -71,6 +72,8 @@ import {
 } from "@/components/ui/select";
 
 const DASHLET_STORAGE_KEY = "paylink-dashlets";
+const GROWTH_ROLE_STORAGE_KEY = "paylink-growth-dashboard-role";
+type GrowthRole = "sales" | "marketing";
 
 interface DashletConfig {
   id: string;
@@ -120,6 +123,18 @@ function loadVisibility(): Record<string, boolean> {
 
 function saveVisibility(v: Record<string, boolean>) {
   localStorage.setItem(DASHLET_STORAGE_KEY, JSON.stringify(v));
+}
+
+function loadGrowthRole(): GrowthRole {
+  try {
+    const stored = localStorage.getItem(GROWTH_ROLE_STORAGE_KEY);
+    if (stored === "marketing") return "marketing";
+  } catch {}
+  return "sales";
+}
+
+function saveGrowthRole(role: GrowthRole) {
+  localStorage.setItem(GROWTH_ROLE_STORAGE_KEY, role);
 }
 
 function getToday(): string {
@@ -1946,14 +1961,151 @@ function LifecycleOverviewWidget() {
   );
 }
 
+function MetricCard({ label, value, icon: Icon, href }: { label: string; value: string | number; icon: any; href: string }) {
+  return (
+    <Link href={href}>
+      <Card className="h-full transition-colors hover:bg-muted/40" data-testid={`card-growth-metric-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+        <CardContent className="p-4 flex items-center gap-3">
+          <div className="h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+            <Icon className="h-5 w-5 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-2xl font-bold leading-none">{value}</div>
+            <div className="text-xs text-muted-foreground mt-1">{label}</div>
+          </div>
+          <ArrowRight className="h-4 w-4 text-muted-foreground ml-auto shrink-0" />
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function SalesDashboardView({ companyId }: { companyId?: string | null }) {
+  const { data: deals = [] } = useQuery<any[]>({
+    queryKey: [`/api/deals?companyId=${companyId}`],
+    enabled: !!companyId,
+  });
+  const { data: customers = [] } = useQuery<any[]>({
+    queryKey: [`/api/customers?companyId=${companyId}`],
+    enabled: !!companyId,
+  });
+
+  const openDeals = deals.filter((d) => !["closed_won", "closed_lost"].includes(d.stage)).length;
+  const pipelineValue = deals
+    .filter((d) => !["closed_lost"].includes(d.stage))
+    .reduce((sum, d) => sum + Number(d.value || 0), 0);
+  const wonValue = deals
+    .filter((d) => d.stage === "closed_won")
+    .reduce((sum, d) => sum + Number(d.value || 0), 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <MetricCard label="Open Deals" value={openDeals} icon={Target} href="/app/deal-pipeline" />
+        <MetricCard label="Pipeline Value" value={`$${pipelineValue.toLocaleString()}`} icon={DollarSign} href="/app/deal-pipeline" />
+        <MetricCard label="Won Revenue" value={`$${wonValue.toLocaleString()}`} icon={TrendingUp} href="/app/deal-pipeline" />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Target className="h-4 w-4" /> Sales Focus</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Link href="/app/deal-pipeline"><Button className="w-full justify-start" variant="outline"><PlusCircle className="h-4 w-4 mr-2" /> Work Pipeline</Button></Link>
+            <Link href="/app/customers?tab=customers"><Button className="w-full justify-start" variant="outline"><Users className="h-4 w-4 mr-2" /> Manage Customers</Button></Link>
+            <Link href="/app/invoices?tab=invoices"><Button className="w-full justify-start" variant="outline"><Receipt className="h-4 w-4 mr-2" /> Send Invoices</Button></Link>
+            <Link href="/app/onboarding-projects"><Button className="w-full justify-start" variant="outline"><CheckSquare className="h-4 w-4 mr-2" /> Handoff Won Deals</Button></Link>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Pipeline Snapshot</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {["lead", "qualified", "proposal", "negotiation", "closed_won"].map(stage => {
+              const count = deals.filter(d => d.stage === stage).length;
+              return (
+                <div key={stage} className="flex items-center justify-between text-sm">
+                  <span className="capitalize text-muted-foreground">{stage.replace(/_/g, " ")}</span>
+                  <span className="font-medium">{count}</span>
+                </div>
+              );
+            })}
+            <div className="pt-2 text-xs text-muted-foreground">{customers.length} customers in the account list</div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function MarketingDashboardView({ companyId }: { companyId?: string | null }) {
+  const { data: events = [] } = useQuery<any[]>({
+    queryKey: [`/api/engagement-events?companyId=${companyId}`],
+    enabled: !!companyId,
+  });
+  const { data: customers = [] } = useQuery<any[]>({
+    queryKey: [`/api/customers?companyId=${companyId}`],
+    enabled: !!companyId,
+  });
+
+  const emailTouches = events.filter((e) => String(e.eventType || "").includes("email")).length;
+  const proposalTouches = events.filter((e) => String(e.eventType || "").includes("proposal")).length;
+  const recentEvents = events.slice(0, 5);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <MetricCard label="Audience" value={customers.length} icon={Users} href="/app/customers?tab=customers" />
+        <MetricCard label="Email Touches" value={emailTouches} icon={Mail} href="/app/engagement-feed" />
+        <MetricCard label="Proposal Touches" value={proposalTouches} icon={FileText} href="/app/engagement-feed" />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Newspaper className="h-4 w-4" /> Marketing Focus</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Link href="/app/engagement-feed"><Button className="w-full justify-start" variant="outline"><MessageSquare className="h-4 w-4 mr-2" /> Review Engagement</Button></Link>
+            <Link href="/app/customers?tab=customers"><Button className="w-full justify-start" variant="outline"><Users className="h-4 w-4 mr-2" /> Segment Audience</Button></Link>
+            <Link href="/app/messages"><Button className="w-full justify-start" variant="outline"><Mail className="h-4 w-4 mr-2" /> Customer Messages</Button></Link>
+            <Link href="/app/invoices?tab=recurring"><Button className="w-full justify-start" variant="outline"><Repeat className="h-4 w-4 mr-2" /> Campaign Billing</Button></Link>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Activity className="h-4 w-4" /> Recent Engagement</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {recentEvents.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No engagement events yet</p>
+            ) : recentEvents.map(event => (
+              <div key={event.id} className="flex items-center justify-between gap-3 text-sm">
+                <span className="truncate">{event.customerName || "Customer"}</span>
+                <Badge variant="outline" className="text-xs shrink-0">{String(event.eventType || "event").replace(/_/g, " ")}</Badge>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const userRole = (user as any)?.role || "employee";
   const [visibility, setVisibility] = useState<Record<string, boolean>>(loadVisibility);
+  const [growthRole, setGrowthRole] = useState<GrowthRole>(loadGrowthRole);
+  const companyId = (user as any)?.companyId;
 
   useEffect(() => {
     saveVisibility(visibility);
   }, [visibility]);
+
+  useEffect(() => {
+    saveGrowthRole(growthRole);
+  }, [growthRole]);
 
   function toggleDashlet(id: string) {
     setVisibility((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -1984,10 +2136,22 @@ export default function Dashboard() {
   return (
     <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-dashboard-title">
-          <LayoutDashboard className="h-6 w-6 text-blue-accent" />
-          Dashboard
-        </h1>
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-dashboard-title">
+            <LayoutDashboard className="h-6 w-6 text-blue-accent" />
+            {growthRole === "sales" ? "Sales Dashboard" : "Marketing Dashboard"}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Switch roles to reshape the workspace around the job you are doing.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-md border bg-muted/30 p-1" data-testid="segmented-growth-role">
+            <Button size="sm" variant={growthRole === "sales" ? "default" : "ghost"} onClick={() => setGrowthRole("sales")} data-testid="button-role-sales">
+              <Target className="h-4 w-4 mr-2" /> Sales
+            </Button>
+            <Button size="sm" variant={growthRole === "marketing" ? "default" : "ghost"} onClick={() => setGrowthRole("marketing")} data-testid="button-role-marketing">
+              <Newspaper className="h-4 w-4 mr-2" /> Marketing
+            </Button>
+          </div>
         <Dialog>
           <DialogTrigger asChild>
             <Button variant="outline" data-testid="button-configure">
@@ -2016,23 +2180,10 @@ export default function Dashboard() {
             </div>
           </DialogContent>
         </Dialog>
-      </div>
-
-      <OnboardingChecklist />
-
-      <DashboardClockCard />
-
-      {userRole === "platform_super_admin" && (
-        <div className="grid grid-cols-1 gap-4">
-          <LifecycleOverviewWidget />
         </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {allowedDashlets.filter((d) => visibility[d.id] !== false).map((d) => (
-          <div key={d.id}>{dashletComponents[d.id]}</div>
-        ))}
       </div>
+
+      {growthRole === "sales" ? <SalesDashboardView companyId={companyId} /> : <MarketingDashboardView companyId={companyId} />}
     </div>
   );
 }

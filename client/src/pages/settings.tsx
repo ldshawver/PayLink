@@ -26,6 +26,10 @@ import {
   MapPin,
   Eye,
   EyeOff,
+  ServerCog,
+  Kanban,
+  CreditCard,
+  Users,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -776,6 +780,43 @@ function CheckPrintCalibrationSection() {
   );
 }
 
+function SaasPlatformSection() {
+  const links = [
+    { title: "SaaS Console", description: "Provisioning, billing, feature flags, and tenant operations.", href: "/platform", icon: ServerCog },
+    { title: "Sales Pipeline", description: "Manage deals and license opportunities from lead to close.", href: "/app/deal-pipeline", icon: Kanban },
+    { title: "Billing", description: "Review subscription billing and account status.", href: "/platform/billing", icon: CreditCard },
+    { title: "Customer Onboarding", description: "Track sold customer implementation projects.", href: "/app/onboarding-projects", icon: Users },
+  ];
+
+  return (
+    <div id="saas-platform">
+      <div className="flex items-center gap-2 mb-4">
+        <ServerCog className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-semibold">SaaS & Platform</h2>
+        <p className="text-xs text-muted-foreground ml-2">Operational controls live here, outside the sales and marketing workspace</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {links.map((link) => (
+          <a key={link.title} href={link.href} data-testid={`link-settings-${link.title.toLowerCase().replace(/\s+/g, "-")}`}>
+            <Card className="h-full transition-colors hover:bg-muted/40">
+              <CardContent className="p-4 flex items-start gap-3">
+                <div className="rounded-md bg-primary/10 p-2 shrink-0">
+                  <link.icon className="h-4 w-4 text-primary" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold">{link.title}</h3>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{link.description}</p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground ml-auto shrink-0" />
+              </CardContent>
+            </Card>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { data: companies, isLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -786,9 +827,11 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-settings-title">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Configure per-company policies, compliance rules, and system preferences.
+          Configure the SaaS, platform, and company-level controls that support the growth workspace.
         </p>
       </div>
+
+      <SaasPlatformSection />
 
       <div>
         <div className="flex items-center gap-2 mb-4">
