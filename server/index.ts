@@ -108,6 +108,29 @@ app.get("/ready", async (_req, res) => {
   }
 });
 
+const appShellExactRoutes = new Set(["/login", "/clock-in", "/time-clock", "/signing-complete"]);
+const appShellPrefixes = ["/app", "/platform"];
+
+app.use((req, res, next) => {
+  if (!isProduction || (req.method !== "GET" && req.method !== "HEAD")) return next();
+  const isAppShellRoute =
+    appShellExactRoutes.has(req.path) ||
+    appShellPrefixes.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`));
+  if (!isAppShellRoute) return next();
+
+  const appShell = path.resolve(process.cwd(), "dist", "public", "app.html");
+  if (!fs.existsSync(appShell)) return next();
+
+  const headers: Record<string, string> = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    "X-PayLink-Shell": "app",
+  };
+  if (req.path === "/login") {
+    headers["Clear-Site-Data"] = '"cache", "storage"';
+  }
+  res.sendFile(appShell, { headers });
+});
+
 app.post(
   '/api/stripe/webhook',
   express.raw({ type: 'application/json' }),
