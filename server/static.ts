@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import fs from "fs";
 import path from "path";
 
@@ -8,6 +8,18 @@ const API_ROUTES = new Set(["/health", "/ready"]);
 const MARKETING_PAGES = [
   "demo", "features", "pricing", "security", "contact",
   "vendor-portal", "terms", "privacy", "signup", "clock",
+];
+
+const APP_EXACT_ROUTES = new Set([
+  "/login",
+  "/clock-in",
+  "/time-clock",
+  "/signing-complete",
+]);
+
+const APP_ROUTE_PREFIXES = [
+  "/app",
+  "/platform",
 ];
 
 function resolveMarketingPath() {
@@ -28,6 +40,28 @@ export function serveStatic(app: Express) {
       `Could not find the build directory: ${distPath}, make sure to build the client first`,
     );
   }
+
+  function sendAppShell(req: Request, res: Response) {
+    const appShell = path.resolve(distPath, "app.html");
+    const shellPath = fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html");
+    const headers: Record<string, string> = {
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    };
+    if (req.path === "/login") {
+      headers["Clear-Site-Data"] = '"cache", "storage"';
+    }
+    res.sendFile(shellPath, { headers });
+  }
+
+  // App routes must win before the marketing static handler. Otherwise /login
+  // can fall through to the public marketing index and the real login UI never loads.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (APP_EXACT_ROUTES.has(req.path) || APP_ROUTE_PREFIXES.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`))) {
+      return sendAppShell(req, res);
+    }
+    next();
+  });
 
   // ── Marketing site static assets (css, js, assets, images) ───────────────
   const marketingPath = resolveMarketingPath();
@@ -78,14 +112,6 @@ export function serveStatic(app: Express) {
     if (STATIC_ASSET_PREFIXES.some(p => req.path.startsWith(p)) || API_ROUTES.has(req.path)) {
       return next();
     }
-    const appShell = path.resolve(distPath, "app.html");
-    const shellPath = fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html");
-    const headers: Record<string, string> = {
-      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-    };
-    if (req.path === "/login") {
-      headers["Clear-Site-Data"] = '"cache", "storage"';
-    }
-    res.sendFile(shellPath, { headers });
+    sendAppShell(req, res);
   });
 }
