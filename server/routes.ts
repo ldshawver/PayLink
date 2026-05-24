@@ -954,6 +954,16 @@ export async function registerRoutes(
     console.error("[MIGRATION] Payroll lifecycle migration error:", migErr);
   }
 
+  // ── Proposal soft-delete schema migration (idempotent) ──────────────────────
+  try {
+    await db.execute(sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS deleted_by_user_id VARCHAR`);
+    await db.execute(sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS deletion_reason TEXT`);
+    console.log("[MIGRATION] Proposal soft-delete columns ready");
+  } catch (migErr) {
+    console.error("[MIGRATION] Proposal soft-delete migration error:", migErr);
+  }
+
   const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
@@ -10318,7 +10328,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE 1=1 ${companyFilter}
+              WHERE cp.deleted_at IS NULL ${companyFilter}
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
@@ -10328,7 +10338,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE (cp.is_archived IS NOT TRUE) ${companyFilter}
+              WHERE (cp.is_archived IS NOT TRUE) AND cp.deleted_at IS NULL ${companyFilter}
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
@@ -10345,6 +10355,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.contractor_id = ${workerId}
+                AND cp.deleted_at IS NULL
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
@@ -10356,6 +10367,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.contractor_id = ${workerId}
                 AND (cp.is_archived IS NOT TRUE)
+                AND cp.deleted_at IS NULL
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
@@ -10565,7 +10577,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to update proposal" }); }
   });
 
-  // DELETE /api/contractor-proposals/:id — only draft proposals, owner only
+  // DELETE /api/contractor-proposals/:id — soft-delete only; files are preserved for audit retention
   app.delete("/api/contractor-proposals/:id", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
@@ -10573,15 +10585,88 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       const proposal = (result.rows ?? (result as any))[0];
       if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (proposal.deleted_at) return res.status(410).json({ message: "Proposal has already been deleted" });
       const isOwner = user?.workerId === proposal.contractor_id;
       const isManager = ["admin", "manager"].includes(user?.role || "");
       if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
       if (!["draft", "rejected"].includes(proposal.status)) {
         return res.status(400).json({ message: "Only draft or rejected proposals can be deleted" });
       }
-      await db.execute(sql`DELETE FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const deletionReason: string = (req.body as any)?.reason || null;
+      // Soft-delete: mark the row as deleted without touching attachments, DAM documents, or files on disk.
+      // Files are preserved for audit retention. Only a platform_super_admin purge can remove them.
+      await db.execute(sql`
+        UPDATE contractor_proposals
+        SET deleted_at = NOW(), deleted_by_user_id = ${userId}, deletion_reason = ${deletionReason},
+            is_archived = TRUE, archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      // Audit log — non-fatal
+      try {
+        await db.execute(sql`
+          INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata)
+          VALUES (
+            ${proposal.company_id ?? null}, ${userId}, 'proposal_deleted_soft',
+            'contractor_proposal', ${req.params.id},
+            ${JSON.stringify({ proposalNumber: proposal.proposal_number, status: proposal.status, reason: deletionReason })}::jsonb
+          )
+        `);
+      } catch (_auditErr) { /* non-fatal */ }
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/purge — permanent purge (platform_super_admin only)
+  // Requires { confirm: true } in body. Unlinks files from disk and hard-deletes DB rows.
+  app.post("/api/contractor-proposals/:id/purge", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (user?.role !== "platform_super_admin") {
+        return res.status(403).json({ message: "Only platform_super_admin can permanently purge proposals" });
+      }
+      if ((req.body as any)?.confirm !== true) {
+        return res.status(400).json({ message: "Purge requires explicit confirmation: send { confirm: true }" });
+      }
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      // Collect file paths before deleting DB rows
+      const attPathsRes = await db.execute(sql`SELECT file_path FROM proposal_attachments WHERE proposal_id = ${req.params.id}`);
+      const attFilePaths = (attPathsRes.rows as Array<{ file_path: string | null }>).map(r => r.file_path).filter(Boolean) as string[];
+      const damPathsRes = await db.execute(sql`SELECT file_path FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id}`);
+      const damFilePaths = (damPathsRes.rows as Array<{ file_path: string | null }>).map(r => r.file_path).filter(Boolean) as string[];
+      // Hard-delete DB rows
+      await db.execute(sql`DELETE FROM proposal_attachments WHERE proposal_id = ${req.params.id}`);
+      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id}`);
+      await db.execute(sql`DELETE FROM contractor_proposals WHERE id = ${req.params.id}`);
+      // Unlink files from disk
+      const { resolveDamFilePath } = await import("./dam-paths");
+      const unlinkFailures: string[] = [];
+      for (const filePath of [...attFilePaths, ...damFilePaths]) {
+        const abs = resolveDamFilePath(filePath, process.cwd());
+        if (abs) {
+          await fs.promises.unlink(abs).catch((e: NodeJS.ErrnoException) => {
+            if (e.code !== "ENOENT") {
+              unlinkFailures.push(filePath);
+              console.error("[PURGE] file_unlink_failed:", filePath, e.message);
+            }
+          });
+        }
+      }
+      // Audit log — non-fatal
+      try {
+        await db.execute(sql`
+          INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata)
+          VALUES (
+            ${proposal.company_id ?? null}, ${userId}, 'proposal_purged',
+            'contractor_proposal', ${req.params.id},
+            ${JSON.stringify({ proposalNumber: proposal.proposal_number, attachmentsRemoved: attFilePaths.length, damDocsRemoved: damFilePaths.length, unlinkFailures })}::jsonb
+          )
+        `);
+      } catch (_auditErr) { /* non-fatal */ }
+      res.json({ success: true, filesRemoved: attFilePaths.length + damFilePaths.length, unlinkFailures });
+    } catch (e: any) { res.status(500).json({ message: "Failed to purge proposal: " + e.message }); }
   });
 
   // POST /api/contractor-proposals/:id/submit — contractor submits to company
