@@ -56,6 +56,12 @@ export async function setupVite(server: Server, app: Express) {
         });
       }
     }
+    // ── MARKETING HOMEPAGE LOCK ─────────────────────────────────────────────
+    // PROTECTED: This serves public-site/public/index.html as the approved
+    // public marketing homepage at / in dev mode.  Do NOT remove, reorder, or
+    // replace with the React SPA catch-all.
+    // Required hero: time punch card visual + Clock In modal (Employee Number + PIN).
+    // See: docs/marketing-page-lock.md
     app.get("/", (_req, res, next) => {
       const indexFile = path.join(marketingPath, "index.html");
       if (fs.existsSync(indexFile)) {

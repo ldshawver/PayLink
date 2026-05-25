@@ -81,7 +81,12 @@ export function serveStatic(app: Express) {
         });
       }
     }
-    // Root marketing page
+    // ── MARKETING HOMEPAGE LOCK ─────────────────────────────────────────────
+    // PROTECTED: This serves public-site/public/index.html as the approved
+    // public marketing homepage at /.  Do NOT remove, reorder above the
+    // APP_EXACT_ROUTES guard, or replace with sendAppShell / redirect to /login.
+    // Required hero: time punch card visual + Clock In modal (Employee Number + PIN).
+    // See: docs/marketing-page-lock.md
     app.get("/", (_req, res, next) => {
       const indexFile = path.join(marketingPath, "index.html");
       if (fs.existsSync(indexFile)) {

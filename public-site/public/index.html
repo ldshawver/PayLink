@@ -1,3 +1,23 @@
+<!-- ============================================================
+  APPROVED MYPAYLINK MARKETING HOMEPAGE — DO NOT MODIFY WITHOUT ADMIN APPROVAL
+  ============================================================
+  This file is the canonical public homepage served at / by Express.
+  It is served BEFORE the React app by both server/vite.ts (dev) and
+  server/static.ts (production).  Do NOT remove, rename, or replace it.
+
+  Required elements (must remain in place):
+    1. time punch card visual   → .clock-machine with analog clock hands
+    2. Clock In / Clock Out     → #btnClockIn / #btnOut open #punchModal overlay
+    3. punchModal               → asks for Employee Number (#punchEmpNum) + PIN (#punchPin)
+    4. Marketing sections       → features-grid, pricing, footer below the hero
+
+  Protected routes (each must serve distinct content):
+    /           → THIS FILE (marketing homepage)
+    /login      → React login page (via sendAppShell / App.tsx)
+    /clock-in   → React kiosk time clock
+
+  See: docs/marketing-page-lock.md for the full protection policy.
+  ============================================================ -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
