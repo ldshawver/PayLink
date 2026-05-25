@@ -1,20 +1,29 @@
 // =============================================================================
-// APPROVED MARKETING PAGE — DO NOT MODIFY WITHOUT ADMIN APPROVAL
-// =============================================================================
-// This file contains the approved PayLink marketing homepage.
+// APPROVED MYPAYLINK MARKETING HOMEPAGE — DO NOT MODIFY WITHOUT ADMIN APPROVAL.
+// Required hero: time punch card visual with Clock In modal for employee number + PIN.
+// Do not replace with login screen or direct clock-in page.
 // Protected routes: / (public), /login (separate), /clock-in (separate)
-// See: docs/marketing-page-lock.md for the full protection policy.
+// See: docs/marketing-homepage-lock.md for the full protection policy.
 // =============================================================================
 
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
   Clock, Users, DollarSign, FileText, BarChart3, Shield,
   CheckCircle2, ArrowRight, Menu, X, Building2, CalendarClock,
-  Receipt, Briefcase, Globe, Lock,
+  Receipt, Briefcase, Globe, Lock, LogIn, AlertCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const FEATURES = [
   {
@@ -68,12 +77,208 @@ const HIGHLIGHTS = [
   "Free 14-day trial",
 ];
 
+function LiveClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const dateStr = now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+  return (
+    <div className="text-center">
+      <div className="text-4xl font-mono font-bold tracking-tight text-white" data-testid="punch-card-time">
+        {timeStr}
+      </div>
+      <div className="text-sm text-white/70 mt-1">{dateStr}</div>
+    </div>
+  );
+}
+
+function TimePunchCard({ onClockIn }: { onClockIn: () => void }) {
+  return (
+    <div
+      className="relative bg-gradient-to-b from-[hsl(184,60%,14%)] to-[hsl(184,50%,10%)] rounded-2xl border border-white/15 shadow-2xl p-6 w-full max-w-[300px] mx-auto"
+      data-testid="time-punch-card"
+    >
+      <div className="absolute -top-px left-1/2 -translate-x-1/2 w-16 h-1 bg-teal-400/60 rounded-full" />
+
+      <div className="flex items-center gap-2 mb-5">
+        <div className="w-7 h-7 rounded-lg bg-teal-500/20 flex items-center justify-center">
+          <Clock className="h-4 w-4 text-teal-300" />
+        </div>
+        <span className="text-white/80 text-sm font-semibold tracking-wide">PayLink Time Clock</span>
+      </div>
+
+      <LiveClock />
+
+      <div className="mt-5 space-y-3">
+        <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2.5 flex items-center gap-2 cursor-default select-none">
+          <Users className="h-4 w-4 text-white/40 flex-shrink-0" />
+          <span className="text-white/40 text-sm">Employee number</span>
+        </div>
+        <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2.5 flex items-center gap-2 cursor-default select-none">
+          <Lock className="h-4 w-4 text-white/40 flex-shrink-0" />
+          <span className="text-white/40 text-sm">PIN</span>
+        </div>
+      </div>
+
+      <Button
+        size="lg"
+        className="mt-5 w-full bg-teal-500 hover:bg-teal-400 text-white font-semibold shadow-lg shadow-teal-500/20 border-0"
+        onClick={onClockIn}
+        data-testid="button-punch-card-clock-in"
+      >
+        <LogIn className="mr-2 h-4 w-4" /> Clock In
+      </Button>
+
+      <p className="text-center text-white/30 text-xs mt-3">
+        Employees — tap to punch in or out
+      </p>
+    </div>
+  );
+}
+
+function ClockInModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [, setLocation] = useLocation();
+  const [employeeNumber, setEmployeeNumber] = useState("");
+  const [pin, setPin] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const reset = () => {
+    setEmployeeNumber("");
+    setPin("");
+    setError("");
+    setSuccess("");
+    setLoading(false);
+  };
+
+  const handleClose = () => {
+    reset();
+    onClose();
+  };
+
+  const handleClockIn = async () => {
+    setError("");
+    if (!employeeNumber.trim()) { setError("Please enter your employee number."); return; }
+    if (!pin.trim()) { setError("Please enter your PIN."); return; }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/time-clock/punch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ employeeNumber: employeeNumber.trim(), pin: pin.trim(), punchType: "clock_in" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.message || "Clock-in failed. Please check your credentials.");
+      } else {
+        setSuccess(data.message || "Clocked in successfully!");
+        setTimeout(() => { handleClose(); setLocation("/clock-in"); }, 1800);
+      }
+    } catch {
+      setError("Network error — please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") handleClockIn();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
+      <DialogContent className="sm:max-w-sm" data-testid="modal-clock-in">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-primary" />
+            Employee Clock-In
+          </DialogTitle>
+          <DialogDescription>
+            Enter your employee number and PIN to clock in.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 pt-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="modal-employee-number">Employee Number</Label>
+            <Input
+              id="modal-employee-number"
+              data-testid="input-modal-employee-number"
+              placeholder="e.g. EMP-001"
+              value={employeeNumber}
+              onChange={(e) => setEmployeeNumber(e.target.value)}
+              onKeyDown={handleKeyDown}
+              autoFocus
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="modal-pin">PIN</Label>
+            <Input
+              id="modal-pin"
+              data-testid="input-modal-pin"
+              type="password"
+              inputMode="numeric"
+              placeholder="Enter your PIN"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              onKeyDown={handleKeyDown}
+              autoComplete="current-password"
+            />
+          </div>
+
+          {error && (
+            <div className="flex items-start gap-2 text-destructive text-sm" data-testid="text-modal-error">
+              <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="flex items-center gap-2 text-emerald-600 text-sm font-medium" data-testid="text-modal-success">
+              <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+              {success}
+            </div>
+          )}
+
+          <Button
+            className="w-full"
+            onClick={handleClockIn}
+            disabled={loading}
+            data-testid="button-modal-clock-in"
+          >
+            {loading ? "Clocking in…" : "Clock In"}
+          </Button>
+
+          <p className="text-center text-xs text-muted-foreground">
+            Manager?{" "}
+            <button
+              className="underline hover:text-foreground transition-colors"
+              onClick={() => { handleClose(); setLocation("/login"); }}
+              data-testid="link-modal-admin-login"
+            >
+              Log in here
+            </button>
+          </p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function MarketingHomePage() {
   const [, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [clockInOpen, setClockInOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-50 flex flex-col">
+
+      <ClockInModal open={clockInOpen} onClose={() => setClockInOpen(false)} />
 
       {/* ── Nav ──────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 bg-white/90 dark:bg-gray-950/90 backdrop-blur border-b border-gray-200 dark:border-gray-800">
@@ -89,6 +294,14 @@ export default function MarketingHomePage() {
           </nav>
 
           <div className="hidden md:flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setClockInOpen(true)}
+              data-testid="button-nav-clock-in"
+            >
+              <Clock className="mr-1.5 h-4 w-4" /> Clock In
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setLocation("/login")} data-testid="link-nav-login">
               Log in
             </Button>
@@ -111,6 +324,14 @@ export default function MarketingHomePage() {
             <a href="#features" className="text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Features</a>
             <a href="#why" className="text-sm font-medium py-2" onClick={() => setMobileOpen(false)}>Why PayLink</a>
             <hr className="border-gray-200 dark:border-gray-800" />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setMobileOpen(false); setClockInOpen(true); }}
+              data-testid="button-mobile-clock-in"
+            >
+              <Clock className="mr-1.5 h-4 w-4" /> Clock In
+            </Button>
             <Button variant="outline" size="sm" onClick={() => setLocation("/login")} data-testid="link-mobile-login">
               Log in
             </Button>
@@ -122,46 +343,56 @@ export default function MarketingHomePage() {
       </header>
 
       {/* ── Hero ─────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-[hsl(184,96%,10%)] via-[hsl(184,80%,16%)] to-[hsl(200,70%,22%)] text-white py-24 md:py-36 px-4">
+      <section className="relative overflow-hidden bg-gradient-to-br from-[hsl(184,96%,10%)] via-[hsl(184,80%,16%)] to-[hsl(200,70%,22%)] text-white py-20 md:py-28 px-4">
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-16 -left-16 w-72 h-72 bg-white/5 rounded-full blur-2xl pointer-events-none" />
 
-        <div className="relative max-w-4xl mx-auto text-center">
-          <Badge className="mb-6 bg-white/10 text-white border-white/20 hover:bg-white/10 text-xs uppercase tracking-widest px-3 py-1">
-            HR · Payroll · Time Clock
-          </Badge>
-          <h1 className="text-4xl md:text-6xl font-extrabold leading-tight tracking-tight mb-6">
-            Everything your team needs,<br className="hidden md:block" /> in one place.
-          </h1>
-          <p className="text-lg md:text-xl text-white/80 max-w-2xl mx-auto mb-10 leading-relaxed">
-            PayLink is the all-in-one HR, payroll, and time-tracking platform built for multi-location businesses and teams with contractors and employees alike.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Button
-              size="lg"
-              className="bg-white text-[hsl(184,96%,19%)] hover:bg-gray-100 font-semibold shadow-lg"
-              onClick={() => setLocation("/login")}
-              data-testid="button-hero-start-trial"
-            >
-              Start free trial <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="border-white/40 text-white hover:bg-white/10 font-semibold"
-              onClick={() => setLocation("/clock-in")}
-              data-testid="button-hero-time-clock"
-            >
-              <Clock className="mr-2 h-5 w-5" /> Open time clock
-            </Button>
+        <div className="relative max-w-6xl mx-auto grid md:grid-cols-2 gap-12 items-center">
+
+          {/* Left: copy + CTAs */}
+          <div className="text-center md:text-left">
+            <Badge className="mb-6 bg-white/10 text-white border-white/20 hover:bg-white/10 text-xs uppercase tracking-widest px-3 py-1">
+              HR · Payroll · Time Clock
+            </Badge>
+            <h1 className="text-4xl md:text-5xl font-extrabold leading-tight tracking-tight mb-5" data-testid="hero-headline">
+              Everything your team needs,{" "}
+              <span className="text-teal-300">in one place.</span>
+            </h1>
+            <p className="text-lg text-white/80 mb-8 leading-relaxed">
+              PayLink is the all-in-one HR, payroll, and time-tracking platform built for multi-location businesses and teams with contractors and employees alike.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center md:justify-start">
+              <Button
+                size="lg"
+                className="bg-white text-[hsl(184,96%,19%)] hover:bg-gray-100 font-semibold shadow-lg"
+                onClick={() => setLocation("/login")}
+                data-testid="button-hero-start-trial"
+              >
+                Start free trial <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                className="border-white/40 text-white hover:bg-white/10 font-semibold"
+                onClick={() => setClockInOpen(true)}
+                data-testid="button-hero-clock-in"
+              >
+                <Clock className="mr-2 h-5 w-5" /> Employee clock-in
+              </Button>
+            </div>
+
+            <div className="mt-8 flex flex-wrap justify-center md:justify-start gap-2">
+              {HIGHLIGHTS.map((h) => (
+                <span key={h} className="flex items-center gap-1.5 bg-white/10 rounded-full px-3 py-1 text-sm text-white/90">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0" /> {h}
+                </span>
+              ))}
+            </div>
           </div>
 
-          <div className="mt-12 flex flex-wrap justify-center gap-2">
-            {HIGHLIGHTS.map((h) => (
-              <span key={h} className="flex items-center gap-1.5 bg-white/10 rounded-full px-3 py-1 text-sm text-white/90">
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0" /> {h}
-              </span>
-            ))}
+          {/* Right: time punch card visual */}
+          <div className="flex justify-center md:justify-end" data-testid="hero-punch-card-section">
+            <TimePunchCard onClockIn={() => setClockInOpen(true)} />
           </div>
         </div>
       </section>
@@ -261,7 +492,7 @@ export default function MarketingHomePage() {
             <button onClick={() => setLocation("/login")} className="hover:text-gray-700 dark:hover:text-white transition-colors" data-testid="link-footer-login">
               Log in
             </button>
-            <button onClick={() => setLocation("/clock-in")} className="hover:text-gray-700 dark:hover:text-white transition-colors" data-testid="link-footer-timeclock">
+            <button onClick={() => setClockInOpen(true)} className="hover:text-gray-700 dark:hover:text-white transition-colors" data-testid="link-footer-timeclock">
               Time clock
             </button>
           </div>
