@@ -5874,6 +5874,85 @@ const TEMPLATE_PRESETS: Record<string, { label: string; description: string }> =
   "three-part": { label: "3-Part Stub", description: "Three detachable stubs per page" },
 };
 
+const NUDGE_STEPS = [
+  { label: '1/16"', pts: Math.round(72 / 16) },
+  { label: '1/8"',  pts: Math.round(72 / 8)  },
+  { label: '1/4"',  pts: Math.round(72 / 4)  },
+  { label: '1/2"',  pts: Math.round(72 / 2)  },
+];
+
+function AddressNudgePad({
+  label, xKey, yKey, layoutConfig, setOffsetField, testIdPrefix,
+}: {
+  label: string; xKey: string; yKey: string;
+  layoutConfig: Record<string, any>;
+  setOffsetField: (field: string, value: number) => void;
+  testIdPrefix: string;
+}) {
+  const [step, setStep] = useState(NUDGE_STEPS[1].pts);
+  const xPts = Number(layoutConfig[xKey] ?? 0);
+  const yPts = Number(layoutConfig[yKey] ?? 0);
+
+  const ptsToIn = (pts: number) => {
+    const inches = Math.abs(pts) / 72;
+    if (inches === 0) return "0";
+    const frac = inches.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+    return frac;
+  };
+
+  const nudge = (dx: number, dy: number) => {
+    if (dx !== 0) setOffsetField(xKey, Math.round(xPts + dx));
+    if (dy !== 0) setOffsetField(yKey, Math.round(yPts + dy));
+  };
+
+  const xLabel = xPts === 0 ? "centered" : xPts > 0 ? `+${ptsToIn(xPts)}" right` : `-${ptsToIn(xPts)}" left`;
+  const yLabel = yPts === 0 ? "centered" : yPts > 0 ? `+${ptsToIn(yPts)}" up` : `-${ptsToIn(Math.abs(yPts))}" down`;
+
+  const btnCls = "h-8 w-10 rounded border bg-background hover:bg-accent text-base font-semibold flex items-center justify-center select-none cursor-pointer transition-colors";
+  const centerCls = "h-8 w-8 rounded border bg-muted hover:bg-accent text-xs text-muted-foreground flex items-center justify-center select-none cursor-pointer transition-colors";
+
+  return (
+    <div className="rounded-lg border bg-muted/20 p-3 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+        <button type="button" data-testid={`${testIdPrefix}-reset`}
+          onClick={() => { setOffsetField(xKey, 0); setOffsetField(yKey, 0); }}
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 underline">
+          Reset
+        </button>
+      </div>
+
+      <div className="text-[11px] text-center text-muted-foreground bg-background rounded border px-2 py-1 font-mono">
+        ↔ {xLabel} &nbsp;·&nbsp; ↕ {yLabel}
+      </div>
+
+      <div className="flex flex-col items-center gap-1">
+        <button type="button" data-testid={`${testIdPrefix}-up`} onClick={() => nudge(0, step)} className={btnCls} title="Move up">▲</button>
+        <div className="flex items-center gap-1">
+          <button type="button" data-testid={`${testIdPrefix}-left`} onClick={() => nudge(-step, 0)} className={btnCls} title="Move left">◀</button>
+          <button type="button" data-testid={`${testIdPrefix}-center`}
+            onClick={() => { setOffsetField(xKey, 0); setOffsetField(yKey, 0); }}
+            className={centerCls} title="Reset to center">⊙</button>
+          <button type="button" data-testid={`${testIdPrefix}-right`} onClick={() => nudge(step, 0)} className={btnCls} title="Move right">▶</button>
+        </div>
+        <button type="button" data-testid={`${testIdPrefix}-down`} onClick={() => nudge(0, -step)} className={btnCls} title="Move down">▼</button>
+      </div>
+
+      <div className="flex items-center justify-center gap-1">
+        <span className="text-[10px] text-muted-foreground mr-1">Step:</span>
+        {NUDGE_STEPS.map(s => (
+          <button key={s.pts} type="button"
+            data-testid={`${testIdPrefix}-step-${s.label.replace(/[^a-z0-9]/gi, "-")}`}
+            onClick={() => setStep(s.pts)}
+            className={`px-2 py-0.5 rounded border text-[10px] font-medium transition-colors ${step === s.pts ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-accent"}`}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CheckPreview({ templateType, config, company }: {
   templateType: string;
   config: Record<string, boolean>;
@@ -6282,37 +6361,24 @@ function CheckLayoutTab() {
                 </div>
                 <div className="grid gap-2">
                   <div className="flex items-center justify-between">
-                    <Label>Address &amp; Paystub Position Offsets <span className="text-xs text-muted-foreground font-normal">(points · 72 pt = 1 inch)</span></Label>
+                    <Label>Address Window Alignment</Label>
                     <Button type="button" size="sm" variant="ghost" data-testid="button-reset-offsets-new" onClick={resetLayoutDefaults} className="text-xs h-7">
-                      Reset to Default
+                      Reset All
                     </Button>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Sender (Company) Address</div>
+                  <p className="text-xs text-muted-foreground -mt-1">Use the arrow pads to shift each address block until it lines up with your envelope's windows.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <AddressNudgePad label="Return (Sender) Address" xKey="senderAddrOffsetX" yKey="senderAddrOffsetY" layoutConfig={layoutConfig} setOffsetField={setOffsetField} testIdPrefix="new-sender" />
+                    <AddressNudgePad label="Payee (Recipient) Address" xKey="employeeAddrOffsetX" yKey="employeeAddrOffsetY" layoutConfig={layoutConfig} setOffsetField={setOffsetField} testIdPrefix="new-payee" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm pt-1">
+                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide">Paystub Panel</div>
                     <div className="grid gap-1">
-                      <Label className="text-xs">X Offset (right +)</Label>
-                      <Input data-testid="input-sender-x" type="number" value={layoutConfig.senderAddrOffsetX ?? 0} onChange={e => setOffsetField("senderAddrOffsetX", Number(e.target.value))} className="h-8" />
-                    </div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">Y Offset (up +)</Label>
-                      <Input data-testid="input-sender-y" type="number" value={layoutConfig.senderAddrOffsetY ?? 0} onChange={e => setOffsetField("senderAddrOffsetY", Number(e.target.value))} className="h-8" />
-                    </div>
-                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Employee (Payee) Address</div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">X Offset (right +)</Label>
-                      <Input data-testid="input-employee-x" type="number" value={layoutConfig.employeeAddrOffsetX ?? 0} onChange={e => setOffsetField("employeeAddrOffsetX", Number(e.target.value))} className="h-8" />
-                    </div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">Y Offset (up +)</Label>
-                      <Input data-testid="input-employee-y" type="number" value={layoutConfig.employeeAddrOffsetY ?? 0} onChange={e => setOffsetField("employeeAddrOffsetY", Number(e.target.value))} className="h-8" />
-                    </div>
-                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Paystub Panel</div>
-                    <div className="grid gap-1">
-                      <Label className="text-xs">X Offset (right +)</Label>
+                      <Label className="text-xs">X Offset (right +, in points)</Label>
                       <Input data-testid="input-paystub-x" type="number" value={layoutConfig.paystubOffsetX ?? 72} onChange={e => setOffsetField("paystubOffsetX", Number(e.target.value))} className="h-8" />
                     </div>
                     <div className="grid gap-1">
-                      <Label className="text-xs">Y Offset (up +)</Label>
+                      <Label className="text-xs">Y Offset (up +, in points)</Label>
                       <Input data-testid="input-paystub-y" type="number" value={layoutConfig.paystubOffsetY ?? -18} onChange={e => setOffsetField("paystubOffsetY", Number(e.target.value))} className="h-8" />
                     </div>
                   </div>
@@ -6469,37 +6535,24 @@ function CheckLayoutTab() {
               </div>
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
-                  <Label>Address &amp; Paystub Position Offsets <span className="text-xs text-muted-foreground font-normal">(points · 72 pt = 1 inch)</span></Label>
+                  <Label>Address Window Alignment</Label>
                   <Button type="button" size="sm" variant="ghost" data-testid="button-reset-offsets-edit" onClick={resetLayoutDefaults} className="text-xs h-7">
-                    Reset to Default
+                    Reset All
                   </Button>
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Sender (Company) Address</div>
+                <p className="text-xs text-muted-foreground -mt-1">Use the arrow pads to shift each address block until it lines up with your envelope's windows.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <AddressNudgePad label="Return (Sender) Address" xKey="senderAddrOffsetX" yKey="senderAddrOffsetY" layoutConfig={layoutConfig} setOffsetField={setOffsetField} testIdPrefix="edit-sender" />
+                  <AddressNudgePad label="Payee (Recipient) Address" xKey="employeeAddrOffsetX" yKey="employeeAddrOffsetY" layoutConfig={layoutConfig} setOffsetField={setOffsetField} testIdPrefix="edit-payee" />
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm pt-1">
+                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide">Paystub Panel</div>
                   <div className="grid gap-1">
-                    <Label className="text-xs">X Offset (right +)</Label>
-                    <Input data-testid="input-edit-sender-x" type="number" value={layoutConfig.senderAddrOffsetX ?? 0} onChange={e => setOffsetField("senderAddrOffsetX", Number(e.target.value))} className="h-8" />
-                  </div>
-                  <div className="grid gap-1">
-                    <Label className="text-xs">Y Offset (up +)</Label>
-                    <Input data-testid="input-edit-sender-y" type="number" value={layoutConfig.senderAddrOffsetY ?? 0} onChange={e => setOffsetField("senderAddrOffsetY", Number(e.target.value))} className="h-8" />
-                  </div>
-                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Employee (Payee) Address</div>
-                  <div className="grid gap-1">
-                    <Label className="text-xs">X Offset (right +)</Label>
-                    <Input data-testid="input-edit-employee-x" type="number" value={layoutConfig.employeeAddrOffsetX ?? 0} onChange={e => setOffsetField("employeeAddrOffsetX", Number(e.target.value))} className="h-8" />
-                  </div>
-                  <div className="grid gap-1">
-                    <Label className="text-xs">Y Offset (up +)</Label>
-                    <Input data-testid="input-edit-employee-y" type="number" value={layoutConfig.employeeAddrOffsetY ?? 0} onChange={e => setOffsetField("employeeAddrOffsetY", Number(e.target.value))} className="h-8" />
-                  </div>
-                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Paystub Panel</div>
-                  <div className="grid gap-1">
-                    <Label className="text-xs">X Offset (right +)</Label>
+                    <Label className="text-xs">X Offset (right +, in points)</Label>
                     <Input data-testid="input-edit-paystub-x" type="number" value={layoutConfig.paystubOffsetX ?? 72} onChange={e => setOffsetField("paystubOffsetX", Number(e.target.value))} className="h-8" />
                   </div>
                   <div className="grid gap-1">
-                    <Label className="text-xs">Y Offset (up +)</Label>
+                    <Label className="text-xs">Y Offset (up +, in points)</Label>
                     <Input data-testid="input-edit-paystub-y" type="number" value={layoutConfig.paystubOffsetY ?? -18} onChange={e => setOffsetField("paystubOffsetY", Number(e.target.value))} className="h-8" />
                   </div>
                 </div>

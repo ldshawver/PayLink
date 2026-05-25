@@ -17,6 +17,7 @@ import {
   CalendarCheck,
   Repeat,
   FileText,
+  FileSignature,
   Wallet,
   CreditCard,
   Tag,
@@ -70,6 +71,7 @@ import {
   Package,
   Mail,
   LogOut,
+  Palette,
 } from "lucide-react";
 import {
   Sidebar,
@@ -186,7 +188,17 @@ const MAIN_NAV: NavGroup[] = [
         icon: Briefcase,
         url: "/app/contractor-hub",
         featureKey: "tenant.finance.contractor-hub",
-        items: [],
+        items: [
+          { title: "Overview",            url: "/app/contractor-hub",                          icon: LayoutDashboard },
+          { title: "Proposals",           url: "/app/contractor-hub?section=proposals",        icon: FileText },
+          { title: "Contracts",           url: "/app/contractor-hub?section=contracts",        icon: FileSignature },
+          { title: "Invoices",            url: "/app/contractor-hub?section=invoices",         icon: Receipt },
+          { title: "Working Documents",   url: "/app/contractor-hub?section=documents",        icon: FolderOpen },
+          { title: "Payments",            url: "/app/contractor-hub?section=payments",         icon: CreditCard },
+          { title: "Messages",            url: "/app/contractor-hub?section=messages",         icon: MessageSquare },
+          { title: "Profile & Branding",  url: "/app/contractor-hub?section=branding",         icon: Palette },
+          { title: "Settings",            url: "/app/contractor-hub?section=settings",         icon: Settings },
+        ],
       },
       {
         label: "Expenses",
@@ -389,7 +401,8 @@ export function AppSidebar() {
 
   const search = useSearch();
   const locationPath = location;
-  const locationTab = new URLSearchParams(search).get("tab");
+  const locationTab     = new URLSearchParams(search).get("tab");
+  const locationSection = new URLSearchParams(search).get("section");
 
   const userRole = user?.role || "employee";
   const isManager = isManagerOrAbove(userRole);
@@ -423,9 +436,16 @@ export function AppSidebar() {
   };
 
   const isSubItemActive = (itemUrl: string) => {
-    const itemPath = itemUrl.split("?")[0];
-    const itemTab = new URLSearchParams(itemUrl.split("?")[1] || "").get("tab");
+    const itemPath    = itemUrl.split("?")[0];
+    const itemParams  = new URLSearchParams(itemUrl.split("?")[1] || "");
+    const itemTab     = itemParams.get("tab");
+    const itemSection = itemParams.get("section");
     if (locationPath !== itemPath) return false;
+    // Hub section links: match on ?section=
+    if (itemSection !== null) return itemSection === locationSection;
+    // Overview (no section param): only active when no section is in the URL
+    if (!itemSection && !itemTab && itemPath === "/app/contractor-hub") return !locationSection && !locationTab;
+    // Standard tab-based sub-items
     if (!itemTab && !locationTab) return true;
     return itemTab === locationTab;
   };
