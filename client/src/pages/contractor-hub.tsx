@@ -893,7 +893,7 @@ function ProposalDetailPanel({
   onEdit: () => void; onRefresh: () => void;
 }) {
   const { toast } = useToast();
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(() => localStorage.getItem("paylink.contractorHub.proposalDetailTab") || "overview");
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [revisionOpen, setRevisionOpen] = useState(false);
@@ -1056,6 +1056,11 @@ function ProposalDetailPanel({
     actionMutation.mutate({ action: "send" });
   }
 
+  function handleTabChange(nextTab: string) {
+    setTab(nextTab);
+    localStorage.setItem("paylink.contractorHub.proposalDetailTab", nextTab);
+  }
+
   return (
     <>
     <Dialog open={showSendDialog} onOpenChange={setShowSendDialog}>
@@ -1094,7 +1099,7 @@ function ProposalDetailPanel({
       </DialogContent>
     </Dialog>
     <Sheet open onOpenChange={() => onClose()}>
-      <SheetContent side="right" className="w-screen sm:w-full sm:max-w-3xl p-0 flex flex-col overflow-hidden">
+      <SheetContent side="right" className="!w-screen !max-w-none p-0 flex flex-col overflow-hidden" data-testid="sheet-proposal-detail">
         <SheetHeader className="px-5 pt-4 pb-0 border-b shrink-0">
           {/* Row 1: title + meta */}
           <div className="flex items-start gap-3 pb-2">
@@ -1202,7 +1207,7 @@ function ProposalDetailPanel({
           )}
         </SheetHeader>
 
-        <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
+        <Tabs value={tab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0">
           <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0 overflow-x-auto">
             {[
               { value: "overview", label: "Overview" },
@@ -1242,7 +1247,7 @@ function ProposalDetailPanel({
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
                 <div>
                   <p className="text-muted-foreground text-xs">Issue Date</p>
                   <p className="font-medium">{fmtDate(proposal.issueDate)}</p>
@@ -1375,7 +1380,7 @@ function ProposalDetailPanel({
               {(proposal.workType || proposal.paymentType || proposal.estimatedHours) && (
                 <div className="rounded-lg border p-3 space-y-2">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Work Details</p>
-                  <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                     {proposal.workType && (
                       <div>
                         <p className="text-xs text-muted-foreground">Type</p>
@@ -1401,7 +1406,7 @@ function ProposalDetailPanel({
               {(proposal.projectClass || proposal.costCenter || proposal.urgency || proposal.laborMaterialsSplit) && (
                 <div className="rounded-lg border p-3 space-y-2">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Project Intake</p>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
                     {proposal.costCenter && (
                       <div>
                         <p className="text-xs text-muted-foreground">Cost Center</p>
@@ -2021,7 +2026,10 @@ function ProposalBuilder({
   open: boolean; onClose: () => void; proposal?: Proposal | null; isAdmin: boolean;
 }) {
   const { toast } = useToast();
-  const [tab, setTab] = useState(proposal ? "details" : "intake");
+  const [tab, setTab] = useState(() => {
+    if (!proposal) return "intake";
+    return localStorage.getItem("paylink.contractorHub.proposalBuilderTab") || "details";
+  });
   const [form, setForm] = useState<Partial<Proposal>>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
@@ -2076,6 +2084,11 @@ function ProposalBuilder({
   });
 
   const current = { ...proposal, ...form };
+
+  function handleBuilderTabChange(nextTab: string) {
+    setTab(nextTab);
+    if (proposal) localStorage.setItem("paylink.contractorHub.proposalBuilderTab", nextTab);
+  }
 
   const saveMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -2377,7 +2390,7 @@ function ProposalBuilder({
           </div>
         </SheetHeader>
 
-        <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
+        <Tabs value={tab} onValueChange={handleBuilderTabChange} className="flex flex-col flex-1 min-h-0">
           <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0 overflow-x-auto">
             {[
               { value: "intake", label: "Intake" },

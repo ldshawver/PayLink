@@ -127,7 +127,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
   const [editDoc, setEditDoc] = useState<Document | null>(null);
   const [uploadForm, setUploadForm] = useState({
     title: "", description: "", category: "HR", classification: "internal",
-    documentType: "Other", department: "HR", tags: "", effectiveDate: "",
+    documentType: "Other", department: "HR", owner: "", tags: "", effectiveDate: "",
   });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
@@ -171,6 +171,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
         classification: uploadForm.classification,
         documentType: uploadForm.documentType,
         department: uploadForm.department,
+        owner: uploadForm.owner,
         tags: uploadForm.tags,
         effectiveDate: uploadForm.effectiveDate || null,
         createdBy: user?.username || "",
@@ -180,7 +181,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
       queryClient.invalidateQueries({ queryKey: ["/api/documents", companyId] });
       setShowUpload(false);
       setSelectedFile(null);
-      setUploadForm({ title: "", description: "", category: "HR", classification: "internal", documentType: "Other", department: "HR", tags: "", effectiveDate: "" });
+      setUploadForm({ title: "", description: "", category: "HR", classification: "internal", documentType: "Other", department: "HR", owner: "", tags: "", effectiveDate: "" });
       toast({ title: "Document uploaded successfully" });
     },
     onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
@@ -206,7 +207,12 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
   });
 
   const filtered = documents.filter(d => {
-    if (searchQuery && !d.title.toLowerCase().includes(searchQuery.toLowerCase()) && !(d.tags || "").toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    const q = searchQuery.trim().toLowerCase();
+    const searchableText = [
+      d.title, d.description, d.tags, d.category, d.classification, d.documentType,
+      d.department, d.owner, d.fileName, d.status,
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (q && !searchableText.includes(q)) return false;
     if (filterCategory !== "all" && d.category !== filterCategory) return false;
     if (filterClassification !== "all" && d.classification !== filterClassification) return false;
     if (filterDepartment !== "all" && d.department !== filterDepartment) return false;
@@ -218,7 +224,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search documents..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9" data-testid="input-search-docs" />
+          <Input placeholder="Search title, keywords, owner, department, file name, or context..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9" data-testid="input-search-docs" />
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <Select value={filterCategory} onValueChange={setFilterCategory}>
@@ -263,6 +269,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
                       <div className="flex flex-wrap items-center gap-1.5 mt-1">
                         <Badge variant="secondary" className="text-[10px]">{doc.category || "—"}</Badge>
                         {doc.documentType && <span className="text-xs text-muted-foreground">{doc.documentType}</span>}
+                        {doc.owner && <span className="text-xs text-muted-foreground">Owner: {doc.owner}</span>}
                         {doc.legalHold && <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Legal Hold</Badge>}
                       </div>
                       <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
@@ -307,7 +314,11 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
                       </div>
                       <div>
                         <button className="font-medium hover:underline text-left" onClick={() => setShowDetail(doc)} data-testid={`link-doc-${doc.id}`}>{doc.title}</button>
-                        {doc.tags && <p className="text-xs text-muted-foreground">{doc.tags}</p>}
+                        {(doc.tags || doc.owner || doc.description) && (
+                          <p className="text-xs text-muted-foreground line-clamp-1">
+                            {[doc.owner ? `Owner: ${doc.owner}` : "", doc.tags, doc.description].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
                       </div>
                       {doc.legalHold && <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Legal Hold</Badge>}
                     </div>
@@ -388,6 +399,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
               </div>
             </div>
             <div><Label>Tags (comma separated)</Label><Input value={uploadForm.tags} onChange={e => setUploadForm(p => ({...p, tags: e.target.value}))} placeholder="e.g. onboarding, 2025, compliance" data-testid="input-doc-tags" /></div>
+            <div><Label>Owner / Steward</Label><Input value={uploadForm.owner} onChange={e => setUploadForm(p => ({...p, owner: e.target.value}))} placeholder="e.g. HR, Finance, Legal, Jane Smith" data-testid="input-doc-owner" /></div>
             <div><Label>Effective Date</Label><Input type="date" value={uploadForm.effectiveDate} onChange={e => setUploadForm(p => ({...p, effectiveDate: e.target.value}))} data-testid="input-doc-effective-date" /></div>
           </div>
           <DialogFooter>
@@ -415,7 +427,7 @@ function EditDocForm({ doc, onSave, isPending }: { doc: Document; onSave: (d: Pa
   const [form, setForm] = useState({
     title: doc.title, description: doc.description || "", category: doc.category || "HR",
     classification: doc.classification || "internal", documentType: doc.documentType || "Other",
-    department: doc.department || "HR", tags: doc.tags || "", legalHold: doc.legalHold || false,
+    department: doc.department || "HR", owner: doc.owner || "", tags: doc.tags || "", legalHold: doc.legalHold || false,
   });
   return (
     <div className="space-y-4">
@@ -448,6 +460,7 @@ function EditDocForm({ doc, onSave, isPending }: { doc: Document; onSave: (d: Pa
         </div>
       </div>
       <div><Label>Tags</Label><Input value={form.tags} onChange={e => setForm(p => ({...p, tags: e.target.value}))} /></div>
+      <div><Label>Owner / Steward</Label><Input value={form.owner} onChange={e => setForm(p => ({...p, owner: e.target.value}))} data-testid="input-edit-owner" /></div>
       <div className="flex items-center gap-3">
         <Switch checked={form.legalHold} onCheckedChange={v => setForm(p => ({...p, legalHold: v}))} data-testid="switch-legal-hold" />
         <Label className="flex items-center gap-1"><Lock className="h-3.5 w-3.5" /> Legal Hold</Label>

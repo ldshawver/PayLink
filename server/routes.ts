@@ -12263,8 +12263,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
         (user?.role || "").startsWith("tenant_") || isPlatformAdmin;
       const isContractor = workerId && contract.contractor_id === workerId;
-      // Platform admins can sign any company's contract; tenant/owner roles must belong to the same company
-      const isCompanyAdmin = isAdmin && (isPlatformAdmin || user?.companyId === contract.company_id);
+      const hasExplicitCompanyAccess = await db.execute(sql`
+        SELECT 1
+        FROM user_company_access uca
+        LEFT JOIN roles r ON r.id = uca.role_id
+        WHERE uca.user_id = ${req.session.userId}
+          AND uca.company_id = ${contract.company_id}
+          AND uca.is_active = TRUE
+          AND (
+            r.name IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','tenant_manager')
+            OR r.name IS NULL
+          )
+        LIMIT 1
+      `);
+      const userCompanyMatches = user?.companyId === contract.company_id || currentUserCompanyId === contract.company_id;
+      // Platform admins can sign any company's contract; tenant/owner roles must belong to the same company or have explicit tenant access.
+      const isCompanyAdmin = isAdmin && (isPlatformAdmin || userCompanyMatches || hasExplicitCompanyAccess.rows.length > 0);
 
       const registeredSignerRes = await db.execute(sql`
         SELECT id FROM contract_signers
@@ -21598,7 +21612,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.post("/api/onboarding-packets", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
     try {
-      const packet = await storage.createOnboardingPacket(req.body);
+      const companyId = (req as any)._companyId;
+      if (!req.body.workerId) return res.status(400).json({ message: "workerId is required" });
+      const worker = await storage.getWorker(req.body.workerId);
+      if (!worker) return res.status(404).json({ message: "Employee not found" });
+      if (worker.companyId !== companyId) return res.status(403).json({ message: "Selected employee does not belong to this company" });
+      const packet = await storage.createOnboardingPacket({ ...req.body, companyId });
       emitIntegrationEvent(packet.companyId, "onboarding_packet.created", { packetId: packet.id, workerId: packet.workerId, templateName: packet.templateName }).catch(() => {});
       const templateSteps: Record<string, Array<{name: string; type: string; taskType: string; desc: string; docType?: string; deps?: number[]; required?: boolean}>> = {
         "Standard Onboarding": [

@@ -395,7 +395,7 @@ export default function ProposalPortalPage() {
       <div className="h-2" style={{ backgroundColor: accentColor }} />
 
       <div className="px-4 sm:px-8 py-6 border-b bg-white" style={{ borderColor: accentColor + "30" }}>
-        <div className="max-w-3xl mx-auto flex flex-col sm:flex-row justify-between items-start gap-4">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row justify-between items-start gap-4">
           <div>
             <div className="flex items-center gap-3 mb-1">
               <div
@@ -427,7 +427,7 @@ export default function ProposalPortalPage() {
         </div>
       </div>
 
-      <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 space-y-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-8 py-8 space-y-8">
 
         {(proposal.branding?.coverNote || proposal.clientMessage) && (
           <div
@@ -448,7 +448,8 @@ export default function ProposalPortalPage() {
         {proposal.lineItems.length > 0 && (
           <div>
             <h2 className="text-base font-semibold mb-3 pb-1 border-b">Pricing</h2>
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto -mx-1 px-1">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="text-muted-foreground border-b">
                   <th className="text-left py-1 font-medium">Item</th>
@@ -471,6 +472,7 @@ export default function ProposalPortalPage() {
                 ))}
               </tbody>
             </table>
+            </div>
             <div className="mt-3 border-t pt-3 space-y-1 text-sm max-w-xs ml-auto">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span>
