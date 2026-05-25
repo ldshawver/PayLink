@@ -16870,6 +16870,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const coPhone = isCalibration ? "(555) 555-0100"    : sanitizeForPdf(company?.phone || "");
     const coEin   = isCalibration ? "12-3456789"        : sanitizeForPdf(company?.ein   || "");
 
+    // Check template address overrides — when set, these replace the company/worker profile address
+    // on the printed check (useful for P.O. Box return address, alternate delivery address, etc.)
+    // Leave blank in the template to use the profile address.
+    const senderNameEff  = (cfg.returnAddrOverrideName  && String(cfg.returnAddrOverrideName).trim())
+      ? sanitizeForPdf(String(cfg.returnAddrOverrideName).trim())  : coName;
+    const senderAddr1Eff = (cfg.returnAddrOverrideLine1 && String(cfg.returnAddrOverrideLine1).trim())
+      ? sanitizeForPdf(String(cfg.returnAddrOverrideLine1).trim()) : coAddr1;
+    const senderAddr2Eff = (cfg.returnAddrOverrideLine2 && String(cfg.returnAddrOverrideLine2).trim())
+      ? sanitizeForPdf(String(cfg.returnAddrOverrideLine2).trim()) : coAddr2;
+
+    const payeeNameEff  = (cfg.payeeAddrOverrideName  && String(cfg.payeeAddrOverrideName).trim())
+      ? sanitizeForPdf(String(cfg.payeeAddrOverrideName).trim())  : wName;
+    const payeeAddr1Eff = (cfg.payeeAddrOverrideLine1 && String(cfg.payeeAddrOverrideLine1).trim())
+      ? sanitizeForPdf(String(cfg.payeeAddrOverrideLine1).trim()) : wStreet;
+    const payeeAddr2Eff = (cfg.payeeAddrOverrideLine2 && String(cfg.payeeAddrOverrideLine2).trim())
+      ? sanitizeForPdf(String(cfg.payeeAddrOverrideLine2).trim()) : wCityStateZip;
+
     // Calibration guide — only drawn in calibration mode
     const drawGuide = (x: number, y: number, w: number, h: number, label: string) => {
       if (!isCalibration) return;
@@ -16943,10 +16960,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Spec: name at (0.68in, 0.30in); lines follow at ~12pt intervals
     const coTextX = z1x(0.68);
     drawGuide(coTextX, z1y(0.90), Math.round(2.5*72), Math.round(0.66*72), "COMPANY BLOCK");
-    if (showCompanyName) page.drawText(coName,  { x: coTextX, y: z1y(0.30), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
+    if (showCompanyName) page.drawText(senderNameEff,  { x: coTextX, y: z1y(0.30), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
     if (showCompanyAddr) {
-      if (coAddr1) page.drawText(coAddr1, { x: coTextX, y: z1y(0.46), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (coAddr2) page.drawText(coAddr2, { x: coTextX, y: z1y(0.62), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (senderAddr1Eff) page.drawText(senderAddr1Eff, { x: coTextX, y: z1y(0.46), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (senderAddr2Eff) page.drawText(senderAddr2Eff, { x: coTextX, y: z1y(0.62), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
       if (coPhone) page.drawText(coPhone, { x: coTextX, y: z1y(0.78), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
     }
 
@@ -17089,21 +17106,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // ── Sender/return address window (upper-left of Zone 2) ──────────────────
     // Shows through the return-address window of a window envelope.
+    // Uses returnAddrOverride* from layoutConfig if set; otherwise falls back to company profile.
     drawGuide(lm, checkBot - 82, mailColDiv - lm - 4, 78, "SENDER ADDR");
     const senderY = checkBot - 18;
-    if (showCompanyName) page.drawText(coName, { x: lm + senderAddrOffX, y: senderY + senderAddrOffY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    if (showCompanyName) page.drawText(senderNameEff,  { x: lm + senderAddrOffX, y: senderY + senderAddrOffY, size: 8, font: hvB, color: rgb(0, 0, 0) });
     if (showCompanyAddr) {
-      if (coAddr1) page.drawText(coAddr1, { x: lm + senderAddrOffX, y: senderY - 12 + senderAddrOffY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (coAddr2) page.drawText(coAddr2, { x: lm + senderAddrOffX, y: senderY - 24 + senderAddrOffY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (senderAddr1Eff) page.drawText(senderAddr1Eff, { x: lm + senderAddrOffX, y: senderY - 12 + senderAddrOffY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (senderAddr2Eff) page.drawText(senderAddr2Eff, { x: lm + senderAddrOffX, y: senderY - 24 + senderAddrOffY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
     }
 
     // ── Recipient/delivery address window (lower-left of Zone 2) ────────────
     // Shows through the main address window of a window envelope.
+    // Uses payeeAddrOverride* from layoutConfig if set; otherwise falls back to worker profile.
     drawGuide(lm, mailBot + 16, mailColDiv - lm - 4, 60, "RECIPIENT ADDR");
     const recipBaseY = mailBot + 16 + 60;  // top of the guide box
-    page.drawText(wName,           { x: lm + employeeAddrOffX, y: recipBaseY - 12 + employeeAddrOffY, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    if (wStreet)       page.drawText(wStreet,       { x: lm + employeeAddrOffX, y: recipBaseY - 24 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
-    if (wCityStateZip) page.drawText(wCityStateZip, { x: lm + employeeAddrOffX, y: recipBaseY - 36 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
+    page.drawText(payeeNameEff,           { x: lm + employeeAddrOffX, y: recipBaseY - 12 + employeeAddrOffY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    if (payeeAddr1Eff) page.drawText(payeeAddr1Eff, { x: lm + employeeAddrOffX, y: recipBaseY - 24 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
+    if (payeeAddr2Eff) page.drawText(payeeAddr2Eff, { x: lm + employeeAddrOffX, y: recipBaseY - 36 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
 
     // ── Paystub / vendor-check info (right column of Zone 2) ────────────────
     // vcMemo declared here so it is accessible in both Zone 2 and Zone 3 sections

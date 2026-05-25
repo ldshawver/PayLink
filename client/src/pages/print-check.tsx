@@ -208,16 +208,19 @@ function CheckPortion({
               {company.dba && config.showCompanyName && (
                 <div style={{ fontSize: "10px", color: "#444" }}>DBA: {company.dba}</div>
               )}
-              {config.showCompanyAddress && company.address && (
-                <div style={{ fontSize: "10px", color: "#333", marginTop: "2px" }}>{company.address}</div>
-              )}
-              {config.showCompanyAddress && (company.city || company.state || company.zip) && (
-                <div style={{ fontSize: "10px", color: "#333" }}>
-                  {[company.city, company.state].filter(Boolean).join(", ")}{company.zip ? " " + company.zip : ""}
-                </div>
-              )}
-              {config.showCompanyAddress && company.phone && (
-                <div style={{ fontSize: "10px", color: "#333" }}>{company.phone}</div>
+              {config.showCompanyAddress && (
+                <>
+                  {(() => {
+                    const line1 = (config as any).returnAddrOverrideLine1?.trim() || company.address || "";
+                    const line2 = (config as any).returnAddrOverrideLine2?.trim() ||
+                      ([company.city, company.state].filter(Boolean).join(", ") + (company.zip ? " " + company.zip : "")) || "";
+                    return (<>
+                      {line1 && <div style={{ fontSize: "10px", color: "#333", marginTop: "2px" }}>{line1}</div>}
+                      {line2 && <div style={{ fontSize: "10px", color: "#333" }}>{line2}</div>}
+                      {company.phone && <div style={{ fontSize: "10px", color: "#333" }}>{company.phone}</div>}
+                    </>);
+                  })()}
+                </>
               )}
             </div>
           </div>
@@ -496,21 +499,37 @@ function StubSummarySection({
         {/* LEFT SECTION: Addresses per guide Zone 2 window coordinates */}
         <div style={{ position: "absolute", left: "0.35in", top: "0", width: "4.25in", height: "100%" }}>
           {/* TOP WINDOW: Company return address — guide x0.65"–4.00", y4.08" from page (0.58" from zone top) */}
+          {/* returnAddrOverride* in layoutConfig takes priority over company profile */}
           <div style={{ position: "absolute", top: "0.46in", left: "0.30in", fontSize: "9px" }}>
-            <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
-            {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
-            {(company.city || company.state || company.zip) && (
-              <div style={{ fontSize: "8px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
-            )}
+            <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>
+              {(config as any).returnAddrOverrideName?.trim() || company.name}
+            </div>
+            {(() => {
+              const line1 = (config as any).returnAddrOverrideLine1?.trim() || company.address;
+              const line2 = (config as any).returnAddrOverrideLine2?.trim() ||
+                ([company.city, company.state].filter(Boolean).join(", ") + (company.zip ? " " + company.zip : "")) || "";
+              return (<>
+                {line1 && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{line1}</div>}
+                {line2 && <div style={{ fontSize: "8px" }}>{line2}</div>}
+              </>);
+            })()}
           </div>
 
           {/* BOTTOM WINDOW: Employee mailing address — guide x0.80"–4.55", y5.75" from page (2.25" from zone top) */}
+          {/* payeeAddrOverride* in layoutConfig takes priority over worker profile */}
           <div style={{ position: "absolute", top: "2.25in", left: "0.45in", fontSize: "10px" }}>
-            <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
-            {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
-            {(worker.city || worker.state || worker.zip) && (
-              <div style={{ fontSize: "9px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
-            )}
+            <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>
+              {(config as any).payeeAddrOverrideName?.trim() || `${worker.firstName} ${worker.lastName}`}
+            </div>
+            {(() => {
+              const line1 = (config as any).payeeAddrOverrideLine1?.trim() || worker.address || "";
+              const line2 = (config as any).payeeAddrOverrideLine2?.trim() ||
+                ([worker.city, worker.state].filter(Boolean).join(", ") + (worker.zip ? " " + worker.zip : "")) || "";
+              return (<>
+                {line1 && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{line1}</div>}
+                {line2 && <div style={{ fontSize: "9px" }}>{line2}</div>}
+              </>);
+            })()}
           </div>
         </div>
 

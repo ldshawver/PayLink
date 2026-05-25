@@ -6191,6 +6191,10 @@ function CheckLayoutTab() {
     setLayoutConfig(prev => ({ ...prev, [field]: value }));
   };
 
+  const setStringField = (field: string, value: string) => {
+    setLayoutConfig(prev => ({ ...prev, [field]: value }));
+  };
+
   const resetLayoutDefaults = () => {
     setLayoutConfig(prev => ({
       ...prev,
@@ -6310,6 +6314,46 @@ function CheckLayoutTab() {
                     <div className="grid gap-1">
                       <Label className="text-xs">Y Offset (up +)</Label>
                       <Input data-testid="input-paystub-y" type="number" value={layoutConfig.paystubOffsetY ?? -18} onChange={e => setOffsetField("paystubOffsetY", Number(e.target.value))} className="h-8" />
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-3 pt-1">
+                  <div>
+                    <Label className="text-sm font-medium">Return (Sender) Address Override</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">Leave blank to use the company profile address. Useful for P.O. Box or alternate mailing address.</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Sender Name</Label>
+                      <Input data-testid="input-return-name" placeholder={selectedCompanyObj?.name || "Company name (from profile)"} value={layoutConfig.returnAddrOverrideName ?? ""} onChange={e => setStringField("returnAddrOverrideName", e.target.value)} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Street Address</Label>
+                      <Input data-testid="input-return-line1" placeholder={selectedCompanyObj?.address || "Street address (from profile)"} value={layoutConfig.returnAddrOverrideLine1 ?? ""} onChange={e => setStringField("returnAddrOverrideLine1", e.target.value)} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">City, State ZIP</Label>
+                      <Input data-testid="input-return-line2" placeholder={[selectedCompanyObj?.city, selectedCompanyObj?.state].filter(Boolean).join(", ") + (selectedCompanyObj?.zip ? " " + selectedCompanyObj.zip : "") || "City, State ZIP (from profile)"} value={layoutConfig.returnAddrOverrideLine2 ?? ""} onChange={e => setStringField("returnAddrOverrideLine2", e.target.value)} className="h-8" />
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-3 pt-1">
+                  <div>
+                    <Label className="text-sm font-medium">Payee (Recipient) Address Override</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">Leave blank to use each employee's address from their profile. Use when all checks should show a specific delivery address.</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Payee Name Override</Label>
+                      <Input data-testid="input-payee-name" placeholder="Employee name (from profile)" value={layoutConfig.payeeAddrOverrideName ?? ""} onChange={e => setStringField("payeeAddrOverrideName", e.target.value)} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Street Address</Label>
+                      <Input data-testid="input-payee-line1" placeholder="Employee street address (from profile)" value={layoutConfig.payeeAddrOverrideLine1 ?? ""} onChange={e => setStringField("payeeAddrOverrideLine1", e.target.value)} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">City, State ZIP</Label>
+                      <Input data-testid="input-payee-line2" placeholder="Employee city, state ZIP (from profile)" value={layoutConfig.payeeAddrOverrideLine2 ?? ""} onChange={e => setStringField("payeeAddrOverrideLine2", e.target.value)} className="h-8" />
                     </div>
                   </div>
                 </div>
@@ -6457,6 +6501,48 @@ function CheckLayoutTab() {
                   <div className="grid gap-1">
                     <Label className="text-xs">Y Offset (up +)</Label>
                     <Input data-testid="input-edit-paystub-y" type="number" value={layoutConfig.paystubOffsetY ?? -18} onChange={e => setOffsetField("paystubOffsetY", Number(e.target.value))} className="h-8" />
+                  </div>
+                </div>
+              </div>
+              <div className="grid gap-3 pt-1">
+                <div>
+                  <Label className="text-sm font-medium">Return (Sender) Address Override</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Leave blank to use the company profile address. Useful for P.O. Box or alternate mailing address.</p>
+                </div>
+                <div className="grid gap-2">
+                  {(() => { const ec = companies.find(c => c.id === editingTemplate.companyId); return (<>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Sender Name</Label>
+                    <Input data-testid="input-edit-return-name" placeholder={ec?.name || "Company name (from profile)"} value={layoutConfig.returnAddrOverrideName ?? ""} onChange={e => setStringField("returnAddrOverrideName", e.target.value)} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Street Address</Label>
+                    <Input data-testid="input-edit-return-line1" placeholder={ec?.address || "Street address (from profile)"} value={layoutConfig.returnAddrOverrideLine1 ?? ""} onChange={e => setStringField("returnAddrOverrideLine1", e.target.value)} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">City, State ZIP</Label>
+                    <Input data-testid="input-edit-return-line2" placeholder={[ec?.city, ec?.state].filter(Boolean).join(", ") + (ec?.zip ? " " + ec.zip : "") || "City, State ZIP (from profile)"} value={layoutConfig.returnAddrOverrideLine2 ?? ""} onChange={e => setStringField("returnAddrOverrideLine2", e.target.value)} className="h-8" />
+                  </div>
+                  </>); })()}
+                </div>
+              </div>
+              <div className="grid gap-3 pt-1">
+                <div>
+                  <Label className="text-sm font-medium">Payee (Recipient) Address Override</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Leave blank to use each employee's address from their profile. Use when all checks should show a specific delivery address.</p>
+                </div>
+                <div className="grid gap-2">
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Payee Name Override</Label>
+                    <Input data-testid="input-edit-payee-name" placeholder="Employee name (from profile)" value={layoutConfig.payeeAddrOverrideName ?? ""} onChange={e => setStringField("payeeAddrOverrideName", e.target.value)} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Street Address</Label>
+                    <Input data-testid="input-edit-payee-line1" placeholder="Employee street address (from profile)" value={layoutConfig.payeeAddrOverrideLine1 ?? ""} onChange={e => setStringField("payeeAddrOverrideLine1", e.target.value)} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">City, State ZIP</Label>
+                    <Input data-testid="input-edit-payee-line2" placeholder="Employee city, state ZIP (from profile)" value={layoutConfig.payeeAddrOverrideLine2 ?? ""} onChange={e => setStringField("payeeAddrOverrideLine2", e.target.value)} className="h-8" />
                   </div>
                 </div>
               </div>
