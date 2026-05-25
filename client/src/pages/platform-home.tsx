@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Kanban, FileBadge, ClipboardCheck, Rss, ServerCog, ShieldCheck,
+  FileBadge, ClipboardCheck, Rss, ServerCog, ShieldCheck,
   CreditCard, ArrowRight, TrendingUp, Users, Building2, AlertTriangle
 } from "lucide-react";
 
@@ -60,12 +60,10 @@ function ModuleCard({ title, description, href, items, badge }: {
 }
 
 export default function PlatformHomePage() {
-  const { data: deals = [] } = useQuery<any[]>({ queryKey: ["/api/deals"] });
   const { data: licenses = [] } = useQuery<any[]>({ queryKey: ["/api/license-requests"] });
   const { data: projects = [] } = useQuery<any[]>({ queryKey: ["/api/onboarding-projects"] });
   const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/companies"] });
 
-  const openDeals = deals.filter((d: any) => !["closed_won", "closed_lost"].includes(d.stage)).length;
   const pendingLicenses = licenses.filter((l: any) => l.status === "pending").length;
   const activeProjects = projects.filter((p: any) => p.status === "active").length;
   const totalTenants = companies.length;
@@ -93,7 +91,6 @@ export default function PlatformHomePage() {
       <div className="flex-1 overflow-auto p-6 space-y-6">
         {/* Stats Row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard label="Open Deals" value={openDeals} icon={Kanban} href="/platform/deal-pipeline" color="bg-blue-600" />
           <StatCard label="Pending License Requests" value={pendingLicenses} icon={FileBadge} href="/platform/license-requests" color="bg-orange-500" />
           <StatCard label="Active Onboarding Projects" value={activeProjects} icon={ClipboardCheck} href="/platform/onboarding-projects" color="bg-green-600" />
           <StatCard label="Provisioned Tenants" value={totalTenants} icon={Building2} href="/platform/provisioning" color="bg-slate-600" />
@@ -104,11 +101,11 @@ export default function PlatformHomePage() {
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Platform Modules</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <ModuleCard
-              title="Sales & Licensing"
-              description="Manage the full sales cycle from deal creation through license issuance."
-              href="/platform/deal-pipeline"
-              badge="Sales"
-              items={["Deal Pipeline", "License Requests", "Agreements & Signed Agreements"]}
+              title="Licensing"
+              description="Manage license requests, agreements, and signed agreements."
+              href="/platform/license-requests"
+              badge="Licensing"
+              items={["License Requests", "Agreements & Signed Agreements"]}
             />
             <ModuleCard
               title="Customer Success"

@@ -27,7 +27,6 @@ import {
   Eye,
   EyeOff,
   ServerCog,
-  Kanban,
   CreditCard,
   Users,
 } from "lucide-react";
@@ -783,7 +782,7 @@ function CheckPrintCalibrationSection() {
 function SaasPlatformSection() {
   const links = [
     { title: "SaaS Console", description: "Provisioning, billing, feature flags, and tenant operations.", href: "/platform", icon: ServerCog },
-    { title: "Sales Pipeline", description: "Manage deals and license opportunities from lead to close.", href: "/app/deal-pipeline", icon: Kanban },
+
     { title: "Billing", description: "Review subscription billing and account status.", href: "/platform/billing", icon: CreditCard },
     { title: "Customer Onboarding", description: "Track sold customer implementation projects.", href: "/app/onboarding-projects", icon: Users },
   ];

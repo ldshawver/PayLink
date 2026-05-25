@@ -48,7 +48,6 @@ const InvoicesPage = lazy(() => import("@/pages/invoices"));
 const PayInvoicePage = lazy(() => import("@/pages/pay-invoice"));
 const BillingPage = lazy(() => import("@/pages/billing"));
 const CompanyDocumentsPage = lazy(() => import("@/pages/company-documents"));
-const DealPipelinePage = lazy(() => import("@/pages/deal-pipeline"));
 const OnboardingProjectsPage = lazy(() => import("@/pages/onboarding-projects"));
 const OnboardingTemplatesPage = lazy(() => import("@/pages/onboarding-templates"));
 const EngagementFeedPage = lazy(() => import("@/pages/engagement-feed"));
@@ -193,6 +192,15 @@ function StrictRoleGuard({ roles, children }: { roles: string[]; children: React
   return <>{children}</>;
 }
 
+// =============================================================================
+// MYPAYLINK SCOPE LOCK
+// This product is payroll / HR / workforce / finance infrastructure.
+// Do NOT replace any route or dashboard with CRM, sales, marketing, or LUXit flows.
+// Approved modules: Payroll, Time & Attendance, HR, Employees, Contractors,
+//   Scheduling, Expenses, Documents, Reports, Compliance, Check Printing.
+// Forbidden: deal-pipeline, leads, campaigns, sales dashboard, marketing views.
+// See: docs/project-scope-guardrails.md
+// =============================================================================
 function AuthenticatedRouter() {
   return (
     <Suspense fallback={<PageLoader />}>
@@ -214,7 +222,7 @@ function AuthenticatedRouter() {
         <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
         <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
         <Route path="/app/billing">{() => <PlatformRedirect to="/platform/billing" />}</Route>
-        <Route path="/app/deal-pipeline" component={DealPipelinePage} />
+
         <Route path="/app/onboarding-projects" component={OnboardingProjectsPage} />
         <Route path="/app/onboarding-templates">{() => <PlatformRedirect to="/platform/onboarding-templates" />}</Route>
         <Route path="/app/engagement-feed" component={EngagementFeedPage} />
@@ -399,7 +407,7 @@ function PlatformRouter() {
       <Suspense fallback={<PageLoader />}>
         <Switch>
           <Route path="/platform" component={PlatformHomePage} />
-          <Route path="/platform/deal-pipeline" component={DealPipelinePage} />
+
           <Route path="/platform/license-requests" component={LicenseRequestsPage} />
           <Route path="/platform/agreements" component={AgreementsPage} />
           <Route path="/platform/onboarding-projects" component={OnboardingProjectsPage} />

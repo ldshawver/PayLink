@@ -70,8 +70,6 @@ import {
   Package,
   Mail,
   LogOut,
-  Kanban,
-  Megaphone,
 } from "lucide-react";
 import {
   Sidebar,
@@ -124,11 +122,14 @@ type NavGroup = {
   sections: NavSection[];
 };
 
-// ─── Tenant App navigation ────────────────────────────────────────────────────
+// ─── Tenant App navigation ─────────────────────────────────────────────────────
+// MYPAYLINK SCOPE LOCK: payroll/HR/workforce/finance infrastructure only.
+// Do NOT add CRM, sales pipeline, marketing campaigns, or LUXit flows here.
+// See: docs/project-scope-guardrails.md
 
-const GROWTH_NAV: NavGroup[] = [
+const MAIN_NAV: NavGroup[] = [
   {
-    groupLabel: "Main",
+    groupLabel: "Core",
     sections: [
       {
         label: "Dashboard",
@@ -139,22 +140,101 @@ const GROWTH_NAV: NavGroup[] = [
     ],
   },
   {
-    groupLabel: "Sales",
+    groupLabel: "Workforce",
     sections: [
       {
-        label: "Pipeline",
-        icon: Kanban,
-        url: "/app/deal-pipeline",
+        label: "Employees",
+        icon: Users,
+        url: "/app/employee",
+        roles: ["admin", "manager"],
         items: [
-          { title: "Deal Pipeline", url: "/app/deal-pipeline", icon: Kanban },
-          { title: "Customers", url: "/app/customers?tab=customers", icon: Users },
-          { title: "Invoices", url: "/app/invoices?tab=invoices", icon: FileText },
+          { title: "All Employees", url: "/app/employee", icon: Users },
+          { title: "Company Structure", url: "/app/company", icon: Building2 },
         ],
       },
+      {
+        label: "Scheduling",
+        icon: CalendarDays,
+        url: "/app/schedule",
+        items: [
+          { title: "Schedule", url: "/app/schedule", icon: CalendarDays },
+          { title: "Time & Attendance", url: "/app/attendance", icon: Clock },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "Payroll",
+    sections: [
+      {
+        label: "Payroll Runs",
+        icon: DollarSign,
+        url: "/app/payroll",
+        roles: ["admin", "manager"],
+        items: [
+          { title: "Process Payroll", url: "/app/payroll", icon: DollarSign },
+          { title: "Payroll Audit", url: "/app/payroll-audit", icon: FileBarChart },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "Operations",
+    sections: [
+      {
+        label: "Contractor Hub",
+        icon: Briefcase,
+        url: "/app/contractor-hub",
+        featureKey: "tenant.finance.contractor-hub",
+        items: [],
+      },
+      {
+        label: "Expenses",
+        icon: Receipt,
+        url: "/app/expenses",
+        items: [],
+      },
+    ],
+  },
+  {
+    groupLabel: "HR & Compliance",
+    sections: [
+      {
+        label: "HR",
+        icon: UserCheck,
+        url: "/app/hr",
+        roles: ["admin", "manager"],
+        items: [
+          { title: "HR Overview", url: "/app/hr", icon: UserCheck },
+          { title: "Policies", url: "/app/policy", icon: Shield },
+          { title: "Company Documents", url: "/app/company-documents", icon: FolderOpen },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "Reports",
+    sections: [
+      {
+        label: "Reports",
+        icon: BarChart3,
+        url: "/app/reports",
+        roles: ["admin", "manager"],
+        items: [
+          { title: "Labor Reports", url: "/app/reports", icon: FileBarChart },
+          { title: "KPI Goals", url: "/app/kpi-goals", icon: TrendingUp },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "Finance & Billing",
+    sections: [
       {
         label: "Customers",
         icon: Users,
         url: "/app/customers",
+        roles: ["admin", "manager"],
         items: [
           { title: "Customer Directory", url: "/app/customers?tab=customers", icon: Users },
           { title: "Vendors", url: "/app/customers?tab=vendors", icon: Building2 },
@@ -162,35 +242,15 @@ const GROWTH_NAV: NavGroup[] = [
         ],
       },
       {
-        label: "Billing",
-        icon: Receipt,
+        label: "Invoices & Billing",
+        icon: Banknote,
         url: "/app/invoices",
+        roles: ["admin", "manager"],
         items: [
           { title: "Invoices", url: "/app/invoices?tab=invoices", icon: FileText },
           { title: "Recurring Billing", url: "/app/invoices?tab=recurring", icon: Repeat },
           { title: "Payments", url: "/app/invoices?tab=payments", icon: DollarSign },
         ],
-      },
-    ],
-  },
-  {
-    groupLabel: "Marketing",
-    sections: [
-      {
-        label: "Campaigns",
-        icon: Megaphone,
-        url: "/app/engagement-feed",
-        items: [
-          { title: "Engagement Feed", url: "/app/engagement-feed", icon: MessageSquare },
-          { title: "Customer Segments", url: "/app/customers?tab=customers", icon: UsersRound },
-          { title: "Campaign Billing", url: "/app/invoices?tab=recurring", icon: Repeat },
-        ],
-      },
-      {
-        label: "Messages",
-        icon: MessageSquare,
-        url: "/app/messages",
-        items: [],
       },
     ],
   },
@@ -388,7 +448,7 @@ export function AppSidebar() {
             <div className="flex flex-col">
               <span className="text-base font-bold tracking-tight">PayLink</span>
               <span className="text-xs text-sidebar-foreground/60">
-                {isManager ? "Sales & Marketing" : "Growth Portal"}
+                {isManager ? "Admin Console" : "Employee Portal"}
               </span>
             </div>
           </div>
@@ -396,7 +456,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        {GROWTH_NAV.map((group) => {
+        {MAIN_NAV.map((group) => {
           if (group.roles && !hasAccess(group.roles)) return null;
           const visibleSections = group.sections.filter(s => hasAccess(s.roles));
           if (visibleSections.length === 0) return null;

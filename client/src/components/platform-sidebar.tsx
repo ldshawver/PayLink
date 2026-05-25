@@ -1,7 +1,6 @@
 import { useLocation, Link } from "wouter";
 import {
   LayoutDashboard,
-  Kanban,
   FileText,
   ClipboardCheck,
   LayoutTemplate,
@@ -94,12 +93,11 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
     module: "licensing",
     sections: [
       {
-        label: "Sales & Deals",
+        label: "License Requests",
         icon: Handshake,
-        url: "/platform/deal-pipeline",
+        url: "/platform/license-requests",
         module: "licensing",
         items: [
-          { title: "Deal Pipeline", url: "/platform/deal-pipeline", icon: Kanban },
           { title: "License Requests", url: "/platform/license-requests", icon: FileBadge },
         ],
       },
