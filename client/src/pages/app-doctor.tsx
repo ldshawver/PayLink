@@ -64,8 +64,17 @@ export default function AppDoctorPage() {
     queryFn: async () => {
       const qs = selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}` : "";
       const res = await fetch(`/api/app-doctor/reports${qs}`, { credentials: "include" });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      const contentType = res.headers.get("content-type") || "";
+      const bodyText = await res.text();
+      if (!contentType.includes("application/json")) {
+        const isHtml = bodyText.trim().startsWith("<!DOCTYPE") || bodyText.trim().startsWith("<html");
+        throw new Error(isHtml
+          ? "The API returned the app shell instead of JSON. Check nginx/API routing for /api/app-doctor/reports."
+          : (bodyText || `Unexpected ${contentType || "unknown"} response`));
+      }
+      const body = bodyText ? JSON.parse(bodyText) : null;
+      if (!res.ok) throw new Error(body?.message || `Request failed with ${res.status}`);
+      return body;
     },
   });
 

@@ -1344,6 +1344,8 @@ export async function registerRoutes(
       const allWorkers = await storage.getWorkers(effectiveSummaryCo);
       const workerMap: Record<string, typeof allWorkers[0]> = {};
       for (const w of allWorkers) workerMap[w.id] = w;
+      const summaryCompany = effectiveSummaryCo ? await storage.getCompany(effectiveSummaryCo).catch(() => null) : null;
+      const isFutaExemptCompany = summaryCompany?.entityType === "nonprofit_501c3";
 
       const companyDeductionsList = await storage.getTaxesDeductions(effectiveSummaryCo);
 
@@ -1412,8 +1414,8 @@ export async function registerRoutes(
           ssTaxEmployer: !isContractor ? ssTaxableWages * 0.062 : 0,
           medicareTaxEmployee: !isContractor ? gross * 0.0145 : 0,
           medicareTaxEmployer: !isContractor ? gross * 0.0145 : 0,
-          futaTaxableWages: !isContractor ? futaTaxableWages : 0,
-          futaTax: !isContractor ? futaTaxableWages * 0.006 : 0,
+          futaTaxableWages: !isContractor && !isFutaExemptCompany ? futaTaxableWages : 0,
+          futaTax: !isContractor && !isFutaExemptCompany ? futaTaxableWages * 0.006 : 0,
           suiTaxableWages: !isContractor ? suiTaxableWages : 0,
           suiTax: !isContractor ? suiTaxableWages * suiRate : 0,
           ettTax: !isContractor ? suiTaxableWages * ettRate : 0,

@@ -16,6 +16,9 @@
 |------|---------|
 | `client/src/pages/marketing-home.tsx` | Approved marketing homepage component |
 | `client/src/App.tsx` (lines ~584-598) | Route rule: unauthenticated `/` → `<MarketingHomePage />` |
+| `public-site/public/index.html` | Approved external marketing homepage, including the time-punch hero/modal markup |
+| `public-site/public/js/punch-clock.js` | Approved in-hero time-punch modal flow |
+| `public-site/public/css/punch-clock.css` | Approved time-punch hero and modal styling |
 
 ## What Cannot Be Changed Without Admin Approval
 
@@ -23,6 +26,7 @@
 2. **`/login` must remain a separate route** — it must not be merged with or replace the marketing homepage.
 3. **`/clock-in` must remain a separate route** — it must not replace the marketing homepage.
 4. **`marketing-home.tsx` hero section, CTA section, and features grid** must not be removed or replaced with login/clock-in UI without explicit admin sign-off.
+5. **The external marketing homepage time-punch hero must keep the in-place modal flow**: Clock In/Clock Out opens the modal, employees enter employee number + PIN, then choose Clock In, Return from Break, Start Break/End Shift, or Sign In to Dashboard. Do not replace this hero flow with a redirect to `/clock-in`, `/time-clock`, or the standalone green/red button kiosk page.
 
 ## External Builder Guardrail
 
@@ -34,6 +38,7 @@ Replit, AI builders, and automated website generators must treat the approved ma
 2. The comment header `APPROVED MARKETING PAGE — DO NOT MODIFY WITHOUT ADMIN APPROVAL` must remain.
 3. After updating, update this document's "Last approved" date.
 4. Ensure all three routes (`/`, `/login`, `/clock-in`) still serve distinct content after the change.
+5. If editing `public-site/public/js/punch-clock.js`, verify the hero buttons open `#punchModal` and do not navigate directly to `/clock-in`.
 
 ## Feature Flag (env)
 
@@ -43,5 +48,5 @@ This flag is informational — the actual protection is enforced by the routing 
 ## Last Approved
 
 Commit: `d99a3477e27a0468ce671481bd2ceaffbbda276e`  
-Date: 2026-05-23  
+Date: 2026-05-24  
 Author: Admin-approved current marketing homepage

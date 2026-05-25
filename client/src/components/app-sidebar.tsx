@@ -255,6 +255,44 @@ const MAIN_NAV: NavGroup[] = [
     ],
   },
   {
+    groupLabel: "Communications",
+    sections: [
+      {
+        label: "Messages",
+        icon: MessageSquare,
+        url: "/app/messages",
+        items: [
+          { title: "Inbox", url: "/app/messages", icon: MessageSquare },
+          { title: "Notification Preferences", url: "/app/notification-settings", icon: Bell },
+          { title: "Alert Templates", url: "/app/notification-templates", icon: Mail, roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"] },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "My Workspace",
+    sections: [
+      {
+        label: "My Profile",
+        icon: UserCircle,
+        url: "/app/my-profile",
+        items: [
+          { title: "My Preferences", url: "/app/my-profile?tab=preferences", icon: SlidersHorizontal },
+          { title: "My Paystubs", url: "/app/my-profile?tab=paystubs", icon: Wallet },
+          { title: "My Documents", url: "/app/my-profile?tab=documents", icon: FolderOpen },
+          { title: "My Reviews", url: "/app/my-profile?tab=reviews", icon: Star },
+          { title: "My Qualifications", url: "/app/my-profile?tab=qualifications", icon: Award },
+        ],
+      },
+      {
+        label: "My Feedback",
+        icon: MessageSquare,
+        url: "/app/my-feedback",
+        items: [],
+      },
+    ],
+  },
+  {
     groupLabel: "Settings",
     roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
     collapsible: true,

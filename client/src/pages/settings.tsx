@@ -335,9 +335,9 @@ const complianceInfo = [
   },
   {
     title: "Tax Configuration",
-    description: "FICA, FUTA, state unemployment tax setup. 501(c)(3) FUTA exemptions automatically applied.",
+    description: "FICA, FUTA, state unemployment, wage-order, minimum-wage, overtime, meal/rest rules, and nonprofit FUTA exemption controls are enabled in Jurisdiction & Compliance below.",
     icon: Globe,
-    status: "Coming Soon",
+    status: "Active",
   },
   {
     title: "Notifications",

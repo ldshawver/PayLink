@@ -665,13 +665,8 @@ export default function ExpensesPage() {
           <Button className="w-full sm:w-auto" onClick={() => setExpenseDialogOpen(true)} data-testid="button-new-expense">
             <Plus className="h-4 w-4 mr-1" /> New Expense
           </Button>
-          {isContractor && (
+          {(isContractor || isAdmin) && (
             <Button variant="outline" className="w-full sm:w-auto" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice">
-              <FileText className="h-4 w-4 mr-1" /> New Invoice
-            </Button>
-          )}
-          {isAdmin && (
-            <Button variant="outline" className="w-full sm:w-auto" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice-admin">
               <FileText className="h-4 w-4 mr-1" /> New Invoice
             </Button>
           )}
