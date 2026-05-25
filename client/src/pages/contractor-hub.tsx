@@ -2028,7 +2028,11 @@ function ProposalBuilder({
   const { toast } = useToast();
   const [tab, setTab] = useState(() => {
     if (!proposal) return "intake";
-    return localStorage.getItem("paylink.contractorHub.proposalBuilderTab") || "details";
+    const VALID_BUILDER_TABS = ["intake", "template", "details", "work", "scope", "pricing", "terms", "attachments", "ai", "history", "preview"];
+    const stored = localStorage.getItem("paylink.contractorHub.proposalBuilderTab");
+    if (stored && VALID_BUILDER_TABS.includes(stored)) return stored;
+    if (stored) localStorage.removeItem("paylink.contractorHub.proposalBuilderTab");
+    return "details";
   });
   const [form, setForm] = useState<Partial<Proposal>>({});
   const [aiLoading, setAiLoading] = useState(false);
