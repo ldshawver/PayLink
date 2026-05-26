@@ -21,6 +21,23 @@ const fmtDate = (s?: string | null) => {
   catch { return s; }
 };
 
+const fmtDateTime = (s?: string | null) => {
+  if (!s) return "";
+  try {
+    return new Date(s).toLocaleString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+      hour: "numeric", minute: "2-digit",
+    });
+  } catch { return s; }
+};
+
+interface ThreadEvent {
+  eventType: "client_message" | "admin_reply";
+  notes: string | null;
+  actorName: string | null;
+  createdAt: string;
+}
+
 interface ProposalPortalData {
   id: string;
   proposalNumber: string;
@@ -46,6 +63,7 @@ interface ProposalPortalData {
   approvalAt?: string;
   version?: number;
   emailNotifiedAt?: string | null;
+  thread?: ThreadEvent[];
   lineItems: Array<{
     id: string; name: string; description?: string; category?: string;
     quantity: string; unit?: string; unitPrice: string; lineTotal: string;
@@ -80,6 +98,58 @@ function StatusBadge({ status }: { status: string }) {
   };
   const s = map[status] || { label: status, variant: "outline" as const };
   return <Badge variant={s.variant}>{s.label}</Badge>;
+}
+
+function ConversationThread({
+  thread,
+  businessName,
+  accentColor,
+}: {
+  thread: ThreadEvent[];
+  businessName: string;
+  accentColor: string;
+}) {
+  if (!thread || thread.length === 0) return null;
+
+  return (
+    <div data-testid="conversation-thread">
+      <h2 className="text-base font-semibold mb-3 pb-1 border-b flex items-center gap-2">
+        <MessageSquare className="h-4 w-4 text-muted-foreground" />
+        Conversation
+      </h2>
+      <div className="space-y-3">
+        {thread.map((evt, i) => {
+          const isAdminReply = evt.eventType === "admin_reply";
+          return (
+            <div
+              key={i}
+              className={`flex ${isAdminReply ? "justify-end" : "justify-start"}`}
+              data-testid={`thread-event-${i}`}
+            >
+              <div
+                className={`max-w-[80%] rounded-lg px-4 py-3 text-sm shadow-sm ${
+                  isAdminReply
+                    ? "rounded-br-sm text-white"
+                    : "bg-white border rounded-bl-sm text-gray-800"
+                }`}
+                style={isAdminReply ? { backgroundColor: accentColor } : {}}
+              >
+                <div className={`text-xs font-semibold mb-1 ${isAdminReply ? "text-white/80" : "text-muted-foreground"}`}>
+                  {isAdminReply
+                    ? `From ${businessName}`
+                    : (evt.actorName && evt.actorName !== "Client" ? evt.actorName : "You")}
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">{evt.notes || ""}</p>
+                <div className={`text-xs mt-1.5 ${isAdminReply ? "text-white/60" : "text-muted-foreground/70"}`}>
+                  {fmtDateTime(evt.createdAt)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function ClientApprovalForm({
@@ -192,10 +262,12 @@ function ClientMessageForm({
   proposalId,
   token,
   accentColor,
+  onSent,
 }: {
   proposalId: string;
   token: string;
   accentColor: string;
+  onSent?: () => void;
 }) {
   const [message, setMessage] = useState("");
   const [senderName, setSenderName] = useState("");
@@ -224,6 +296,8 @@ function ClientMessageForm({
         return;
       }
       setSubmitted(true);
+      setMessage("");
+      onSent?.();
     } catch {
       setError("Network error — please try again");
       setSubmitting(false);
@@ -246,7 +320,7 @@ function ClientMessageForm({
     <Card className="border">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
-          <MessageSquare className="h-5 w-5 text-muted-foreground" /> Questions or comments?
+          <MessageSquare className="h-5 w-5 text-muted-foreground" /> Send a message
         </CardTitle>
         <p className="text-sm text-muted-foreground">
           Have a question or want to request a change? Send a message directly to the team.
@@ -354,6 +428,11 @@ export default function ProposalPortalPage() {
   }, [proposalId, token]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Reload proposal data (including thread) after client sends a message
+  const handleMessageSent = useCallback(() => {
+    loadData();
+  }, [loadData]);
 
   const accentColor = proposal?.branding?.primaryColor || "#0f766e";
   const businessName = proposal?.branding?.businessName || proposal?.companyName || "PayLink";
@@ -590,7 +669,22 @@ export default function ProposalPortalPage() {
           </div>
         )}
 
-        <ClientMessageForm proposalId={proposal.id} token={token} accentColor={accentColor} />
+        {/* Conversation thread — shows client messages and admin replies in chronological order */}
+        {proposal.thread && proposal.thread.length > 0 && (
+          <ConversationThread
+            thread={proposal.thread}
+            businessName={businessName}
+            accentColor={accentColor}
+          />
+        )}
+
+        {/* Message compose form — shown below the thread so new messages appear at the bottom */}
+        <ClientMessageForm
+          proposalId={proposal.id}
+          token={token}
+          accentColor={accentColor}
+          onSent={handleMessageSent}
+        />
 
         {isApproved && (
           <div className="border-2 border-green-500 rounded-lg p-4 bg-green-50">

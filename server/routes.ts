@@ -31087,6 +31087,20 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const emailNotifiedAt = (sentEvent?.notes as string | null)?.startsWith("Email sent to")
         ? (sentEvent.created_at as string)
         : null;
+      // Fetch conversation thread (client messages + admin replies) for the portal
+      const threadRes = await db.execute(sql`
+        SELECT event_type, notes, actor_name, created_at
+        FROM proposal_approval_events
+        WHERE proposal_id = ${req.params.id}
+          AND event_type IN ('client_message', 'admin_reply')
+        ORDER BY created_at ASC
+      `);
+      const thread = ((threadRes as any).rows ?? threadRes as any[]).map((r: any) => ({
+        eventType: r.event_type,
+        notes: r.notes,
+        actorName: r.actor_name || null,
+        createdAt: r.created_at,
+      }));
       // Build safe response — omit internal-only fields
       const safe = {
         id: proposal.id,
@@ -31131,6 +31145,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         },
         contractorName: proposal.contractor_full_name || null,
         companyName: proposal.company_name_resolved || null,
+        thread,
       };
       res.json(safe);
     } catch (e: any) { res.status(500).json({ message: "Failed to load proposal: " + e.message }); }
