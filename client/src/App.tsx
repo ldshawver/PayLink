@@ -125,7 +125,7 @@ class AppErrorBoundary extends Component<{ children: React.ReactNode; area?: str
         <div className="max-w-xl rounded-lg border bg-background p-6 shadow-sm">
           <h2 className="text-lg font-semibold">Something went wrong</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            App Doctor captured this crash for admin review. You can reload the page or open App Doctor to review the report.
+            An unexpected error occurred. This has been reported and our team will investigate. You can reload the page to continue.
           </p>
           <pre className="mt-4 max-h-40 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
             {this.state.error.message}
@@ -134,9 +134,6 @@ class AppErrorBoundary extends Component<{ children: React.ReactNode; area?: str
             <button className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground" onClick={() => window.location.reload()}>
               Reload
             </button>
-            <a className="rounded-md border px-3 py-2 text-sm font-medium" href="/app/app-doctor">
-              Open App Doctor
-            </a>
           </div>
         </div>
       </div>

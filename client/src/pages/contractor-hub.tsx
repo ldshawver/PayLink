@@ -2069,6 +2069,7 @@ function ProposalBuilder({
       return r.ok ? r.json() : [];
     },
     enabled: !!proposalId,
+    select: (data: any) => snakeToCamel(data) as ProposalEvent[],
   });
   const { data: attachments = [], refetch: refetchAttachments } = useQuery<any[]>({
     queryKey: ["/api/contractor-proposals", proposalId, "attachments"],
@@ -3006,7 +3007,7 @@ function ProposalBuilder({
                               {ev.eventType === "client_message" ? "Client Message" :
                                ev.eventType === "admin_reply" ? "Admin Reply" :
                                ev.eventType === "email_resent" ? "Email Resent" :
-                               ev.eventType.replace(/_/g, " ")}
+                               (ev.eventType ?? "event").replace(/_/g, " ")}
                             </p>
                             {isAdmin && ev.eventType === "client_message" && proposalId && (
                               <Button
@@ -4758,6 +4759,11 @@ function DocumentsSection() {
       d.mime_type === "application/pdf"
     ),
   });
+  const { data: workerDocs = [] } = useQuery<any[]>({
+    queryKey: ["/api/worker-documents"],
+    queryFn: async () => { const r = await fetch("/api/worker-documents", { credentials: "include" }); return r.ok ? r.json() : []; },
+    select: (d: any) => snakeToCamel(d),
+  });
 
   const [contractorFilter, setContractorFilter] = useState("all");
   const [costCenterFilter, setCostCenterFilter] = useState("all");
@@ -4774,6 +4780,7 @@ function DocumentsSection() {
     amount?: string; immutable: boolean; hasVersions: boolean;
     contractorId?: string; contractorName?: string; costCenter?: string; workType?: string;
     companyId?: string; companyName?: string; versionNum?: number;
+    fileUrl?: string; documentType?: string;
     signers?: Array<{name?: string; email?: string; signedAt?: string; role?: string}>;
   };
 
@@ -4817,6 +4824,14 @@ function DocumentsSection() {
       id: p.id, type: "payment", title: `Payment — ${fmtDate(p.paidAt)}`,
       status: p.status || "completed", date: p.paidAt, amount: p.amount,
       immutable: true, hasVersions: false, contractorId: undefined,
+    })),
+    ...workerDocs.map((d: any) => ({
+      id: String(d.id), type: "file",
+      title: d.name || d.documentType || "Document",
+      status: "on_file", date: d.createdAt || new Date().toISOString(),
+      immutable: true, hasVersions: false,
+      fileUrl: d.fileUrl || d.file_url,
+      documentType: d.documentType || d.document_type,
     })),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -4876,6 +4891,15 @@ function DocumentsSection() {
 
   async function handleDownload(doc: DocRow) {
     try {
+      // Worker-uploaded files (W-9, agreements, etc.) — served directly from /uploads/
+      if (doc.type === "file" && doc.fileUrl) {
+        const a = document.createElement("a");
+        a.href = doc.fileUrl;
+        a.download = doc.title.replace(/[^a-z0-9.\-_]/gi, "_");
+        a.target = "_blank";
+        a.click();
+        return;
+      }
       const base = DOC_DOWNLOAD_ENDPOINTS[doc.type];
       if (!base) { toast({ title: "Download not available for this document type" }); return; }
       const r = await fetch(`${base}/${doc.id}/download`, { credentials: "include" });
@@ -4916,7 +4940,7 @@ function DocumentsSection() {
   });
 
   const statusOptions = Array.from(new Set(allDocs.map(d => d.status))).sort();
-  const DOC_TYPES = ["all", "proposal", "contract", "invoice", "payment"] as const;
+  const DOC_TYPES = ["all", "proposal", "contract", "invoice", "payment", "file"] as const;
 
   return (
     <div className="space-y-4">
