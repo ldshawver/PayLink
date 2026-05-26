@@ -500,6 +500,29 @@ function snakeToCamel(obj: any): any {
   return obj;
 }
 
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  client_message: "Client Message",
+  admin_reply: "Admin Reply",
+  email_resent: "Email Resent",
+  approved: "Approved",
+  rejected: "Rejected",
+  submitted: "Submitted",
+  revision_requested: "Revision Requested",
+  created: "Created",
+  updated: "Updated",
+  viewed: "Viewed",
+  downloaded: "Downloaded",
+  signed: "Signed",
+  activated: "Activated",
+  voided: "Voided",
+  archived: "Archived",
+};
+
+function normalizeEventType(type: string | null | undefined): string {
+  if (!type) return "Event";
+  return EVENT_TYPE_LABELS[type] || type.replace(/_/g, " ");
+}
+
 function fmtDate(s?: string | null) {
   if (!s) return "—";
   return new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -1601,7 +1624,7 @@ function ProposalDetailPanel({
                           {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                         </div>
                         <div className="pb-4 flex-1">
-                          <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : (ev.eventType ?? "event").replace(/_/g, " ")}</p>
+                          <p className="text-sm font-medium capitalize">{normalizeEventType(ev.eventType)}</p>
                           <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
                           {ev.notes && ev.eventType === "client_message" && (
                             <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
@@ -3004,10 +3027,7 @@ function ProposalBuilder({
                         <div className="pb-4 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <p className="text-sm font-medium capitalize">
-                              {ev.eventType === "client_message" ? "Client Message" :
-                               ev.eventType === "admin_reply" ? "Admin Reply" :
-                               ev.eventType === "email_resent" ? "Email Resent" :
-                               (ev.eventType ?? "event").replace(/_/g, " ")}
+                              {normalizeEventType(ev.eventType)}
                             </p>
                             {isAdmin && ev.eventType === "client_message" && proposalId && (
                               <Button
@@ -4754,10 +4774,12 @@ function DocumentsSection() {
   const { data: damDocs = [] } = useQuery<any[]>({
     queryKey: ["/api/dam-documents", "contractor-pdfs"],
     queryFn: async () => { const r = await fetch("/api/dam-documents", { credentials: "include" }); return r.ok ? r.json() : []; },
-    select: (rows: any[]) => rows.filter(d =>
-      ["proposal","invoice","contract","contractor_contract"].includes(d.linked_entity_type || "") &&
-      d.mime_type === "application/pdf"
-    ),
+    select: (rows: any[]) => rows
+      .filter(d =>
+        ["proposal","invoice","contract","contractor_contract"].includes(d.linked_entity_type || "") &&
+        d.mime_type === "application/pdf"
+      )
+      .map(snakeToCamel),
   });
   const { data: workerDocs = [] } = useQuery<any[]>({
     queryKey: ["/api/worker-documents"],
@@ -5238,12 +5260,12 @@ function DocumentsSection() {
                   <FileText className="h-4 w-4 text-rose-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{d.title || d.file_name || "PDF Document"}</p>
+                  <p className="text-sm font-medium truncate">{d.title || d.fileName || "PDF Document"}</p>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
-                    <span className="capitalize">{(d.linked_entity_type || "").replace("contractor_", "")}</span>
+                    <span className="capitalize">{(d.linkedEntityType || "").replace("contractor_", "")}</span>
                     {d.description && <><span>·</span><span className="truncate max-w-[200px]">{d.description}</span></>}
-                    {d.created_at && <><span>·</span><span>{new Date(d.created_at).toLocaleDateString()}</span></>}
-                    {d.file_size && <><span>·</span><span>{(d.file_size / 1024).toFixed(1)} KB</span></>}
+                    {d.createdAt && <><span>·</span><span>{new Date(d.createdAt).toLocaleDateString()}</span></>}
+                    {d.fileSize && <><span>·</span><span>{(d.fileSize / 1024).toFixed(1)} KB</span></>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -5256,7 +5278,7 @@ function DocumentsSection() {
                     onClick={() => {
                       const a = document.createElement("a");
                       a.href = `/api/dam-documents/${d.id}/download`;
-                      a.download = d.file_name || "document.pdf";
+                      a.download = d.fileName || "document.pdf";
                       a.click();
                     }}
                     data-testid={`btn-download-pdf-${d.id}`} title="Download PDF">

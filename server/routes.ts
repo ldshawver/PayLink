@@ -12531,13 +12531,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
-      if (!isAdmin && inv.contractorId !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && inv.companyId !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && inv.contractorId !== workerId) {
+        db.execute(sql`INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata) VALUES (${inv.companyId || null}, ${req.session.userId!}, 'access_denied', 'contractor_invoice', ${req.params.id}, ${JSON.stringify({ reason: "not_owner", workerId })}::jsonb)`).catch(() => {});
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (isAdmin && user?.companyId && inv.companyId !== user.companyId && !(user?.role || "").startsWith("platform_")) {
+        db.execute(sql`INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata) VALUES (${user.companyId || null}, ${req.session.userId!}, 'access_denied', 'contractor_invoice', ${req.params.id}, ${JSON.stringify({ reason: "cross_company" })}::jsonb)`).catch(() => {});
+        return res.status(403).json({ message: "Access denied" });
+      }
       const exportData = { ...inv, exportedAt: new Date().toISOString() };
       const filename = `invoice-${(inv.invoiceNumber || req.params.id).replace(/[^a-z0-9]/gi, "_")}.json`;
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.setHeader("Content-Type", "application/json");
       res.json(exportData);
+      db.execute(sql`INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata) VALUES (${inv.companyId || null}, ${req.session.userId!}, 'download', 'contractor_invoice', ${req.params.id}, ${JSON.stringify({ workerId, invoiceNumber: inv.invoiceNumber })}::jsonb)`).catch(() => {});
     } catch (e: any) { res.status(500).json({ message: "Failed to download invoice: " + e.message }); }
   });
 
@@ -12553,9 +12560,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       // Non-admin must own the proposal
-      if (!isAdmin && prop.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && prop.contractor_id !== workerId) {
+        db.execute(sql`INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata) VALUES (${prop.company_id || null}, ${req.session.userId!}, 'access_denied', 'contractor_proposal', ${req.params.id}, ${JSON.stringify({ reason: "not_owner", workerId })}::jsonb)`).catch(() => {});
+        return res.status(403).json({ message: "Access denied" });
+      }
       // Admin must be scoped to their company (platform admins bypass)
       if (isAdmin && !isPlatform && user?.companyId && prop.company_id !== user.companyId) {
+        db.execute(sql`INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata) VALUES (${user.companyId || null}, ${req.session.userId!}, 'access_denied', 'contractor_proposal', ${req.params.id}, ${JSON.stringify({ reason: "cross_company" })}::jsonb)`).catch(() => {});
         return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
       }
       const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
@@ -12564,6 +12575,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.setHeader("Content-Type", "application/json");
       res.json(exportData);
+      db.execute(sql`INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata) VALUES (${prop.company_id || null}, ${req.session.userId!}, 'download', 'contractor_proposal', ${req.params.id}, ${JSON.stringify({ workerId, proposalNumber: prop.proposal_number })}::jsonb)`).catch(() => {});
     } catch (e: any) { res.status(500).json({ message: "Failed to download proposal: " + e.message }); }
   });
 
@@ -14126,6 +14138,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!workerId) return res.status(400).json({ message: "workerId required" });
       const docs = await storage.getWorkerDocuments(workerId);
       res.json(docs);
+      db.execute(sql`
+        INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata)
+        VALUES (
+          ${user?.companyId || null}, ${req.session.userId!}, 'view',
+          'worker_documents', ${workerId},
+          ${JSON.stringify({ count: docs.length, ownAccess: workerId === user?.workerId })}::jsonb
+        )
+      `).catch(() => {});
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch documents" });
