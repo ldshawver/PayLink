@@ -1656,12 +1656,28 @@ function ProposalDetailPanel({
                           {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                         </div>
                         <div className="pb-4 flex-1">
-                          <p className="text-sm font-medium capitalize">{normalizeEventType(ev.eventType)}</p>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium capitalize">{normalizeEventType(ev.eventType)}</p>
+                            {ev.eventType === "admin_reply" && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 text-xs px-2 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
+                                onClick={() => setTab("thread")}
+                                data-testid={`btn-view-thread-${ev.id}`}
+                              >
+                                View in Thread →
+                              </Button>
+                            )}
+                          </div>
                           <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
                           {ev.notes && ev.eventType === "client_message" && (
                             <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
                           )}
-                          {ev.notes && ev.eventType !== "client_message" && <p className="text-xs text-muted-foreground mt-0.5 italic">"{ev.notes}"</p>}
+                          {ev.notes && ev.eventType === "admin_reply" && (
+                            <p className="text-xs mt-1 px-2 py-1.5 rounded bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 whitespace-pre-wrap">{ev.notes}</p>
+                          )}
+                          {ev.notes && ev.eventType !== "client_message" && ev.eventType !== "admin_reply" && <p className="text-xs text-muted-foreground mt-0.5 italic">"{ev.notes}"</p>}
                           {ev.oldStatus && ev.newStatus && (
                             <p className="text-xs text-muted-foreground mt-0.5">
                               <span className="capitalize">{ev.oldStatus.replace(/_/g, " ")}</span>
@@ -1703,6 +1719,31 @@ function ProposalDetailPanel({
                   return items.map(item => {
                     if (item.kind === "event") {
                       const ev = item.data as ProposalEvent;
+
+                      // ── Chat bubbles for client/admin messages ─────────────
+                      if (ev.eventType === "client_message" || ev.eventType === "admin_reply") {
+                        const isAdminMsg = ev.eventType === "admin_reply";
+                        return (
+                          <div key={item.id} className={`flex ${isAdminMsg ? "justify-end" : "justify-start"}`} data-testid={`thread-bubble-${ev.id}`}>
+                            <div className={cn(
+                              "max-w-[80%] rounded-lg px-3 py-2.5 text-sm shadow-sm",
+                              isAdminMsg
+                                ? "rounded-br-sm bg-emerald-600 text-white"
+                                : "bg-violet-50 border border-violet-200 rounded-bl-sm text-violet-900 dark:bg-violet-950/30 dark:border-violet-800 dark:text-violet-100"
+                            )}>
+                              <div className={cn("text-xs font-semibold mb-1", isAdminMsg ? "text-emerald-100" : "text-violet-600 dark:text-violet-300")}>
+                                {isAdminMsg ? (ev.actorName || "Admin") : (ev.actorName || "Client")}
+                              </div>
+                              <p className="whitespace-pre-wrap leading-relaxed">{ev.notes || ""}</p>
+                              <div className={cn("text-xs mt-1.5", isAdminMsg ? "text-emerald-200" : "text-muted-foreground/70")}>
+                                {fmtDate(ev.createdAt)}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // ── Generic event card ─────────────────────────────────
                       return (
                         <div key={item.id} className={cn(
                           "rounded-lg p-3 text-sm border",
