@@ -1074,7 +1074,7 @@ function ProposalDetailPanel({
   const canRevise = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
   const canCreateRevision = isAdmin && ["approved", "sent", "viewed"].includes(proposal.status);
   const canMarkSent = isAdmin && ["draft", "internal_review", "submitted"].includes(proposal.status);
-  const canRetryEmail = isAdmin && proposal.status === "sent" && !proposal.lastSentEventNotes?.startsWith("Email sent to");
+  const canRetryEmail = isAdmin && proposal.status === "sent" && !!proposal.lastSentEventNotes?.startsWith("Email delivery failed");
 
   function handleMarkSent() {
     setSendEmailDraft(proposal.clientEmail ?? "");

@@ -11445,22 +11445,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (emailResult.sent) {
             console.log(`[Proposals] Resent client notification email to ${proposal.client_email} for proposal ${req.params.id}`);
             emailStatus = "sent";
-            eventNotes = `Email resent to ${proposal.client_email} | Portal: ${portalUrl}`;
+            eventNotes = `Email sent to ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
           } else {
             console.error(`[Proposals] Resend email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
             emailStatus = "failed";
-            eventNotes = `Email resend failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+            eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
           }
         } catch (emailErr: any) {
           console.error(`[Proposals] Failed to resend client email for proposal ${req.params.id}:`, emailErr.message);
           emailStatus = "failed";
-          eventNotes = `Email resend failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+          eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
         }
       } else {
         eventNotes = `No client email on file | Portal: ${portalUrl}`;
       }
 
-      await logProposalEvent(req.params.id, "email_resent", proposal.status, proposal.status, req, undefined, undefined, eventNotes!);
+      // Log as 'sent' so last_sent_event_notes (queried by event_type='sent') stays current and the badge reflects the latest outcome
+      await logProposalEvent(req.params.id, "sent", proposal.status, proposal.status, req, undefined, undefined, eventNotes!);
 
       res.json({ message: "Resend attempted", emailStatus });
     } catch (e) { res.status(500).json({ message: "Failed to resend email" }); }
