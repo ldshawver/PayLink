@@ -26,7 +26,7 @@ import {
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
-  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply
+  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply, RefreshCw
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -1044,6 +1044,22 @@ function ProposalDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
 
+  const retryEmailMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposal.id}/resend-email`, {}),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposal.id, "events"] });
+      if (data?.emailStatus === "sent") {
+        toast({ title: "Email resent", description: "The client notification was delivered successfully." });
+      } else if (data?.emailStatus === "failed") {
+        toast({ title: "Retry failed", description: "Email delivery failed again. Check the client email address.", variant: "destructive" });
+      } else {
+        toast({ title: "No client email", description: "No client email is on file for this proposal.", variant: "destructive" });
+      }
+    },
+    onError: (e: any) => toast({ title: e?.message || "Retry failed", variant: "destructive" }),
+  });
+
   const subtotal = lineItems.filter(i => i.selected).reduce((s, i) => s + parseFloat(i.lineTotal ?? "0"), 0);
   const tax = parseFloat(proposal.taxAmount ?? "0");
   const discount = parseFloat(proposal.discountAmount ?? "0");
@@ -1058,6 +1074,7 @@ function ProposalDetailPanel({
   const canRevise = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
   const canCreateRevision = isAdmin && ["approved", "sent", "viewed"].includes(proposal.status);
   const canMarkSent = isAdmin && ["draft", "internal_review", "submitted"].includes(proposal.status);
+  const canRetryEmail = isAdmin && proposal.status === "sent" && !proposal.lastSentEventNotes?.startsWith("Email sent to");
 
   function handleMarkSent() {
     setSendEmailDraft(proposal.clientEmail ?? "");
@@ -1132,6 +1149,21 @@ function ProposalDetailPanel({
                 <span className="text-xs text-muted-foreground">{proposal.proposalNumber}</span>
                 <ProposalBadge status={proposal.status} />
                 {proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}
+                {canRetryEmail && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-5 px-2 text-xs shrink-0 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400"
+                    onClick={() => retryEmailMutation.mutate()}
+                    disabled={retryEmailMutation.isPending}
+                    data-testid="btn-retry-email"
+                  >
+                    {retryEmailMutation.isPending
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <RefreshCw className="h-3 w-3 mr-1" />}
+                    Retry
+                  </Button>
+                )}
                 {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
                 {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
               </div>
