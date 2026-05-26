@@ -73,6 +73,13 @@ export async function setupVite(server: Server, app: Express) {
   }
 
   app.use("/{*path}", async (req, res, next) => {
+    // Never serve HTML for API routes — they must be handled by Express API handlers or return 404.
+    // Without this guard, unhandled API requests would receive the React SPA HTML, causing
+    // "invalid JSON" errors on the frontend (e.g. App Doctor, portal pages).
+    if (req.path.startsWith("/api/")) {
+      return res.status(404).json({ message: "API route not found", path: req.path });
+    }
+
     const url = req.originalUrl;
 
     try {

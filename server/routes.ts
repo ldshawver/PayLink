@@ -10318,7 +10318,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
       const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
-      const isAdminRole = ["admin", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
+      const isAdminRole = ["admin", "owner", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
       if (isAdminRole) {
         // Admins see proposals targeted at their company (or all companies for platform users)
         const companyFilter = filterCompanyId ? sql`AND cp.company_id = ${filterCompanyId}` : sql``;
@@ -10574,6 +10574,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
+      // Recalculate totals — tax_amount and discount_amount may have changed
+      await recalcProposalTotals(req.params.id).catch(() => {});
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to update proposal" }); }
@@ -11828,7 +11830,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       res.json({ result: text });
-    } catch (e: any) { console.error(e); res.status(500).json({ message: "AI assist failed: " + e.message }); }
+    } catch (e: any) {
+      console.error("[AI Assist] error:", e?.status, e?.constructor?.name);
+      // Sanitize authentication errors — never expose raw API key details to the client
+      if (e?.status === 401 || e?.constructor?.name === "AuthenticationError" || (e?.message || "").toLowerCase().includes("invalid api key") || (e?.message || "").toLowerCase().includes("authentication")) {
+        return res.status(503).json({ message: "AI assistance is unavailable. The configured AI API key is invalid or expired. Please contact your administrator." });
+      }
+      res.status(500).json({ message: "AI assist failed. Please try again." });
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -22112,16 +22121,24 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   }
 
   app.get("/api/app-doctor/reports", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const userId = req.session.userId;
+    console.log(`[AppDoctor] GET /api/app-doctor/reports — userId=${userId} url=${req.originalUrl}`);
     try {
       const user = await storage.getUser(req.session.userId!);
+      console.log(`[AppDoctor] role=${user?.role} companyId=${user?.companyId}`);
       const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
       const companyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
-      if (!companyId && !isPlatformUser(user?.role)) return res.status(400).json({ message: "No company context" });
+      if (!companyId && !isPlatformUser(user?.role)) {
+        console.log(`[AppDoctor] 400 — no company context for role=${user?.role}`);
+        return res.status(400).json({ message: "No company context" });
+      }
       const rows = companyId
         ? pgRows<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE company_id = ${companyId} ORDER BY created_at DESC LIMIT 100`))
         : pgRows<any>(await db.execute(sql`SELECT * FROM app_doctor_reports ORDER BY created_at DESC LIMIT 100`));
+      console.log(`[AppDoctor] 200 — returning ${rows.length} reports`);
       res.json(rows);
     } catch (e: any) {
+      console.error(`[AppDoctor] 500 — ${e?.message}`);
       res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch App Doctor reports") });
     }
   });
