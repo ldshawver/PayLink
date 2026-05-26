@@ -1060,6 +1060,23 @@ function ProposalDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Retry failed", variant: "destructive" }),
   });
 
+  const [threadReplyText, setThreadReplyText] = useState("");
+  const [threadReplyNotifyClient, setThreadReplyNotifyClient] = useState(false);
+  const threadReplyMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposal.id}/reply`, {
+      message: threadReplyText.trim(),
+      notifyClient: threadReplyNotifyClient,
+    }),
+    onSuccess: (data: any) => {
+      setThreadReplyText("");
+      setThreadReplyNotifyClient(false);
+      refetchEvents();
+      const notified = data?.emailStatus === "sent";
+      toast({ title: "Reply sent", description: notified ? "Client was notified by email." : undefined });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to send reply", variant: "destructive" }),
+  });
+
   const subtotal = lineItems.filter(i => i.selected).reduce((s, i) => s + parseFloat(i.lineTotal ?? "0"), 0);
   const tax = parseFloat(proposal.taxAmount ?? "0");
   const discount = parseFloat(proposal.discountAmount ?? "0");
@@ -1663,7 +1680,7 @@ function ProposalDetailPanel({
                                 size="sm"
                                 variant="ghost"
                                 className="h-6 text-xs px-2 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
-                                onClick={() => setTab("thread")}
+                                onClick={() => handleTabChange("thread")}
                                 data-testid={`btn-view-thread-${ev.id}`}
                               >
                                 View in Thread →
@@ -1807,6 +1824,51 @@ function ProposalDetailPanel({
                     </Button>
                     <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => actionMutation.mutate({ action: "accept", body: { notes: commentText } })} disabled={actionMutation.isPending} data-testid="btn-thread-approve">
                       <CheckCircle className="h-3.5 w-3.5 mr-1" /> Approve
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Reply to Client — visible to admins on any proposal status */}
+              {isAdmin && (
+                <div className="border-t pt-4 space-y-2" data-testid="thread-reply-form">
+                  <Label className="text-xs font-semibold flex items-center gap-1.5">
+                    <Reply className="h-3.5 w-3.5 text-emerald-600" />
+                    Reply to Client
+                  </Label>
+                  <Textarea
+                    value={threadReplyText}
+                    onChange={e => setThreadReplyText(e.target.value)}
+                    placeholder="Write a reply visible to the client in their proposal portal…"
+                    rows={3}
+                    data-testid="textarea-thread-reply"
+                  />
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    {proposal.clientEmail ? (
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={threadReplyNotifyClient}
+                          onChange={e => setThreadReplyNotifyClient(e.target.checked)}
+                          className="rounded"
+                          data-testid="checkbox-notify-client"
+                        />
+                        Notify client by email ({proposal.clientEmail})
+                      </label>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">No client email on file — reply logged only</span>
+                    )}
+                    <Button
+                      size="sm"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white shrink-0"
+                      onClick={() => threadReplyMutation.mutate()}
+                      disabled={threadReplyMutation.isPending || !threadReplyText.trim()}
+                      data-testid="btn-send-thread-reply"
+                    >
+                      {threadReplyMutation.isPending
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                        : <Reply className="h-3.5 w-3.5 mr-1" />}
+                      Send Reply
                     </Button>
                   </div>
                 </div>
