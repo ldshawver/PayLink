@@ -90,7 +90,7 @@ export default function PlatformHomePage() {
 
       <div className="flex-1 overflow-auto p-6 space-y-6">
         {/* Stats Row */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <StatCard label="Pending License Requests" value={pendingLicenses} icon={FileBadge} href="/platform/license-requests" color="bg-orange-500" />
           <StatCard label="Active Onboarding Projects" value={activeProjects} icon={ClipboardCheck} href="/platform/onboarding-projects" color="bg-green-600" />
           <StatCard label="Provisioned Tenants" value={totalTenants} icon={Building2} href="/platform/provisioning" color="bg-slate-600" />
@@ -102,7 +102,7 @@ export default function PlatformHomePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <ModuleCard
               title="Licensing"
-              description="Manage license requests, agreements, and signed agreements."
+              description="Manage license requests and signed agreements for provisioned tenants."
               href="/platform/license-requests"
               badge="Licensing"
               items={["License Requests", "Agreements & Signed Agreements"]}

@@ -14,9 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Search, Edit, Trash2, Building2, Mail, Phone, MapPin, Users, Loader2, Store, Truck, Rocket, Activity, ClipboardList, Calendar, User, CheckCircle2 } from "lucide-react";
+import { Plus, Search, Edit, Trash2, Building2, Mail, Phone, MapPin, Users, Loader2, Store, Truck, Activity, ClipboardList, Calendar, User, CheckCircle2 } from "lucide-react";
 import type { Customer } from "@shared/schema";
-import type { OnboardingProject, EngagementEvent, Deal } from "@/lib/onboarding-types";
+import type { OnboardingProject, EngagementEvent } from "@/lib/onboarding-types";
 import { PROJECT_STATUSES, EVENT_TYPES } from "@/lib/onboarding-types";
 
 function CustomerForm({ customer, onSave, onCancel }: {
@@ -174,12 +174,7 @@ function CustomerOnboardingTab({ customerId, companyId }: { customerId: string; 
     enabled: !!customerId,
   });
 
-  const { data: deals = [], isLoading: loadingDeals } = useQuery<Deal[]>({
-    queryKey: [`/api/deals?customerId=${customerId}`],
-    enabled: !!customerId,
-  });
-
-  if (loadingProjects || loadingEvents || loadingDeals) {
+  if (loadingProjects || loadingEvents) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -230,36 +225,6 @@ function CustomerOnboardingTab({ customerId, companyId }: { customerId: string; 
                 </Card>
               );
             })}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <Rocket className="h-5 w-5" /> Deal History
-        </h3>
-        {deals.length === 0 ? (
-          <Card>
-            <CardContent className="py-6 text-center text-muted-foreground">
-              No deals for this customer
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {deals.map(deal => (
-              <Card key={deal.id} data-testid={`card-customer-deal-${deal.id}`}>
-                <CardContent className="p-3 flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-sm">{deal.title}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <Badge variant="outline" className="text-xs">{deal.stage.replace("_", " ")}</Badge>
-                      <span className="text-sm font-semibold text-emerald-600">${deal.value.toLocaleString()}</span>
-                    </div>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{deal.product}</span>
-                </CardContent>
-              </Card>
-            ))}
           </div>
         )}
       </div>

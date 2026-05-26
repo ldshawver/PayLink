@@ -14,7 +14,6 @@ import {
   ArrowLeft,
   Grid3X3,
   FileBadge,
-  Handshake,
   Rocket,
   Building2,
   Layers,
@@ -93,8 +92,8 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
     module: "licensing",
     sections: [
       {
-        label: "License Requests",
-        icon: Handshake,
+        label: "Licensing",
+        icon: FileBadge,
         url: "/platform/license-requests",
         module: "licensing",
         items: [

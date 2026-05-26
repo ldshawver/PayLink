@@ -218,9 +218,8 @@ function AuthenticatedRouter() {
         <Route path="/app/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
         <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
         <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
-        <Route path="/app/billing">{() => <PlatformRedirect to="/platform/billing" />}</Route>
-
-        <Route path="/app/onboarding-projects" component={OnboardingProjectsPage} />
+        {/* Platform-owner routes — redirect to /platform/* */}
+        <Route path="/app/onboarding-projects">{() => <PlatformRedirect to="/platform/onboarding-projects" />}</Route>
         <Route path="/app/onboarding-templates">{() => <PlatformRedirect to="/platform/onboarding-templates" />}</Route>
         <Route path="/app/engagement-feed" component={EngagementFeedPage} />
         <Route path="/app/license-requests">{() => <PlatformRedirect to="/platform/license-requests" />}</Route>
@@ -398,13 +397,18 @@ function PlatformRoleGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// =============================================================================
+// MYPAYLINK SCOPE LOCK
+// This product is payroll/HR/workforce/finance infrastructure.
+// Do not replace with CRM, sales, marketing, or LUXit flows.
+// See: docs/project-scope-guardrails.md
+// =============================================================================
 function PlatformRouter() {
   return (
     <PlatformRoleGuard>
       <Suspense fallback={<PageLoader />}>
         <Switch>
           <Route path="/platform" component={PlatformHomePage} />
-
           <Route path="/platform/license-requests" component={LicenseRequestsPage} />
           <Route path="/platform/agreements" component={AgreementsPage} />
           <Route path="/platform/onboarding-projects" component={OnboardingProjectsPage} />

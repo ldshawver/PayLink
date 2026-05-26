@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send,
+  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send, Mail,
 } from "lucide-react";
 
 const fmt = (n: number | string | undefined | null) => {
@@ -45,6 +45,7 @@ interface ProposalPortalData {
   approvalEmail?: string;
   approvalAt?: string;
   version?: number;
+  emailNotifiedAt?: string | null;
   lineItems: Array<{
     id: string; name: string; description?: string; category?: string;
     quantity: string; unit?: string; unitPrice: string; lineTotal: string;
@@ -416,6 +417,17 @@ export default function ProposalPortalPage() {
               <p className="text-sm text-muted-foreground">{proposal.proposalNumber}</p>
               <StatusBadge status={proposal.status} />
             </div>
+            {proposal.emailNotifiedAt && (
+              <div
+                className="flex items-center gap-1.5 mt-1.5"
+                data-testid="text-email-notification-notice"
+              >
+                <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <p className="text-xs text-muted-foreground">
+                  You were notified by email on {fmtDate(proposal.emailNotifiedAt)}
+                </p>
+              </div>
+            )}
           </div>
           <div className="text-left sm:text-right text-sm text-muted-foreground space-y-0.5 shrink-0">
             {proposal.issueDate && <p>Date: {fmtDate(proposal.issueDate)}</p>}

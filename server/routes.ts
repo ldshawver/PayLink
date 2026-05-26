@@ -22394,7 +22394,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to upload document") }); }
   });
 
-  // ── Deals (Pipeline) ──────────────────────────────────────────
+  // ── Onboarding Project Progress Helper ──────────────────────────────────────────
 
   async function recalcProjectProgress(projectId: string) {
     const allTasks = await storage.getOnboardingTasks(projectId);
@@ -22410,139 +22410,6 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       ...(projectStatus === "completed" ? { completedAt: new Date() } : {}),
     });
   }
-
-  app.get("/api/deals", requireAuth, enforceCompanyScope("query"), async (req, res) => {
-    try {
-      const companyId = (req as any)._companyId;
-      const deals = await storage.getDeals(companyId);
-      res.json(deals);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch deals") }); }
-  });
-
-  app.get("/api/deals/:id", requireAuth, async (req, res) => {
-    try {
-      const companyId = await getSessionCompanyId(req);
-      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
-      const deal = await storage.getDeal(req.params.id);
-      if (!deal) return res.status(404).json({ message: "Deal not found" });
-      if (deal.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
-      res.json(deal);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch deal") }); }
-  });
-
-  app.post("/api/deals", requireAuth, async (req, res) => {
-    try {
-      const companyId = await getSessionCompanyId(req);
-      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
-      if (req.body.customerId) {
-        const customer = await storage.getCustomer(req.body.customerId);
-        if (!customer || customer.companyId !== companyId) return res.status(403).json({ message: "Customer does not belong to your company" });
-      }
-      const data = { ...req.body, companyId };
-      const deal = await storage.createDeal(data);
-      res.status(201).json(deal);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create deal") }); }
-  });
-
-  app.patch("/api/deals/:id", requireAuth, async (req, res) => {
-    try {
-      const companyId = await getSessionCompanyId(req);
-      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
-      const existing = await storage.getDeal(req.params.id);
-      if (!existing) return res.status(404).json({ message: "Deal not found" });
-      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
-
-      const validDealStages = ["lead", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"];
-      if (req.body.stage && !validDealStages.includes(req.body.stage)) {
-        return res.status(400).json({ message: `Invalid stage. Must be one of: ${validDealStages.join(", ")}` });
-      }
-      const previousStage = existing.stage;
-      const newStage = req.body.stage;
-      const allowedFields = ["title", "description", "stage", "productName", "value", "currency", "assignedTo", "expectedCloseDate", "lostReason", "notes"];
-      const data: Record<string, any> = {};
-      for (const key of allowedFields) { if (req.body[key] !== undefined) data[key] = req.body[key]; }
-      if (newStage === "closed_won" && previousStage !== "closed_won") {
-        data.closedAt = new Date();
-      }
-      if (newStage === "closed_lost" && previousStage !== "closed_lost") {
-        data.closedAt = new Date();
-      }
-
-      const deal = await storage.updateDeal(req.params.id, data);
-
-      if (newStage === "closed_won" && previousStage !== "closed_won" && deal) {
-        const existingProjects = await storage.getCustomerOnboardingProjects(companyId);
-        const alreadyOnboarded = existingProjects.some(p => p.dealId === deal.id);
-        if (!alreadyOnboarded) {
-        let templateId: string | null = null;
-        if (deal.productName) {
-          const templates = await storage.getOnboardingTemplates(companyId);
-          const matched = templates.find(t => t.productName === deal.productName && t.isActive);
-          if (matched) templateId = matched.id;
-        }
-
-        const project = await storage.createCustomerOnboardingProject({
-          companyId,
-          customerId: deal.customerId,
-          dealId: deal.id,
-          templateId,
-          productName: deal.productName || undefined,
-          title: `Onboarding: ${deal.title}`,
-          status: "not_started",
-          progressPercentage: 0,
-          assignedTo: deal.assignedTo || undefined,
-          createdBy: req.session?.userId || undefined,
-        });
-
-        if (templateId) {
-          const templateTasks = await storage.getOnboardingTemplateTasks(templateId);
-          for (const tt of templateTasks) {
-            await storage.createOnboardingTask({
-              projectId: project.id,
-              templateTaskId: tt.id,
-              title: tt.title,
-              description: tt.description || undefined,
-              category: tt.category || undefined,
-              sortOrder: tt.sortOrder ?? 0,
-              status: "pending",
-              isMandatory: tt.isMandatory ?? true,
-            });
-          }
-
-          const templateDocs = await storage.getOnboardingDocuments(companyId, undefined, templateId);
-          for (const doc of templateDocs) {
-            await storage.createOnboardingDocument({
-              projectId: project.id,
-              templateId: doc.templateId || undefined,
-              companyId,
-              title: doc.title,
-              description: doc.description || undefined,
-              documentType: doc.documentType,
-              url: doc.url || undefined,
-              fileSize: doc.fileSize ?? undefined,
-              sortOrder: doc.sortOrder ?? 0,
-              createdBy: req.session?.userId || undefined,
-            });
-          }
-        }
-        }
-      }
-
-      res.json(deal);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update deal") }); }
-  });
-
-  app.delete("/api/deals/:id", requireAuth, async (req, res) => {
-    try {
-      const companyId = await getSessionCompanyId(req);
-      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
-      const existing = await storage.getDeal(req.params.id);
-      if (!existing) return res.status(404).json({ message: "Deal not found" });
-      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
-      await storage.deleteDeal(req.params.id);
-      res.json({ message: "Deal deleted" });
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete deal") }); }
-  });
 
   // ── Onboarding Templates ──────────────────────────────────────────
 
@@ -31193,6 +31060,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       // Fetch line items
       const liRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id} AND selected = true ORDER BY sort_order ASC`);
       const lineItems = liRes.rows as any[];
+      // Fetch the most recent 'sent' event to surface email delivery info to the client
+      const sentEventRes = await db.execute(sql`
+        SELECT notes, created_at FROM proposal_approval_events
+        WHERE proposal_id = ${req.params.id} AND event_type = 'sent'
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      const sentEvent = firstRow<any>(sentEventRes);
+      const emailNotifiedAt = (sentEvent?.notes as string | null)?.startsWith("Email sent to")
+        ? (sentEvent.created_at as string)
+        : null;
       // Build safe response — omit internal-only fields
       const safe = {
         id: proposal.id,
@@ -31218,6 +31095,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         approvalEmail: proposal.approval_email,
         approvalAt: proposal.approval_at,
         version: proposal.version,
+        emailNotifiedAt,
         lineItems: lineItems.map(li => ({
           id: li.id, name: li.name, description: li.description, category: li.category,
           quantity: li.quantity, unit: li.unit, unitPrice: li.unit_price, lineTotal: li.line_total,
