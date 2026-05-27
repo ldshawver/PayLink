@@ -263,17 +263,19 @@ function ClientMessageForm({
   token,
   accentColor,
   onSent,
+  compact = false,
 }: {
   proposalId: string;
   token: string;
   accentColor: string;
   onSent?: () => void;
+  compact?: boolean;
 }) {
   const [message, setMessage] = useState("");
   const [senderName, setSenderName] = useState("");
   const [senderEmail, setSenderEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [justSent, setJustSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -295,88 +297,140 @@ function ClientMessageForm({
         setSubmitting(false);
         return;
       }
-      setSubmitted(true);
       setMessage("");
+      setJustSent(true);
       onSent?.();
+      // Reset the "just sent" notice after 3 s so they can reply again
+      setTimeout(() => setJustSent(false), 3000);
     } catch {
       setError("Network error — please try again");
+    } finally {
       setSubmitting(false);
     }
   };
 
-  if (submitted) {
+  // ── Compact inline reply box (shown below an existing thread) ────────────
+  if (compact) {
     return (
-      <div className="rounded-lg border-2 p-4 flex items-start gap-3" style={{ borderColor: accentColor + "40", backgroundColor: accentColor + "08" }}>
-        <CheckCircle className="h-5 w-5 mt-0.5 shrink-0" style={{ color: accentColor }} />
-        <div>
-          <p className="text-sm font-semibold" style={{ color: accentColor }}>Message sent</p>
-          <p className="text-sm text-muted-foreground">We received your message and will get back to you soon.</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <Card className="border">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center gap-2">
-          <MessageSquare className="h-5 w-5 text-muted-foreground" /> Send a message
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Have a question or want to request a change? Send a message directly to the team.
-        </p>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="portal-msg-name">Your Name (optional)</Label>
-              <Input
-                id="portal-msg-name"
-                value={senderName}
-                onChange={e => setSenderName(e.target.value)}
-                placeholder="Jane Smith"
-                data-testid="input-message-name"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="portal-msg-email">Your Email (optional)</Label>
-              <Input
-                id="portal-msg-email"
-                type="email"
-                value={senderEmail}
-                onChange={e => setSenderEmail(e.target.value)}
-                placeholder="jane@example.com"
-                data-testid="input-message-email"
-              />
-            </div>
+      <div className="space-y-2">
+        <h2 className="text-base font-semibold pb-1 border-b flex items-center gap-2">
+          <Send className="h-4 w-4 text-muted-foreground" />
+          Reply
+        </h2>
+        {justSent && (
+          <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2" style={{ backgroundColor: accentColor + "15", color: accentColor }}>
+            <CheckCircle className="h-4 w-4 shrink-0" />
+            <span>Reply sent — the team will be in touch soon.</span>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="portal-msg-text">Message *</Label>
-            <Textarea
-              id="portal-msg-text"
-              value={message}
-              onChange={e => setMessage(e.target.value)}
-              placeholder="Ask a question or describe any changes you'd like..."
-              rows={3}
-              required
-              data-testid="textarea-message-text"
-            />
-          </div>
+        )}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+          <Textarea
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            placeholder="Type your reply…"
+            rows={3}
+            required
+            data-testid="textarea-reply-text"
+            className="resize-none"
+          />
           {error && (
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
           )}
-          <Button type="submit" disabled={submitting} variant="outline" className="w-full" data-testid="button-send-message">
-            {submitting
-              ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending...</>
-              : <><Send className="h-4 w-4 mr-2" />Send Message</>}
-          </Button>
+          <div className="flex justify-end">
+            <Button
+              type="submit"
+              disabled={submitting || !message.trim()}
+              size="sm"
+              data-testid="button-send-reply"
+              style={{ backgroundColor: accentColor, borderColor: accentColor }}
+              className="text-white"
+            >
+              {submitting
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
+                : <><Send className="h-4 w-4 mr-2" />Send Reply</>}
+            </Button>
+          </div>
         </form>
-      </CardContent>
-    </Card>
+      </div>
+    );
+  }
+
+  // ── Full card form (shown when there is no thread yet) ───────────────────
+  return (
+    <div className="space-y-3">
+      {justSent && (
+        <div className="rounded-lg border-2 p-4 flex items-start gap-3" style={{ borderColor: accentColor + "40", backgroundColor: accentColor + "08" }}>
+          <CheckCircle className="h-5 w-5 mt-0.5 shrink-0" style={{ color: accentColor }} />
+          <div>
+            <p className="text-sm font-semibold" style={{ color: accentColor }}>Message sent</p>
+            <p className="text-sm text-muted-foreground">We received your message and will get back to you soon.</p>
+          </div>
+        </div>
+      )}
+      <Card className="border">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <MessageSquare className="h-5 w-5 text-muted-foreground" /> Send a message
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Have a question or want to request a change? Send a message directly to the team.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="portal-msg-name">Your Name (optional)</Label>
+                <Input
+                  id="portal-msg-name"
+                  value={senderName}
+                  onChange={e => setSenderName(e.target.value)}
+                  placeholder="Jane Smith"
+                  data-testid="input-message-name"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="portal-msg-email">Your Email (optional)</Label>
+                <Input
+                  id="portal-msg-email"
+                  type="email"
+                  value={senderEmail}
+                  onChange={e => setSenderEmail(e.target.value)}
+                  placeholder="jane@example.com"
+                  data-testid="input-message-email"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-msg-text">Message *</Label>
+              <Textarea
+                id="portal-msg-text"
+                value={message}
+                onChange={e => setMessage(e.target.value)}
+                placeholder="Ask a question or describe any changes you'd like..."
+                rows={3}
+                required
+                data-testid="textarea-message-text"
+              />
+            </div>
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+            <Button type="submit" disabled={submitting} variant="outline" className="w-full" data-testid="button-send-message">
+              {submitting
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending...</>
+                : <><Send className="h-4 w-4 mr-2" />Send Message</>}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -669,22 +723,32 @@ export default function ProposalPortalPage() {
           </div>
         )}
 
-        {/* Conversation thread — shows client messages and admin replies in chronological order */}
-        {proposal.thread && proposal.thread.length > 0 && (
-          <ConversationThread
-            thread={proposal.thread}
-            businessName={businessName}
+        {/* Conversation thread + reply box — kept together so the UI feels like one chat pane */}
+        {proposal.thread && proposal.thread.length > 0 ? (
+          <div className="space-y-6">
+            <ConversationThread
+              thread={proposal.thread}
+              businessName={businessName}
+              accentColor={accentColor}
+            />
+            {/* Compact reply box rendered directly below the thread */}
+            <ClientMessageForm
+              proposalId={proposal.id}
+              token={token}
+              accentColor={accentColor}
+              onSent={handleMessageSent}
+              compact
+            />
+          </div>
+        ) : (
+          /* No thread yet — show the full "Send a message" card */
+          <ClientMessageForm
+            proposalId={proposal.id}
+            token={token}
             accentColor={accentColor}
+            onSent={handleMessageSent}
           />
         )}
-
-        {/* Message compose form — shown below the thread so new messages appear at the bottom */}
-        <ClientMessageForm
-          proposalId={proposal.id}
-          token={token}
-          accentColor={accentColor}
-          onSent={handleMessageSent}
-        />
 
         {isApproved && (
           <div className="border-2 border-green-500 rounded-lg p-4 bg-green-50">
