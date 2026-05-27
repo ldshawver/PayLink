@@ -3,8 +3,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Loader2, ShieldCheck, AlertTriangle, AlertCircle, Info, RefreshCw } from "lucide-react";
+import { Loader2, ShieldCheck, AlertTriangle, AlertCircle, Info, RefreshCw, ExternalLink } from "lucide-react";
 import { useState } from "react";
+import { Link } from "wouter";
 
 interface AuditIssue {
   severity: "error" | "warning" | "info";
@@ -16,6 +17,15 @@ interface AuditIssue {
 interface AuditResult {
   summary: { errors: number; warnings: number; info: number; total: number };
   issues: AuditIssue[];
+}
+
+function issueActionLink(issue: AuditIssue): { label: string; href: string } | null {
+  const cat = issue.category?.toLowerCase();
+  if (cat === "legal entity") return { label: "Configure", href: "/app/company?tab=legal" };
+  if (cat === "ein missing") return { label: "Configure", href: "/app/company?tab=legal" };
+  if (cat === "pay frequency") return { label: "Company Settings", href: "/app/company" };
+  if (cat === "missing worker data" || cat === "worker") return { label: "Employees", href: "/app/employees" };
+  return null;
 }
 
 export default function PayrollAuditPage() {
@@ -119,19 +129,30 @@ export default function PayrollAuditPage() {
               <CardHeader><CardTitle>Issues</CardTitle></CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {audit.issues.map((issue, idx) => (
-                    <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border" data-testid={`row-issue-${idx}`}>
-                      {severityIcon(issue.severity)}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          {severityBadge(issue.severity)}
-                          <span className="text-xs font-medium text-muted-foreground">{issue.category}</span>
-                          {issue.entity && <span className="text-xs text-muted-foreground">— {issue.entity}</span>}
+                  {audit.issues.map((issue, idx) => {
+                    const action = issueActionLink(issue);
+                    return (
+                      <div key={idx} className="flex items-start gap-3 p-3 rounded-lg border" data-testid={`row-issue-${idx}`}>
+                        {severityIcon(issue.severity)}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            {severityBadge(issue.severity)}
+                            <span className="text-xs font-medium text-muted-foreground">{issue.category}</span>
+                            {issue.entity && <span className="text-xs text-muted-foreground">— {issue.entity}</span>}
+                          </div>
+                          <p className="text-sm" data-testid={`text-issue-message-${idx}`}>{issue.message}</p>
+                          {action && (
+                            <Link href={action.href}>
+                              <span className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1 cursor-pointer" data-testid={`link-fix-issue-${idx}`}>
+                                <ExternalLink className="h-3 w-3" />
+                                {action.label} →
+                              </span>
+                            </Link>
+                          )}
                         </div>
-                        <p className="text-sm" data-testid={`text-issue-message-${idx}`}>{issue.message}</p>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>

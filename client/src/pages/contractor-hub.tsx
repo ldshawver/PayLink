@@ -1068,11 +1068,16 @@ function ProposalDetailPanel({
       notifyClient: threadReplyNotifyClient,
     }),
     onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposal.id, "events"] });
       setThreadReplyText("");
       setThreadReplyNotifyClient(false);
-      refetchEvents();
-      const notified = data?.emailStatus === "sent";
-      toast({ title: "Reply sent", description: notified ? "Client was notified by email." : undefined });
+      if (data?.emailStatus === "sent") {
+        toast({ title: "Reply sent", description: "Your reply was recorded and the client was notified by email." });
+      } else if (data?.emailStatus === "failed") {
+        toast({ title: "Reply recorded", description: "Reply saved, but the client email notification failed.", variant: "destructive" });
+      } else {
+        toast({ title: "Reply recorded", description: "Reply saved. No client email notification was sent." });
+      }
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to send reply", variant: "destructive" }),
   });

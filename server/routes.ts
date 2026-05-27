@@ -16955,17 +16955,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const coLogoUrl: string | undefined = (company as any)?.logo_url || (company as any)?.logoUrl;
     if (coLogoUrl && !isCalibration) {
       try {
-        const https = await import("https");
-        const http  = await import("http");
-        const logoBytes: Buffer = await new Promise((resolve, reject) => {
-          const proto = coLogoUrl.startsWith("https") ? https : http;
-          (proto as any).get(coLogoUrl, (res: any) => {
-            const chunks: Buffer[] = [];
-            res.on("data", (c: Buffer) => chunks.push(c));
-            res.on("end", () => resolve(Buffer.concat(chunks)));
-            res.on("error", reject);
-          }).on("error", reject);
-        });
+        let logoBytes: Buffer;
+        if (coLogoUrl.startsWith("/uploads/") || coLogoUrl.startsWith("uploads/")) {
+          // Local upload — read directly from disk (avoids http.get failure on relative paths)
+          const relativePart = coLogoUrl.startsWith("/") ? coLogoUrl.slice(1) : coLogoUrl;
+          const localPath = path.join(resolvedUploadDir, path.basename(relativePart));
+          logoBytes = await fs.promises.readFile(localPath);
+        } else {
+          // Remote URL — fetch via HTTP/HTTPS
+          const https = await import("https");
+          const http  = await import("http");
+          logoBytes = await new Promise((resolve, reject) => {
+            const proto = coLogoUrl.startsWith("https") ? https : http;
+            (proto as any).get(coLogoUrl, (res: any) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (c: Buffer) => chunks.push(c));
+              res.on("end", () => resolve(Buffer.concat(chunks)));
+              res.on("error", reject);
+            }).on("error", reject);
+          });
+        }
         const isPng = coLogoUrl.toLowerCase().endsWith(".png") || logoBytes[0] === 0x89;
         const logoImg = isPng
           ? await doc.embedPng(logoBytes)

@@ -74,38 +74,71 @@ const LEGAL_ENTITY_TYPES: Record<string, string> = {
   nonprofit: "Nonprofit",
 };
 
-function FileUploadField({ label, value, onUpload, onClear, testId }: {
+function FileUploadField({ label, value, onUpload, onClear, testId, companyId, field }: {
   label: string;
   value: string;
   onUpload: (url: string) => void;
   onClear: () => void;
   testId: string;
+  companyId?: string;
+  field?: "logoUrl" | "iconUrl";
 }) {
+  const { toast } = useToast();
   const [uploading, setUploading] = useState(false);
+  const [saved, setSaved] = useState(false);
+
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setSaved(false);
     try {
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch("/api/upload", { method: "POST", body: formData, credentials: "include" });
-      if (!res.ok) throw new Error("Upload failed");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any).message || "Upload failed");
+      }
       const { url } = await res.json();
       onUpload(url);
-    } catch {
+      // Auto-save to company immediately if we have a company ID and field name
+      if (companyId && field) {
+        const saveRes = await fetch(`/api/companies/${companyId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ [field]: url }),
+        });
+        if (saveRes.ok) {
+          queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+          setSaved(true);
+          setTimeout(() => setSaved(false), 2500);
+        }
+      }
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err?.message || "Could not upload image. Please try again.", variant: "destructive" });
     } finally {
       setUploading(false);
       e.target.value = "";
     }
   };
+
   return (
     <div className="grid gap-2">
       <Label>{label}</Label>
       {value ? (
         <div className="flex items-center gap-3">
-          <img src={value} alt={label} className="h-12 w-12 rounded border object-contain bg-white" />
+          <div className="relative">
+            <img src={value} alt={label} className="h-12 w-12 rounded border object-contain bg-white" />
+            {saved && (
+              <span className="absolute -top-1 -right-1 bg-green-500 rounded-full p-0.5">
+                <Check className="h-2.5 w-2.5 text-white" />
+              </span>
+            )}
+          </div>
           <span className="text-sm text-muted-foreground truncate flex-1">{value.split("/").pop()}</span>
+          {saved && <span className="text-xs text-green-600 font-medium">Saved</span>}
           <Button type="button" size="icon" variant="ghost" onClick={onClear} data-testid={`${testId}-clear`}>
             <X className="h-4 w-4" />
           </Button>
@@ -126,11 +159,13 @@ function CompanyFormFields({
   setForm,
   enterprises,
   legalEntities,
+  companyId,
 }: {
   form: Record<string, string>;
   setForm: (f: Record<string, string>) => void;
   enterprises?: Enterprise[];
   legalEntities?: LegalEntity[];
+  companyId?: string;
 }) {
   const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm({ ...form, [key]: e.target.value });
@@ -262,6 +297,8 @@ function CompanyFormFields({
           onUpload={(url) => setForm({ ...form, logoUrl: url })}
           onClear={() => setForm({ ...form, logoUrl: "" })}
           testId="upload-company-logo"
+          companyId={companyId}
+          field="logoUrl"
         />
         <FileUploadField
           label="Company Icon"
@@ -269,6 +306,8 @@ function CompanyFormFields({
           onUpload={(url) => setForm({ ...form, iconUrl: url })}
           onClear={() => setForm({ ...form, iconUrl: "" })}
           testId="upload-company-icon"
+          companyId={companyId}
+          field="iconUrl"
         />
       </div>
     </div>
@@ -392,7 +431,7 @@ function CompanyInfoTab() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Company</DialogTitle></DialogHeader>
-          <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} legalEntities={legalEntities} />
+          <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} legalEntities={legalEntities} companyId={editId ?? undefined} />
           <Button
             data-testid="button-save-company"
             className="w-full mt-2"

@@ -26,13 +26,13 @@ jobs:
           script_stop: false
           script: |
             set -e
-            echo "=== PayLink Deploy $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+            echo "Starting deployment..."
 
             cd /home/paylinkssh/paylink-app/PayLink
 
             git fetch origin main
             git reset --hard origin/main
-            echo "✓ Repository updated ($(git rev-parse --short HEAD))"
+            echo "✓ Repository updated"
 
             # Take ownership of any root-owned build artifacts from prior sudo runs.
             # This must happen before rm or pnpm, otherwise both will fail with EACCES.
@@ -52,18 +52,9 @@ jobs:
             pnpm install --frozen-lockfile=false --reporter=append-only
             echo "✓ Dependencies installed"
 
-            # ── Build — redirect verbose Vite output to a temp file ────────────
-            # The SSH action has a finite output buffer; Vite's asset manifest
-            # output can easily push PM2 crash logs past the visible window.
-            BUILD_LOG=/tmp/paylink-build.log
-            rm -f "$BUILD_LOG"
-            if pnpm build > "$BUILD_LOG" 2>&1; then
-              echo "✓ Build completed ($(wc -l < "$BUILD_LOG") lines of output suppressed)"
-            else
-              echo "❌ Build failed — last 60 lines:"
-              tail -60 "$BUILD_LOG"
-              exit 1
-            fi
+            rm -rf dist/
+            pnpm build
+            echo "✓ Build completed"
 
             # ── Nginx config update ──────────────────────────────────────────
             # Deploy the canonical nginx config so mypaylink.app proxies to the
@@ -107,32 +98,13 @@ jobs:
               -- dotenv_config_path=/etc/paylink/.env
 
             pm2 save --force
-            echo "✓ PM2 process registered"
+            echo "✓ Application started with PM2"
 
-            # ── Early crash detection ─────────────────────────────────────────
-            # PM2 starts the process asynchronously. Wait a few seconds and check
-            # whether the process is still online before entering the health loop.
-            # If it crashed immediately, show logs now (before output buffer fills up).
-            sleep 4
-            echo "--- PM2 status after startup ---"
-            pm2 status paylink
-            if pm2 list | grep -E "paylink\s+\|.*online" > /dev/null 2>&1 || \
-               pm2 jlist 2>/dev/null | grep -E '"name":"paylink".*"status":"online"' > /dev/null 2>&1 || \
-               pm2 status paylink 2>&1 | grep -q "online"; then
-              echo "✓ PM2 process is online — starting health checks"
-            else
-              echo "❌ PM2 process is NOT online — crashed on startup"
-              echo "--- PM2 crash logs (last 100 lines) ---"
-              pm2 logs paylink --lines 100 --nostream
-              exit 1
-            fi
+            sleep 5
 
-            # ── Health check loop ─────────────────────────────────────────────
-            # 30 attempts × 2 s = 60 s total. PM2 crash logs are dumped at
-            # attempt 5 (early signal) and again at attempt 30 (final failure).
             for i in {1..30}; do
               if curl -fs http://127.0.0.1:8000/health > /dev/null; then
-                echo "✓ Health check passed (attempt $i)"
+                echo "✓ Health check passed"
                 echo ""
                 echo "=== Verifying public routing ==="
                 HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 https://mypaylink.app/health 2>/dev/null || echo "ERR")
@@ -145,22 +117,10 @@ jobs:
                 exit 0
               fi
 
-              # Mid-loop crash log dump — show PM2 logs early so they appear
-              # near the top of the failure output, before the buffer fills up.
-              if [ $i -eq 5 ]; then
-                echo "⏳ Health check not yet passing (attempt $i/30) — PM2 snapshot:"
-                pm2 status paylink
-                echo "--- PM2 logs (last 50 lines, attempt $i) ---"
-                pm2 logs paylink --lines 50 --nostream
-                echo "--- (continuing health checks) ---"
-              fi
-
               if [ $i -eq 30 ]; then
-                echo "❌ Health check failed after 30 attempts (60 s)"
-                echo "--- PM2 crash logs (last 100 lines) ---"
-                pm2 logs paylink --lines 100 --nostream
-                echo "--- PM2 final status ---"
+                echo "❌ Health check failed after 30 attempts"
                 pm2 status
+                pm2 logs paylink --lines 80 --nostream
                 exit 1
               fi
 
