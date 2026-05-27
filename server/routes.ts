@@ -10329,8 +10329,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
       const isAdminRole = ["admin", "owner", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
       if (isAdminRole) {
-        // Admins see proposals targeted at their company (or all companies for platform users)
-        const companyFilter = filterCompanyId ? sql`AND cp.company_id = ${filterCompanyId}` : sql``;
+        // Build an enterprise-aware company ID set so admins see proposals across all sibling companies.
+        let companyFilter: ReturnType<typeof sql>;
+        if (!filterCompanyId) {
+          companyFilter = sql``;
+        } else {
+          // Resolve the enterprise_id of the user's company; include all companies sharing that enterprise
+          const entRes = await db.execute(sql`SELECT enterprise_id FROM companies WHERE id = ${filterCompanyId} LIMIT 1`);
+          const enterpriseId = (entRes.rows[0] as any)?.enterprise_id as string | null | undefined;
+          if (enterpriseId) {
+            companyFilter = sql`AND cp.company_id IN (SELECT id FROM companies WHERE enterprise_id = ${enterpriseId})`;
+          } else {
+            companyFilter = sql`AND cp.company_id = ${filterCompanyId}`;
+          }
+        }
         const result = showArchived
           ? await db.execute(sql`
               SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
@@ -12073,9 +12085,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id ORDER BY cc.created_at DESC LIMIT 500`)
             : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC LIMIT 500`);
         } else {
+          // Enterprise-aware: include all sibling companies sharing the same enterprise_id
+          const entRes = await db.execute(sql`SELECT enterprise_id FROM companies WHERE id = ${cid} LIMIT 1`);
+          const contractsEnterpriseId = (entRes.rows[0] as any)?.enterprise_id as string | null | undefined;
+          const contractsCompanyFilter = contractsEnterpriseId
+            ? sql`cc.company_id IN (SELECT id FROM companies WHERE enterprise_id = ${contractsEnterpriseId})`
+            : sql`cc.company_id = ${cid}`;
           result = showArchivedC
-            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`)
-            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.company_id = ${cid} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} ORDER BY cc.created_at DESC`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
         }
         rows = result.rows;
       } else {

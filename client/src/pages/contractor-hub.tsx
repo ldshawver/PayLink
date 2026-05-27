@@ -5658,7 +5658,7 @@ function BrandingSection() {
   const saveMutation = useMutation({
     mutationFn: async () => {
       const fd = new FormData();
-      Object.entries(form).forEach(([k, v]) => v && fd.append(k, v));
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ""));
       if (logoFile) fd.append("logo", logoFile);
       // Explicitly signal logo removal — server MUST set logo_url/logo_path to NULL (not COALESCE)
       if (removeLogo) fd.append("removeLogo", "true");
