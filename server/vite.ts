@@ -74,10 +74,12 @@ export async function setupVite(server: Server, app: Express) {
 
   app.use("/{*path}", async (req, res, next) => {
     // Never serve HTML for API routes — they must be handled by Express API handlers or return 404.
-    // Without this guard, unhandled API requests would receive the React SPA HTML, causing
-    // "invalid JSON" errors on the frontend (e.g. App Doctor, portal pages).
-    if (req.path.startsWith("/api/")) {
-      return res.status(404).json({ message: "API route not found", path: req.path });
+    // Use req.originalUrl (not req.path) because Express 5 strips the wildcard prefix from
+    // req.path inside app.use("/{*path}", ...), making req.path lose its leading slash and
+    // causing startsWith("/api/") to silently fail (e.g. "api/app-doctor/reports" has no leading slash).
+    const urlPath = req.originalUrl.split("?")[0];
+    if (urlPath.startsWith("/api/")) {
+      return res.status(404).json({ message: "API route not found", path: urlPath });
     }
 
     const url = req.originalUrl;
