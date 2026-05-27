@@ -1465,10 +1465,19 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       let companies = await storage.getCompanies();
-      // Tenant users can only see their own company; platform users see all
+      // Tenant users see their own company plus all enterprise siblings (same enterpriseId).
+      // Platform users see everything.
       if (user && !isPlatformUser(user.role)) {
         if (!user.companyId) return res.status(403).json({ message: "Access denied" });
-        companies = companies.filter(c => c.id === user.companyId);
+        const userCompany = companies.find(c => c.id === user.companyId);
+        const enterpriseId = userCompany?.enterpriseId;
+        if (enterpriseId) {
+          // Show all companies in the same enterprise group
+          companies = companies.filter(c => c.enterpriseId === enterpriseId);
+        } else {
+          // No enterprise — only their own company
+          companies = companies.filter(c => c.id === user.companyId);
+        }
       }
       res.json(companies);
     } catch (error) {
