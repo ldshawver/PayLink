@@ -67,9 +67,10 @@ export default function AppDoctorPage() {
       const contentType = res.headers.get("content-type") || "";
       const bodyText = await res.text();
       if (!contentType.includes("application/json")) {
-        const isHtml = bodyText.trim().startsWith("<!DOCTYPE") || bodyText.trim().startsWith("<html");
+        const trimmed = bodyText.trim();
+        const isHtml = trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html") || trimmed.startsWith("<!--");
         throw new Error(isHtml
-          ? "The API returned the app shell instead of JSON. Check nginx/API routing for /api/app-doctor/reports."
+          ? "The API returned an HTML page instead of JSON. Check authentication or nginx/API routing for /api/app-doctor/reports."
           : (bodyText || `Unexpected ${contentType || "unknown"} response`));
       }
       const body = bodyText ? JSON.parse(bodyText) : null;

@@ -2217,6 +2217,7 @@ function ProposalBuilder({
       const r = await fetch(`/api/contractor-proposals/${proposalId}/line-items`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
+    select: (data: any) => snakeToCamel(data) as LineItem[],
     enabled: !!proposalId,
   });
   const { data: events = [] } = useQuery<ProposalEvent[]>({
@@ -3336,11 +3337,11 @@ function LineItemRow({ item, canEdit, onDelete, onRefresh }: { item: LineItem; c
         <div className="grid grid-cols-3 gap-2">
           <div className="flex items-center gap-1">
             <Label className="text-xs w-6 shrink-0">Qty</Label>
-            <Input type="number" value={form.quantity} onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))} className="h-8 text-sm" />
+            <Input type="number" value={form.quantity ?? ""} onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))} className="h-8 text-sm" />
           </div>
           <div className="flex items-center gap-1">
             <Label className="text-xs w-14 shrink-0">Unit $</Label>
-            <Input type="number" value={form.unitPrice} onChange={e => setForm(f => ({ ...f, unitPrice: e.target.value }))} className="h-8 text-sm" />
+            <Input type="number" value={form.unitPrice ?? ""} onChange={e => setForm(f => ({ ...f, unitPrice: e.target.value }))} className="h-8 text-sm" />
           </div>
           <div className="flex items-center justify-end text-sm font-medium">Total: {fmt(lineTotal)}</div>
         </div>
