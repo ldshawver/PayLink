@@ -1062,6 +1062,18 @@ function ProposalDetailPanel({
 
   const [threadReplyText, setThreadReplyText] = useState("");
   const [threadReplyNotifyClient, setThreadReplyNotifyClient] = useState(false);
+  const threadBottomRef = useRef<HTMLDivElement>(null);
+
+  function scrollThreadToBottom() {
+    setTimeout(() => threadBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  }
+
+  useEffect(() => {
+    if (tab === "thread") {
+      scrollThreadToBottom();
+    }
+  }, [tab, events]);
+
   const threadReplyMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposal.id}/reply`, {
       message: threadReplyText.trim(),
@@ -1071,6 +1083,7 @@ function ProposalDetailPanel({
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposal.id, "events"] });
       setThreadReplyText("");
       setThreadReplyNotifyClient(false);
+      scrollThreadToBottom();
       if (data?.emailStatus === "sent") {
         toast({ title: "Reply sent", description: "Your reply was recorded and the client was notified by email." });
       } else if (data?.emailStatus === "failed") {
@@ -1717,7 +1730,7 @@ function ProposalDetailPanel({
 
             {/* Negotiation Thread */}
             <TabsContent value="thread" className="m-0 p-6 space-y-4">
-              <div className="space-y-3">
+              <div className="space-y-3" data-testid="thread-messages-container">
                 {(() => {
                   type ThreadItem = { id: string; ts: string; kind: "event" | "negotiation"; data: ProposalEvent | Negotiation };
                   const items: ThreadItem[] = [
@@ -1812,6 +1825,7 @@ function ProposalDetailPanel({
                   });
                 })()}
               </div>
+              <div ref={threadBottomRef} />
 
               {canAdminAction && (
                 <div className="border-t pt-4 space-y-2">
