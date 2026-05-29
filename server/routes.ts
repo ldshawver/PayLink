@@ -987,9 +987,11 @@ async function autoSnapshot(proposalId: string, prop: any, changeNotes: string, 
   try {
     const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${proposalId}`);
     const snapshot = JSON.stringify({ proposal: prop, lineItems: lineItemsRes.rows });
+    const countRes = await db.execute(sql`SELECT COUNT(*) as cnt FROM proposal_versions WHERE proposal_id = ${proposalId}`);
+    const nextVersion = (parseInt((countRes.rows[0] as any).cnt, 10) || 0) + 1;
     await db.execute(sql`
       INSERT INTO proposal_versions (proposal_id, version, snapshot_json, change_notes, created_by_user_id)
-      VALUES (${proposalId}, ${prop.version || 1}, ${snapshot}, ${changeNotes}, ${userId ?? null})
+      VALUES (${proposalId}, ${nextVersion}, ${snapshot}, ${changeNotes}, ${userId ?? null})
     `);
   } catch (e) { console.warn("autoSnapshot failed:", e); }
 }
@@ -12280,9 +12282,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { prop } = access;
       const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
       const snapshot = JSON.stringify({ proposal: prop, lineItems: lineItemsRes.rows });
+      const countRes2 = await db.execute(sql`SELECT COUNT(*) as cnt FROM proposal_versions WHERE proposal_id = ${req.params.id}`);
+      const nextVersion2 = (parseInt((countRes2.rows[0] as any).cnt, 10) || 0) + 1;
       const versionResult = await db.execute(sql`
         INSERT INTO proposal_versions (proposal_id, version, snapshot_json, change_notes, created_by_user_id)
-        VALUES (${req.params.id}, ${prop.version || 1}, ${snapshot}, ${req.body.changeNotes || null}, ${req.session.userId})
+        VALUES (${req.params.id}, ${nextVersion2}, ${snapshot}, ${req.body.changeNotes || null}, ${req.session.userId})
         RETURNING *
       `);
       res.status(201).json(versionResult.rows[0]);

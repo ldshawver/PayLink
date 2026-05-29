@@ -1264,7 +1264,7 @@ function ProposalDetailPanel({
                   </Button>
                 )}
                 {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
-                {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
+                {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">V{proposal.version}</span>}
               </div>
             </div>
           </div>
@@ -1784,10 +1784,10 @@ function ProposalDetailPanel({
                     {versions.map((v) => (
                       <div key={v.id} className="flex items-center gap-3 rounded-lg border px-3 py-2">
                         <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary shrink-0">
-                          v{v.version}
+                          V{v.version}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium">Version {v.version}</p>
+                          <p className="text-sm font-medium">V{v.version}</p>
                           <p className="text-xs text-muted-foreground">{fmtDate(v.createdAt)}</p>
                           {v.changeNotes && <p className="text-xs text-muted-foreground italic truncate">"{v.changeNotes}"</p>}
                         </div>
@@ -3474,7 +3474,7 @@ function LineItemRow({ item, canEdit, onDelete, onRefresh }: { item: LineItem; c
 
   const saveMutation = useMutation({
     mutationFn: () => apiRequest("PATCH", `/api/proposal-line-items/${item.id}`, { ...form, unitPrice: form.unitPrice, quantity: form.quantity }),
-    onSuccess: () => { onRefresh(); setEditing(false); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] }); onRefresh(); setEditing(false); },
     onError: (e: any) => toast({ title: e?.message || "Failed to save", variant: "destructive" }),
   });
 
@@ -7482,7 +7482,7 @@ export default function ContractorHubPage() {
                                     <ProposalBadge status={proposal.status} />
                                     {proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}
                                     {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
-                                    {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
+                                    {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">V{proposal.version}</span>}
                                   </div>
                                   <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
                                     <span>{proposal.proposalNumber}</span>
@@ -7532,7 +7532,7 @@ export default function ContractorHubPage() {
                                 <ProposalBadge status={proposal.status} />
                                 {proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}
                                 {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
-                                {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
+                                {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">V{proposal.version}</span>}
                               </div>
                               <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
                                 <span>{proposal.proposalNumber}</span>
