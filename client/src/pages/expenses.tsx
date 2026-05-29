@@ -17,6 +17,7 @@ import {
   Receipt as ReceiptIcon, Plus, Trash2, Upload, FileText, DollarSign, Download,
   Camera, Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, Send,
   CreditCard, BarChart3, RefreshCw, Eye, Building2, Printer, BanknoteIcon,
+  ArrowLeftRight, ExternalLink,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -447,6 +448,109 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
   );
 }
 
+function TradeBartarSection() {
+  const [companyId, setCompanyId] = useState("");
+  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/companies"] });
+  const { data: transactions = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/trade-transactions", companyId],
+    queryFn: () =>
+      fetch(`/api/trade-transactions?companyId=${companyId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!companyId,
+  });
+
+  function fmtV(v: any) { return `$${parseFloat(String(v || 0)).toFixed(2)}`; }
+  function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
+    if (s === "approved" || s === "completed") return "default";
+    if (s === "rejected" || s === "cancelled") return "destructive";
+    if (s === "pending_review") return "secondary";
+    return "outline";
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <ArrowLeftRight className="h-5 w-5" /> Trade / Barter Compensation
+          </h3>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Non-cash and barter arrangements — goods, services, or other in-kind exchanges. Amounts exceeding $600/year must be reported on 1099 forms.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Select value={companyId} onValueChange={setCompanyId}>
+            <SelectTrigger className="h-8 w-44" data-testid="select-trade-barter-company">
+              <SelectValue placeholder="Select company…" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <a href="/app/trade-compensation" data-testid="link-expenses-trade-comp">
+            <button className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 h-8 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+              Manage <ExternalLink className="h-3.5 w-3.5 ml-0.5" />
+            </button>
+          </a>
+        </div>
+      </div>
+
+      {!companyId ? (
+        <Card>
+          <CardContent className="py-10 text-center text-muted-foreground text-sm">
+            Select a company to view its barter and non-cash compensation records.
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
+        <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : transactions.length === 0 ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No trade or barter transactions found.{" "}
+            <a href="/app/trade-compensation" className="text-primary underline">
+              Create one in Trade Compensation.
+            </a>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Title</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Counterparty</TableHead>
+                <TableHead>Fair Market Value</TableHead>
+                <TableHead>Reportable</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {transactions.map((tx: any) => (
+                <TableRow key={tx.id} data-testid={`row-expense-trade-${tx.id}`}>
+                  <TableCell className="font-medium">{tx.title}</TableCell>
+                  <TableCell className="capitalize">{(tx.transaction_type || tx.transactionType || "").replace(/_/g, " ")}</TableCell>
+                  <TableCell>{tx.counterparty_name ?? tx.counterpartyName}</TableCell>
+                  <TableCell>{fmtV(tx.fair_market_value ?? tx.fairMarketValue)}</TableCell>
+                  <TableCell>
+                    {(tx.is_reportable ?? tx.isReportable)
+                      ? <Badge className="bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-100">Reportable</Badge>
+                      : <Badge variant="outline">No</Badge>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariant(tx.status)} className="capitalize">
+                      {(tx.status || "").replace(/_/g, " ")}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export default function ExpensesPage() {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("my-expenses");
@@ -712,6 +816,7 @@ export default function ExpensesPage() {
           {isAdmin && <TabsTrigger value="ap-queue" data-testid="tab-ap-queue">AP Queue</TabsTrigger>}
           {isAdmin && <TabsTrigger value="recurring" data-testid="tab-recurring">Recurring</TabsTrigger>}
           {isAdmin && <TabsTrigger value="export" data-testid="tab-export">Export</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="trade-barter" data-testid="tab-trade-barter"><ArrowLeftRight className="h-3.5 w-3.5 mr-1 inline" />Trade / Barter</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="my-expenses" className="space-y-4">
@@ -1047,6 +1152,11 @@ export default function ExpensesPage() {
           </TabsContent>
         )}
 
+        {isAdmin && (
+          <TabsContent value="trade-barter" className="space-y-4">
+            <TradeBartarSection />
+          </TabsContent>
+        )}
         {isAdmin && (
           <TabsContent value="export" className="space-y-4">
             <h3 className="text-lg font-semibold">Accounting Export</h3>

@@ -26,7 +26,8 @@ import {
   Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
   Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3,
   Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle, Brain, Sparkles,
-  AlertTriangle, Ban, RotateCcw, ClipboardList, BadgeX, Activity
+  AlertTriangle, Ban, RotateCcw, ClipboardList, BadgeX, Activity,
+  ArrowLeftRight
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { PayrollSummaryReportDialog } from "@/components/reports/payroll-summary-report";
@@ -7680,6 +7681,109 @@ function CommissionsTab() {
   );
 }
 
+function TradeCompPayrollTab() {
+  const [companyId, setCompanyId] = useState<string>("");
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: transactions = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/trade-transactions", companyId],
+    queryFn: () =>
+      fetch(`/api/trade-transactions?companyId=${companyId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!companyId,
+  });
+
+  function fmtV(v: any) { return `$${parseFloat(String(v || 0)).toFixed(2)}`; }
+  function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
+    if (s === "approved" || s === "completed") return "default";
+    if (s === "rejected" || s === "cancelled") return "destructive";
+    if (s === "pending_review") return "secondary";
+    return "outline";
+  }
+
+  return (
+    <div className="space-y-4 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold flex items-center gap-2">
+            <ArrowLeftRight className="h-5 w-5 text-blue-accent" /> Trade Compensation
+          </h3>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Non-cash and barter arrangements that supplement regular payroll. Reportable amounts appear on 1099 forms.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Select value={companyId} onValueChange={setCompanyId}>
+            <SelectTrigger className="h-8 w-44" data-testid="select-trade-comp-company">
+              <SelectValue placeholder="Select company…" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button asChild variant="outline" size="sm">
+            <a href="/app/trade-compensation" data-testid="link-trade-comp-full">
+              Manage <ExternalLink className="h-3.5 w-3.5 ml-1" />
+            </a>
+          </Button>
+        </div>
+      </div>
+
+      {!companyId ? (
+        <Card>
+          <CardContent className="py-10 text-center text-muted-foreground text-sm">
+            Select a company to view non-cash compensation records.
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
+        <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : transactions.length === 0 ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No trade transactions found for this company.{" "}
+            <a href="/app/trade-compensation" className="text-primary underline">
+              Create one in Trade Compensation.
+            </a>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Title</TableHead>
+                <TableHead>Counterparty</TableHead>
+                <TableHead>Fair Market Value</TableHead>
+                <TableHead>Tax Year</TableHead>
+                <TableHead>Reportable</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {transactions.map((tx: any) => (
+                <TableRow key={tx.id} data-testid={`row-payroll-trade-${tx.id}`}>
+                  <TableCell className="font-medium">{tx.title}</TableCell>
+                  <TableCell>{tx.counterparty_name ?? tx.counterpartyName}</TableCell>
+                  <TableCell>{fmtV(tx.fair_market_value ?? tx.fairMarketValue)}</TableCell>
+                  <TableCell>{tx.tax_year ?? tx.taxYear ?? "—"}</TableCell>
+                  <TableCell>
+                    {(tx.is_reportable ?? tx.isReportable)
+                      ? <Badge className="bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-100">Reportable</Badge>
+                      : <Badge variant="outline">No</Badge>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={statusVariant(tx.status)} className="capitalize">
+                      {(tx.status || "").replace(/_/g, " ")}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useTabParam();
 
@@ -7700,6 +7804,7 @@ export default function PayrollPage() {
     { value: "funding-accounts", label: "Funding Accounts" },
     { value: "payment-records", label: "Payment Records" },
     { value: "commissions", label: "Commissions" },
+    { value: "trade-comp", label: "Trade Comp" },
   ];
 
   return (
@@ -7734,6 +7839,7 @@ export default function PayrollPage() {
         <TabsContent value="funding-accounts"><FundingAccountsTab /></TabsContent>
         <TabsContent value="payment-records"><PaymentRecordsTab /></TabsContent>
         <TabsContent value="commissions"><CommissionsTab /></TabsContent>
+        <TabsContent value="trade-comp"><TradeCompPayrollTab /></TabsContent>
       </Tabs>
     </div>
   );

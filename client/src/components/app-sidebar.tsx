@@ -206,6 +206,14 @@ const MAIN_NAV: NavGroup[] = [
         url: "/app/expenses",
         items: [],
       },
+      {
+        label: "Trade Compensation",
+        icon: ArrowLeftRight,
+        url: "/app/trade-compensation",
+        roles: ["admin", "manager"],
+        featureKey: "tenant.finance.trade-compensation",
+        items: [],
+      },
     ],
   },
   {

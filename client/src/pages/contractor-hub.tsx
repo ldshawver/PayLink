@@ -15,6 +15,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn, normalizeTemplate } from "@/lib/utils";
 import {
   FileText, Plus, Send, CheckCircle, XCircle, Clock, DollarSign, AlertTriangle,
@@ -26,7 +28,8 @@ import {
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
-  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply, RefreshCw
+  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply, RefreshCw,
+  ArrowLeftRight
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -64,7 +67,7 @@ class ProposalErrorBoundary extends Component<
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "payments" | "messages" | "branding" | "settings";
+type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "payments" | "messages" | "branding" | "settings" | "trade";
 
 interface Proposal {
   id: string; proposalNumber: string; title: string; description: string;
@@ -6645,6 +6648,80 @@ function SettingsSection() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+function TradeSection() {
+  const [companyId, setCompanyId] = useState("");
+  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/companies"] });
+  const { data: transactions = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/trade-transactions", companyId],
+    queryFn: () =>
+      fetch(`/api/trade-transactions?companyId=${companyId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!companyId,
+  });
+
+  function fmtV(v: any) { return `$${parseFloat(String(v || 0)).toFixed(2)}`; }
+  function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
+    if (s === "approved" || s === "completed") return "default";
+    if (s === "rejected" || s === "cancelled") return "destructive";
+    if (s === "pending_review") return "secondary";
+    return "outline";
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Non-cash and barter arrangements tracked for compliance and 1099 reporting.</p>
+        <div className="flex items-center gap-2 shrink-0">
+          <Select value={companyId} onValueChange={setCompanyId}>
+            <SelectTrigger className="h-8 w-44" data-testid="select-trade-company"><SelectValue placeholder="Select company…" /></SelectTrigger>
+            <SelectContent>{companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+          <Button asChild variant="outline" size="sm">
+            <a href="/app/trade-compensation" data-testid="link-open-trade-comp">
+              Full View <ExternalLink className="h-3.5 w-3.5 ml-1" />
+            </a>
+          </Button>
+        </div>
+      </div>
+
+      {!companyId ? (
+        <Card><CardContent className="py-10 text-center text-muted-foreground text-sm">Select a company above to view its trade transactions.</CardContent></Card>
+      ) : isLoading ? (
+        <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : transactions.length === 0 ? (
+        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">
+          No trade transactions yet.{" "}
+          <a href="/app/trade-compensation" className="text-primary underline">Create one in Trade Compensation.</a>
+        </CardContent></Card>
+      ) : (
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Title</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Counterparty</TableHead>
+                <TableHead>Value</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {transactions.map((tx: any) => (
+                <TableRow key={tx.id} data-testid={`row-trade-tx-${tx.id}`}>
+                  <TableCell className="font-medium">{tx.title}</TableCell>
+                  <TableCell className="capitalize">{(tx.transaction_type || tx.transactionType || "").replace(/_/g, " ")}</TableCell>
+                  <TableCell>{tx.counterparty_name ?? tx.counterpartyName}</TableCell>
+                  <TableCell>{fmtV(tx.fair_market_value ?? tx.fairMarketValue)}</TableCell>
+                  <TableCell><Badge variant={statusVariant(tx.status)} className="capitalize">{(tx.status || "").replace(/_/g, " ")}</Badge></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: string }> }[] = [
   { id: "dashboard", label: "Overview", icon: LayoutDashboard },
   { id: "proposals", label: "Proposals", icon: FileText },
@@ -6655,6 +6732,7 @@ const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: s
   { id: "messages", label: "Messages", icon: MessageSquare },
   { id: "branding", label: "Profile & Branding", icon: Palette },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "trade", label: "Trade Comp", icon: ArrowLeftRight },
 ];
 
 export default function ContractorHubPage() {
@@ -6664,7 +6742,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings","trade"];
       return (s && valid.includes(s)) ? s : "dashboard";
     } catch { return "dashboard"; }
   })();
@@ -6675,7 +6753,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings","trade"];
       if (s && valid.includes(s)) setSection(s);
       else if (!s) setSection("dashboard");
     } catch {}
@@ -6862,6 +6940,7 @@ export default function ContractorHubPage() {
               {section === "messages" && "Activity notifications and workflow events"}
               {section === "branding" && "Profile and proposal templates"}
               {section === "settings" && "Hub configuration"}
+              {section === "trade" && "Non-cash and barter arrangements for compliance and 1099 reporting"}
             </p>
           </div>
 
@@ -7338,6 +7417,9 @@ export default function ContractorHubPage() {
 
             {/* Settings */}
             {section === "settings" && <SettingsSection />}
+
+            {/* Trade Compensation */}
+            {section === "trade" && <TradeSection />}
           </div>
         </ScrollArea>
 
