@@ -744,6 +744,56 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
   }
 }
 
+// Helper: build the list of invoice terms based on company settings
+function getInvoiceTermsList(ts: {
+  allow_trade_barter?: boolean; allow_rent_credit?: boolean;
+  require_written_approval_non_cash?: boolean; require_documentation_before_payment?: boolean;
+  allow_setoff_defective_work?: boolean; show_california_late_fee?: boolean;
+  custom_payment_terms_text?: string;
+} = {}): { title: string; text: string }[] {
+  const pmList = ["ACH/bank transfer", "credit card", "PayPal", "Venmo", "Cash App", "Apple Pay"];
+  if (ts.allow_trade_barter) pmList.push("approved trade/barter");
+  if (ts.allow_rent_credit) pmList.push("approved rent credits");
+  const terms: { title: string; text: string }[] = [
+    { title: "Payment Due Date", text: ts.custom_payment_terms_text || "Payment is due Net 30 from the invoice issue date unless otherwise agreed in writing." },
+    { title: "Accepted Payment Methods", text: pmList.join(", ") + "." },
+  ];
+  if (ts.allow_trade_barter || ts.allow_rent_credit) {
+    terms.push({ title: "Trade, Barter & Rent Credit Payments", text: "Payment may be accepted as goods, services, labor, barter, rent credit, housing accommodation, or other mutually agreed consideration only if approved in writing by both parties. The agreed value must be documented. Unless agreed in writing, invoices remain due in cash. Partial trade/rent credit does not waive collection of any remaining balance." });
+  }
+  terms.push(
+    { title: "Approval Required for Additional Work", text: "No work outside the approved scope is billable unless authorized in writing before the work is performed." },
+    { title: "Right to Inspect and Reject Work", text: "The business/client may inspect all work. Payment does not equal acceptance of defective, incomplete, unauthorized, non-compliant, or substandard work." },
+    { title: "Payment Contingent Upon Satisfactory Completion", text: "Invoices are payable only for satisfactorily completed and approved work. The business may withhold disputed amounts until issues are resolved." },
+  );
+  if (ts.require_documentation_before_payment !== false) {
+    terms.push({ title: "Documentation Requirement", text: "Contractor must provide records of hours, materials, receipts, work performed, and supporting documentation upon request before payment is due." });
+  }
+  terms.push(
+    { title: "No Guaranteed Hours", text: "Contractor is not guaranteed minimum hours, future work, continued engagement, or project duration." },
+    { title: "Independent Contractor Status", text: "Contractor is independent and responsible for taxes, licenses, insurance, tools, business expenses, and compliance obligations. Nothing creates an employee relationship." },
+    { title: "Correction of Defective Work", text: "Contractor must correct defective workmanship at no additional cost within a reasonable time after notice." },
+  );
+  if (ts.allow_setoff_defective_work !== false) {
+    terms.push({ title: "Setoff Rights", text: "The business may deduct costs caused by contractor defects, unfinished work, damage, replacement materials, repair costs, or third-party correction work from amounts otherwise owed." });
+  }
+  terms.push(
+    { title: "Unauthorized Purchases", text: "Contractor may not buy materials, tools, services, or supplies on behalf of the business without prior written approval. Unauthorized purchases are contractor's responsibility." },
+    { title: "Work Progress / Termination", text: "Failure to make reasonable progress, follow instructions, or complete work properly may result in suspension or termination without further obligation except for approved completed work." },
+    { title: "Indemnification", text: "Contractor is responsible for damages caused by negligence, willful misconduct, defective workmanship, code violations, or unauthorized work." },
+    { title: "Photographic / Video Documentation", text: "The business may document the project with photos, video, inspections, third-party evaluations, and work logs to verify completion, quality, and payment disputes." },
+    { title: "No Waiver by Payment", text: "Payment of any invoice does not waive defects, claims, damages, dispute rights, setoff rights, or the right to later challenge incomplete or defective work." },
+  );
+  if (ts.show_california_late_fee !== false) {
+    terms.push(
+      { title: "Late Fees", text: "Late fee: $25 for invoices up to $250. $50 for invoices of $250.01 or greater." },
+      { title: "Interest on Overdue Balances", text: "Overdue balances may accrue 2% monthly interest, but only up to the maximum amount allowed under California law." },
+      { title: "Governing Law", text: "California law applies." },
+    );
+  }
+  return terms;
+}
+
 // Helper: generate a PDF for a contractor invoice and store in DMS
 async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorUserId: string): Promise<string | null> {
   try {
@@ -761,6 +811,14 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
       if (coRes.rows[0]) invoiceCompanyName = (coRes.rows[0] as { name: string }).name || null;
     }
     const invDisplayName = style.businessName || invoiceCompanyName || "PayLink";
+    // Fetch invoice term settings for this company
+    let invTermSettings: Record<string, any> = {};
+    try {
+      if (invoice.company_id) {
+        const tsRes = await db.execute(sql`SELECT * FROM invoice_term_settings WHERE company_id = ${invoice.company_id} LIMIT 1`);
+        if (tsRes.rows[0]) invTermSettings = tsRes.rows[0] as Record<string, any>;
+      }
+    } catch (_e) { /* no term settings configured yet */ }
     let y = renderDocHeader(doc, pageWidth, style, {
       displayName: invDisplayName,
       documentTypeLabel: "Contractor Invoice",
@@ -821,6 +879,33 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
       doc.setTextColor(80, 80, 80);
       const noteLines = doc.splitTextToSize("Notes: " + invoice.notes, pageWidth - 28);
       doc.text(noteLines, 14, y);
+    }
+
+    // ── Invoice Terms Page ──────────────────────────────────────────────────
+    const invTermsList = getInvoiceTermsList(invTermSettings);
+    if (invTermsList.length > 0) {
+      doc.addPage();
+      let ty = 20;
+      const tpw = doc.internal.pageSize.getWidth();
+      doc.setFontSize(13);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
+      doc.text("Invoice Terms & Conditions", 14, ty);
+      ty += 5;
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "italic");
+      doc.setTextColor(120, 120, 120);
+      doc.text("These invoice terms are billing terms only and do not replace a written contract or legal advice.", 14, ty);
+      ty += 5;
+      doc.setTextColor(0, 0, 0);
+      autoTable(doc, {
+        startY: ty,
+        head: [],
+        body: invTermsList.map((t, i) => [`${i + 1}. ${t.title}`, t.text]),
+        styles: { fontSize: 7.5, cellPadding: { top: 2, right: 3, bottom: 2, left: 3 }, valign: "top" as const },
+        columnStyles: { 0: { fontStyle: "bold" as const, cellWidth: 48 }, 1: { cellWidth: tpw - 28 - 48 } },
+        margin: { left: 14, right: 14 },
+      });
     }
 
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -9621,7 +9706,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const allowedFields = ["invoiceNumber", "invoiceDate", "dueDate", "amount", "description",
         "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes", "companyId",
-        "templateId", "brandingId"];
+        "templateId", "brandingId",
+        "paymentMethodType", "nonCashPaymentDescription", "agreedTradeValue", "rentCreditAmount",
+        "writtenApprovalAttached", "disputedAmount", "approvedAmount", "withheldAmount",
+        "setoffAmount", "setoffReason"];
       const sanitized: Record<string, any> = {};
       for (const key of allowedFields) { if (req.body[key] !== undefined) sanitized[key] = req.body[key]; }
 
@@ -13334,6 +13422,75 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to save workflow settings: " + e.message }); }
+  });
+
+  // ── Invoice Term Settings ─────────────────────────────────────────────────
+  app.get("/api/invoice-term-settings", requireAuth, requireRole("admin", "manager", "tenant_owner", "tenant_admin", "tenant_finance_admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = user?.companyId;
+      if (!cid) return res.status(400).json({ message: "No company context" });
+      const result = await db.execute(sql`SELECT * FROM invoice_term_settings WHERE company_id = ${cid} LIMIT 1`);
+      if (!result.rows[0]) {
+        return res.json({
+          companyId: cid, allowTradeBarter: false, allowRentCredit: false,
+          requireWrittenApprovalNonCash: true, requireDocumentationBeforePayment: true,
+          allowSetoffDefectiveWork: true, showCaliforniaLateFee: true, customPaymentTermsText: null,
+        });
+      }
+      const row = result.rows[0] as any;
+      res.json({
+        companyId: row.company_id, allowTradeBarter: row.allow_trade_barter,
+        allowRentCredit: row.allow_rent_credit,
+        requireWrittenApprovalNonCash: row.require_written_approval_non_cash,
+        requireDocumentationBeforePayment: row.require_documentation_before_payment,
+        allowSetoffDefectiveWork: row.allow_setoff_defective_work,
+        showCaliforniaLateFee: row.show_california_late_fee,
+        customPaymentTermsText: row.custom_payment_terms_text || null,
+      });
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch invoice term settings" }); }
+  });
+
+  app.put("/api/invoice-term-settings", requireAuth, requireRole("admin", "manager", "tenant_owner", "tenant_admin", "tenant_finance_admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = user?.companyId;
+      if (!cid) return res.status(400).json({ message: "No company context" });
+      const { allowTradeBarter, allowRentCredit, requireWrittenApprovalNonCash,
+        requireDocumentationBeforePayment, allowSetoffDefectiveWork, showCaliforniaLateFee,
+        customPaymentTermsText } = req.body;
+      const result = await db.execute(sql`
+        INSERT INTO invoice_term_settings
+          (company_id, allow_trade_barter, allow_rent_credit, require_written_approval_non_cash,
+           require_documentation_before_payment, allow_setoff_defective_work, show_california_late_fee,
+           custom_payment_terms_text, updated_at)
+        VALUES
+          (${cid}, ${allowTradeBarter ?? false}, ${allowRentCredit ?? false},
+           ${requireWrittenApprovalNonCash ?? true}, ${requireDocumentationBeforePayment ?? true},
+           ${allowSetoffDefectiveWork ?? true}, ${showCaliforniaLateFee ?? true},
+           ${customPaymentTermsText || null}, NOW())
+        ON CONFLICT (company_id) DO UPDATE SET
+          allow_trade_barter = EXCLUDED.allow_trade_barter,
+          allow_rent_credit = EXCLUDED.allow_rent_credit,
+          require_written_approval_non_cash = EXCLUDED.require_written_approval_non_cash,
+          require_documentation_before_payment = EXCLUDED.require_documentation_before_payment,
+          allow_setoff_defective_work = EXCLUDED.allow_setoff_defective_work,
+          show_california_late_fee = EXCLUDED.show_california_late_fee,
+          custom_payment_terms_text = EXCLUDED.custom_payment_terms_text,
+          updated_at = NOW()
+        RETURNING *
+      `);
+      const row = result.rows[0] as any;
+      res.json({
+        companyId: row.company_id, allowTradeBarter: row.allow_trade_barter,
+        allowRentCredit: row.allow_rent_credit,
+        requireWrittenApprovalNonCash: row.require_written_approval_non_cash,
+        requireDocumentationBeforePayment: row.require_documentation_before_payment,
+        allowSetoffDefectiveWork: row.allow_setoff_defective_work,
+        showCaliforniaLateFee: row.show_california_late_fee,
+        customPaymentTermsText: row.custom_payment_terms_text || null,
+      });
+    } catch (e: any) { res.status(500).json({ message: "Failed to save invoice term settings: " + e.message }); }
   });
 
   // ── Contractor Templates: set-default ────────────────────────────────────

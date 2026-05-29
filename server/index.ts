@@ -3484,6 +3484,39 @@ Thank you,
     await runExp("expenses.contractor_invoice_id", sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS contractor_invoice_id VARCHAR`);
   }
 
+  // ── Invoice payment method / client protection columns ────────────────────
+  {
+    const { db: dbInv } = await import("./db");
+    const { sql: sqlInv } = await import("drizzle-orm");
+    const runInv = async (label: string, stmt: any) => {
+      try { await dbInv.execute(stmt); console.log(`Auto-migration OK: ${label}`); }
+      catch (e: any) { console.log(`Auto-migration skipped (${label}):`, e.message); }
+    };
+    await runInv("contractor_invoices.payment_method_type",          sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS payment_method_type TEXT DEFAULT 'cash'`);
+    await runInv("contractor_invoices.non_cash_payment_description", sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS non_cash_payment_description TEXT`);
+    await runInv("contractor_invoices.agreed_trade_value",           sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS agreed_trade_value NUMERIC`);
+    await runInv("contractor_invoices.rent_credit_amount",           sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS rent_credit_amount NUMERIC`);
+    await runInv("contractor_invoices.written_approval_attached",    sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS written_approval_attached BOOLEAN DEFAULT FALSE`);
+    await runInv("contractor_invoices.disputed_amount",              sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS disputed_amount NUMERIC DEFAULT 0`);
+    await runInv("contractor_invoices.approved_amount",              sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_amount NUMERIC`);
+    await runInv("contractor_invoices.withheld_amount",              sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS withheld_amount NUMERIC DEFAULT 0`);
+    await runInv("contractor_invoices.setoff_amount",                sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS setoff_amount NUMERIC DEFAULT 0`);
+    await runInv("contractor_invoices.setoff_reason",                sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS setoff_reason TEXT`);
+    await runInv("invoice_term_settings table", sqlInv`CREATE TABLE IF NOT EXISTS invoice_term_settings (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL UNIQUE REFERENCES companies(id),
+      allow_trade_barter BOOLEAN DEFAULT FALSE,
+      allow_rent_credit BOOLEAN DEFAULT FALSE,
+      require_written_approval_non_cash BOOLEAN DEFAULT TRUE,
+      require_documentation_before_payment BOOLEAN DEFAULT TRUE,
+      allow_setoff_defective_work BOOLEAN DEFAULT TRUE,
+      show_california_late_fee BOOLEAN DEFAULT TRUE,
+      custom_payment_terms_text TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();

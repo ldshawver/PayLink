@@ -110,6 +110,51 @@ interface LineItem {
   taxable: boolean; optional: boolean; selected: boolean; sortOrder: number; aiGenerated: boolean;
 }
 
+// Helper: build the invoice terms list based on company settings
+function buildInvoiceTermsList(ts: Record<string, any> = {}): { title: string; text: string }[] {
+  const pmList = ["ACH/bank transfer", "credit card", "PayPal", "Venmo", "Cash App", "Apple Pay"];
+  if (ts.allowTradeBarter) pmList.push("approved trade/barter");
+  if (ts.allowRentCredit) pmList.push("approved rent credits");
+  const terms: { title: string; text: string }[] = [
+    { title: "Payment Due Date", text: ts.customPaymentTermsText || "Payment is due Net 30 from the invoice issue date unless otherwise agreed in writing." },
+    { title: "Accepted Payment Methods", text: pmList.join(", ") + "." },
+  ];
+  if (ts.allowTradeBarter || ts.allowRentCredit) {
+    terms.push({ title: "Trade, Barter & Rent Credit Payments", text: "Payment may be accepted as goods, services, labor, barter, rent credit, housing accommodation, or other mutually agreed consideration only if approved in writing by both parties. The agreed value must be documented. Unless agreed in writing, invoices remain due in cash. Partial trade/rent credit does not waive collection of any remaining balance." });
+  }
+  terms.push(
+    { title: "Approval Required for Additional Work", text: "No work outside the approved scope is billable unless authorized in writing before the work is performed." },
+    { title: "Right to Inspect and Reject Work", text: "The business/client may inspect all work. Payment does not equal acceptance of defective, incomplete, unauthorized, non-compliant, or substandard work." },
+    { title: "Payment Contingent Upon Satisfactory Completion", text: "Invoices are payable only for satisfactorily completed and approved work. The business may withhold disputed amounts until issues are resolved." },
+  );
+  if (ts.requireDocumentationBeforePayment !== false) {
+    terms.push({ title: "Documentation Requirement", text: "Contractor must provide records of hours, materials, receipts, work performed, and supporting documentation upon request before payment is due." });
+  }
+  terms.push(
+    { title: "No Guaranteed Hours", text: "Contractor is not guaranteed minimum hours, future work, continued engagement, or project duration." },
+    { title: "Independent Contractor Status", text: "Contractor is independent and responsible for taxes, licenses, insurance, tools, business expenses, and compliance obligations. Nothing creates an employee relationship." },
+    { title: "Correction of Defective Work", text: "Contractor must correct defective workmanship at no additional cost within a reasonable time after notice." },
+  );
+  if (ts.allowSetoffDefectiveWork !== false) {
+    terms.push({ title: "Setoff Rights", text: "The business may deduct costs caused by contractor defects, unfinished work, damage, replacement materials, repair costs, or third-party correction work from amounts otherwise owed." });
+  }
+  terms.push(
+    { title: "Unauthorized Purchases", text: "Contractor may not buy materials, tools, services, or supplies on behalf of the business without prior written approval. Unauthorized purchases are contractor's responsibility." },
+    { title: "Work Progress / Termination", text: "Failure to make reasonable progress, follow instructions, or complete work properly may result in suspension or termination without further obligation except for approved completed work." },
+    { title: "Indemnification", text: "Contractor is responsible for damages caused by negligence, willful misconduct, defective workmanship, code violations, or unauthorized work." },
+    { title: "Photographic / Video Documentation", text: "The business may document the project with photos, video, inspections, third-party evaluations, and work logs to verify completion, quality, and payment disputes." },
+    { title: "No Waiver by Payment", text: "Payment of any invoice does not waive defects, claims, damages, dispute rights, setoff rights, or the right to later challenge incomplete or defective work." },
+  );
+  if (ts.showCaliforniaLateFee !== false) {
+    terms.push(
+      { title: "Late Fees", text: "Late fee: $25 for invoices up to $250. $50 for invoices of $250.01 or greater." },
+      { title: "Interest on Overdue Balances", text: "Overdue balances may accrue 2% monthly interest, but only up to the maximum amount allowed under California law." },
+      { title: "Governing Law", text: "California law applies." },
+    );
+  }
+  return terms;
+}
+
 interface Invoice {
   id: string; invoiceNumber?: string; title?: string; invoiceType?: string;
   status: string; companyId?: string; contractorId: string;
@@ -120,6 +165,11 @@ interface Invoice {
   lastReminderSentAt?: string;
   voidedAt?: string; voidReason?: string; duplicateOfInvoiceId?: string;
   rejectedAt?: string; rejectionReason?: string;
+  paymentMethodType?: string; nonCashPaymentDescription?: string;
+  agreedTradeValue?: string; rentCreditAmount?: string;
+  writtenApprovalAttached?: boolean; disputedAmount?: string;
+  approvedAmount?: string; withheldAmount?: string;
+  setoffAmount?: string; setoffReason?: string;
 }
 
 interface Payment {
@@ -3629,6 +3679,15 @@ function InvoiceDetailPanel({
     },
   });
 
+  const { data: termSettings = {} } = useQuery<any>({
+    queryKey: ["/api/invoice-term-settings"],
+    queryFn: async () => {
+      const r = await fetch("/api/invoice-term-settings", { credentials: "include" });
+      return r.ok ? r.json() : {};
+    },
+    enabled: isAdmin,
+  });
+
   const proposalBlocked = invoice.proposalId && proposalStatus && proposalStatus !== "approved";
   const balance = parseFloat(invoice.balanceDue ?? invoice.amount ?? "0");
   const canEditAttachments = !isAdmin && ["draft", "submitted"].includes(invoice.status) || isAdmin;
@@ -3704,6 +3763,7 @@ function InvoiceDetailPanel({
               { value: "summary", label: "Summary" },
               { value: "payments", label: "Payments" },
               { value: "attachments", label: `Attachments${invoiceAttachments.length > 0 ? ` (${invoiceAttachments.length})` : ""}` },
+              { value: "terms", label: "Terms" },
               { value: "linked", label: "Linked Proposal" },
               ...(isAdmin ? [{ value: "reminders", label: "Reminders" }, { value: "audit", label: "Audit Trail" }] : []),
             ].map(t => (
@@ -3761,6 +3821,65 @@ function InvoiceDetailPanel({
                   <p className="text-sm">{invoice.paymentTerms}</p>
                 </div>
               )}
+            </TabsContent>
+
+            <TabsContent value="terms" className="m-0 p-6 space-y-4">
+              {(invoice.paymentMethodType && invoice.paymentMethodType !== "cash") && (
+                <div className="rounded-lg border p-4 space-y-2">
+                  <p className="text-sm font-medium">Payment Method for This Invoice</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200" data-testid="badge-payment-method">
+                      {({"cash":"Cash","ach":"ACH/Bank Transfer","credit_card":"Credit Card","paypal":"PayPal","venmo":"Venmo","cash_app":"Cash App","apple_pay":"Apple Pay","trade":"Trade (Goods/Services)","barter":"Barter","rent_credit":"Rent Credit","mixed":"Mixed"} as Record<string,string>)[invoice.paymentMethodType] || invoice.paymentMethodType}
+                    </span>
+                    {invoice.writtenApprovalAttached && (
+                      <span className="text-xs text-green-600 flex items-center gap-1" data-testid="badge-written-approval"><FileCheck className="h-3 w-3" /> Written approval attached</span>
+                    )}
+                  </div>
+                  {invoice.nonCashPaymentDescription && (
+                    <div><p className="text-xs text-muted-foreground">Description</p><p className="text-sm">{invoice.nonCashPaymentDescription}</p></div>
+                  )}
+                  {invoice.agreedTradeValue && parseFloat(invoice.agreedTradeValue) > 0 && (
+                    <div><p className="text-xs text-muted-foreground">Agreed Trade Value</p><p className="text-sm font-medium">{fmt(invoice.agreedTradeValue)}</p></div>
+                  )}
+                  {invoice.rentCreditAmount && parseFloat(invoice.rentCreditAmount) > 0 && (
+                    <div><p className="text-xs text-muted-foreground">Rent Credit Amount</p><p className="text-sm font-medium">{fmt(invoice.rentCreditAmount)}</p></div>
+                  )}
+                </div>
+              )}
+
+              {(parseFloat(invoice.disputedAmount || "0") > 0 || parseFloat(invoice.withheldAmount || "0") > 0 || parseFloat(invoice.setoffAmount || "0") > 0) && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-4 space-y-2">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Dispute / Setoff Details</p>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {parseFloat(invoice.disputedAmount || "0") > 0 && (
+                      <div><p className="text-xs text-muted-foreground">Disputed Amount</p><p className="font-medium text-amber-700">{fmt(invoice.disputedAmount)}</p></div>
+                    )}
+                    {parseFloat(invoice.withheldAmount || "0") > 0 && (
+                      <div><p className="text-xs text-muted-foreground">Withheld Amount</p><p className="font-medium text-orange-700">{fmt(invoice.withheldAmount)}</p></div>
+                    )}
+                    {parseFloat(invoice.setoffAmount || "0") > 0 && (
+                      <div><p className="text-xs text-muted-foreground">Setoff Amount</p><p className="font-medium text-red-700">{fmt(invoice.setoffAmount)}</p></div>
+                    )}
+                    {invoice.approvedAmount && parseFloat(invoice.approvedAmount) > 0 && (
+                      <div><p className="text-xs text-muted-foreground">Approved Amount</p><p className="font-medium text-green-700">{fmt(invoice.approvedAmount)}</p></div>
+                    )}
+                  </div>
+                  {invoice.setoffReason && (
+                    <div><p className="text-xs text-muted-foreground mt-1">Setoff Reason</p><p className="text-sm">{invoice.setoffReason}</p></div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <p className="text-sm font-medium mb-2">Invoice Terms & Conditions</p>
+                <div className="rounded-lg border bg-muted/20 p-4 space-y-2.5 text-xs max-h-80 overflow-y-auto" data-testid="div-invoice-terms-list">
+                  {buildInvoiceTermsList(termSettings).map((term, i) => (
+                    <p key={i}><span className="font-semibold text-foreground">{i + 1}. {term.title}:</span> {term.text}</p>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground italic" data-testid="text-terms-disclaimer">These invoice terms are billing terms only and do not replace a written contract or legal advice.</p>
             </TabsContent>
 
             <TabsContent value="payments" className="m-0 p-6 space-y-4">
@@ -6065,6 +6184,7 @@ function SettingsSection() {
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "permissions", label: "Permissions", icon: Shield },
     { id: "retention", label: "Retention", icon: Archive },
+    { id: "invoice-terms", label: "Invoice Terms", icon: FileCheck },
   ];
 
   const { data: retentionPolicy, refetch: refetchRetention } = useQuery<any>({
@@ -6104,7 +6224,47 @@ function SettingsSection() {
     onError: (e: any) => toast({ title: e?.message || "Cleanup failed", variant: "destructive" }),
   });
 
-  const hasUnsaved = wfDirty || matrixDirty || notifDirty;
+  const [termsForm, setTermsForm] = useState<Record<string, any>>({
+    allowTradeBarter: false, allowRentCredit: false,
+    requireWrittenApprovalNonCash: true, requireDocumentationBeforePayment: true,
+    allowSetoffDefectiveWork: true, showCaliforniaLateFee: true, customPaymentTermsText: "",
+  });
+  const [termsDirty, setTermsDirty] = useState(false);
+
+  const { data: termSettingsData } = useQuery<any>({
+    queryKey: ["/api/invoice-term-settings"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const r = await fetch("/api/invoice-term-settings", { credentials: "include" });
+      return r.ok ? r.json() : {};
+    },
+  });
+
+  useEffect(() => {
+    if (termSettingsData && !termsDirty) {
+      setTermsForm({
+        allowTradeBarter: termSettingsData.allowTradeBarter ?? false,
+        allowRentCredit: termSettingsData.allowRentCredit ?? false,
+        requireWrittenApprovalNonCash: termSettingsData.requireWrittenApprovalNonCash ?? true,
+        requireDocumentationBeforePayment: termSettingsData.requireDocumentationBeforePayment ?? true,
+        allowSetoffDefectiveWork: termSettingsData.allowSetoffDefectiveWork ?? true,
+        showCaliforniaLateFee: termSettingsData.showCaliforniaLateFee ?? true,
+        customPaymentTermsText: termSettingsData.customPaymentTermsText ?? "",
+      });
+    }
+  }, [termSettingsData, termsDirty]);
+
+  const saveTermsMutation = useMutation({
+    mutationFn: () => apiRequest("PUT", "/api/invoice-term-settings", termsForm),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoice-term-settings"] });
+      setTermsDirty(false);
+      toast({ title: "Invoice terms saved" });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to save invoice terms", variant: "destructive" }),
+  });
+
+  const hasUnsaved = wfDirty || matrixDirty || notifDirty || termsDirty;
 
   return (
     <div className="space-y-4">
@@ -6527,6 +6687,90 @@ function SettingsSection() {
             <Button variant="outline" onClick={() => runRetentionMutation.mutate()} disabled={runRetentionMutation.isPending} data-testid="btn-run-retention-cleanup">
               {runRetentionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Archive className="h-4 w-4 mr-1" />}
               Run Cleanup Now
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── INVOICE TERMS TAB ── */}
+      {settingsTab === "invoice-terms" && (
+        <div className="space-y-5">
+          <div className="rounded-lg border border-blue-100 bg-blue-50 dark:bg-blue-950/20 p-3 text-xs text-blue-800 dark:text-blue-300" data-testid="terms-disclaimer-banner">
+            <strong>Note:</strong> These invoice terms are billing terms only and do not replace a written contract or legal advice.
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Payment Method Options</p>
+            {([
+              { key: "allowTradeBarter", label: "Allow trade/barter payment", desc: "Accept goods, services, or labor as payment consideration" },
+              { key: "allowRentCredit", label: "Allow rent credit payment", desc: "Accept rent credit or housing accommodation as payment" },
+              { key: "requireWrittenApprovalNonCash", label: "Require written approval for non-cash payment", desc: "Non-cash payments must be documented and approved in writing" },
+            ] as { key: string; label: string; desc: string }[]).map(({ key, label, desc }) => (
+              <div key={key} className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <p className="text-sm font-medium">{label}</p>
+                  <p className="text-xs text-muted-foreground">{desc}</p>
+                </div>
+                <button
+                  onClick={() => { setTermsForm(f => ({ ...f, [key]: !f[key] })); setTermsDirty(true); }}
+                  className={cn("relative inline-flex h-5 w-9 rounded-full transition-colors", termsForm[key] ? "bg-primary" : "bg-muted-foreground/30")}
+                  data-testid={`toggle-terms-${key}`}
+                >
+                  <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5", termsForm[key] ? "translate-x-4" : "translate-x-0.5")} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Protection Clauses</p>
+            {([
+              { key: "requireDocumentationBeforePayment", label: "Require documentation before payment", desc: "Contractor must provide work records and receipts before payment is due" },
+              { key: "allowSetoffDefectiveWork", label: "Allow setoff for defective work", desc: "Deduct costs of defects, repairs, or replacement work from amounts owed" },
+              { key: "showCaliforniaLateFee", label: "Show California late fee language", desc: "$25 fee (≤$250) / $50 fee (>$250) — California law governs" },
+            ] as { key: string; label: string; desc: string }[]).map(({ key, label, desc }) => (
+              <div key={key} className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <p className="text-sm font-medium">{label}</p>
+                  <p className="text-xs text-muted-foreground">{desc}</p>
+                </div>
+                <button
+                  onClick={() => { setTermsForm(f => ({ ...f, [key]: !f[key] })); setTermsDirty(true); }}
+                  className={cn("relative inline-flex h-5 w-9 rounded-full transition-colors", termsForm[key] ? "bg-primary" : "bg-muted-foreground/30")}
+                  data-testid={`toggle-terms-${key}`}
+                >
+                  <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5", termsForm[key] ? "translate-x-4" : "translate-x-0.5")} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <Label className="text-sm font-medium">Custom Payment Terms Text</Label>
+            <p className="text-xs text-muted-foreground mb-2">Override the default "Net 30" clause on generated invoices</p>
+            <Textarea
+              value={termsForm.customPaymentTermsText ?? ""}
+              onChange={e => { setTermsForm(f => ({ ...f, customPaymentTermsText: e.target.value })); setTermsDirty(true); }}
+              placeholder="e.g. Payment due within 15 days of invoice date."
+              className="text-sm"
+              rows={3}
+              data-testid="textarea-custom-payment-terms"
+            />
+          </div>
+
+          <div>
+            <p className="text-sm font-medium mb-2">Terms Preview</p>
+            <div className="rounded-lg border bg-muted/20 p-4 space-y-2 text-xs text-muted-foreground max-h-64 overflow-y-auto" data-testid="div-terms-preview">
+              {buildInvoiceTermsList(termsForm).map((term, i) => (
+                <p key={i}><span className="font-medium text-foreground">{i + 1}. {term.title}:</span> {term.text}</p>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-2 border-t">
+            <Button onClick={() => saveTermsMutation.mutate()} disabled={saveTermsMutation.isPending || !termsDirty} data-testid="btn-save-invoice-terms">
+              {saveTermsMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Save Invoice Terms
             </Button>
           </div>
         </div>

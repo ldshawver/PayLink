@@ -1905,6 +1905,17 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   voidedByUserId: varchar("voided_by_user_id"),
   voidReason: text("void_reason"),
   duplicateOfInvoiceId: varchar("duplicate_of_invoice_id"),
+  // ── Payment method / client protection fields (added via migration) ──────
+  paymentMethodType: text("payment_method_type").default("cash"),
+  nonCashPaymentDescription: text("non_cash_payment_description"),
+  agreedTradeValue: numeric("agreed_trade_value"),
+  rentCreditAmount: numeric("rent_credit_amount"),
+  writtenApprovalAttached: boolean("written_approval_attached").default(false),
+  disputedAmount: numeric("disputed_amount").default("0"),
+  approvedAmount: numeric("approved_amount"),
+  withheldAmount: numeric("withheld_amount").default("0"),
+  setoffAmount: numeric("setoff_amount").default("0"),
+  setoffReason: text("setoff_reason"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1927,6 +1938,25 @@ export const contractorInvoiceAttachments = pgTable("contractor_invoice_attachme
 export const insertContractorInvoiceAttachmentSchema = createInsertSchema(contractorInvoiceAttachments).omit({ id: true, uploadedAt: true });
 export type ContractorInvoiceAttachment = typeof contractorInvoiceAttachments.$inferSelect;
 export type InsertContractorInvoiceAttachment = z.infer<typeof insertContractorInvoiceAttachmentSchema>;
+
+// ── Invoice Term Settings (per company) ──────────────────────────────────
+export const invoiceTermSettings = pgTable("invoice_term_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().unique().references(() => companies.id),
+  allowTradeBarter: boolean("allow_trade_barter").default(false),
+  allowRentCredit: boolean("allow_rent_credit").default(false),
+  requireWrittenApprovalNonCash: boolean("require_written_approval_non_cash").default(true),
+  requireDocumentationBeforePayment: boolean("require_documentation_before_payment").default(true),
+  allowSetoffDefectiveWork: boolean("allow_setoff_defective_work").default(true),
+  showCaliforniaLateFee: boolean("show_california_late_fee").default(true),
+  customPaymentTermsText: text("custom_payment_terms_text"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertInvoiceTermSettingsSchema = createInsertSchema(invoiceTermSettings).omit({ id: true, createdAt: true, updatedAt: true });
+export type InvoiceTermSettings = typeof invoiceTermSettings.$inferSelect;
+export type InsertInvoiceTermSettings = z.infer<typeof insertInvoiceTermSettingsSchema>;
 
 // ── Contractor Proposals ──────────────────────────────────────────────────
 export const contractorProposals = pgTable("contractor_proposals", {
