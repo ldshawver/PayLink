@@ -18,6 +18,7 @@ import { useTrial } from "@/hooks/use-trial";
 import { TrialBanner } from "@/components/trial-banner";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackButton } from "@/components/FeedbackButton";
+import { ApiHealthBanner } from "@/components/api-health-banner";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
@@ -313,6 +314,7 @@ function AuthenticatedLayout() {
         <div className="flex h-screen w-full overflow-hidden">
           <AppSidebar />
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+            <ApiHealthBanner />
             <TrialBanner />
             <MobileHeader />
             <main className="flex-1 overflow-y-auto overflow-x-hidden">
@@ -474,6 +476,7 @@ function PlatformLayout() {
       <div className="flex h-screen w-full overflow-hidden">
         <PlatformSidebar />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <ApiHealthBanner />
           <PlatformHeader />
           <main className="flex-1 overflow-y-auto overflow-x-hidden">
             <AppErrorBoundary area="platform_console">
