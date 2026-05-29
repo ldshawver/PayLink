@@ -1118,7 +1118,7 @@ function ProposalDetailPanel({
   });
 
   const [threadReplyText, setThreadReplyText] = useState("");
-  const [threadReplyNotifyClient, setThreadReplyNotifyClient] = useState(false);
+  const [threadReplyNotifyClient, setThreadReplyNotifyClient] = useState(true);
   const threadBottomRef = useRef<HTMLDivElement>(null);
 
   function scrollThreadToBottom() {
@@ -1139,7 +1139,7 @@ function ProposalDetailPanel({
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposal.id, "events"] });
       setThreadReplyText("");
-      setThreadReplyNotifyClient(false);
+      setThreadReplyNotifyClient(true);
       scrollThreadToBottom();
       if (data?.emailStatus === "sent") {
         toast({ title: "Reply sent", description: "Your reply was recorded and the client was notified by email." });
@@ -2466,7 +2466,7 @@ function ProposalBuilder({
 
   const [replyingToEventId, setReplyingToEventId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
-  const [replyNotifyClient, setReplyNotifyClient] = useState(false);
+  const [replyNotifyClient, setReplyNotifyClient] = useState(true);
 
   const replyMutation = useMutation({
     mutationFn: ({ message, notifyClient }: { message: string; notifyClient: boolean }) =>
@@ -2475,7 +2475,7 @@ function ProposalBuilder({
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposalId, "events"] });
       setReplyingToEventId(null);
       setReplyText("");
-      setReplyNotifyClient(false);
+      setReplyNotifyClient(true);
       if (data?.emailStatus === "sent") {
         toast({ title: "Reply sent", description: "Your reply was recorded and the client was notified by email." });
       } else if (data?.emailStatus === "failed") {
