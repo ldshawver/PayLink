@@ -70,7 +70,7 @@ export default function AppDoctorPage() {
         const trimmed = bodyText.trim();
         const isHtml = trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html") || trimmed.startsWith("<!--");
         throw new Error(isHtml
-          ? "The API returned an HTML page instead of JSON. Check authentication or nginx/API routing for /api/app-doctor/reports."
+          ? "non_json_response"
           : (bodyText || `Unexpected ${contentType || "unknown"} response`));
       }
       const body = bodyText ? JSON.parse(bodyText) : null;
@@ -160,11 +160,21 @@ export default function AppDoctorPage() {
             <CardDescription>{reports.length} recent report{reports.length === 1 ? "" : "s"}</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            {reportsQuery.isError && (
-              <div className="m-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-                Failed to load App Doctor reports: {(reportsQuery.error as Error)?.message || "Unknown error"}
-              </div>
-            )}
+            {reportsQuery.isError && (() => {
+              const msg = (reportsQuery.error as Error)?.message || "";
+              const isStartup = msg === "non_json_response";
+              return (
+                <div className="m-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive space-y-2">
+                  <p>{isStartup ? "Server is starting up — please wait a moment and try again." : `Failed to load reports: ${msg}`}</p>
+                  <button
+                    className="text-xs underline underline-offset-2 opacity-70 hover:opacity-100"
+                    onClick={() => reportsQuery.refetch()}
+                  >
+                    Retry
+                  </button>
+                </div>
+              );
+            })()}
             <Table>
               <TableHeader>
                 <TableRow>
