@@ -1004,6 +1004,10 @@ export async function registerRoutes(
   // ── Health / readiness endpoints (required by deploy health check) ───────────
   app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
   app.get("/ready",  (_req, res) => res.status(200).json({ status: "ready" }));
+  app.get("/api/health", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+  });
 
   // ── Payroll lifecycle schema migration (idempotent) ─────────────────────────
   try {

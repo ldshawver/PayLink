@@ -59,6 +59,18 @@ export default function AppDoctorPage() {
     enabled: isPlatform,
   });
 
+  const apiHealthQuery = useQuery<{ status: string; timestamp: string }>({
+    queryKey: ["/api/health"],
+    queryFn: async () => {
+      const res = await fetch("/api/health", { credentials: "include" });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) throw new Error("non_json");
+      return res.json();
+    },
+    retry: 1,
+    staleTime: 30_000,
+  });
+
   const reportsQuery = useQuery<AppDoctorReport[]>({
     queryKey: ["/api/app-doctor/reports", selectedCompanyId],
     queryFn: async () => {
@@ -146,10 +158,22 @@ export default function AppDoctorPage() {
         </Button>
       </div>
 
+      {apiHealthQuery.isError && (
+        <Alert variant="destructive">
+          <ShieldAlert className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            API routing self-check failed — /api/health did not return JSON. The API layer may be misconfigured or still starting up.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Alert>
         <ShieldAlert className="h-4 w-4" />
-        <AlertDescription className="text-sm">
-          App Doctor proposes fixes and PR-ready notes. Payroll submission, ACH release, tax filing, tenant access, and deploy decisions still require human approval.
+        <AlertDescription className="text-sm flex items-center justify-between gap-2 flex-wrap">
+          <span>App Doctor proposes fixes and PR-ready notes. Payroll submission, ACH release, tax filing, tenant access, and deploy decisions still require human approval.</span>
+          <span data-testid="status-api-health" className={`text-xs font-medium px-2 py-0.5 rounded-full border ${apiHealthQuery.isLoading ? "border-muted-foreground/30 text-muted-foreground" : apiHealthQuery.isError ? "border-destructive/60 text-destructive bg-destructive/10" : "border-green-500/60 text-green-600 bg-green-50 dark:bg-green-950/30"}`}>
+            {apiHealthQuery.isLoading ? "Checking API…" : apiHealthQuery.isError ? "API routing: error" : "API routing: ok"}
+          </span>
         </AlertDescription>
       </Alert>
 
