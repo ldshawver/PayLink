@@ -10607,11 +10607,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isManager = ["admin", "owner", "manager", "supervisor"].includes(user?.role || "") ||
         (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
-      if (!isOwner && isOwner === false && !["submitted", "approved", "rejected"].includes(proposal.status)) {
-        // Only manager can act on proposals they didn't create (unless it's a status-only override)
+      // Guard: admin/manager cannot edit locked/superseded versions
+      if (isManager && !isOwner && ["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal.status || "")) {
+        return res.status(400).json({ message: "Cannot edit a superseded or locked proposal. Create a new revision from the active version." });
       }
-      if (isOwner && !["draft", "revision_requested"].includes(proposal.status)) {
-        return res.status(400).json({ message: "Cannot edit a submitted proposal" });
+      // Guard: contractor can only edit their own draft/revision_requested/countered proposals
+      if (isOwner && !isManager && !["draft", "revision_requested", "countered"].includes(proposal.status || "")) {
+        return res.status(400).json({ message: "Cannot edit a submitted proposal. Wait for admin review or respond to the counteroffer." });
       }
       const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency,
               scopeOfWork, assumptions, exclusions, allowances, materials, warrantyNotes, scheduleNotes,
@@ -11112,6 +11114,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/request-revision
+  // When called on an APPROVED proposal, automatically creates a new revision (status=revision_requested)
+  // and marks the approved version as superseded — ensuring there is always an active editable version.
+  // For other statuses (submitted/sent/viewed/countered), updates the same record's status.
   app.post("/api/contractor-proposals/:id/request-revision", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
@@ -11119,41 +11124,83 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
-      // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
       if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "sent", "viewed", "countered"].includes(proposal.status || "")) return res.status(400).json({ message: "Cannot request revision from current status" });
+      const allowedStatuses = ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review"];
+      if (!allowedStatuses.includes(proposal.status || "")) return res.status(400).json({ message: `Cannot request revision from status '${proposal.status}'` });
       const { revisionNotes } = req.body;
       const oldStatus = proposal.status;
+
+      // ── Special case: approved → create new revision to avoid losing the approved record ──────
+      if (oldStatus === "approved") {
+        await autoSnapshot(req.params.id, proposal, `Admin requested revision after approval: ${revisionNotes || "no notes"}`, userId);
+        const newVersion = (proposal.version || 1) + 1;
+        const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_proposals WHERE contractor_id = ${proposal.contractor_id}`);
+        const count = parseInt((countResult.rows[0] as any)?.c ?? "0") + 1;
+        const proposalNumber = `${proposal.proposal_number || "PROP"}-r${newVersion}`;
+        const newProposalRes = await db.execute(sql`
+          INSERT INTO contractor_proposals
+            (company_id, contractor_id, proposal_number, title, description, scope_of_work, assumptions, exclusions,
+             allowances, materials, warranty_notes, schedule_notes, payment_terms, notes, terms,
+             issue_date, expiration_date, subtotal, tax_amount, discount_amount, amount, currency,
+             job_id, cost_center_id, status, version, revision_of_id, parent_proposal_id, is_change_order,
+             rejection_reason, reviewed_by_user_id, reviewed_at, editable_by, response_required_by)
+          VALUES
+            (${proposal.company_id}, ${proposal.contractor_id}, ${proposalNumber}, ${proposal.title}, ${proposal.description},
+             ${proposal.scope_of_work}, ${proposal.assumptions}, ${proposal.exclusions}, ${proposal.allowances},
+             ${proposal.materials}, ${proposal.warranty_notes}, ${proposal.schedule_notes}, ${proposal.payment_terms},
+             ${proposal.notes}, ${proposal.terms}, ${proposal.issue_date}, ${proposal.expiration_date},
+             ${proposal.subtotal}, ${proposal.tax_amount}, ${proposal.discount_amount}, ${proposal.amount},
+             ${proposal.currency}, ${proposal.job_id}, ${proposal.cost_center_id},
+             'revision_requested', ${newVersion}, ${req.params.id}, ${proposal.parent_proposal_id || req.params.id},
+             ${proposal.is_change_order},
+             ${revisionNotes || null}, ${userId}, NOW(), 'contractor', 'contractor')
+          RETURNING *
+        `);
+        const newProposal = firstRow<ProposalRow & { id: string }>(newProposalRes);
+        if (!newProposal) throw new Error("Failed to create revision");
+        // Copy line items
+        await db.execute(sql`
+          INSERT INTO proposal_line_items
+            (proposal_id, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total)
+          SELECT ${newProposal.id}, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total
+          FROM proposal_line_items WHERE proposal_id = ${req.params.id}
+        `);
+        // Mark old as superseded and link to new revision
+        await db.execute(sql`UPDATE contractor_proposals SET status = 'superseded', superseded_by_id = ${newProposal.id}, updated_at = NOW() WHERE id = ${req.params.id}`);
+        await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'superseded', ${oldStatus}, 'superseded', ${userId}, ${user?.username || null}, ${'Auto-superseded: admin requested revision after approval'}, ${req.ip || null})`);
+        await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${newProposal.id}, 'revision_requested', null, 'revision_requested', ${userId}, ${user?.username || null}, ${revisionNotes || null}, ${req.ip || null})`);
+        createContractorNotification({ workerId: proposal.contractor_id || undefined, companyId: proposal.company_id, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "The company has requested a revision to the approved proposal. Please revise and resubmit.", entityType: "proposal", entityId: newProposal.id, actionUrl: `/app/contractor-hub?section=proposals&id=${newProposal.id}` }).catch(() => {});
+        // Email contractor
+        try {
+          const { sendGenericNotificationEmail } = await import("./notifications.js");
+          const baseUrl = getAppBaseUrl(req);
+          const cwRes = await db.execute(sql`SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+          const cw = cwRes.rows[0] as any;
+          if (cw?.email) {
+            sendGenericNotificationEmail({ recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor", email: cw.email, title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes ? `A revision has been requested after approval. Notes: ${revisionNotes}` : "The approved proposal has been revised. Please log in to PayLink to update and resubmit.", actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${newProposal.id}` }).catch(() => {});
+          }
+        } catch (emailErr) { console.warn("[Proposal revision-after-approval] Email failed:", emailErr); }
+        return res.status(201).json(newProposal);
+      }
+
+      // ── Standard path: in-place status change ──────────────────────────────
       await autoSnapshot(req.params.id, proposal, `Revision requested: ${revisionNotes || "no notes"}`, userId);
       await db.execute(sql`
-        UPDATE contractor_proposals SET status = 'revision_requested', rejection_reason = ${revisionNotes || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
+        UPDATE contractor_proposals SET status = 'revision_requested', rejection_reason = ${revisionNotes || null},
+          reviewed_by_user_id = ${userId}, reviewed_at = NOW(), editable_by = 'contractor', response_required_by = 'contractor', updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'revision_requested', ${oldStatus}, 'revision_requested', ${userId}, ${user?.username || null}, ${revisionNotes || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: proposal.contractor_id || undefined, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
-      // Email contractor
+      createContractorNotification({ workerId: proposal.contractor_id || undefined, companyId: proposal.company_id, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
         const baseUrl = getAppBaseUrl(req);
-        const cwRes = await db.execute(sql`
-          SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email,
-                 w.first_name, w.last_name
-          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-          WHERE w.id = ${proposal.contractor_id} LIMIT 1
-        `);
-        const cw = cwRes.rows[0] as { email: string | null; first_name: string | null; last_name: string | null } | undefined;
+        const cwRes = await db.execute(sql`SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cw = cwRes.rows[0] as any;
         if (cw?.email) {
-          sendGenericNotificationEmail({
-            recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
-            email: cw.email,
-            title: `Revision Requested: ${proposal.title || proposal.proposal_number}`,
-            body: revisionNotes
-              ? `Changes have been requested for your proposal. Notes: ${revisionNotes}`
-              : "Your proposal requires revisions before it can be approved. Please log in to PayLink to update and resubmit.",
-            actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`,
-          }).catch(() => {});
+          sendGenericNotificationEmail({ recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor", email: cw.email, title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes ? `Changes have been requested. Notes: ${revisionNotes}` : "Your proposal requires revisions. Please log in to PayLink to update and resubmit.", actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Proposal revision] Contractor email failed:", emailErr); }
       res.json(firstRow<ProposalRow>(updated));
@@ -11695,26 +11742,166 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isAdmin = isAdminRole(user?.role) && (!user?.companyId || user.companyId === p.company_id);
       const isOwner = user?.workerId && p.contractor_id === user.workerId;
       if (!isAdmin && !isOwner) return res.status(403).json({ message: "Forbidden" });
-      // Mark original as superseded
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'superseded', updated_at = NOW() WHERE id = ${req.params.id}`);
-      await logProposalEvent(req.params.id, "superseded", p.status, "superseded", req);
-      // Create new version
+      // Create new version first (so we have the new ID to link back)
       const newVersion = (p.version || 1) + 1;
       const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_proposals WHERE contractor_id = ${p.contractor_id}`);
       const count = parseInt((countResult.rows[0] as any).c) + 1;
-      const proposalNumber = `PROP-${String(count).padStart(4, "0")}-v${newVersion}`;
-      const newProposal = await db.execute(sql`
+      const proposalNumber = `${p.proposal_number || "PROP"}-v${newVersion}`;
+      const newProposalRes = await db.execute(sql`
         INSERT INTO contractor_proposals (company_id, contractor_id, proposal_number, title, description, scope_of_work, assumptions, exclusions, allowances, materials, warranty_notes, schedule_notes, payment_terms, notes, terms, issue_date, expiration_date, subtotal, tax_amount, discount_amount, amount, currency, job_id, cost_center_id, status, version, revision_of_id, parent_proposal_id, is_change_order)
         VALUES (${p.company_id}, ${p.contractor_id}, ${proposalNumber}, ${p.title}, ${p.description}, ${p.scope_of_work}, ${p.assumptions}, ${p.exclusions}, ${p.allowances}, ${p.materials}, ${p.warranty_notes}, ${p.schedule_notes}, ${p.payment_terms}, ${p.notes}, ${p.terms}, ${p.issue_date}, ${p.expiration_date}, ${p.subtotal}, ${p.tax_amount}, ${p.discount_amount}, ${p.amount}, ${p.currency}, ${p.job_id}, ${p.cost_center_id}, 'draft', ${newVersion}, ${req.params.id}, ${p.parent_proposal_id || req.params.id}, ${p.is_change_order})
         RETURNING *`);
-      const newId = (newProposal.rows[0] as any).id;
+      const newId = (newProposalRes.rows[0] as any).id;
+      // Now mark original as superseded and link to new version
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'superseded', superseded_by_id = ${newId}, updated_at = NOW() WHERE id = ${req.params.id}`);
+      await logProposalEvent(req.params.id, "superseded", p.status, "superseded", req);
       // Copy line items to new version
       await db.execute(sql`INSERT INTO proposal_line_items (proposal_id, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total) SELECT ${newId}, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
       await logProposalEvent(newId, "created", null, "draft", req);
       // Notify admin/company that a revised proposal was submitted
       createContractorNotification({ companyId: p.company_id, notificationType: "proposal_revised", title: `Revised Proposal Submitted: ${p.title || p.proposal_number || p.id}`, body: `Version ${newVersion} of this proposal has been submitted for review.`, entityType: "proposal", entityId: newId, actionUrl: `/app/contractor-hub?section=proposals&id=${newId}` }).catch(() => {});
-      res.status(201).json(newProposal.rows[0]);
+      res.status(201).json(newProposalRes.rows[0]);
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to create revision" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/accept-counteroffer — contractor accepts admin's counter
+  app.post("/api/contractor-proposals/:id/accept-counteroffer", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (user?.workerId !== proposal.contractor_id) return res.status(403).json({ message: "Only the contractor on this proposal may accept the counteroffer" });
+      if (proposal.status !== "countered") return res.status(400).json({ message: "Proposal must be in 'countered' status to accept the counteroffer" });
+      const oldStatus = proposal.status;
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'approved', approval_at = NOW(), approval_method = 'accepted_counteroffer', editable_by = null, response_required_by = null, updated_at = NOW() WHERE id = ${req.params.id}`);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'accept_counteroffer', ${oldStatus}, 'approved', ${userId}, ${user?.username || null}, 'Contractor accepted counteroffer', ${req.ip || null})`);
+      createContractorNotification({ companyId: proposal.company_id, notificationType: "proposal_approved", title: `Counteroffer Accepted: ${proposal.title || proposal.proposal_number}`, body: "The contractor has accepted the counteroffer. The proposal is now approved.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json(firstRow<ProposalRow>(updated));
+    } catch (e) { res.status(500).json({ message: "Failed to accept counteroffer" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/reject-counteroffer — contractor rejects admin's counter
+  app.post("/api/contractor-proposals/:id/reject-counteroffer", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (user?.workerId !== proposal.contractor_id) return res.status(403).json({ message: "Only the contractor may reject the counteroffer" });
+      if (proposal.status !== "countered") return res.status(400).json({ message: "Proposal must be in 'countered' status to reject the counteroffer" });
+      const { reason } = req.body;
+      const oldStatus = proposal.status;
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'rejected', rejection_reason = ${reason || null}, editable_by = null, response_required_by = null, updated_at = NOW() WHERE id = ${req.params.id}`);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'reject_counteroffer', ${oldStatus}, 'rejected', ${userId}, ${user?.username || null}, ${reason || 'Contractor rejected counteroffer'}, ${req.ip || null})`);
+      createContractorNotification({ companyId: proposal.company_id, notificationType: "proposal_rejected", title: `Counteroffer Rejected: ${proposal.title || proposal.proposal_number}`, body: reason || "The contractor has rejected the counteroffer.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json(firstRow<ProposalRow>(updated));
+    } catch (e) { res.status(500).json({ message: "Failed to reject counteroffer" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/counteroffer — admin sends a counteroffer to the contractor
+  app.post("/api/contractor-proposals/:id/counteroffer", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      const isPlatformUser = !user?.companyId;
+      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      const allowedForCounter = ["submitted", "sent", "viewed", "revision_requested", "under_review", "approved"];
+      if (!allowedForCounter.includes(proposal.status || "")) return res.status(400).json({ message: `Cannot send counteroffer from status '${proposal.status}'` });
+      const { counterTerms, counterNotes, counterAmount } = req.body;
+      const oldStatus = proposal.status;
+      await db.execute(sql`
+        UPDATE contractor_proposals SET
+          status = 'countered', counteroffer_terms = ${counterTerms || null},
+          counteroffer_notes = ${counterNotes || null}, counteroffer_sent_at = NOW(),
+          counteroffer_by_user_id = ${userId}, editable_by = 'contractor', response_required_by = 'contractor',
+          updated_at = NOW()
+          ${counterAmount ? sql`, amount = ${counterAmount}` : sql``}
+        WHERE id = ${req.params.id}
+      `);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'countered', ${oldStatus}, 'countered', ${userId}, ${user?.username || null}, ${counterNotes || null}, ${req.ip || null})`);
+      createContractorNotification({ workerId: proposal.contractor_id || undefined, companyId: proposal.company_id, notificationType: "proposal_countered", title: `Counteroffer Received: ${proposal.title || proposal.proposal_number}`, body: counterNotes || "The company has sent a counteroffer. Please review and respond.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json(firstRow<ProposalRow>(updated));
+    } catch (e) { res.status(500).json({ message: "Failed to send counteroffer" }); }
+  });
+
+  // GET /api/contractor-proposals/:id/current-version — redirect to the active (non-superseded) version
+  app.get("/api/contractor-proposals/:id/current-version", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      // Walk the superseded_by_id chain to find the latest non-superseded version
+      let currentId: string = req.params.id;
+      let depth = 0;
+      while (depth < 20) {
+        const row = await db.execute(sql`SELECT id, status, superseded_by_id FROM contractor_proposals WHERE id = ${currentId} LIMIT 1`);
+        const p = row.rows[0] as any;
+        if (!p) break;
+        if (p.status !== "superseded" || !p.superseded_by_id) break;
+        currentId = p.superseded_by_id;
+        depth++;
+      }
+      if (currentId === req.params.id) return res.json({ isCurrent: true, id: currentId });
+      res.json({ isCurrent: false, id: currentId });
+    } catch (e) { res.status(500).json({ message: "Failed to find current version" }); }
+  });
+
+  // POST /api/contractor-proposals/repair-superseded — admin repair script for stuck proposals
+  // Finds proposal groups where ALL versions are superseded (orphaned), sets the newest to 'revision_requested'
+  app.post("/api/contractor-proposals/repair-superseded", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const isPlatformUser = !user?.companyId;
+      // Find contractor_ids that have proposals, then check if any group has no active version
+      const companyFilter = isPlatformUser ? sql`` : sql`AND company_id = ${user!.companyId}`;
+      const candidates = await db.execute(sql`
+        SELECT p1.id, p1.contractor_id, p1.company_id, p1.title, p1.proposal_number, p1.version, p1.status, p1.created_at,
+               p1.parent_proposal_id, p1.revision_of_id
+        FROM contractor_proposals p1
+        WHERE p1.status = 'superseded' ${companyFilter}
+          AND p1.superseded_by_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM contractor_proposals p2
+            WHERE (p2.parent_proposal_id = p1.parent_proposal_id OR p2.id = p1.parent_proposal_id OR p2.revision_of_id = p1.id)
+              AND p2.status NOT IN ('superseded', 'archived', 'deleted')
+          )
+        ORDER BY p1.created_at DESC
+      `);
+      const orphaned = candidates.rows as any[];
+      const repaired: string[] = [];
+      for (const p of orphaned) {
+        // Check if this is truly orphaned (no active sibling in the chain)
+        const activeExists = await db.execute(sql`
+          SELECT 1 FROM contractor_proposals
+          WHERE contractor_id = ${p.contractor_id}
+            AND (parent_proposal_id = ${p.parent_proposal_id || p.id} OR id = ${p.parent_proposal_id || p.id})
+            AND status NOT IN ('superseded','archived','deleted')
+          LIMIT 1
+        `);
+        if (activeExists.rows.length === 0) {
+          // Restore this version to revision_requested so it can be edited
+          await db.execute(sql`
+            UPDATE contractor_proposals
+            SET status = 'revision_requested', editable_by = 'contractor', response_required_by = 'contractor',
+                rejection_reason = 'Auto-restored by repair script: no active version found in proposal chain',
+                updated_at = NOW()
+            WHERE id = ${p.id}
+          `);
+          await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes) VALUES (${p.id}, 'repair_restored', 'superseded', 'revision_requested', ${userId}, ${user?.username || null}, 'Restored by repair-superseded script')`);
+          repaired.push(p.id);
+        }
+      }
+      res.json({ checked: orphaned.length, repaired: repaired.length, repairedIds: repaired });
+    } catch (e: any) { res.status(500).json({ message: "Repair failed: " + e.message }); }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -12555,7 +12742,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const baseUrl = process.env.APP_BASE_URL || "";
         await db.execute(sql`
           INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
-          VALUES (${contract.company_id}, ${contract.contractor_id}, 'worker', 'contract', ${"Contract: " + contract.title}, ${"Activated contract document — " + contract.title}, ${"/api/contractor-contracts/" + req.params.id + "/download"}, ${(contract.title || "contract").replace(/[^a-z0-9]/gi, "_") + ".json"}, 'json', 'application/json', 'contractor_contract', ${req.params.id}, ${req.session.userId})
+          VALUES (${contract.company_id}, ${contract.contractor_id}, 'worker', 'contract', ${"Contract: " + contract.title}, ${"Activated contract document — " + contract.title}, ${"/api/contractor-contracts/" + req.params.id + "/download"}, ${(contract.title || "contract").replace(/[^a-z0-9]/gi, "_") + ".pdf"}, 'document', 'application/pdf', 'contractor_contract', ${req.params.id}, ${req.session.userId})
           ON CONFLICT DO NOTHING
         `);
       } catch (damErr) { console.error("[Contract] DAM record creation failed:", damErr); }
@@ -12623,28 +12810,364 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
   });
 
-  // ── Contract: Download (JSON export) ─────────────────────────────────────
+  // ── Contract: PDF helper ──────────────────────────────────────────────────
+  async function generateContractPdf(contractId: string): Promise<Buffer | null> {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const { default: autoTable } = await import("jspdf-autotable");
+
+      const contractRes = await db.execute(sql`
+        SELECT cc.*,
+          w.first_name || ' ' || w.last_name AS contractor_name,
+          COALESCE(w.email, w.work_email) AS contractor_email,
+          co.name AS company_name
+        FROM contractor_contracts cc
+        LEFT JOIN workers w ON w.id = cc.contractor_id
+        LEFT JOIN companies co ON co.id = cc.company_id
+        WHERE cc.id = ${contractId}
+      `);
+      if (!contractRes.rows[0]) return null;
+      const c = contractRes.rows[0] as any;
+      const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} ORDER BY "order" ASC`);
+      const signers = signersRes.rows as any[];
+
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const style = await resolveDocStyle(c.template_id, c.contractor_id, c.company_id);
+
+      let y = renderDocHeader(doc, pageW, style, {
+        displayName: style.businessName || c.company_name || "PayLink",
+        documentTypeLabel: "Service Contract",
+        documentNumberLabel: `Contract #${c.contract_number || contractId.slice(0, 8)}`,
+        dateLabel: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+      });
+
+      // Title + status
+      doc.setFontSize(14); doc.setFont("helvetica", "bold"); doc.setTextColor(0, 0, 0);
+      doc.text(c.title || "Service Contract", 14, y); y += 6;
+      doc.setFontSize(8); doc.setFont("helvetica", "normal"); doc.setTextColor(100, 100, 100);
+      doc.text(`Status: ${(c.status || "draft").toUpperCase()}  |  Type: ${(c.contract_type || "service").replace(/_/g, " ").toUpperCase()}`, 14, y);
+      y += 9; doc.setTextColor(0, 0, 0);
+
+      // Parties
+      doc.setFontSize(11); doc.setFont("helvetica", "bold"); doc.text("Parties", 14, y); y += 5;
+      autoTable(doc, {
+        startY: y, head: [],
+        body: [
+          ["Business / Client", c.company_name || "—"],
+          ["Contractor", [c.contractor_name, c.contractor_email].filter(Boolean).join("  |  ") || "—"],
+          ...(c.proposal_id ? [["Related Proposal", c.proposal_id]] : []),
+        ],
+        styles: { fontSize: 9, cellPadding: 2 },
+        columnStyles: { 0: { fontStyle: "bold", cellWidth: 48 } },
+        margin: { left: 14, right: 14 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 7;
+
+      // Dates & value
+      const dateRows: [string, string][] = [];
+      if (c.start_date) dateRows.push(["Start Date", new Date(c.start_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })]);
+      if (c.end_date) dateRows.push(["Completion Date", new Date(c.end_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })]);
+      if (c.total_value) dateRows.push(["Contract Value", `$${parseFloat(c.total_value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${c.currency || "USD"}`]);
+      if (dateRows.length > 0) {
+        autoTable(doc, {
+          startY: y, head: [], body: dateRows,
+          styles: { fontSize: 9, cellPadding: 2 },
+          columnStyles: { 0: { fontStyle: "bold", cellWidth: 48 } },
+          margin: { left: 14, right: 14 },
+        });
+        y = (doc as any).lastAutoTable.finalY + 7;
+      }
+
+      const section = (title: string, body: string) => {
+        if (y > pageH - 60) { doc.addPage(); y = 20; }
+        doc.setFontSize(11); doc.setFont("helvetica", "bold"); doc.setTextColor(0, 0, 0);
+        doc.text(title, 14, y); y += 5;
+        doc.setFontSize(9); doc.setFont("helvetica", "normal");
+        const lines = doc.splitTextToSize(body, pageW - 28);
+        doc.text(lines, 14, y); y += (lines.length * 4.8) + 6;
+      };
+
+      if (c.scope_of_work) section("Scope of Work", c.scope_of_work);
+      if (c.payment_terms) section("Payment Terms", c.payment_terms);
+      if (c.payment_type && c.payment_type !== "monetary" && c.trade_details) {
+        section("Non-Cash / Trade Arrangement", c.trade_details);
+      }
+      if (c.special_terms) section("Special Terms & Conditions", c.special_terms);
+      if (c.description && !c.scope_of_work) section("Description", c.description);
+
+      // Independent contractor acknowledgment
+      if (y > pageH - 80) { doc.addPage(); y = 20; }
+      doc.setFontSize(10); doc.setFont("helvetica", "bold"); doc.setTextColor(0, 0, 0);
+      doc.text("Independent Contractor Acknowledgment", 14, y); y += 5;
+      doc.setFontSize(8); doc.setFont("helvetica", "normal"); doc.setTextColor(80, 80, 80);
+      const icaLines = doc.splitTextToSize(
+        "The parties acknowledge that Contractor is an independent contractor and not an employee of the Business. " +
+        "Contractor is solely responsible for taxes, licenses, insurance, tools, and business expenses. " +
+        "Nothing in this agreement creates an employment relationship, partnership, or joint venture. " +
+        "Contractor controls the method and manner of performing the services. " +
+        "Payment is by approved invoice only. No payment will be made for unauthorized work.",
+        pageW - 28
+      );
+      doc.text(icaLines, 14, y); y += (icaLines.length * 4.2) + 5;
+      doc.setTextColor(0, 0, 0);
+
+      if (c.governing_law) {
+        doc.setFontSize(9); doc.setFont("helvetica", "bold");
+        doc.text("Governing Law: ", 14, y);
+        doc.setFont("helvetica", "normal");
+        doc.text(c.governing_law, 14 + doc.getTextWidth("Governing Law: "), y);
+        y += 7;
+      }
+
+      // Signature blocks
+      if (y > pageH - 70) { doc.addPage(); y = 20; }
+      doc.setFontSize(11); doc.setFont("helvetica", "bold"); doc.setTextColor(0, 0, 0);
+      doc.text("Signatures", 14, y); y += 5;
+      if (signers.length > 0) {
+        autoTable(doc, {
+          startY: y,
+          head: [["Name", "Role", "Status", "Signed"]],
+          body: signers.map(s => [
+            s.name || "—",
+            (s.role || "contractor").replace(/_/g, " "),
+            (s.status || "pending").toUpperCase(),
+            s.signed_at ? new Date(s.signed_at).toLocaleDateString() : "Pending",
+          ]),
+          styles: { fontSize: 9 },
+          headStyles: { fillColor: style.primaryRgb, textColor: [255, 255, 255] as [number, number, number], fontStyle: "bold" },
+          margin: { left: 14, right: 14 },
+        });
+        y = (doc as any).lastAutoTable.finalY + 10;
+      } else {
+        const bY = y + 5;
+        doc.setFontSize(9); doc.setFont("helvetica", "normal");
+        doc.line(14, bY, 92, bY); doc.text("Contractor Signature", 14, bY + 5);
+        doc.text(`Name: ${c.contractor_name || "_____________________"}`, 14, bY + 10);
+        doc.line(108, bY, 195, bY); doc.text("Business Representative", 108, bY + 5);
+        doc.text(`Name: ${c.company_name || "_____________________"}`, 108, bY + 10);
+        y = bY + 20;
+      }
+
+      // Audit footer
+      const fH = doc.internal.pageSize.getHeight();
+      doc.setFontSize(7); doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Generated by PayLink HR & Payroll Platform  •  ${new Date().toISOString()}  •  Confidential`,
+        pageW / 2, fH - 7, { align: "center" }
+      );
+
+      return Buffer.from(doc.output("arraybuffer"));
+    } catch (e: unknown) {
+      console.error("[ContractPDF] generation error:", e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
+  // ── Contract: Download PDF ────────────────────────────────────────────────
   app.get("/api/contractor-contracts/:id/download", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
-      const contractRes = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
-      if (!contractRes.rows[0]) return res.status(404).json({ message: "Contract not found" });
-      const contract = contractRes.rows[0] as any;
-      if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && contract.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
-      const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
-      const versions = await db.execute(sql`SELECT version, reason, created_at FROM contract_versions WHERE contract_id = ${req.params.id} ORDER BY version DESC`);
-      const exportData = { ...contract, signers: signers.rows, versionHistory: versions.rows, exportedAt: new Date().toISOString() };
-      const filename = `contract-${(contract.title || req.params.id).replace(/[^a-z0-9]/gi, "_")}.json`;
+      const contractCheck = await db.execute(sql`SELECT id, company_id, contractor_id, title FROM contractor_contracts WHERE id = ${req.params.id}`);
+      if (!contractCheck.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      const cc = contractCheck.rows[0] as any;
+      if (!isAdmin && cc.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && cc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+
+      const pdfBuffer = await generateContractPdf(req.params.id);
+      if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF" });
+
+      const safeTitle = (cc.title || req.params.id).replace(/[^a-z0-9]/gi, "-").toLowerCase();
+      const filename = `Contract-${safeTitle}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Content-Type", "application/json");
-      res.json(exportData);
+      res.setHeader("Content-Length", pdfBuffer.length.toString());
+      res.send(pdfBuffer);
       // Log access in DAM
       db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action, ip_address) SELECT id, ${req.session.userId || null}, ${workerId || null}, 'download', ${req.ip || null} FROM dam_documents WHERE linked_entity_type = 'contractor_contract' AND linked_entity_id = ${req.params.id} LIMIT 1`).catch(() => {});
     } catch (e: any) { res.status(500).json({ message: "Failed to download contract: " + e.message }); }
+  });
+
+  // ── Contract: Send for Signature via Documenso ────────────────────────────
+  app.post("/api/contractor-contracts/:id/send-for-signature", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contractId = req.params.id;
+      const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (["void", "terminated", "completed"].includes(contract.status)) {
+        return res.status(400).json({ message: `Cannot send a contract in '${contract.status}' status for signature` });
+      }
+      const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} ORDER BY "order" ASC`);
+      const signers = signersRes.rows as any[];
+      const recipients = signers.filter(s => s.email).map((s, i) => ({ name: s.name as string, email: s.email as string, role: "SIGNER" as const, routingOrder: i + 1 }));
+      if (recipients.length === 0) {
+        return res.status(400).json({ message: "Add at least one signer with an email address before sending for signature." });
+      }
+
+      const pdfBuffer = await generateContractPdf(contractId);
+      if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for signing" });
+
+      const { sendDocumentForSignature } = await import("./services/documenso.js");
+      const docResult = await sendDocumentForSignature({
+        title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
+        pdfBuffer,
+        recipients,
+        subject: `Please sign: ${contract.title}`,
+        message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+      });
+
+      // Persist the Documenso request
+      const primarySigner = recipients[0];
+      await db.execute(sql`
+        INSERT INTO documenso_signature_requests
+          (document_type, related_record_id, company_id, documenso_document_id, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
+        VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, 'sent_for_signature',
+                ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
+      `);
+
+      // Update contract status
+      await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`);
+
+      // Notify signers in-app
+      createContractorNotification({
+        workerId: contract.contractor_id,
+        companyId: contract.company_id,
+        notificationType: "signature_requested",
+        title: `Signature Requested: ${contract.title}`,
+        body: "Please check your email for a signing link from Documenso to sign this contract.",
+        entityType: "contract",
+        entityId: contractId,
+        actionUrl: `/app/contractor-hub?section=contracts&id=${contractId}`,
+      }).catch(() => {});
+
+      res.json({ success: true, documensoDocumentId: docResult.documentId });
+    } catch (e: any) {
+      const msg = e?.message || "";
+      if (msg.includes("Documenso not configured") || msg.includes("DOCUMENSO_API_KEY")) {
+        return res.status(503).json({ message: "Documenso is not configured. Set MyPayLink_DOCUMENSO_API_KEY in environment settings." });
+      }
+      res.status(500).json({ message: "Failed to send for signature: " + msg });
+    }
+  });
+
+  // ── Documenso Webhook ─────────────────────────────────────────────────────
+  // Receives event callbacks from Documenso and updates related records.
+  // Signature verification uses HMAC-SHA256 via DOCUMENSO_WEBHOOK_SECRET.
+  app.post("/api/webhooks/documenso", async (req, res) => {
+    try {
+      const { verifyWebhookSignature, downloadCompletedDocument } = await import("./services/documenso.js");
+      const signature = (req.headers["x-documenso-signature"] as string) || (req.headers["x-webhook-signature"] as string) || "";
+      const secret = process.env.DOCUMENSO_WEBHOOK_SECRET || "";
+
+      // Handle both raw-buffer and already-parsed JSON body
+      let rawBodyBuf: Buffer;
+      let eventData: any;
+      if (Buffer.isBuffer(req.body)) {
+        rawBodyBuf = req.body;
+        try { eventData = JSON.parse(rawBodyBuf.toString("utf8")); } catch { return res.status(400).json({ message: "Invalid JSON" }); }
+      } else {
+        eventData = req.body || {};
+        rawBodyBuf = Buffer.from(JSON.stringify(eventData));
+      }
+
+      const isValid = verifyWebhookSignature(rawBodyBuf, signature, secret);
+
+      const eventType: string = eventData.event || eventData.type || "unknown";
+      const documensoDocumentId: string | null = String(eventData.data?.id || eventData.documentId || "").trim() || null;
+      const documensoEventId: string | null = String(eventData.webhookId || eventData.id || "").trim() || null;
+
+      // Deduplication: skip if already processed
+      if (documensoEventId) {
+        const dup = await db.execute(sql`SELECT id FROM documenso_webhook_events WHERE documenso_event_id = ${documensoEventId} LIMIT 1`);
+        if (dup.rows[0]) return res.status(200).json({ message: "Already processed" });
+      }
+
+      // Store raw event (even invalid-sig ones for audit)
+      const eventRow = await db.execute(sql`
+        INSERT INTO documenso_webhook_events (event_type, documenso_document_id, documenso_event_id, payload, signature_valid, processed)
+        VALUES (${eventType}, ${documensoDocumentId}, ${documensoEventId}, ${JSON.stringify(eventData)}, ${isValid}, false)
+        RETURNING id
+      `);
+      const eventId = (eventRow.rows[0] as any)?.id;
+
+      if (!isValid && secret) {
+        await db.execute(sql`UPDATE documenso_webhook_events SET processing_error = 'invalid_signature' WHERE id = ${eventId}`).catch(() => {});
+        return res.status(401).json({ message: "Invalid webhook signature" });
+      }
+
+      // Process asynchronously so we return 200 quickly
+      (async () => {
+        try {
+          if (!documensoDocumentId) {
+            await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW(), processing_error = 'no_document_id' WHERE id = ${eventId}`);
+            return;
+          }
+          const sigReqRes = await db.execute(sql`SELECT * FROM documenso_signature_requests WHERE documenso_document_id = ${documensoDocumentId} ORDER BY created_at DESC LIMIT 1`);
+          const sigReq = sigReqRes.rows[0] as any;
+          if (!sigReq) {
+            await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW(), processing_error = 'no_signature_request_found' WHERE id = ${eventId}`);
+            return;
+          }
+
+          if (eventType === "document.viewed") {
+            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'viewed', viewed_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
+          } else if (eventType === "document.signed") {
+            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'partially_signed', signed_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
+          } else if (eventType === "document.completed") {
+            // Download signed PDF and store in DAM
+            try {
+              const pdfBuf = await downloadCompletedDocument(documensoDocumentId);
+              if (pdfBuf) {
+                const fname = `documenso-signed-${sigReq.related_record_id}-${Date.now()}.pdf`;
+                const uploadDir = path.join(process.cwd(), "uploads");
+                if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+                fs.writeFileSync(path.join(uploadDir, fname), pdfBuf);
+
+                const damRes = await db.execute(sql`
+                  INSERT INTO dam_documents (company_id, document_type, title, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id)
+                  VALUES (${sigReq.company_id}, 'signed_contract',
+                    ${"SIGNED — " + (sigReq.document_type || "contract")},
+                    ${"/uploads/" + fname}, ${fname}, 'document', ${pdfBuf.length}, 'application/pdf',
+                    ${sigReq.document_type}, ${sigReq.related_record_id})
+                  RETURNING id
+                `).catch(() => ({ rows: [] }));
+                const damId = (damRes.rows[0] as any)?.id || null;
+
+                await db.execute(sql`UPDATE documenso_signature_requests SET status = 'completed', completed_at = NOW(), completed_pdf_file_id = ${damId}, updated_at = NOW() WHERE id = ${sigReq.id}`);
+
+                // Lock the contract
+                if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
+                  await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = NOW(), signed_pdf_path = ${"/uploads/" + fname}, updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
+                }
+              }
+            } catch (dlErr: any) {
+              console.error("[DocumensoWebhook] PDF download error:", dlErr.message);
+            }
+          } else if (eventType === "document.declined") {
+            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'declined', declined_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
+            if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
+              await db.execute(sql`UPDATE contractor_contracts SET updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
+            }
+          } else if (eventType === "document.expired") {
+            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'expired', expired_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
+          }
+
+          await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW() WHERE id = ${eventId}`);
+        } catch (procErr: any) {
+          console.error("[DocumensoWebhook] processing error:", procErr.message);
+          await db.execute(sql`UPDATE documenso_webhook_events SET processing_error = ${procErr.message} WHERE id = ${eventId}`).catch(() => {});
+        }
+      })();
+
+      res.status(200).json({ message: "OK" });
+    } catch (e: any) {
+      console.error("[DocumensoWebhook] handler error:", e.message);
+      res.status(500).json({ message: "Webhook error" });
+    }
   });
 
   // ── Invoice: Download (JSON export) ──────────────────────────────────────
@@ -24504,35 +25027,52 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       }
 
       let result: any;
-      if (userRole === "admin") {
-        // Admin: return all workers (exclude self if we have a worker record)
+      // Determine the companyId to scope by for tenant users
+      const scopeCompanyId: string | null = user?.companyId || myCompanyId;
+      const isPlatformAdmin = !scopeCompanyId && (userRole === "admin" || (userRole || "").startsWith("platform_"));
+
+      if (isPlatformAdmin) {
+        // Platform admins see all workers
         result = myWorkerId
           ? await db.execute(sql`
-              SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+              SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name, w.worker_type,
+                     CASE WHEN w.worker_type = 'independent_contractor' THEN 'Contractor'
+                          WHEN w.worker_type = 'vendor' THEN 'Vendor'
+                          ELSE 'Employee' END AS recipient_type
               FROM workers w LEFT JOIN companies c ON c.id = w.company_id
               WHERE w.id != ${myWorkerId} ORDER BY w.first_name, w.last_name
             `)
           : await db.execute(sql`
-              SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+              SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name, w.worker_type,
+                     CASE WHEN w.worker_type = 'independent_contractor' THEN 'Contractor'
+                          WHEN w.worker_type = 'vendor' THEN 'Vendor'
+                          ELSE 'Employee' END AS recipient_type
               FROM workers w LEFT JOIN companies c ON c.id = w.company_id
               ORDER BY w.first_name, w.last_name
             `);
-      } else if (myCompanyId) {
-        if (myWorkerId) {
-          result = await db.execute(sql`
-            SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
-            FROM workers w LEFT JOIN companies c ON c.id = w.company_id
-            WHERE w.company_id = ${myCompanyId} AND w.id != ${myWorkerId}
-            ORDER BY w.first_name, w.last_name
-          `);
-        } else {
-          result = await db.execute(sql`
-            SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
-            FROM workers w LEFT JOIN companies c ON c.id = w.company_id
-            WHERE w.company_id = ${myCompanyId}
-            ORDER BY w.first_name, w.last_name
-          `);
-        }
+      } else if (scopeCompanyId) {
+        // Tenant admins/users: include own company workers PLUS contractors linked via proposals/contracts/invoices
+        const selfExclude = myWorkerId ? sql`AND w.id != ${myWorkerId}` : sql``;
+        result = await db.execute(sql`
+          SELECT DISTINCT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name, w.worker_type,
+                 CASE WHEN w.worker_type = 'independent_contractor' THEN 'Contractor'
+                      WHEN w.worker_type = 'vendor' THEN 'Vendor'
+                      ELSE 'Employee' END AS recipient_type
+          FROM workers w
+          LEFT JOIN companies c ON c.id = w.company_id
+          WHERE (
+            w.company_id = ${scopeCompanyId}
+            OR w.id IN (
+              SELECT DISTINCT contractor_id FROM contractor_proposals WHERE company_id = ${scopeCompanyId} AND contractor_id IS NOT NULL
+              UNION
+              SELECT DISTINCT contractor_id FROM contractor_contracts WHERE company_id = ${scopeCompanyId} AND contractor_id IS NOT NULL
+              UNION
+              SELECT DISTINCT contractor_id FROM contractor_invoices WHERE company_id = ${scopeCompanyId} AND contractor_id IS NOT NULL
+            )
+          )
+          ${selfExclude}
+          ORDER BY w.first_name, w.last_name
+        `);
       } else {
         return res.json([]);
       }

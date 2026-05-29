@@ -29,7 +29,7 @@ import {
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
   FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply, RefreshCw,
-  ArrowLeftRight
+  ArrowLeftRight, PenLine, GitBranch, HandshakeIcon
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -1077,7 +1077,11 @@ function ProposalDetailPanel({
         vars.action === "reject" ? "Proposal rejected" :
         vars.action === "request-revision" ? "Revision requested" :
         vars.action === "counter" ? "Counter offer sent" :
+        vars.action === "counteroffer" ? "Counter offer sent" :
+        vars.action === "accept-counteroffer" ? "Counter offer accepted" :
+        vars.action === "reject-counteroffer" ? "Counter offer rejected" :
         vars.action === "submit" ? "Proposal submitted" :
+        vars.action === "submit-revision" ? "Revision submitted" :
         vars.action === "send" ? "Proposal marked as sent" :
         vars.action === "request-signature" ? "Signature request sent" :
         "Done"
@@ -1153,16 +1157,23 @@ function ProposalDetailPanel({
   const discount = parseFloat(proposal.discountAmount ?? "0");
   const total = subtotal + tax - discount;
 
-  const canEdit = ["draft", "revision_requested"].includes(proposal.status);
-  const canSubmit = ["draft", "revision_requested"].includes(proposal.status) && !isAdmin;
-  const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered"].includes(proposal.status);
+  const isLocked = ["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal.status);
+  const canEdit = !isLocked && (
+    isAdmin
+      ? !["superseded", "archived"].includes(proposal.status)
+      : ["draft", "revision_requested", "countered"].includes(proposal.status)
+  );
+  const canSubmit = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
+  const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review"].includes(proposal.status);
   const canNegotiate = isAdmin && proposal.status === "countered";
   const canMarkNegotiated = isAdmin && ["countered", "negotiated"].includes(proposal.status);
   const canConvertToContract = isAdmin && ["approved", "negotiated"].includes(proposal.status) && !proposal.convertedToContractId;
-  const canRevise = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
+  const canRevise = !isAdmin && ["draft", "revision_requested", "countered"].includes(proposal.status);
   const canCreateRevision = isAdmin && ["approved", "sent", "viewed"].includes(proposal.status);
   const canMarkSent = isAdmin && ["draft", "internal_review", "submitted"].includes(proposal.status);
   const canRetryEmail = isAdmin && proposal.status === "sent" && !!proposal.lastSentEventNotes?.startsWith("Email delivery failed");
+  const canAcceptCounteroffer = !isAdmin && proposal.status === "countered";
+  const canRejectCounteroffer = !isAdmin && proposal.status === "countered";
 
   function handleMarkSent() {
     setSendEmailDraft(proposal.clientEmail ?? "");
@@ -1258,8 +1269,13 @@ function ProposalDetailPanel({
             </div>
           </div>
           {/* Row 2: action buttons — horizontally scrollable so nothing gets clipped */}
-          {(canEdit || canSubmit || canMarkSent || canAdminAction || canMarkNegotiated || canConvertToContract || (proposal.status === "approved" && isAdmin) || canCreateRevision) && (
+          {(isLocked || canEdit || canSubmit || canMarkSent || canAdminAction || canMarkNegotiated || canConvertToContract || (proposal.status === "approved" && isAdmin) || canCreateRevision || canAcceptCounteroffer) && (
             <div className="flex items-center gap-2 overflow-x-auto pb-3 pt-1 scrollbar-none" style={{ scrollbarWidth: "none" }}>
+              {isLocked && (
+                <span className="shrink-0 flex items-center gap-1 text-xs text-muted-foreground border rounded px-2 py-1" data-testid="label-locked-proposal">
+                  <Lock className="h-3 w-3" /> {proposal.status === "superseded" ? "Superseded — view only" : "Locked — view only"}
+                </span>
+              )}
               {canEdit && (
                 <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit} data-testid="btn-edit-from-detail">
                   <Edit className="h-3.5 w-3.5 mr-1" /> Edit
@@ -1314,6 +1330,21 @@ function ProposalDetailPanel({
               {canCreateRevision && (
                 <Button size="sm" variant="outline" className="shrink-0" onClick={() => revisionMutation.mutate()} disabled={revisionMutation.isPending} data-testid="btn-create-revision-from-detail">
                   <RotateCcw className="h-3.5 w-3.5 mr-1" /> New Revision
+                </Button>
+              )}
+              {canAcceptCounteroffer && (
+                <Button size="sm" className="shrink-0 bg-green-600 hover:bg-green-700 text-white" onClick={() => actionMutation.mutate({ action: "accept-counteroffer" })} disabled={actionMutation.isPending} data-testid="btn-accept-counteroffer">
+                  <HandshakeIcon className="h-3.5 w-3.5 mr-1" /> Accept Counter
+                </Button>
+              )}
+              {canRejectCounteroffer && (
+                <Button size="sm" variant="outline" className="shrink-0 border-red-300 text-red-700" onClick={() => actionMutation.mutate({ action: "reject-counteroffer" })} disabled={actionMutation.isPending} data-testid="btn-reject-counteroffer">
+                  <XCircle className="h-3.5 w-3.5 mr-1" /> Reject Counter
+                </Button>
+              )}
+              {canRejectCounteroffer && (
+                <Button size="sm" variant="outline" className="shrink-0 border-amber-300 text-amber-700" onClick={() => revisionMutation.mutate()} disabled={revisionMutation.isPending} data-testid="btn-counter-back">
+                  <ArrowLeftRight className="h-3.5 w-3.5 mr-1" /> Counter Back
                 </Button>
               )}
               {["sent", "viewed", "approved", "signed", "negotiated", "countered"].includes(proposal.status) && (
@@ -1371,6 +1402,35 @@ function ProposalDetailPanel({
           <ScrollArea className="flex-1">
             {/* Overview */}
             <TabsContent value="overview" className="m-0 p-6 space-y-4">
+              {/* Superseded banner — shown when this version has been replaced */}
+              {proposal.status === "superseded" && (
+                <div className="flex gap-3 rounded-lg border border-slate-300 bg-slate-50 dark:bg-slate-900/40 p-4" data-testid="banner-superseded">
+                  <GitBranch className="h-5 w-5 text-slate-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-700 dark:text-slate-300 text-sm">Superseded Version</p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                      This version has been replaced by a newer revision. It is read-only and cannot be edited.
+                      {(proposal as any).supersededById && " A newer version exists in the proposals list."}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {/* Counteroffer banner — shown to contractor when admin has countered */}
+              {!isAdmin && proposal.status === "countered" && (
+                <div className="flex gap-3 rounded-lg border border-violet-300 bg-violet-50 dark:bg-violet-950/30 p-4" data-testid="banner-countered">
+                  <HandshakeIcon className="h-5 w-5 text-violet-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-violet-800 dark:text-violet-300 text-sm">Counteroffer Received</p>
+                    {(proposal as any).counterofferNotes || (proposal as any).counteroffer_notes ? (
+                      <p className="text-sm text-violet-700 dark:text-violet-400 mt-1 whitespace-pre-wrap">
+                        {(proposal as any).counterofferNotes || (proposal as any).counteroffer_notes}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-violet-700 dark:text-violet-400 mt-1">The company has sent a counteroffer. Please review and respond below.</p>
+                    )}
+                  </div>
+                </div>
+              )}
               {/* Revision request banner — shown to contractor when revision is requested */}
               {!isAdmin && proposal.status === "revision_requested" && (
                 <div className="flex gap-3 rounded-lg border border-orange-300 bg-orange-50 dark:bg-orange-950/30 p-4" data-testid="banner-revision-requested">
@@ -2427,7 +2487,11 @@ function ProposalBuilder({
     actionMutation.mutate({ action: "send" });
   }
 
-  const canEdit = isNew || ["draft", "revision_requested"].includes(proposal?.status || "draft");
+  const canEdit = isNew || (
+    isAdmin
+      ? !["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal?.status || "")
+      : ["draft", "revision_requested", "countered"].includes(proposal?.status || "draft")
+  );
   const canSubmit = !isNew && ["draft", "revision_requested"].includes(proposal?.status || "");
   const canSend = !isNew && isAdmin && ["draft", "internal_review", "submitted"].includes(proposal?.status || "");
   const canRevise = !isNew && isAdmin && ["approved", "sent", "viewed"].includes(proposal?.status || "");
@@ -4144,6 +4208,12 @@ function ContractDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Failed to send", variant: "destructive" }),
   });
 
+  const sendViaDocumensoMutation = useMutation({
+    mutationFn: () => fetch(`/api/contractor-contracts/${contract.id}/send-for-signature`, { method: "POST", credentials: "include" }).then(async r => { if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || "Failed"); } return r.json(); }),
+    onSuccess: () => { refetch(); toast({ title: "Sent via Documenso", description: "Signing request sent. Signers will receive an email with the signing link." }); onRefresh(); },
+    onError: (e: any) => toast({ title: "Documenso send failed", description: e?.message || "Unable to send for signature", variant: "destructive" }),
+  });
+
   const activateMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/activate`, {}),
     onSuccess: () => { refetch(); toast({ title: "Contract activated" }); onRefresh(); },
@@ -4207,9 +4277,14 @@ function ContractDetailPanel({
                   <XCircle className="h-3.5 w-3.5 mr-1" /> Void
                 </Button>
               )}
+              {isAdmin && signers.length > 0 && !["void","terminated","completed","fully_signed"].includes(contract.status) && (
+                <Button size="sm" variant="outline" className="border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400" onClick={() => sendViaDocumensoMutation.mutate()} disabled={sendViaDocumensoMutation.isPending} data-testid="btn-send-via-documenso" title="Send for e-signature via Documenso">
+                  <PenLine className="h-3.5 w-3.5 mr-1" /> {sendViaDocumensoMutation.isPending ? "Sending…" : "Sign via Documenso"}
+                </Button>
+              )}
               <a href={`/api/contractor-contracts/${contract.id}/download`} target="_blank" rel="noreferrer" data-testid="btn-download-contract">
-                <Button size="sm" variant="ghost" title="Download contract as JSON">
-                  <Download className="h-3.5 w-3.5 mr-1" /> Download
+                <Button size="sm" variant="ghost" title="Download contract PDF">
+                  <Download className="h-3.5 w-3.5 mr-1" /> Download PDF
                 </Button>
               </a>
             </div>

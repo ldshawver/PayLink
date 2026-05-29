@@ -4800,3 +4800,51 @@ export const payrollOverrides = pgTable("payroll_overrides", {
 export const insertPayrollOverrideSchema = createInsertSchema(payrollOverrides).omit({ id: true, createdAt: true, overriddenAt: true });
 export type PayrollOverride = typeof payrollOverrides.$inferSelect;
 export type InsertPayrollOverride = z.infer<typeof insertPayrollOverrideSchema>;
+
+// ── Documenso Signature Requests ─────────────────────────────────────────────
+// Tracks per-document signing requests sent to Documenso.
+// Each row corresponds to one send-for-signature action on any document type.
+export const documensoSignatureRequests = pgTable("documenso_signature_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentType: text("document_type").notNull(), // contract | contractor_hub_contract | independent_contractor_agreement | onboarding_packet | proposal_signature
+  relatedRecordId: varchar("related_record_id").notNull(),
+  companyId: varchar("company_id").references(() => companies.id),
+  documensoDocumentId: text("documenso_document_id"),
+  status: text("status").notNull().default("draft"), // draft | generated | sent_for_signature | viewed | partially_signed | signed | completed | declined | expired | voided | archived
+  signerName: text("signer_name"),
+  signerEmail: text("signer_email"),
+  sentAt: timestamp("sent_at"),
+  viewedAt: timestamp("viewed_at"),
+  signedAt: timestamp("signed_at"),
+  completedAt: timestamp("completed_at"),
+  declinedAt: timestamp("declined_at"),
+  expiredAt: timestamp("expired_at"),
+  completedPdfFileId: varchar("completed_pdf_file_id"),
+  rawResponse: text("raw_response"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDocumensoSignatureRequestSchema = createInsertSchema(documensoSignatureRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export type DocumensoSignatureRequest = typeof documensoSignatureRequests.$inferSelect;
+export type InsertDocumensoSignatureRequest = z.infer<typeof insertDocumensoSignatureRequestSchema>;
+
+// ── Documenso Webhook Events ──────────────────────────────────────────────────
+// Immutable event log for all incoming Documenso webhook payloads.
+export const documensoWebhookEvents = pgTable("documenso_webhook_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventType: text("event_type").notNull(), // document.created | document.sent | document.viewed | document.signed | document.completed | document.declined | document.expired | document.deleted
+  documensoDocumentId: text("documenso_document_id"),
+  documensoEventId: text("documenso_event_id"),
+  payload: text("payload").notNull(),
+  signatureValid: boolean("signature_valid").default(false),
+  processed: boolean("processed").default(false),
+  processingError: text("processing_error"),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDocumensoWebhookEventSchema = createInsertSchema(documensoWebhookEvents).omit({ id: true, createdAt: true });
+export type DocumensoWebhookEvent = typeof documensoWebhookEvents.$inferSelect;
+export type InsertDocumensoWebhookEvent = z.infer<typeof insertDocumensoWebhookEventSchema>;

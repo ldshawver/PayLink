@@ -3515,6 +3515,69 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // ── Documenso integration tables ──────────────────────────────────────────
+    await runInv("documenso_signature_requests table", sqlInv`CREATE TABLE IF NOT EXISTS documenso_signature_requests (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_type TEXT NOT NULL,
+      related_record_id VARCHAR NOT NULL,
+      company_id VARCHAR REFERENCES companies(id),
+      documenso_document_id TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      signer_name TEXT,
+      signer_email TEXT,
+      sent_at TIMESTAMP,
+      viewed_at TIMESTAMP,
+      signed_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      declined_at TIMESTAMP,
+      expired_at TIMESTAMP,
+      completed_pdf_file_id VARCHAR,
+      raw_response TEXT,
+      created_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await runInv("documenso_signature_requests idx document", sqlInv`CREATE INDEX IF NOT EXISTS idx_dsr_documenso_id ON documenso_signature_requests(documenso_document_id)`);
+    await runInv("documenso_signature_requests idx type record", sqlInv`CREATE INDEX IF NOT EXISTS idx_dsr_type_record ON documenso_signature_requests(document_type, related_record_id)`);
+
+    await runInv("documenso_webhook_events table", sqlInv`CREATE TABLE IF NOT EXISTS documenso_webhook_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      event_type TEXT NOT NULL,
+      documenso_document_id TEXT,
+      documenso_event_id TEXT UNIQUE,
+      payload TEXT NOT NULL,
+      signature_valid BOOLEAN DEFAULT FALSE,
+      processed BOOLEAN DEFAULT FALSE,
+      processing_error TEXT,
+      processed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await runInv("documenso_webhook_events idx event_type", sqlInv`CREATE INDEX IF NOT EXISTS idx_dwe_event_type ON documenso_webhook_events(event_type)`);
+    await runInv("documenso_webhook_events idx processed", sqlInv`CREATE INDEX IF NOT EXISTS idx_dwe_processed ON documenso_webhook_events(processed)`);
+
+    // ── Proposal versioning + negotiation columns ──────────────────────────
+    await runInv("contractor_proposals.superseded_by_id",        sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS superseded_by_id VARCHAR`);
+    await runInv("contractor_proposals.editable_by",             sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS editable_by TEXT`);
+    await runInv("contractor_proposals.response_required_by",    sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS response_required_by TEXT`);
+    await runInv("contractor_proposals.counteroffer_terms",      sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS counteroffer_terms TEXT`);
+    await runInv("contractor_proposals.counteroffer_notes",      sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS counteroffer_notes TEXT`);
+    await runInv("contractor_proposals.counteroffer_sent_at",    sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS counteroffer_sent_at TIMESTAMP`);
+    await runInv("contractor_proposals.counteroffer_by_user_id", sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS counteroffer_by_user_id VARCHAR`);
+
+    // ── Contractor Hub reviewer/settings table ─────────────────────────────
+    await runInv("company_contractor_hub_reviewers table", sqlInv`CREATE TABLE IF NOT EXISTS company_contractor_hub_reviewers (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      user_id VARCHAR NOT NULL,
+      role_scope TEXT,
+      is_default BOOLEAN DEFAULT FALSE,
+      receives_notifications BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(company_id, user_id)
+    )`);
+    await runInv("company_contractor_hub_reviewers idx", sqlInv`CREATE INDEX IF NOT EXISTS idx_cchr_company ON company_contractor_hub_reviewers(company_id)`);
   }
 
   const { seedDatabase } = await import("./seed");
@@ -3586,11 +3649,16 @@ Thank you,
       host,
       reusePort: true,
     },
-    () => {
+    async () => {
       log(`serving on ${host}:${port}`);
 
       // All background jobs are managed by the worker orchestrator.
       // It handles staggered startup, deduplication, and clean shutdown.
+      // Log Documenso integration configuration status (never prints secret values)
+      try {
+        const { logDocumensoConfig } = await import("./services/documenso.js");
+        logDocumensoConfig();
+      } catch { /* ignore if module not yet built */ }
       startWorkerOrchestrator();
     },
   );
