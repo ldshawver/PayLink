@@ -1916,6 +1916,9 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   withheldAmount: numeric("withheld_amount").default("0"),
   setoffAmount: numeric("setoff_amount").default("0"),
   setoffReason: text("setoff_reason"),
+  // ── Archive / document lifecycle (added via migration) ──
+  archivedToDocumentsAt: timestamp("archived_to_documents_at"),
+  archivedDocumentId: varchar("archived_document_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2032,6 +2035,9 @@ export const contractorProposals = pgTable("contractor_proposals", {
   tradeTerms: text("trade_terms"),
   templateId: varchar("template_id"),
   brandingId: varchar("branding_id"),
+  // ── Archive / document lifecycle (added via migration) ──
+  archivedToDocumentsAt: timestamp("archived_to_documents_at"),
+  archivedDocumentId: varchar("archived_document_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2194,6 +2200,12 @@ export const contractorContracts = pgTable("contractor_contracts", {
   voidedAt: timestamp("voided_at"),
   voidReason: text("void_reason"),
   createdByUserId: varchar("created_by_user_id"),
+  // ── Traceability (added via migration) ──
+  jobId: varchar("job_id"),
+  costCenterId: varchar("cost_center_id"),
+  // ── Archive / document lifecycle (added via migration) ──
+  archivedToDocumentsAt: timestamp("archived_to_documents_at"),
+  archivedDocumentId: varchar("archived_document_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2272,6 +2284,20 @@ export const damDocuments = pgTable("dam_documents", {
   archivedAt: timestamp("archived_at"),
   deletedAt: timestamp("deleted_at"),
   deletedReason: text("deleted_reason"),
+  // ── Traceability metadata (added via migration) ──
+  proposalId: varchar("proposal_id"),
+  contractId: varchar("contract_id"),
+  invoiceId: varchar("invoice_id"),
+  proposalName: text("proposal_name"),
+  jobCode: text("job_code"),
+  costCenter: text("cost_center"),
+  sourceRecordType: text("source_record_type"),
+  sourceRecordId: varchar("source_record_id"),
+  generatedAt: timestamp("generated_at"),
+  signedAt: timestamp("signed_at"),
+  paidAt: timestamp("paid_at"),
+  archivedBy: varchar("archived_by"),
+  autoArchivePolicyId: varchar("auto_archive_policy_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

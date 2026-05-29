@@ -3578,6 +3578,32 @@ Thank you,
       UNIQUE(company_id, user_id)
     )`);
     await runInv("company_contractor_hub_reviewers idx", sqlInv`CREATE INDEX IF NOT EXISTS idx_cchr_company ON company_contractor_hub_reviewers(company_id)`);
+
+    // ── Traceability: Proposal→Contract→Invoice lifecycle columns ─────────
+    await runInv("dam_documents.proposal_id",            sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS proposal_id VARCHAR`);
+    await runInv("dam_documents.contract_id",            sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS contract_id VARCHAR`);
+    await runInv("dam_documents.invoice_id",             sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS invoice_id VARCHAR`);
+    await runInv("dam_documents.proposal_name",          sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS proposal_name TEXT`);
+    await runInv("dam_documents.job_code",               sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS job_code TEXT`);
+    await runInv("dam_documents.cost_center",            sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS cost_center TEXT`);
+    await runInv("dam_documents.source_record_type",     sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS source_record_type TEXT`);
+    await runInv("dam_documents.source_record_id",       sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS source_record_id VARCHAR`);
+    await runInv("dam_documents.generated_at",           sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS generated_at TIMESTAMP`);
+    await runInv("dam_documents.signed_at",              sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS signed_at TIMESTAMP`);
+    await runInv("dam_documents.paid_at",                sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP`);
+    await runInv("dam_documents.archived_by",            sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS archived_by VARCHAR`);
+    await runInv("dam_documents.auto_archive_policy_id", sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS auto_archive_policy_id VARCHAR`);
+
+    await runInv("contractor_proposals.archived_to_documents_at", sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS archived_to_documents_at TIMESTAMP`);
+    await runInv("contractor_proposals.archived_document_id",     sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS archived_document_id VARCHAR`);
+
+    await runInv("contractor_contracts.job_id",                   sqlInv`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS job_id VARCHAR`);
+    await runInv("contractor_contracts.cost_center_id",           sqlInv`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`);
+    await runInv("contractor_contracts.archived_to_documents_at", sqlInv`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS archived_to_documents_at TIMESTAMP`);
+    await runInv("contractor_contracts.archived_document_id",     sqlInv`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS archived_document_id VARCHAR`);
+
+    await runInv("contractor_invoices.archived_to_documents_at",  sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_to_documents_at TIMESTAMP`);
+    await runInv("contractor_invoices.archived_document_id",      sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_document_id VARCHAR`);
   }
 
   const { seedDatabase } = await import("./seed");

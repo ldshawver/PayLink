@@ -1473,6 +1473,28 @@ function ProposalDetailPanel({
                 </div>
               </div>
 
+              {/* Traceability chain */}
+              {(proposal.convertedToContractId || (proposal as any).archivedDocumentId || (proposal as any).archivedToDocumentsAt) && (
+                <div className="flex flex-wrap gap-2">
+                  {proposal.convertedToContractId && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-3 py-1" data-testid="chip-proposal-related-contract">
+                      <FileText className="h-3 w-3" /> Converted to Contract
+                    </span>
+                  )}
+                  {(proposal as any).archivedToDocumentsAt && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 rounded-full px-3 py-1" data-testid="chip-proposal-archived">
+                      <Archive className="h-3 w-3" /> Archived to Documents
+                    </span>
+                  )}
+                  {(proposal as any).archivedDocumentId && (
+                    <a href={`/api/contractor-proposals/${proposal.id}/pdf`} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-full px-3 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" data-testid="link-view-pdf-proposal">
+                      <Download className="h-3 w-3" /> View Archived PDF
+                    </a>
+                  )}
+                </div>
+              )}
+
               {proposal.clientMessage && (
                 <div className="bg-muted/40 rounded-lg p-4 italic text-sm text-muted-foreground border-l-2 border-primary/30">
                   "{proposal.clientMessage}"
@@ -3873,6 +3895,34 @@ function InvoiceDetailPanel({
                 <div><p className="text-muted-foreground text-xs">Amount</p><p className="font-bold text-lg text-primary">{fmt(invoice.amount)}</p></div>
                 <div><p className="text-muted-foreground text-xs">Balance Due</p><p className="font-semibold">{fmt(invoice.balanceDue ?? invoice.amount)}</p></div>
               </div>
+
+              {/* Traceability chain */}
+              {(invoice.proposalId || (invoice as any).contractId || (invoice as any).archivedToDocumentsAt) && (
+                <div className="flex flex-wrap gap-2">
+                  {invoice.proposalId && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-3 py-1" data-testid="chip-invoice-source-proposal">
+                      <FileText className="h-3 w-3" /> Source Proposal
+                    </span>
+                  )}
+                  {(invoice as any).contractId && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-3 py-1" data-testid="chip-invoice-source-contract">
+                      <Briefcase className="h-3 w-3" /> Source Contract
+                    </span>
+                  )}
+                  {(invoice as any).archivedToDocumentsAt && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 rounded-full px-3 py-1" data-testid="chip-invoice-archived">
+                      <Archive className="h-3 w-3" /> Archived to Documents
+                    </span>
+                  )}
+                  {(invoice as any).archivedDocumentId && (
+                    <a href={`/api/contractor-invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-full px-3 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" data-testid="link-view-pdf-invoice">
+                      <Download className="h-3 w-3" /> View Archived PDF
+                    </a>
+                  )}
+                </div>
+              )}
+
               {invoice.description && (
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Description</p>
@@ -4732,6 +4782,7 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "all");
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [showCompleted, setShowCompleted] = useState(false);
 
   useEffect(() => {
     if (initialStatusFilter) setStatusFilter(initialStatusFilter);
@@ -4774,7 +4825,8 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
     } else {
       matchStatus = c.status === statusFilter;
     }
-    return matchSearch && matchStatus;
+    const matchCompleted = showCompleted || statusFilter !== "all" || !["fully_signed", "completed", "terminated", "void"].includes(c.status);
+    return matchSearch && matchStatus && matchCompleted;
   });
 
   return (
@@ -4815,7 +4867,7 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search contracts..." className="h-8 max-w-xs" data-testid="input-contract-search" />
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="h-8 w-40" data-testid="select-contract-status"><SelectValue placeholder="All Status" /></SelectTrigger>
@@ -4825,6 +4877,11 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
             {Object.entries(CONTRACT_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Button variant={showCompleted ? "secondary" : "ghost"} size="sm" className="h-8 gap-1.5 text-xs shrink-0"
+          onClick={() => setShowCompleted(v => !v)} data-testid="btn-toggle-contract-completed">
+          <CheckSquare className="h-3.5 w-3.5" />
+          {showCompleted ? "Hide Completed" : "Show Completed"}
+        </Button>
       </div>
 
       {isLoading ? (
@@ -5087,6 +5144,7 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
 
 function DocumentsSection() {
   const { toast } = useToast();
+  const [folder, setFolder] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -5219,6 +5277,13 @@ function DocumentsSection() {
   }));
 
   const filtered = allDocs.filter(d => {
+    // Folder filter (high-level tabs)
+    if (folder === "proposals" && d.type !== "proposal") return false;
+    if (folder === "contracts" && d.type !== "contract") return false;
+    if (folder === "invoices" && d.type !== "invoice") return false;
+    if (folder === "agreements" && d.type !== "file") return false;
+    if (folder === "archived" && !d.immutable) return false;
+    // Secondary filters
     if (typeFilter !== "all" && d.type !== typeFilter) return false;
     if (statusFilter !== "all" && d.status !== statusFilter) return false;
     if (contractorFilter !== "all" && d.contractorId !== contractorFilter) return false;
@@ -5321,6 +5386,29 @@ function DocumentsSection() {
       <div>
         <h2 className="text-lg font-semibold">Documents</h2>
         <p className="text-sm text-muted-foreground">{allDocs.length} total artifacts · {filtered.length} showing</p>
+      </div>
+
+      {/* Folder tabs */}
+      <div className="flex gap-1 flex-wrap border-b pb-2">
+        {[
+          { key: "all", label: "All", count: allDocs.length },
+          { key: "proposals", label: "Proposals", count: allDocs.filter(d => d.type === "proposal").length },
+          { key: "contracts", label: "Contracts", count: allDocs.filter(d => d.type === "contract").length },
+          { key: "invoices", label: "Invoices", count: allDocs.filter(d => d.type === "invoice").length },
+          { key: "agreements", label: "Agreements", count: allDocs.filter(d => d.type === "file").length },
+          { key: "archived", label: "Archived", count: allDocs.filter(d => d.immutable).length },
+        ].map(f => (
+          <Button key={f.key} size="sm" variant={folder === f.key ? "default" : "ghost"} className="h-8 text-xs gap-1.5"
+            onClick={() => setFolder(f.key)} data-testid={`btn-folder-${f.key}`}>
+            {f.key === "proposals" && <FileText className="h-3 w-3" />}
+            {f.key === "contracts" && <FileSignature className="h-3 w-3" />}
+            {f.key === "invoices" && <Receipt className="h-3 w-3" />}
+            {f.key === "agreements" && <Shield className="h-3 w-3" />}
+            {f.key === "archived" && <Archive className="h-3 w-3" />}
+            {f.label}
+            {f.count > 0 && <span className="text-muted-foreground ml-0.5">({f.count})</span>}
+          </Button>
+        ))}
       </div>
 
       {/* Filters */}
@@ -7095,6 +7183,8 @@ export default function ContractorHubPage() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [newProposal, setNewProposal] = useState(false);
+  const [showProposalCompleted, setShowProposalCompleted] = useState(false);
+  const [showInvoiceCompleted, setShowInvoiceCompleted] = useState(false);
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
@@ -7151,7 +7241,8 @@ export default function ContractorHubPage() {
       const matchSearch = !search || p.title?.toLowerCase().includes(search.toLowerCase()) || p.proposalNumber?.toLowerCase().includes(search.toLowerCase());
       const matchStatus = statusFilter === "all" || p.status === statusFilter;
       const matchCompany = companyFilter === "all" || p.companyId === companyFilter;
-      return matchSearch && matchStatus && matchCompany;
+      const matchCompleted = showProposalCompleted || statusFilter !== "all" || !["converted_to_contract", "archived_to_documents"].includes(p.status);
+      return matchSearch && matchStatus && matchCompany && matchCompleted;
     })
     .sort((a, b) => {
       if (sortBy === "date_desc") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -7167,12 +7258,12 @@ export default function ContractorHubPage() {
     if (statusFilter === "all") {
       matchStatus = true;
     } else if (statusFilter === "overdue") {
-      // Compute-overdue: same logic used to count "overdue" on the dashboard summary card.
       matchStatus = !["paid", "void"].includes(i.status) && !!i.dueDate && new Date(i.dueDate) < new Date();
     } else {
       matchStatus = i.status === statusFilter;
     }
-    return matchSearch && matchStatus;
+    const matchCompleted = showInvoiceCompleted || statusFilter !== "all" || !["paid"].includes(i.status);
+    return matchSearch && matchStatus && matchCompleted;
   });
 
   function getProposalStatus(proposalId?: string) {
@@ -7346,6 +7437,11 @@ export default function ContractorHubPage() {
                       <SelectItem value="amount_asc">Amount: Low → High</SelectItem>
                     </SelectContent>
                   </Select>
+                  <Button variant={showProposalCompleted ? "secondary" : "ghost"} size="sm" className="h-8 gap-1.5 text-xs shrink-0"
+                    onClick={() => setShowProposalCompleted(v => !v)} data-testid="btn-toggle-proposal-completed">
+                    <CheckSquare className="h-3.5 w-3.5" />
+                    {showProposalCompleted ? "Hide Completed" : "Show Completed"}
+                  </Button>
                 </div>
 
                 {proposalsLoading ? (
@@ -7490,6 +7586,11 @@ export default function ContractorHubPage() {
                       {Object.entries(INVOICE_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                  <Button variant={showInvoiceCompleted ? "secondary" : "ghost"} size="sm" className="h-8 gap-1.5 text-xs shrink-0"
+                    onClick={() => setShowInvoiceCompleted(v => !v)} data-testid="btn-toggle-invoice-completed">
+                    <CheckSquare className="h-3.5 w-3.5" />
+                    {showInvoiceCompleted ? "Hide Paid" : "Show Paid"}
+                  </Button>
                   {!isAdmin && invoices.some(i => i.status === "draft") && (
                     <p className="text-xs text-muted-foreground ml-auto">
                       Draft invoices can be submitted for approval using the Submit button on each row.

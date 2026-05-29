@@ -729,12 +729,15 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
     // Create DMS record — uses document_type='proposal_pdf' (not 'proposal') so it can be
     // narrowly targeted for cache invalidation without touching uploaded PDF attachments.
     await db.execute(sql`
-      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id, proposal_id, proposal_name, job_code, cost_center, source_record_type, source_record_id, generated_at)
       VALUES (${proposal.company_id || null}, ${proposal.contractor_id}, 'worker', 'proposal_pdf',
         ${(proposal.title || proposal.proposal_number || "Proposal") + " — Approved PDF"},
         ${"Approved proposal PDF for " + (proposal.proposal_number || proposalId.slice(0, 8))},
         ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
-        'proposal', ${proposalId}, ${actorUserId})
+        'proposal', ${proposalId}, ${actorUserId},
+        ${proposalId}, ${proposal.title || proposal.proposal_number || null},
+        ${(proposal as any).job_id || null}, ${(proposal as any).cost_center_id || null},
+        'proposal', ${proposalId}, NOW())
     `);
 
     return "/uploads/" + fileName;
@@ -922,12 +925,15 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
     const fileSize = fs.statSync(filePath).size;
 
     await db.execute(sql`
-      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id, invoice_id, proposal_id, contract_id, job_code, cost_center, source_record_type, source_record_id, generated_at)
       VALUES (${invoice.company_id || null}, ${invoice.contractor_id}, 'worker', 'invoice',
         ${`Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)} — PDF`},
         ${"Invoice PDF for " + (invoice.invoice_number || invoiceId.slice(0, 8))},
         ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
-        'invoice', ${invoiceId}, ${actorUserId})
+        'invoice', ${invoiceId}, ${actorUserId},
+        ${invoiceId}, ${(invoice as any).proposal_id || null}, ${(invoice as any).contract_id || null},
+        ${(invoice as any).job_id || null}, ${(invoice as any).cost_center_id || null},
+        'invoice', ${invoiceId}, NOW())
     `);
 
     return "/uploads/" + fileName;
@@ -9981,6 +9987,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${inv.companyId}, u.id, 'invoice_paid', ${"Invoice Paid: " + invRef}, ${"Your invoice has been marked as paid."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
       } catch (notifErr) { console.error("[Invoice] Notify paid failed:", notifErr); }
 
+      // Generate paid invoice PDF and archive to Business Documents
+      try {
+        const invFullRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`);
+        const invRow = invFullRes.rows[0] as any;
+        if (invRow) {
+          const pdfPath = await generateInvoicePdf(req.params.id, invRow, req.session.userId!).catch((e: unknown) => {
+            console.warn("[Invoice mark-paid] PDF generation failed:", e instanceof Error ? e.message : String(e)); return null;
+          });
+          if (pdfPath) {
+            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${req.params.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+            const damDocId = (damRes?.rows[0] as any)?.id || null;
+            await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
+            if (damDocId) await db.execute(sql`UPDATE dam_documents SET paid_at = NOW() WHERE id = ${damDocId}`).catch(() => {});
+          }
+        }
+      } catch (archiveErr) { console.warn("[Invoice mark-paid] Archive to documents failed:", archiveErr); }
+
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
   });
@@ -10877,6 +10900,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const acceptedProposal = firstRow<ProposalRow & { id: string }>(updated) || proposal;
       const pdfPath = await generateProposalPdf(req.params.id, acceptedProposal, userId).catch((e: unknown) => { console.warn("[Proposal accept] PDF generation failed:", e instanceof Error ? e.message : String(e)); return null; });
       if (!pdfPath) console.warn("[Proposal accept] DMS record may be missing for proposal", req.params.id);
+      if (pdfPath) {
+        const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND document_type = 'proposal_pdf' ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+        const damDocId = (damRes?.rows[0] as any)?.id || null;
+        await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
+      }
       res.json({ ...acceptedProposal, _pdfGenerated: !!pdfPath });
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
@@ -12156,7 +12184,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } = req.body;
 
       const contractRes = await db.execute(sql`
-        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, end_date, contract_type, special_terms, body_markdown, status, created_by_user_id)
+        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, end_date, contract_type, special_terms, body_markdown, status, created_by_user_id, job_id, cost_center_id)
         VALUES (
           ${prop.company_id}, ${prop.contractor_id}, ${prop.id}, ${contractNumber},
           ${title || prop.title || "Service Contract"},
@@ -12172,7 +12200,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ${contractType || "service"},
           ${specialTerms || null},
           ${bodyMarkdown || null},
-          'draft', ${req.session.userId}
+          'draft', ${req.session.userId},
+          ${prop.job_id || null}, ${prop.cost_center_id || null}
         )
         RETURNING *
       `);
@@ -12664,6 +12693,34 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }
           await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contractData?.company_id}, u.id, 'signature_complete', ${"Contract Fully Signed: " + (contractData?.title || "")}, ${"All parties have signed. The contract is ready to be activated."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.company_id = ${contractData?.company_id} AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 5`);
         } catch (notifErr) { console.error("[Contract] Notify fully signed failed:", notifErr); }
+      }
+
+      // Store signed contract PDF in Business Documents
+      if (newStatus === "fully_signed") {
+        try {
+          const contractPdfBuf = await generateContractPdf(req.params.id);
+          if (contractPdfBuf) {
+            const fName = `contract-signed-${req.params.id.slice(0, 8)}-${Date.now()}.pdf`;
+            const uploadDir = path.join(process.cwd(), "uploads");
+            if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+            const fPath = path.join(uploadDir, fName);
+            fs.writeFileSync(fPath, contractPdfBuf);
+            const fSize = fs.statSync(fPath).size;
+            const damIns = await db.execute(sql`
+              INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id, contract_id, proposal_id, source_record_type, source_record_id, generated_at, signed_at)
+              VALUES (${contractData?.company_id || null}, ${contractData?.contractor_id || null}, 'worker', 'contract_pdf',
+                ${(contractData?.title || contractData?.contract_number || "Contract") + " — Signed PDF"},
+                ${"Signed contract PDF for " + (contractData?.contract_number || req.params.id.slice(0, 8))},
+                ${"/uploads/" + fName}, ${fName}, 'document', ${fSize}, 'application/pdf',
+                'contract', ${req.params.id}, ${req.session.userId || null},
+                ${req.params.id}, ${contractData?.proposal_id || null},
+                'contract', ${req.params.id}, NOW(), NOW())
+              RETURNING id
+            `);
+            const damDocId = (damIns.rows[0] as any)?.id || null;
+            await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
+          }
+        } catch (archiveErr) { console.warn("[Contract fully-signed] Archive to documents failed:", archiveErr); }
       }
 
       res.json({ signer, contractStatus: newStatus });
@@ -13347,28 +13404,132 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── DAM Documents ─────────────────────────────────────────────────────────
+  // POST /api/contractor-hub/backfill-documents — repair missing PDF archives for existing records
+  app.post("/api/contractor-hub/backfill-documents", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = user?.companyId;
+      const results = { proposals: 0, invoices: 0, proposalJobCodes: 0 };
+
+      // Backfill: approved proposals without archived_document_id
+      const approvedProps = await db.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE status IN ('approved','converted_to_contract')
+          AND archived_document_id IS NULL
+          AND deleted_at IS NULL
+          ${companyId ? sql`AND company_id = ${companyId}` : sql``}
+        LIMIT 50
+      `);
+      for (const row of approvedProps.rows as any[]) {
+        const existing = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${row.id} AND document_type = 'proposal_pdf' LIMIT 1`);
+        if (existing.rows[0]) {
+          const damDocId = (existing.rows[0] as any).id;
+          await db.execute(sql`UPDATE contractor_proposals SET archived_document_id = ${damDocId}, archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()) WHERE id = ${row.id}`).catch(() => {});
+          results.proposals++;
+        } else {
+          const pdfPath = await generateProposalPdf(row.id, row, req.session.userId!).catch(() => null);
+          if (pdfPath) {
+            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${row.id} AND document_type = 'proposal_pdf' ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+            const damDocId = (damRes?.rows[0] as any)?.id || null;
+            await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()), archived_document_id = ${damDocId} WHERE id = ${row.id}`).catch(() => {});
+            results.proposals++;
+          }
+        }
+      }
+
+      // Backfill: paid invoices without archived_document_id
+      const paidInvs = await db.execute(sql`
+        SELECT * FROM contractor_invoices
+        WHERE status = 'paid'
+          AND archived_document_id IS NULL
+          ${companyId ? sql`AND company_id = ${companyId}` : sql``}
+        LIMIT 50
+      `);
+      for (const row of paidInvs.rows as any[]) {
+        const existing = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${row.id} LIMIT 1`);
+        if (existing.rows[0]) {
+          const damDocId = (existing.rows[0] as any).id;
+          await db.execute(sql`UPDATE contractor_invoices SET archived_document_id = ${damDocId}, archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()) WHERE id = ${row.id}`).catch(() => {});
+          results.invoices++;
+        } else {
+          const pdfPath = await generateInvoicePdf(row.id, row, req.session.userId!).catch(() => null);
+          if (pdfPath) {
+            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${row.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+            const damDocId = (damRes?.rows[0] as any)?.id || null;
+            await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()), archived_document_id = ${damDocId} WHERE id = ${row.id}`).catch(() => {});
+            if (damDocId) await db.execute(sql`UPDATE dam_documents SET paid_at = COALESCE(paid_at, NOW()) WHERE id = ${damDocId}`).catch(() => {});
+            results.invoices++;
+          }
+        }
+      }
+
+      // Backfill: contracts missing job_id / cost_center_id — copy from proposal
+      const contractsMissingJob = await db.execute(sql`
+        SELECT cc.id, cp.job_id, cp.cost_center_id
+        FROM contractor_contracts cc
+        JOIN contractor_proposals cp ON cp.id = cc.proposal_id
+        WHERE cc.job_id IS NULL AND cp.job_id IS NOT NULL
+          ${companyId ? sql`AND cc.company_id = ${companyId}` : sql``}
+        LIMIT 100
+      `);
+      for (const row of contractsMissingJob.rows as any[]) {
+        await db.execute(sql`UPDATE contractor_contracts SET job_id = ${row.job_id}, cost_center_id = ${row.cost_center_id || null} WHERE id = ${row.id}`).catch(() => {});
+        results.proposalJobCodes++;
+      }
+
+      res.json({ message: "Backfill complete", results });
+    } catch (e: any) { res.status(500).json({ message: "Backfill failed: " + e.message }); }
+  });
+
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const { companyId, linkedEntityId } = req.query as Record<string, string>;
+      const { companyId, linkedEntityId, linkedEntityType, documentType, proposalId, contractId, invoiceId, jobCode, costCenter, folder, showArchived } = req.query as Record<string, string>;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const showArchivedBool = showArchived === "true";
       let result;
       if (isAdmin) {
-        // Admins filter by company; optionally by linked entity
         const cid = companyId || user?.companyId;
+        // Build folder→documentType mapping
+        const folderTypeMap: Record<string, string[]> = {
+          proposals: ["proposal_pdf", "proposal"],
+          contracts: ["contract_pdf", "contract"],
+          invoices: ["invoice"],
+          agreements: ["contractor_agreement", "independent_contractor_agreement", "work_for_rent_agreement", "trade_barter_agreement", "rent_credit_agreement"],
+          archived: [],
+        };
+        const effectiveDocTypes = folder && folderTypeMap[folder] ? folderTypeMap[folder] : (documentType ? [documentType] : null);
+        const isArchivedFolder = folder === "archived";
+
         result = await db.execute(sql`
           SELECT * FROM dam_documents
-          WHERE is_archived = FALSE
+          WHERE ${showArchivedBool || isArchivedFolder ? sql`TRUE` : sql`is_archived = FALSE`}
+            ${isArchivedFolder ? sql`AND is_archived = TRUE` : sql``}
             AND (company_id = ${cid} OR (company_id IS NULL AND worker_id IN (SELECT id FROM workers WHERE company_id = ${cid})))
             ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``}
+            ${linkedEntityType ? sql`AND linked_entity_type = ${linkedEntityType}` : sql``}
+            ${effectiveDocTypes && effectiveDocTypes.length > 0 ? sql`AND document_type = ANY(${effectiveDocTypes})` : sql``}
+            ${proposalId ? sql`AND proposal_id = ${proposalId}` : sql``}
+            ${contractId ? sql`AND contract_id = ${contractId}` : sql``}
+            ${invoiceId ? sql`AND invoice_id = ${invoiceId}` : sql``}
+            ${jobCode ? sql`AND job_code ILIKE ${"%" + jobCode + "%"}` : sql``}
+            ${costCenter ? sql`AND cost_center ILIKE ${"%" + costCenter + "%"}` : sql``}
           ORDER BY created_at DESC
         `);
       } else {
-        // Contractors only see their own documents — workerId always from session
         const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
         const wId = (wRes.rows[0] as any)?.worker_id;
         if (!wId) return res.json([]);
-        result = await db.execute(sql`SELECT * FROM dam_documents WHERE worker_id = ${wId} AND is_archived = FALSE ORDER BY created_at DESC`);
+        result = await db.execute(sql`
+          SELECT * FROM dam_documents
+          WHERE worker_id = ${wId}
+            AND ${showArchivedBool ? sql`TRUE` : sql`is_archived = FALSE`}
+            ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``}
+            ${proposalId ? sql`AND proposal_id = ${proposalId}` : sql``}
+            ${contractId ? sql`AND contract_id = ${contractId}` : sql``}
+            ${invoiceId ? sql`AND invoice_id = ${invoiceId}` : sql``}
+          ORDER BY created_at DESC
+        `);
       }
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch documents" }); }
