@@ -13074,6 +13074,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         rawBodyBuf = Buffer.from(JSON.stringify(eventData));
       }
 
+      // Fail-closed: reject immediately if no secret is configured
+      if (!secret) {
+        console.error("[Documenso Webhook] DOCUMENSO_WEBHOOK_SECRET is not set — rejecting all webhook requests. Configure the secret to enable webhook processing.");
+        return res.status(503).json({ message: "Webhook endpoint not configured: secret missing" });
+      }
+
       const isValid = verifyWebhookSignature(rawBodyBuf, signature, secret);
 
       const eventType: string = eventData.event || eventData.type || "unknown";
@@ -13086,18 +13092,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (dup.rows[0]) return res.status(200).json({ message: "Already processed" });
       }
 
-      // Store raw event (even invalid-sig ones for audit)
+      // Reject invalid signatures before storing (do not log untrusted payloads on auth failure)
+      if (!isValid) {
+        return res.status(401).json({ message: "Invalid webhook signature" });
+      }
+
+      // Store verified event
       const eventRow = await db.execute(sql`
         INSERT INTO documenso_webhook_events (event_type, documenso_document_id, documenso_event_id, payload, signature_valid, processed)
-        VALUES (${eventType}, ${documensoDocumentId}, ${documensoEventId}, ${JSON.stringify(eventData)}, ${isValid}, false)
+        VALUES (${eventType}, ${documensoDocumentId}, ${documensoEventId}, ${JSON.stringify(eventData)}, true, false)
         RETURNING id
       `);
       const eventId = (eventRow.rows[0] as any)?.id;
-
-      if (!isValid && secret) {
-        await db.execute(sql`UPDATE documenso_webhook_events SET processing_error = 'invalid_signature' WHERE id = ${eventId}`).catch(() => {});
-        return res.status(401).json({ message: "Invalid webhook signature" });
-      }
 
       // Process asynchronously so we return 200 quickly
       (async () => {
