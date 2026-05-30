@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send, Mail,
+  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send, Mail, Sparkles,
 } from "lucide-react";
 
 const fmt = (n: number | string | undefined | null) => {
@@ -104,25 +104,60 @@ function ConversationThread({
   thread,
   businessName,
   accentColor,
+  lastViewedAt,
+  firstUnreadRef,
 }: {
   thread: ThreadEvent[];
   businessName: string;
   accentColor: string;
+  lastViewedAt: number | null;
+  firstUnreadRef: React.RefObject<HTMLDivElement | null>;
 }) {
   if (!thread || thread.length === 0) return null;
+
+  let firstUnreadAssigned = false;
+
+  const unreadCount = thread.filter(
+    evt =>
+      evt.eventType === "admin_reply" &&
+      lastViewedAt !== null &&
+      new Date(evt.createdAt).getTime() > lastViewedAt,
+  ).length;
 
   return (
     <div data-testid="conversation-thread">
       <h2 className="text-base font-semibold mb-3 pb-1 border-b flex items-center gap-2">
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         Conversation
+        {unreadCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold text-white"
+            style={{ backgroundColor: accentColor }}
+            data-testid="unread-count-badge"
+          >
+            <Sparkles className="h-3 w-3" />
+            {unreadCount} new
+          </span>
+        )}
       </h2>
       <div className="space-y-3">
         {thread.map((evt, i) => {
           const isAdminReply = evt.eventType === "admin_reply";
+          const isUnread =
+            isAdminReply &&
+            lastViewedAt !== null &&
+            new Date(evt.createdAt).getTime() > lastViewedAt;
+
+          let refProp: React.RefObject<HTMLDivElement | null> | undefined;
+          if (isUnread && !firstUnreadAssigned) {
+            refProp = firstUnreadRef;
+            firstUnreadAssigned = true;
+          }
+
           return (
             <div
               key={i}
+              ref={refProp as React.RefObject<HTMLDivElement> | undefined}
               className={`flex ${isAdminReply ? "justify-end" : "justify-start"}`}
               data-testid={`thread-event-${i}`}
             >
@@ -131,13 +166,29 @@ function ConversationThread({
                   isAdminReply
                     ? "rounded-br-sm text-white"
                     : "bg-white border rounded-bl-sm text-gray-800"
-                }`}
-                style={isAdminReply ? { backgroundColor: accentColor } : {}}
+                } ${isUnread ? "ring-2 ring-offset-1" : ""}`}
+                style={
+                  isAdminReply
+                    ? {
+                        backgroundColor: accentColor,
+                        ...(isUnread ? { outlineColor: accentColor } : {}),
+                      }
+                    : {}
+                }
               >
-                <div className={`text-xs font-semibold mb-1 ${isAdminReply ? "text-white/80" : "text-muted-foreground"}`}>
+                <div className={`text-xs font-semibold mb-1 ${isAdminReply ? "text-white/80" : "text-muted-foreground"} flex items-center gap-1.5`}>
                   {isAdminReply
                     ? `From ${businessName}`
                     : (evt.actorName && evt.actorName !== "Client" ? evt.actorName : "You")}
+                  {isUnread && (
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-white font-bold leading-none"
+                      style={{ fontSize: "9px", backgroundColor: "rgba(255,255,255,0.35)" }}
+                      data-testid={`unread-badge-${i}`}
+                    >
+                      NEW
+                    </span>
+                  )}
                 </div>
                 <p className="whitespace-pre-wrap leading-relaxed">{evt.notes || ""}</p>
                 <div className={`text-xs mt-1.5 ${isAdminReply ? "text-white/60" : "text-muted-foreground/70"}`}>
@@ -451,6 +502,23 @@ export default function ProposalPortalPage() {
   const [error, setError] = useState<string | null>(null);
   const [approved, setApproved] = useState(false);
 
+  // Track the timestamp of the client's last visit so we can highlight new admin replies.
+  // We read this BEFORE loading data so we capture the "previous" visit time, then
+  // update it after data loads so future visits correctly mark only truly new messages.
+  const lsKey = proposalId ? `portal_last_viewed_${proposalId}` : null;
+  const [lastViewedAt] = useState<number | null>(() => {
+    if (!lsKey) return null;
+    try {
+      const stored = localStorage.getItem(lsKey);
+      return stored ? parseInt(stored, 10) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Ref used to auto-scroll to the first unread admin reply
+  const firstUnreadRef = useRef<HTMLDivElement | null>(null);
+
   const loadData = useCallback(async () => {
     if (!proposalId) { setError("Invalid proposal link"); setLoading(false); return; }
     if (!token) {
@@ -475,13 +543,24 @@ export default function ProposalPortalPage() {
       if (attRes.ok) {
         setAttachments(await attRes.json());
       }
+      // Record this visit so next time we can detect new replies
+      if (lsKey) {
+        try { localStorage.setItem(lsKey, String(Date.now())); } catch { /* storage unavailable */ }
+      }
     } catch {
       setError("Failed to load proposal — please check the link and try again.");
     }
     setLoading(false);
-  }, [proposalId, token]);
+  }, [proposalId, token, lsKey]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Scroll to the first unread admin reply once the thread renders
+  useEffect(() => {
+    if (!loading && firstUnreadRef.current) {
+      firstUnreadRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [loading]);
 
   // Reload proposal data (including thread) after client sends a message
   const handleMessageSent = useCallback(() => {
@@ -730,6 +809,8 @@ export default function ProposalPortalPage() {
               thread={proposal.thread}
               businessName={businessName}
               accentColor={accentColor}
+              lastViewedAt={lastViewedAt}
+              firstUnreadRef={firstUnreadRef}
             />
             {/* Compact reply box rendered directly below the thread */}
             <ClientMessageForm
