@@ -1160,10 +1160,11 @@ function ProposalDetailPanel({
   const isLocked = ["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal.status);
   const canEdit = !isLocked && (
     isAdmin
-      ? !["superseded", "archived"].includes(proposal.status)
-      : ["draft", "revision_requested", "countered"].includes(proposal.status)
+      ? !["superseded", "archived"].includes(proposal.status) &&
+        !(proposal.contractorId && ["draft", "countered", "counteroffer_pending", "revision_requested"].includes(proposal.status))
+      : ["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status)
   );
-  const canSubmit = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
+  const canSubmit = !isAdmin && ["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status);
   const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review"].includes(proposal.status);
   const canNegotiate = isAdmin && proposal.status === "countered";
   const canMarkNegotiated = isAdmin && ["countered", "negotiated"].includes(proposal.status);
@@ -1274,6 +1275,19 @@ function ProposalDetailPanel({
               {isLocked && (
                 <span className="shrink-0 flex items-center gap-1 text-xs text-muted-foreground border rounded px-2 py-1" data-testid="label-locked-proposal">
                   <Lock className="h-3 w-3" /> {proposal.status === "superseded" ? "Superseded — view only" : "Locked — view only"}
+                </span>
+              )}
+              {isAdmin && !isLocked && proposal.contractorId && ["draft", "countered", "counteroffer_pending", "revision_requested"].includes(proposal.status) && (
+                <span className="shrink-0 flex items-center gap-1 text-xs text-amber-700 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 rounded px-2 py-1" data-testid="label-admin-view-only-contractor">
+                  <Lock className="h-3 w-3" />
+                  {proposal.status === "draft" ? "Draft with contractor — view only" :
+                   proposal.status === "revision_requested" ? "Revision with contractor — view only" :
+                   "Counteroffer pending contractor response — view only"}
+                </span>
+              )}
+              {!isAdmin && proposal.status === "submitted" && (
+                <span className="shrink-0 flex items-center gap-1 text-xs text-blue-700 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 rounded px-2 py-1" data-testid="label-submitted-awaiting-review">
+                  <Send className="h-3 w-3" /> Submitted — waiting for admin review
                 </span>
               )}
               {canEdit && (
@@ -1428,6 +1442,11 @@ function ProposalDetailPanel({
                     ) : (
                       <p className="text-sm text-violet-700 dark:text-violet-400 mt-1">The company has sent a counteroffer. Please review and respond below.</p>
                     )}
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Button size="sm" className="bg-violet-600 hover:bg-violet-700 text-white" onClick={() => actionMutation.mutate({ action: "submit" })} disabled={actionMutation.isPending} data-testid="btn-resubmit-countered">
+                        <Send className="h-3.5 w-3.5 mr-1" /> Resubmit Revised Proposal
+                      </Button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2511,10 +2530,11 @@ function ProposalBuilder({
 
   const canEdit = isNew || (
     isAdmin
-      ? !["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal?.status || "")
-      : ["draft", "revision_requested", "countered"].includes(proposal?.status || "draft")
+      ? !["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal?.status || "") &&
+        !(proposal?.contractorId && ["draft", "countered", "counteroffer_pending", "revision_requested"].includes(proposal?.status || ""))
+      : ["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal?.status || "draft")
   );
-  const canSubmit = !isNew && ["draft", "revision_requested"].includes(proposal?.status || "");
+  const canSubmit = !isNew && !isAdmin && ["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal?.status || "");
   const canSend = !isNew && isAdmin && ["draft", "internal_review", "submitted"].includes(proposal?.status || "");
   const canRevise = !isNew && isAdmin && ["approved", "sent", "viewed"].includes(proposal?.status || "");
 
@@ -2889,6 +2909,24 @@ function ProposalBuilder({
 
             {/* ── Details Tab ── */}
             <TabsContent value="details" className="m-0 p-6 space-y-4">
+              {/* Counteroffer banner in editor — shown to contractor when admin has countered */}
+              {!isNew && !isAdmin && proposal?.status === "countered" && (
+                <div className="flex gap-3 rounded-lg border border-violet-300 bg-violet-50 dark:bg-violet-950/30 p-4" data-testid="banner-countered-builder">
+                  <HandshakeIcon className="h-5 w-5 text-violet-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-violet-800 dark:text-violet-300 text-sm">Counteroffer Received — Edit &amp; Resubmit</p>
+                    {(proposal as any)?.counterofferNotes || (proposal as any)?.counteroffer_notes ? (
+                      <p className="text-sm text-violet-700 dark:text-violet-400 mt-1 whitespace-pre-wrap">
+                        {(proposal as any).counterofferNotes || (proposal as any).counteroffer_notes}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-violet-700 dark:text-violet-400 mt-1">
+                        Update your proposal below and click <strong>Resubmit</strong> when ready.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
               {/* Revision requested banner — shows what admin asked contractor to fix */}
               {!isNew && !isAdmin && proposal?.status === "revision_requested" && (
                 <div className="flex gap-3 rounded-lg border border-orange-300 bg-orange-50 dark:bg-orange-950/30 p-4" data-testid="banner-revision-notes-builder">

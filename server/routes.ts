@@ -10662,8 +10662,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (isManager && !isOwner && ["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Cannot edit a superseded or locked proposal. Create a new revision from the active version." });
       }
+      // Guard: admin cannot edit contractor-owned proposals when it is the contractor's turn to act
+      if (isManager && !isOwner && proposal.contractor_id &&
+          ["draft", "countered", "counteroffer_pending", "revision_requested"].includes(proposal.status || "")) {
+        return res.status(403).json({ message: "This proposal is currently with the contractor. Admins cannot edit contractor-owned proposals in draft, countered, or revision-requested states." });
+      }
       // Guard: contractor can only edit their own draft/revision_requested/countered proposals
-      if (isOwner && !isManager && !["draft", "revision_requested", "countered"].includes(proposal.status || "")) {
+      if (isOwner && !isManager && !["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Cannot edit a submitted proposal. Wait for admin review or respond to the counteroffer." });
       }
       const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency,
@@ -10844,7 +10849,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (user?.workerId !== proposal.contractor_id) return res.status(403).json({ message: "Not your proposal" });
-      if (!["draft", "revision_requested"].includes(proposal.status || "")) {
+      if (!["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Proposal cannot be submitted from current status" });
       }
       if (!proposal.company_id) return res.status(400).json({ message: "Proposal must be addressed to a company before submitting" });
