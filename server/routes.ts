@@ -10467,8 +10467,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
       const showCompleted = req.query.showCompleted === "true";
-      const completedFilter = showCompleted ? sql`` : sql`AND cp.status NOT IN ('converted_to_contract', 'archived_to_documents') AND cp.archived_to_documents_at IS NULL`;
+      // Only hide proposals that are fully terminal (converted or explicitly archived).
+      // archived_to_documents_at just means a PDF was stored — NOT that the proposal is done.
+      const completedFilter = showCompleted ? sql`` : sql`AND cp.status NOT IN ('converted_to_contract', 'archived_to_documents')`;
       const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
+      // Owner/admin roles always see all proposals — permission overrides supersede workflow settings.
       const isAdminRole = ["admin", "owner", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
       if (isAdminRole) {
         // Build an enterprise-aware company ID set so admins see proposals across all sibling companies.

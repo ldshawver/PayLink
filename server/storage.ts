@@ -3003,7 +3003,8 @@ export class DatabaseStorage implements IStorage {
     if (contractorId) conds.push(eq(contractorInvoices.contractorId, contractorId));
     if (status) conds.push(eq(contractorInvoices.status, status));
     if (!showArchived) conds.push(eq(contractorInvoices.isArchived, false));
-    if (!showCompleted) conds.push(or(ne(contractorInvoices.status, "paid"), isNull(contractorInvoices.archivedToDocumentsAt)));
+    // archived_to_documents_at only tracks PDF storage — not completion status.
+    if (!showCompleted) conds.push(ne(contractorInvoices.status, "paid"));
     const q = conds.length > 0 ? db.select().from(contractorInvoices).where(and(...conds)) : db.select().from(contractorInvoices);
     return q.orderBy(desc(contractorInvoices.createdAt));
   }
