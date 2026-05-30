@@ -519,6 +519,13 @@ export default function ProposalPortalPage() {
   // Ref used to auto-scroll to the first unread admin reply
   const firstUnreadRef = useRef<HTMLDivElement | null>(null);
 
+  // Sentinel ref at the bottom of the thread — used for auto-scroll
+  const threadBottomRef = useRef<HTMLDivElement | null>(null);
+
+  function scrollThreadToBottom() {
+    setTimeout(() => threadBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  }
+
   const loadData = useCallback(async () => {
     if (!proposalId) { setError("Invalid proposal link"); setLoading(false); return; }
     if (!token) {
@@ -555,16 +562,17 @@ export default function ProposalPortalPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Scroll to the first unread admin reply once the thread renders
+  // On load: scroll to the thread bottom so the latest message is always visible
   useEffect(() => {
-    if (!loading && firstUnreadRef.current) {
-      firstUnreadRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!loading) {
+      scrollThreadToBottom();
     }
   }, [loading]);
 
-  // Reload proposal data (including thread) after client sends a message
-  const handleMessageSent = useCallback(() => {
-    loadData();
+  // Reload proposal data (including thread) after client sends a message, then scroll to bottom
+  const handleMessageSent = useCallback(async () => {
+    await loadData();
+    scrollThreadToBottom();
   }, [loadData]);
 
   const accentColor = proposal?.branding?.primaryColor || "#0f766e";
@@ -820,15 +828,19 @@ export default function ProposalPortalPage() {
               onSent={handleMessageSent}
               compact
             />
+            <div ref={threadBottomRef} />
           </div>
         ) : (
           /* No thread yet — show the full "Send a message" card */
-          <ClientMessageForm
-            proposalId={proposal.id}
-            token={token}
-            accentColor={accentColor}
-            onSent={handleMessageSent}
-          />
+          <>
+            <ClientMessageForm
+              proposalId={proposal.id}
+              token={token}
+              accentColor={accentColor}
+              onSent={handleMessageSent}
+            />
+            <div ref={threadBottomRef} />
+          </>
         )}
 
         {isApproved && (
