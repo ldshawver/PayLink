@@ -1,0 +1,3 @@
+- [Contractor Hub showCompleted](contractor-hub-show-completed.md) — showCompleted param added to all three list endpoints; frontend queries use it as cache key.
+- [Document Chain Links](document-chain-links.md) — DocRow type has proposalId/contractId/invoiceId/archivedDocumentId; cards render traceability chips.
+- [Backfill PDF Endpoint](backfill-pdf-endpoint.md) — POST /api/contractor-hub/backfill-documents uses generateProposalPdf/generateInvoicePdf (which auto-insert DAM records); contracts need manual Buffer→disk→DAM INSERT pattern.

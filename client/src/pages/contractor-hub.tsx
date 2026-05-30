@@ -4467,6 +4467,21 @@ function ContractDetailPanel({
                   <p className="text-sm whitespace-pre-wrap">{contract.tradeDetails}</p>
                 </div>
               )}
+              {((contract as any).proposalId || (contract as any).archivedDocumentId || (contract as any).archivedToDocumentsAt) && (
+                <div className="flex items-center gap-2 flex-wrap pt-1" data-testid="div-contract-traceability">
+                  {(contract as any).proposalId && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-3 py-1" data-testid="chip-contract-source-proposal">
+                      <FileText className="h-3 w-3" /> Source Proposal
+                    </span>
+                  )}
+                  {(contract as any).archivedDocumentId && (
+                    <a href={`/api/dam-documents/${(contract as any).archivedDocumentId}/download`} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-full px-3 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" data-testid="link-view-pdf-contract">
+                      <ExternalLink className="h-3 w-3" /> View PDF in Documents
+                    </a>
+                  )}
+                </div>
+              )}
               {contract.voidReason && (
                 <div className="p-3 bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-800">
                   <p className="text-xs font-medium text-red-700 dark:text-red-400 mb-1">Void Reason</p>
@@ -4827,9 +4842,10 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
   }, [initialStatusFilter]);
 
   const { data: rawContracts = [], isLoading, refetch } = useQuery<any[]>({
-    queryKey: ["/api/contractor-contracts"],
+    queryKey: ["/api/contractor-contracts", showCompleted],
     queryFn: async () => {
-      const r = await fetch("/api/contractor-contracts", { credentials: "include" });
+      const qs = showCompleted ? "?showCompleted=true" : "";
+      const r = await fetch(`/api/contractor-contracts${qs}`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
   });
@@ -5252,6 +5268,8 @@ function DocumentsSection() {
     companyId?: string; companyName?: string; versionNum?: number;
     fileUrl?: string; documentType?: string;
     signers?: Array<{name?: string; email?: string; signedAt?: string; role?: string}>;
+    proposalId?: string | null; contractId?: string | null; invoiceId?: string | null;
+    archivedDocumentId?: string | null;
   };
 
   const allDocs: DocRow[] = [
@@ -5266,6 +5284,10 @@ function DocumentsSection() {
       companyId: p.companyId,
       companyName: (p as any).companyName,
       versionNum: (p as any).version || (p as any).versionNumber || 1,
+      proposalId: p.id,
+      contractId: (p as any).convertedToContractId || null,
+      invoiceId: null,
+      archivedDocumentId: (p as any).archivedDocumentId || null,
     })),
     ...contracts.map(c => ({
       id: c.id, type: "contract", title: c.title || c.contractNumber || "Contract",
@@ -5281,6 +5303,10 @@ function DocumentsSection() {
         signedAt: (s as any).signedAt || (s as any).signed_at,
         role: (s as any).role,
       })),
+      proposalId: (c as any).proposalId || null,
+      contractId: c.id,
+      invoiceId: null,
+      archivedDocumentId: (c as any).archivedDocumentId || null,
     })),
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
@@ -5289,6 +5315,10 @@ function DocumentsSection() {
       contractorId: i.contractorId,
       companyId: (i as any).companyId,
       companyName: (i as any).companyName,
+      proposalId: (i as any).proposalId || null,
+      contractId: (i as any).contractId || null,
+      invoiceId: i.id,
+      archivedDocumentId: (i as any).archivedDocumentId || null,
     })),
     ...payments.map(p => ({
       id: p.id, type: "payment", title: `Payment — ${fmtDate(p.paidAt)}`,
@@ -5596,6 +5626,32 @@ function DocumentsSection() {
                       </span>
                     )}
                   </div>
+                  {(doc.proposalId || doc.contractId || doc.archivedDocumentId) && (
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      {doc.type !== "proposal" && doc.proposalId && (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-2 py-0.5" data-testid={`chip-chain-proposal-${doc.id}`}>
+                          <FileText className="h-2.5 w-2.5" /> Source Proposal
+                        </span>
+                      )}
+                      {doc.type === "proposal" && doc.contractId && (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-2 py-0.5" data-testid={`chip-chain-contract-${doc.id}`}>
+                          <FileSignature className="h-2.5 w-2.5" /> → Contract
+                        </span>
+                      )}
+                      {doc.type === "invoice" && doc.contractId && (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-2 py-0.5" data-testid={`chip-chain-src-contract-${doc.id}`}>
+                          <FileSignature className="h-2.5 w-2.5" /> Source Contract
+                        </span>
+                      )}
+                      {doc.archivedDocumentId && (
+                        <a href={`/api/dam-documents/${doc.archivedDocumentId}/download`} target="_blank" rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-[10px] bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 rounded-full px-2 py-0.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          data-testid={`link-chain-pdf-${doc.id}`}>
+                          <ExternalLink className="h-2.5 w-2.5" /> PDF in Docs
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                   {doc.signers && doc.signers.length > 0 && (
@@ -7228,12 +7284,22 @@ export default function ContractorHubPage() {
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
 
   const { data: proposals = [], isLoading: proposalsLoading } = useQuery<Proposal[]>({
-    queryKey: ["/api/contractor-proposals"],
+    queryKey: ["/api/contractor-proposals", showProposalCompleted],
+    queryFn: async () => {
+      const qs = showProposalCompleted ? "?showCompleted=true" : "";
+      const r = await fetch(`/api/contractor-proposals${qs}`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
     select: (data: any) => snakeToCamel(data),
   });
 
   const { data: invoices = [], isLoading: invoicesLoading } = useQuery<Invoice[]>({
-    queryKey: ["/api/contractor-invoices"],
+    queryKey: ["/api/contractor-invoices", showInvoiceCompleted],
+    queryFn: async () => {
+      const qs = showInvoiceCompleted ? "?showCompleted=true" : "";
+      const r = await fetch(`/api/contractor-invoices${qs}`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
     select: (data: any) => snakeToCamel(data),
   });
 

@@ -9662,14 +9662,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices", requireAuth, requireFeature("tenant.finance.contractor-hub"), async (req, res) => {
     try {
-      const { companyId, contractorId, status, showArchived } = req.query as Record<string, string>;
+      const { companyId, contractorId, status, showArchived, showCompleted } = req.query as Record<string, string>;
       const showArchivedBool = showArchived === "true";
+      const showCompletedBool = showCompleted === "true";
       const user = await storage.getUser(req.session.userId!);
       const isManager = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (isManager) {
-        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool));
+        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool, showCompletedBool));
       } else {
-        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool));
+        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool, showCompletedBool));
       }
     } catch (e) { res.status(500).json({ message: "Failed to fetch invoices" }); }
   });
@@ -10465,6 +10466,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
+      const showCompleted = req.query.showCompleted === "true";
+      const completedFilter = showCompleted ? sql`` : sql`AND cp.status NOT IN ('converted_to_contract', 'archived_to_documents') AND cp.archived_to_documents_at IS NULL`;
       const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
       const isAdminRole = ["admin", "owner", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
       if (isAdminRole) {
@@ -10490,7 +10493,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE cp.deleted_at IS NULL ${companyFilter}
+              WHERE cp.deleted_at IS NULL ${companyFilter} ${completedFilter}
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
@@ -10500,7 +10503,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE (cp.is_archived IS NOT TRUE) AND cp.deleted_at IS NULL ${companyFilter}
+              WHERE (cp.is_archived IS NOT TRUE) AND cp.deleted_at IS NULL ${companyFilter} ${completedFilter}
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
@@ -10518,6 +10521,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.contractor_id = ${workerId}
                 AND cp.deleted_at IS NULL
+                ${completedFilter}
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
@@ -10530,12 +10534,113 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               WHERE cp.contractor_id = ${workerId}
                 AND (cp.is_archived IS NOT TRUE)
                 AND cp.deleted_at IS NULL
+                ${completedFilter}
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
       }
       res.json(rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch proposals" }); }
+  });
+
+  // POST /api/contractor-hub/backfill-documents — scan completed records without DAM links and generate/link PDFs
+  app.post("/api/contractor-hub/backfill-documents", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isAdminOrPlatform = user?.role === "admin" || user?.role === "manager" ||
+        (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      if (!isAdminOrPlatform) return res.status(403).json({ message: "Admin access required" });
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const companyClause = isPlatform ? sql`` : sql`AND company_id = ${user?.companyId}`;
+
+      const results = { proposals: 0, contracts: 0, invoices: 0, errors: 0 };
+
+      // Backfill proposals in terminal states that haven't been archived
+      const propRows = await db.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE status IN ('approved', 'converted_to_contract')
+          AND archived_document_id IS NULL
+          AND deleted_at IS NULL
+          ${companyClause}
+        LIMIT 50
+      `);
+      for (const p of propRows.rows as any[]) {
+        try {
+          const pdfPath = await generateProposalPdf(p.id, p as any, req.session.userId!);
+          if (pdfPath) {
+            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${p.id} ORDER BY created_at DESC LIMIT 1`);
+            const damDocId = (damRes.rows[0] as any)?.id;
+            if (damDocId) {
+              await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${p.id} AND archived_document_id IS NULL`);
+              results.proposals++;
+            }
+          }
+        } catch { results.errors++; }
+      }
+
+      // Backfill fully-signed contracts (generateContractPdf returns Buffer; we write + insert manually)
+      const contractRows = await db.execute(sql`
+        SELECT * FROM contractor_contracts
+        WHERE status = 'fully_signed'
+          AND archived_document_id IS NULL
+          ${companyClause}
+        LIMIT 50
+      `);
+      for (const c of contractRows.rows as any[]) {
+        try {
+          const pdfBuf = await generateContractPdf(c.id);
+          if (pdfBuf) {
+            const fName = `contract-backfill-${c.id.slice(0, 8)}-${Date.now()}.pdf`;
+            const uploadDir = path.join(process.cwd(), "uploads");
+            if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+            const fPath = path.join(uploadDir, fName);
+            fs.writeFileSync(fPath, pdfBuf);
+            const fSize = fs.statSync(fPath).size;
+            const ins = await db.execute(sql`
+              INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id, contract_id, proposal_id, source_record_type, source_record_id, generated_at, signed_at)
+              VALUES (${c.company_id || null}, ${c.contractor_id || null}, 'worker', 'contract_pdf',
+                ${(c.title || c.contract_number || "Contract") + " — Signed PDF"},
+                ${"Backfilled signed contract PDF for " + (c.contract_number || c.id.slice(0, 8))},
+                ${"/uploads/" + fName}, ${fName}, 'document', ${fSize}, 'application/pdf',
+                'contract', ${c.id}, ${req.session.userId || null},
+                ${c.id}, ${c.proposal_id || null}, 'contract', ${c.id}, NOW(), ${c.fully_signed_at || null})
+              RETURNING id
+            `);
+            const damDocId = (ins.rows[0] as any)?.id;
+            if (damDocId) {
+              await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${c.id} AND archived_document_id IS NULL`);
+              results.contracts++;
+            }
+          }
+        } catch { results.errors++; }
+      }
+
+      // Backfill paid invoices
+      const invRows = await db.execute(sql`
+        SELECT * FROM contractor_invoices
+        WHERE status = 'paid'
+          AND archived_document_id IS NULL
+          ${companyClause}
+        LIMIT 50
+      `);
+      for (const inv of invRows.rows as any[]) {
+        try {
+          const pdfPath = await generateInvoicePdf(inv.id, inv as any, req.session.userId!);
+          if (pdfPath) {
+            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${inv.id} ORDER BY created_at DESC LIMIT 1`);
+            const damDocId = (damRes.rows[0] as any)?.id;
+            if (damDocId) {
+              await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${inv.id} AND archived_document_id IS NULL`);
+              results.invoices++;
+            }
+          }
+        } catch { results.errors++; }
+      }
+
+      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
+    } catch (e: any) {
+      res.status(500).json({ message: "Backfill failed: " + (e?.message || String(e)) });
+    }
   });
 
   // POST /api/contractor-proposals — contractor creates a proposal
@@ -12414,6 +12519,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       let rows;
       const showArchivedC = req.query.showArchived === "true";
+      const showCompletedC = req.query.showCompleted === "true";
+      const completedFilterC = showCompletedC ? sql`` : sql`AND cc.archived_to_documents_at IS NULL`;
       if (isAdmin) {
         // Admins can see company contracts; platform roles see all if no companyId filter
         const cid = companyId || user?.companyId;
@@ -12421,8 +12528,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         let result;
         if (isPlatform && !cid) {
           result = showArchivedC
-            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id ORDER BY cc.created_at DESC LIMIT 500`)
-            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC LIMIT 500`);
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE 1=1 ${completedFilterC} ORDER BY cc.created_at DESC LIMIT 500`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.is_archived IS NOT TRUE ${completedFilterC} ORDER BY cc.created_at DESC LIMIT 500`);
         } else {
           // Enterprise-aware: include all sibling companies sharing the same enterprise_id
           const entRes = await db.execute(sql`SELECT enterprise_id FROM companies WHERE id = ${cid} LIMIT 1`);
@@ -12431,8 +12538,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             ? sql`cc.company_id IN (SELECT id FROM companies WHERE enterprise_id = ${contractsEnterpriseId})`
             : sql`cc.company_id = ${cid}`;
           result = showArchivedC
-            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} ORDER BY cc.created_at DESC`)
-            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} ${completedFilterC} ORDER BY cc.created_at DESC`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} AND cc.is_archived IS NOT TRUE ${completedFilterC} ORDER BY cc.created_at DESC`);
         }
         rows = result.rows;
       } else {
@@ -12441,8 +12548,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const wId = (wRes.rows[0] as any)?.worker_id;
         if (!wId) return res.json([]);
         const result = showArchivedC
-          ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.contractor_id = ${wId} ORDER BY cc.created_at DESC`)
-          : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.contractor_id = ${wId} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
+          ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.contractor_id = ${wId} ${completedFilterC} ORDER BY cc.created_at DESC`)
+          : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.contractor_id = ${wId} AND cc.is_archived IS NOT TRUE ${completedFilterC} ORDER BY cc.created_at DESC`);
         rows = result.rows;
       }
       res.json(rows);
