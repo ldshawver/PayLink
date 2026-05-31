@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Link, useLocation } from "wouter";
+
 import {
   LayoutDashboard,
   Settings,
@@ -70,6 +71,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+type DashboardExceptionsResponse = { exceptions: any[]; count: number };
+
+function normalizeDashboardExceptions(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.exceptions)) return data.exceptions;
+  return [];
+}
 
 const DASHLET_STORAGE_KEY = "paylink-dashlets";
 
@@ -182,7 +191,7 @@ function NewsDashlet() {
 }
 
 function ExceptionSummaryDashlet() {
-  const { data: exceptions, isLoading: loadingEx } = useQuery<any[]>({
+  const { data: exceptionsResponse, isLoading: loadingEx } = useQuery<DashboardExceptionsResponse | any[]>({
     queryKey: ["/api/dashboard/exceptions"],
   });
   const { data: timeEntries, isLoading: loadingEntries } = useQuery<TimeEntry[]>({
@@ -192,7 +201,7 @@ function ExceptionSummaryDashlet() {
   if (loadingEx || loadingEntries) return <DashletSkeleton />;
 
   const entries = timeEntries || [];
-  const exList = exceptions || [];
+  const exList = normalizeDashboardExceptions(exceptionsResponse);
   const pendingApprovalCount = exList.filter((e) => e.status === "pending_approval").length;
   const missingClockOutCount = exList.filter((e) => e.exceptionType === "Missing clock-out").length;
   const highOTCount = entries.filter((e) => Number(e.overtimeHours) > 4).length;
@@ -469,7 +478,7 @@ function RequestAuthorizationsDashlet() {
 
 function ExceptionsDashlet({ label, testId }: { label: string; testId: string }) {
   const { toast } = useToast();
-  const { data: exceptions, isLoading } = useQuery<any[]>({
+  const { data: exceptionsResponse, isLoading } = useQuery<DashboardExceptionsResponse | any[]>({
     queryKey: ["/api/dashboard/exceptions"],
   });
   const [commentItem, setCommentItem] = useState<{ id: string; sourceType: string; sourceId: string } | null>(null);
@@ -551,7 +560,7 @@ function ExceptionsDashlet({ label, testId }: { label: string; testId: string })
 
   if (isLoading) return <DashletSkeleton />;
 
-  const items = (exceptions || []).slice(0, 5);
+  const items = normalizeDashboardExceptions(exceptionsResponse).slice(0, 5);
 
   const exceptionStatusColor = (status: string) => {
     if (status === "pending_approval") return "text-amber-600 dark:text-amber-400";

@@ -30,6 +30,7 @@ type AppDoctorReport = {
   error_message: string;
   stack_trace?: string | null;
   route?: string | null;
+  context_json?: string | null;
   occurrence_count?: number;
   ai_summary?: string | null;
   ai_root_cause?: string | null;
@@ -122,6 +123,16 @@ function parseRecommended(value?: unknown) {
 function parseAffectedFiles(value?: string | null): string[] {
   if (!value) return [];
   try { return JSON.parse(value); } catch { return []; }
+}
+
+function parseReportContext(value?: string | null): Record<string, any> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function formatUptime(s: number) {
@@ -221,6 +232,7 @@ export default function AppDoctorPage() {
   const [selectedReportId, setSelectedReportId] = useState<string>("");
   const selected = useMemo(() => reports.find(r => r.id === selectedReportId) || reports[0], [reports, selectedReportId]);
   const recommended = parseRecommended(selected?.recommended_files);
+  const selectedContext = parseReportContext(selected?.context_json);
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
@@ -619,6 +631,9 @@ export default function AppDoctorPage() {
                           {ISSUE_CATEGORY_LABELS[selected.issue_category] || selected.issue_category}
                         </Badge>
                       )}
+                      {selectedContext.httpStatus && (
+                        <Badge variant="outline">HTTP {selectedContext.httpStatus}</Badge>
+                      )}
                     </div>
 
                     {/* Approver requirement */}
@@ -637,10 +652,18 @@ export default function AppDoctorPage() {
                       <p className="text-sm text-muted-foreground whitespace-pre-wrap">{selected.ai_summary || "No AI diagnosis yet — run Analyze."}</p>
                     </section>
 
+                    {/* Route status */}
+                    {selectedContext.httpStatus && (
+                      <section>
+                        <h3 className="text-sm font-medium mb-1">HTTP Status</h3>
+                        <p className="text-sm text-muted-foreground">{selectedContext.httpStatus}</p>
+                      </section>
+                    )}
+
                     {/* Root Cause */}
                     <section>
                       <h3 className="text-sm font-medium mb-1">Likely Root Cause</h3>
-                      <p className="text-sm text-muted-foreground whitespace-pre-wrap">{selected.ai_root_cause || selected.error_message}</p>
+                      <p className="text-sm text-muted-foreground whitespace-pre-wrap">{selected.ai_root_cause || selected.error_message || "No error message was captured."}</p>
                     </section>
 
                     {/* Suggested Fix */}
