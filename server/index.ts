@@ -3308,6 +3308,57 @@ Thank you,
       resolved_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+    await run("company_user_access table", sql`CREATE TABLE IF NOT EXISTS company_user_access (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id VARCHAR NOT NULL,
+      company_id VARCHAR NOT NULL,
+      role TEXT NOT NULL DEFAULT 'employee',
+      is_default_company BOOLEAN NOT NULL DEFAULT FALSE,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      worker_type TEXT DEFAULT 'employee',
+      permissions TEXT,
+      granted_by_user_id VARCHAR,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, company_id)
+    )`);
+    await run("app_doctor_reports.issue_category",       sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS issue_category TEXT`);
+    await run("app_doctor_reports.severity_class",        sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS severity_class TEXT`);
+    await run("app_doctor_reports.required_approver_role",sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS required_approver_role TEXT`);
+    await run("app_doctor_reports.test_plan",             sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS test_plan TEXT`);
+    await run("app_doctor_reports.rollback_plan",         sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS rollback_plan TEXT`);
+    await run("app_doctor_repair_tickets table", sql`CREATE TABLE IF NOT EXISTS app_doctor_repair_tickets (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      report_id VARCHAR,
+      company_id VARCHAR,
+      status TEXT NOT NULL DEFAULT 'pending_approval',
+      severity_class TEXT NOT NULL DEFAULT 'medium',
+      required_approver_role TEXT NOT NULL DEFAULT 'admin',
+      proposed_patch TEXT,
+      affected_files TEXT,
+      test_plan TEXT,
+      rollback_plan TEXT,
+      approved_by_user_id VARCHAR,
+      approved_at TIMESTAMPTZ,
+      rejected_by_user_id VARCHAR,
+      rejected_reason TEXT,
+      pr_url TEXT,
+      branch_name TEXT,
+      pr_number INTEGER,
+      created_by_user_id VARCHAR,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("company_user_access backfill", sql`
+      INSERT INTO company_user_access (user_id, company_id, role, is_default_company, is_active, worker_type)
+      SELECT id, company_id, COALESCE(role, 'employee'), TRUE, TRUE,
+        CASE WHEN role IN ('admin','manager','tenant_admin','tenant_manager') THEN 'manager'
+             WHEN role LIKE 'platform_%' THEN 'admin'
+             ELSE 'employee' END
+      FROM users
+      WHERE company_id IS NOT NULL
+      ON CONFLICT (user_id, company_id) DO NOTHING
+    `);
   }
 
   // Fix: ensure the platform 'admin' user is never scoped to a company.

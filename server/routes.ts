@@ -259,27 +259,60 @@ function isPlatformUser(role: string | null | undefined): boolean {
 }
 
 /**
- * Returns true when a tenant-scoped user is allowed to act on a record belonging
- * to `targetCompanyId`.  Covers:
- *   1. Same company (exact match).
- *   2. Different companies that share the same non-null enterprise_id — an admin
- *      of Company A can approve/act on proposals from Company B when both belong
- *      to the same enterprise (same logic as the proposals GET list filter).
- *   3. null / undefined targetCompanyId — allowed for legacy records without a
- *      company assignment.
- * Platform users (no companyId) must be handled by the caller; this helper is
- * only for tenant-scoped users who have a companyId.
+ * Shared company access helper — the single source of truth for cross-company
+ * permission checks. Access is granted when ANY of the following is true:
+ *  1. targetCompanyId is null/undefined (record is not company-scoped)
+ *  2. User is a platform/global admin (no companyId or role starts with 'platform_')
+ *  3. User's default company === targetCompanyId
+ *  4. User and target share the same non-null enterprise_id (enterprise siblings)
+ *  5. User has an active company_user_access row for targetCompanyId
+ *
+ * Accepts either:
+ *  - A full user object `{ id, companyId?, role? }` (preferred — enables platform
+ *    admin bypass and company_user_access lookup)
+ *  - A plain companyId string (legacy callers; enterprise + CUA checks still run)
  */
-async function canAccessCompany(userCompanyId: string, targetCompanyId: string | null | undefined): Promise<boolean> {
+async function canAccessCompany(
+  userOrCompanyId: string | { id: string; companyId?: string | null; role?: string | null },
+  targetCompanyId: string | null | undefined
+): Promise<boolean> {
   if (!targetCompanyId) return true;
+
+  let userId: string | null = null;
+  let userCompanyId: string | null = null;
+
+  if (typeof userOrCompanyId === "string") {
+    userCompanyId = userOrCompanyId;
+  } else {
+    const u = userOrCompanyId;
+    userId = u.id;
+    // Platform / global admins bypass all company restrictions
+    if (!u.companyId || (u.role ?? "").startsWith("platform_")) return true;
+    userCompanyId = u.companyId;
+  }
+
+  if (!userCompanyId) return true;
   if (userCompanyId === targetCompanyId) return true;
+
+  // Enterprise sibling check
   const entRes = await db.execute(sql`
     SELECT 1 FROM companies c1
     JOIN companies c2 ON c1.enterprise_id = c2.enterprise_id AND c1.enterprise_id IS NOT NULL
     WHERE c1.id = ${userCompanyId} AND c2.id = ${targetCompanyId}
     LIMIT 1
   `);
-  return (entRes.rows ?? []).length > 0;
+  if ((entRes.rows ?? []).length > 0) return true;
+
+  // company_user_access — explicit secondary-company assignment
+  const cuaFilter = userId
+    ? sql`user_id = ${userId}`
+    : sql`user_id IN (SELECT id FROM users WHERE company_id = ${userCompanyId} LIMIT 1)`;
+  const cuaRes = await db.execute(sql`
+    SELECT 1 FROM company_user_access
+    WHERE ${cuaFilter} AND company_id = ${targetCompanyId} AND is_active = TRUE
+    LIMIT 1
+  `);
+  return (cuaRes.rows ?? []).length > 0;
 }
 
 async function getSessionCompanyId(req: Request): Promise<string | null> {
@@ -1380,6 +1413,57 @@ export async function registerRoutes(
       tenantGate = await checkTenantGate(user.companyId);
     }
     res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate });
+  });
+
+  // GET /api/auth/effective-access — debug endpoint showing a user's resolved company access
+  app.get("/api/auth/effective-access", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const isPlatformAdmin = !user.companyId || (user.role ?? "").startsWith("platform_");
+
+      // Fetch explicit company_user_access assignments
+      const cuaRows = await db.execute(sql`
+        SELECT cua.*, co.name AS company_name
+        FROM company_user_access cua
+        LEFT JOIN companies co ON co.id = cua.company_id
+        WHERE cua.user_id = ${user.id}
+        ORDER BY cua.is_default_company DESC, co.name ASC
+      `);
+
+      // Fetch enterprise sibling companies (if applicable)
+      let enterpriseCompanies: any[] = [];
+      if (user.companyId) {
+        const entRes = await db.execute(sql`
+          SELECT c.id, c.name, c.enterprise_id
+          FROM companies c
+          JOIN companies uc ON uc.enterprise_id = c.enterprise_id AND uc.enterprise_id IS NOT NULL
+          WHERE uc.id = ${user.companyId}
+          ORDER BY c.name ASC
+        `);
+        enterpriseCompanies = entRes.rows as any[];
+      }
+
+      // Accessible company IDs (union of default + enterprise + CUA)
+      const accessibleIds = new Set<string>();
+      if (user.companyId) accessibleIds.add(user.companyId);
+      for (const r of cuaRows.rows as any[]) if (r.is_active) accessibleIds.add(r.company_id);
+      for (const r of enterpriseCompanies) accessibleIds.add(r.id);
+
+      res.json({
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+        isPlatformAdmin,
+        defaultCompanyId: user.companyId,
+        accessibleCompanyIds: Array.from(accessibleIds),
+        companyUserAccess: cuaRows.rows,
+        enterpriseSiblings: enterpriseCompanies,
+        permissionNote: isPlatformAdmin
+          ? "Platform admin — bypasses all company restrictions"
+          : `Tenant-scoped to ${user.companyId} with ${accessibleIds.size} accessible company/companies`,
+      });
+    } catch (e: any) { res.status(500).json({ message: "Failed to resolve effective access: " + e.message }); }
   });
 
   app.post("/api/auth/pin-login", async (req, res) => {
@@ -11029,7 +11113,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status || "")) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
       const oldStatus = proposal.status;
       await autoSnapshot(req.params.id, proposal, `Approved by ${user?.username || "reviewer"}`, userId);
@@ -11084,7 +11168,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (proposal.status !== "approved") {
         return res.status(400).json({ message: "Only approved proposals can be sent for signature" });
       }
@@ -11269,7 +11353,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status || "")) return res.status(400).json({ message: "Invalid status for rejection" });
       const { rejectionReason } = req.body;
       const oldStatus = proposal.status;
@@ -11318,7 +11402,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       const allowedStatuses = ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review"];
       if (!allowedStatuses.includes(proposal.status || "")) return res.status(400).json({ message: `Cannot request revision from status '${proposal.status}'` });
       const { revisionNotes } = req.body;
@@ -11410,7 +11494,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (!["approved", "signed"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Only approved or signed proposals can be converted to invoices" });
       }
@@ -12005,7 +12089,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       const allowedForCounter = ["submitted", "sent", "viewed", "revision_requested", "under_review", "approved"];
       if (!allowedForCounter.includes(proposal.status || "")) return res.status(400).json({ message: `Cannot send counteroffer from status '${proposal.status}'` });
       const { counterTerms, counterNotes, counterAmount } = req.body;
@@ -12547,7 +12631,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let rows;
       const showArchivedC = req.query.showArchived === "true";
       const showCompletedC = req.query.showCompleted === "true";
-      const completedFilterC = showCompletedC ? sql`` : sql`AND cc.archived_to_documents_at IS NULL`;
+      const completedFilterC = showCompletedC ? sql`` : sql`AND cc.status NOT IN ('completed', 'terminated', 'void')`;
       if (isAdmin) {
         // Admins can see company contracts; platform roles see all if no companyId filter
         const cid = companyId || user?.companyId;
@@ -12594,7 +12678,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contract = result.rows[0] as any;
       // Ownership check: admin sees company contracts; contractor sees own
       if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && contract.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !(await canAccessCompany(user!, contract.company_id))) return res.status(403).json({ message: "Access denied" });
       const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
       res.json({ ...contract, signers: signers.rows });
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
@@ -12931,7 +13015,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!contractRes.rows[0]) return res.status(404).json({ message: "Contract not found" });
       const contract = contractRes.rows[0] as any;
       if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && contract.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !(await canAccessCompany(user!, contract.company_id))) return res.status(403).json({ message: "Access denied" });
       const result = await db.execute(sql`SELECT * FROM contract_versions WHERE contract_id = ${req.params.id} ORDER BY version DESC`);
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract versions" }); }
@@ -13570,84 +13654,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } catch (notifErr) { console.error("[Invoice] Notify override failed:", notifErr); }
       res.json({ message: "Override request submitted" });
     } catch (e: any) { res.status(500).json({ message: "Failed to submit override request: " + e.message }); }
-  });
-
-  // ── DAM Documents ─────────────────────────────────────────────────────────
-  // POST /api/contractor-hub/backfill-documents — repair missing PDF archives for existing records
-  app.post("/api/contractor-hub/backfill-documents", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session.userId!);
-      const companyId = user?.companyId;
-      const results = { proposals: 0, invoices: 0, proposalJobCodes: 0 };
-
-      // Backfill: approved proposals without archived_document_id
-      const approvedProps = await db.execute(sql`
-        SELECT * FROM contractor_proposals
-        WHERE status IN ('approved','converted_to_contract')
-          AND archived_document_id IS NULL
-          AND deleted_at IS NULL
-          ${companyId ? sql`AND company_id = ${companyId}` : sql``}
-        LIMIT 50
-      `);
-      for (const row of approvedProps.rows as any[]) {
-        const existing = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${row.id} AND document_type = 'proposal_pdf' LIMIT 1`);
-        if (existing.rows[0]) {
-          const damDocId = (existing.rows[0] as any).id;
-          await db.execute(sql`UPDATE contractor_proposals SET archived_document_id = ${damDocId}, archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()) WHERE id = ${row.id}`).catch(() => {});
-          results.proposals++;
-        } else {
-          const pdfPath = await generateProposalPdf(row.id, row, req.session.userId!).catch(() => null);
-          if (pdfPath) {
-            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${row.id} AND document_type = 'proposal_pdf' ORDER BY created_at DESC LIMIT 1`).catch(() => null);
-            const damDocId = (damRes?.rows[0] as any)?.id || null;
-            await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()), archived_document_id = ${damDocId} WHERE id = ${row.id}`).catch(() => {});
-            results.proposals++;
-          }
-        }
-      }
-
-      // Backfill: paid invoices without archived_document_id
-      const paidInvs = await db.execute(sql`
-        SELECT * FROM contractor_invoices
-        WHERE status = 'paid'
-          AND archived_document_id IS NULL
-          ${companyId ? sql`AND company_id = ${companyId}` : sql``}
-        LIMIT 50
-      `);
-      for (const row of paidInvs.rows as any[]) {
-        const existing = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${row.id} LIMIT 1`);
-        if (existing.rows[0]) {
-          const damDocId = (existing.rows[0] as any).id;
-          await db.execute(sql`UPDATE contractor_invoices SET archived_document_id = ${damDocId}, archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()) WHERE id = ${row.id}`).catch(() => {});
-          results.invoices++;
-        } else {
-          const pdfPath = await generateInvoicePdf(row.id, row, req.session.userId!).catch(() => null);
-          if (pdfPath) {
-            const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${row.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
-            const damDocId = (damRes?.rows[0] as any)?.id || null;
-            await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = COALESCE(archived_to_documents_at, NOW()), archived_document_id = ${damDocId} WHERE id = ${row.id}`).catch(() => {});
-            if (damDocId) await db.execute(sql`UPDATE dam_documents SET paid_at = COALESCE(paid_at, NOW()) WHERE id = ${damDocId}`).catch(() => {});
-            results.invoices++;
-          }
-        }
-      }
-
-      // Backfill: contracts missing job_id / cost_center_id — copy from proposal
-      const contractsMissingJob = await db.execute(sql`
-        SELECT cc.id, cp.job_id, cp.cost_center_id
-        FROM contractor_contracts cc
-        JOIN contractor_proposals cp ON cp.id = cc.proposal_id
-        WHERE cc.job_id IS NULL AND cp.job_id IS NOT NULL
-          ${companyId ? sql`AND cc.company_id = ${companyId}` : sql``}
-        LIMIT 100
-      `);
-      for (const row of contractsMissingJob.rows as any[]) {
-        await db.execute(sql`UPDATE contractor_contracts SET job_id = ${row.job_id}, cost_center_id = ${row.cost_center_id || null} WHERE id = ${row.id}`).catch(() => {});
-        results.proposalJobCodes++;
-      }
-
-      res.json({ message: "Backfill complete", results });
-    } catch (e: any) { res.status(500).json({ message: "Backfill failed: " + e.message }); }
   });
 
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
@@ -14463,7 +14469,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         contract = contractRes.rows[0];
         if (!contract) return res.status(404).json({ message: "Contract not found" });
         // Cross-tenant guard: caller must belong to same company as the contract
-        if (!isPlatform && user?.companyId && contract.company_id && contract.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+        if (!isPlatform && user?.companyId && contract.company_id && !(await canAccessCompany(user!, contract.company_id))) return res.status(403).json({ message: "Access denied" });
         if (!["fully_signed", "active"].includes(contract.status)) return res.status(400).json({ message: "Contract must be signed before invoicing" });
       }
 
@@ -23111,7 +23117,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       messages: [
         {
           role: "system",
-          content: "You are MyPayLink's AI App Doctor. Diagnose payroll/HR/finance SaaS runtime errors safely. Never recommend auto-deploying changes. Return strict JSON only.",
+          content: "You are MyPayLink's AI App Doctor for a production payroll/HR/compliance SaaS. " +
+            "Diagnose runtime errors and propose safe, minimal code fixes for human review. " +
+            "NEVER recommend auto-deploying. NEVER recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls. " +
+            "NEVER recommend changing visual layout/design, login/auth flow, payroll/tax calculations, check layouts, or invoice totals without global admin approval. " +
+            "NEVER recommend destructive DB migrations (DROP, TRUNCATE, DELETE on data). " +
+            "Classify severity_class: minor (single-file, non-structural fix), medium (multi-file workflow change), major (payroll/auth/migration/company-model). " +
+            "Return strict JSON only.",
         },
         {
           role: "user",
@@ -23126,11 +23138,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             expectedJson: {
               summary: "short user-facing diagnosis",
               rootCause: "likely technical cause",
+              issueCategory: "api_routing|permission_403|database_migration|frontend_render|document_pdf|payroll_calculation|deployment|port_process|twilio_sms|documenso_signature|other",
               suggestedFix: "what should change",
-              proposedPatch: "reviewable patch/diff/pseudocode",
+              proposedPatch: "reviewable patch/diff/pseudocode or null if not applicable",
               recommendedFiles: ["paths to inspect or change"],
               testsToRun: ["commands or flows"],
               riskLevel: "low|medium|high|critical",
+              severityClass: "minor (single-file non-structural) | medium (multi-file workflow) | major (payroll/auth/migration/company-model)",
+              requiredApproverRole: "admin (minor/medium) or global_admin (major)",
+              testPlan: "numbered steps to verify the fix works",
+              rollbackPlan: "how to undo the fix if something goes wrong",
             },
             report: {
               source: report.source,
@@ -23165,6 +23182,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           ai_patch = ${parsed.proposedPatch || null},
           recommended_files = ${JSON.stringify({ files: parsed.recommendedFiles || [], tests: parsed.testsToRun || [] })},
           risk_level = ${parsed.riskLevel || null},
+          issue_category = ${parsed.issueCategory || null},
+          severity_class = ${parsed.severityClass || null},
+          required_approver_role = ${parsed.requiredApproverRole || null},
+          test_plan = ${parsed.testPlan || null},
+          rollback_plan = ${parsed.rollbackPlan || null},
           updated_at = NOW()
       WHERE id = ${reportId}
     `);
@@ -23244,6 +23266,293 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to update App Doctor report") });
+    }
+  });
+
+  // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
+  app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      let dbHealth = "ok";
+      try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
+
+      const errorCounts = pgRows<any>(await db.execute(sql`
+        SELECT severity, COUNT(*) as cnt FROM app_doctor_reports
+        WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY severity
+      `));
+      const statusCounts = pgRows<any>(await db.execute(sql`
+        SELECT status, COUNT(*) as cnt FROM app_doctor_reports
+        WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY status
+      `));
+      const categoryBreakdown = pgRows<any>(await db.execute(sql`
+        SELECT issue_category, COUNT(*) as cnt FROM app_doctor_reports
+        WHERE created_at > NOW() - INTERVAL '7 days' AND issue_category IS NOT NULL GROUP BY issue_category ORDER BY cnt DESC
+      `));
+      const openTicketRow = pgRow<any>(await db.execute(sql`
+        SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets
+        WHERE status IN ('draft','pending_approval')
+      `));
+      const pendingApprovalRow = pgRow<any>(await db.execute(sql`
+        SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status = 'pending_approval'
+      `));
+
+      const toMap = (rows: any[]) => Object.fromEntries(rows.map(r => [r.severity || r.status || r.issue_category, parseInt(r.cnt)]));
+
+      res.json({
+        timestamp: new Date().toISOString(),
+        nodeVersion: process.version,
+        uptimeSeconds: Math.floor(process.uptime()),
+        dbHealth,
+        commitHash: process.env.COMMIT_SHA || "unknown",
+        environment: process.env.NODE_ENV || "development",
+        aiConfig: {
+          provider: process.env.XAI_API_KEY ? "xai" : process.env.OPENAI_API_KEY ? "openai" : "none",
+          model: process.env.APP_DOCTOR_MODEL || "grok-3-mini",
+          repairEnabled: process.env.APP_DOCTOR_REPAIR_ENABLED !== "false",
+          prEnabled: process.env.APP_DOCTOR_PR_ENABLED === "true",
+          githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
+          maxRiskAutoDraft: process.env.APP_DOCTOR_MAX_RISK_AUTO_DRAFT || "minor",
+          requireApproval: process.env.APP_DOCTOR_REQUIRE_APPROVAL !== "false",
+        },
+        reports: {
+          last24hBySeverity: toMap(errorCounts),
+          last7dByStatus: toMap(statusCounts),
+          last7dByCategory: toMap(categoryBreakdown),
+        },
+        repairTickets: {
+          open: parseInt(openTicketRow?.cnt || "0"),
+          pendingApproval: parseInt(pendingApprovalRow?.cnt || "0"),
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to collect diagnostics") });
+    }
+  });
+
+  // ── App Doctor: Repair Tickets ───────────────────────────────────────────────
+  app.get("/api/app-doctor/repair-tickets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = isPlatformUser(user?.role);
+      const companyId = isPlatform
+        ? (typeof req.query.companyId === "string" ? req.query.companyId : undefined)
+        : user?.companyId;
+      const rows = companyId
+        ? pgRows<any>(await db.execute(sql`
+            SELECT t.*, r.title as report_title, r.severity as report_severity, r.source as report_source
+            FROM app_doctor_repair_tickets t
+            LEFT JOIN app_doctor_reports r ON r.id = t.report_id
+            WHERE t.company_id = ${companyId}
+            ORDER BY t.created_at DESC LIMIT 100`))
+        : pgRows<any>(await db.execute(sql`
+            SELECT t.*, r.title as report_title, r.severity as report_severity, r.source as report_source
+            FROM app_doctor_repair_tickets t
+            LEFT JOIN app_doctor_reports r ON r.id = t.report_id
+            ORDER BY t.created_at DESC LIMIT 100`));
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch repair tickets") });
+    }
+  });
+
+  app.post("/api/app-doctor/repair-tickets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { reportId } = req.body || {};
+      if (!reportId) return res.status(400).json({ message: "reportId required" });
+      const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+      if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const severityClass = report.severity_class || "medium";
+      const requiredApproverRole = severityClass === "major" ? "global_admin" : "admin";
+
+      // Parse affected files from recommended_files JSON
+      let affectedFiles: string[] = [];
+      try {
+        const rf = typeof report.recommended_files === "string" ? JSON.parse(report.recommended_files) : report.recommended_files;
+        affectedFiles = rf?.files || [];
+      } catch { /* ignore */ }
+
+      const ticket = pgRow<any>(await db.execute(sql`
+        INSERT INTO app_doctor_repair_tickets
+          (report_id, company_id, severity_class, required_approver_role, proposed_patch,
+           affected_files, test_plan, rollback_plan, status, created_by_user_id)
+        VALUES
+          (${reportId}, ${report.company_id}, ${severityClass}, ${requiredApproverRole},
+           ${report.ai_patch || null}, ${JSON.stringify(affectedFiles)},
+           ${report.test_plan || null}, ${report.rollback_plan || null},
+           'pending_approval', ${req.session.userId})
+        RETURNING *
+      `));
+
+      // Notify approvers
+      if (report.company_id) {
+        await db.execute(sql`
+          INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read)
+          SELECT ${report.company_id}, u.id, 'app_doctor_approval_request',
+                 ${"App Doctor: Repair Approval Required"},
+                 ${`A ${severityClass} repair for "${report.title}" requires ${requiredApproverRole === "global_admin" ? "global admin" : "admin"} approval.`},
+                 ${"/app/app-doctor"}, FALSE
+          FROM users u
+          WHERE u.company_id = ${report.company_id}
+            AND u.role IN ('admin','owner','platform_super_admin','platform_admin','tenant_admin','tenant_owner')
+          LIMIT 10
+        `).catch(() => {});
+      }
+
+      res.status(201).json(ticket);
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create repair ticket") });
+    }
+  });
+
+  app.patch("/api/app-doctor/repair-tickets/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const ticket = pgRow<any>(await db.execute(sql`
+        SELECT * FROM app_doctor_repair_tickets WHERE id = ${req.params.id}
+      `));
+      if (!ticket) return res.status(404).json({ message: "Repair ticket not found" });
+      if (ticket.status !== "pending_approval") return res.status(400).json({ message: "Ticket is not pending approval" });
+      if (ticket.required_approver_role === "global_admin" && !isPlatformUser(user?.role)) {
+        return res.status(403).json({ message: "This repair requires global admin (platform admin) approval" });
+      }
+      const updated = pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_repair_tickets
+        SET status = 'approved', approved_by_user_id = ${req.session.userId}, approved_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id} RETURNING *
+      `));
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to approve repair ticket") });
+    }
+  });
+
+  app.patch("/api/app-doctor/repair-tickets/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { reason } = req.body || {};
+      const updated = pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_repair_tickets
+        SET status = 'rejected', rejected_by_user_id = ${req.session.userId}, rejected_reason = ${reason || null}, updated_at = NOW()
+        WHERE id = ${req.params.id} RETURNING *
+      `));
+      if (!updated) return res.status(404).json({ message: "Repair ticket not found" });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to reject repair ticket") });
+    }
+  });
+
+  app.post("/api/app-doctor/repair-tickets/:id/create-pr", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const ticket = pgRow<any>(await db.execute(sql`
+        SELECT t.*, r.title as report_title FROM app_doctor_repair_tickets t
+        LEFT JOIN app_doctor_reports r ON r.id = t.report_id
+        WHERE t.id = ${req.params.id}
+      `));
+      if (!ticket) return res.status(404).json({ message: "Repair ticket not found" });
+      if (ticket.status !== "approved") return res.status(400).json({ message: "Ticket must be approved before creating a PR" });
+
+      const githubToken = process.env.GITHUB_TOKEN;
+      const githubRepo = process.env.GITHUB_REPO; // format: "owner/repo"
+
+      if (!githubToken || !githubRepo) {
+        // Degrade gracefully — mark as pr_requested without actual GitHub PR
+        const updated = pgRow<any>(await db.execute(sql`
+          UPDATE app_doctor_repair_tickets SET status = 'pr_requested', updated_at = NOW()
+          WHERE id = ${req.params.id} RETURNING *
+        `));
+        return res.json({
+          ...updated,
+          note: "GITHUB_TOKEN and GITHUB_REPO are not configured. Set these environment variables to enable automatic PR creation. The ticket has been marked as pr_requested for manual processing.",
+          manualBranch: `app-doctor/fix-${req.params.id.slice(0, 8)}-${(ticket.report_title || "repair").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+        });
+      }
+
+      const [owner, repo] = githubRepo.split("/");
+      const slug = (ticket.report_title || "repair").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+      const branchName = `app-doctor/fix-${req.params.id.slice(0, 8)}-${slug}`;
+      const ghHeaders = {
+        Authorization: `token ${githubToken}`,
+        Accept: "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+        "User-Agent": "PayLink-AppDoctor/1.0",
+      };
+      const ghBase = `https://api.github.com/repos/${owner}/${repo}`;
+
+      // Get base SHA
+      const refRes = await fetch(`${ghBase}/git/ref/heads/main`, { headers: ghHeaders });
+      if (!refRes.ok) throw new Error(`GitHub ref fetch failed: ${refRes.status}`);
+      const refData: any = await refRes.json();
+      const baseSha = refData.object?.sha;
+
+      // Create branch
+      await fetch(`${ghBase}/git/refs`, {
+        method: "POST",
+        headers: ghHeaders,
+        body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+      });
+
+      // Compose PR body
+      let affectedFilesList: string[] = [];
+      try { affectedFilesList = JSON.parse(ticket.affected_files || "[]"); } catch { /* ignore */ }
+      const prBody = [
+        `## App Doctor Repair`,
+        `**Report:** ${ticket.report_title}`,
+        `**Severity Class:** \`${ticket.severity_class}\``,
+        `**Required Approver:** ${ticket.required_approver_role}`,
+        `**Ticket ID:** \`${ticket.id}\``,
+        ``,
+        `### Proposed Patch`,
+        "```",
+        ticket.proposed_patch || "(no patch content — review report for manual fix)",
+        "```",
+        ``,
+        `### Affected Files`,
+        affectedFilesList.length ? affectedFilesList.map(f => `- ${f}`).join("\n") : "_See report for details_",
+        ``,
+        `### Test Plan`,
+        ticket.test_plan || "_See App Doctor report for test plan._",
+        ``,
+        `### Rollback Plan`,
+        ticket.rollback_plan || "_Revert this commit._",
+        ``,
+        `---`,
+        `> ⚠️ This PR was created by **App Doctor**. Review carefully before merging. Do **not** auto-merge. Do **not** push directly to main.`,
+      ].join("\n");
+
+      // Create PR
+      const prRes = await fetch(`${ghBase}/pulls`, {
+        method: "POST",
+        headers: ghHeaders,
+        body: JSON.stringify({
+          title: `[App Doctor] ${ticket.report_title}`,
+          body: prBody,
+          head: branchName,
+          base: "main",
+        }),
+      });
+      if (!prRes.ok) {
+        const err: any = await prRes.json().catch(() => ({}));
+        throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+      }
+      const pr: any = await prRes.json();
+
+      // Add labels (best-effort)
+      await fetch(`${ghBase}/issues/${pr.number}/labels`, {
+        method: "POST",
+        headers: ghHeaders,
+        body: JSON.stringify({ labels: ["app-doctor", "bugfix", "needs-review", `severity-${ticket.severity_class}`] }),
+      }).catch(() => {});
+
+      const updated = pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_repair_tickets
+        SET status = 'pr_created', pr_url = ${pr.html_url}, branch_name = ${branchName},
+            pr_number = ${pr.number}, updated_at = NOW()
+        WHERE id = ${req.params.id} RETURNING *
+      `));
+
+      res.json({ ...updated, prUrl: pr.html_url });
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create GitHub PR") });
     }
   });
 

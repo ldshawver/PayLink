@@ -3091,6 +3091,12 @@ export const appDoctorReports = pgTable("app_doctor_reports", {
   recommendedFiles: text("recommended_files"),
   riskLevel: text("risk_level"),
   prUrl: text("pr_url"),
+  // Enhanced classification (added via migration)
+  issueCategory: text("issue_category"), // api_routing|permission_403|database_migration|frontend_render|document_pdf|payroll_calculation|deployment|port_process|twilio_sms|documenso_signature|other
+  severityClass: text("severity_class"), // minor|medium|major
+  requiredApproverRole: text("required_approver_role"), // admin|global_admin
+  testPlan: text("test_plan"),
+  rollbackPlan: text("rollback_plan"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -3098,6 +3104,35 @@ export const appDoctorReports = pgTable("app_doctor_reports", {
 export const insertAppDoctorReportSchema = createInsertSchema(appDoctorReports).omit({ id: true, createdAt: true, updatedAt: true });
 export type AppDoctorReport = typeof appDoctorReports.$inferSelect;
 export type InsertAppDoctorReport = z.infer<typeof insertAppDoctorReportSchema>;
+
+// ── App Doctor Repair Tickets ────────────────────────────────────────────────
+// Tracks repair proposals that have gone through the approval workflow.
+export const appDoctorRepairTickets = pgTable("app_doctor_repair_tickets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reportId: varchar("report_id"),
+  companyId: varchar("company_id"),
+  status: text("status").notNull().default("pending_approval"), // draft|pending_approval|approved|rejected|pr_created|merged
+  severityClass: text("severity_class").notNull().default("medium"), // minor|medium|major
+  requiredApproverRole: text("required_approver_role").notNull().default("admin"), // admin|global_admin
+  proposedPatch: text("proposed_patch"),
+  affectedFiles: text("affected_files"), // JSON array
+  testPlan: text("test_plan"),
+  rollbackPlan: text("rollback_plan"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  approvedAt: timestamp("approved_at"),
+  rejectedByUserId: varchar("rejected_by_user_id"),
+  rejectedReason: text("rejected_reason"),
+  prUrl: text("pr_url"),
+  branchName: text("branch_name"),
+  prNumber: integer("pr_number"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertAppDoctorRepairTicketSchema = createInsertSchema(appDoctorRepairTickets).omit({ id: true, createdAt: true, updatedAt: true });
+export type AppDoctorRepairTicket = typeof appDoctorRepairTickets.$inferSelect;
+export type InsertAppDoctorRepairTicket = z.infer<typeof insertAppDoctorRepairTicketSchema>;
 
 // ── Portal Access Tokens ──────────────────────────────────────────
 export const portalAccessTokens = pgTable("portal_access_tokens", {
@@ -4874,3 +4909,24 @@ export const documensoWebhookEvents = pgTable("documenso_webhook_events", {
 export const insertDocumensoWebhookEventSchema = createInsertSchema(documensoWebhookEvents).omit({ id: true, createdAt: true });
 export type DocumensoWebhookEvent = typeof documensoWebhookEvents.$inferSelect;
 export type InsertDocumensoWebhookEvent = z.infer<typeof insertDocumensoWebhookEventSchema>;
+
+// ── Company User Access ───────────────────────────────────────────────────
+// Multi-company access table. One row per (user, company) pair.
+// Enables a single user to have different roles/permissions across multiple companies.
+export const companyUserAccess = pgTable("company_user_access", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  role: text("role").notNull().default("employee"), // employee | contractor | supervisor | manager | admin | owner | vendor
+  isDefaultCompany: boolean("is_default_company").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  workerType: text("worker_type").default("employee"),
+  permissions: text("permissions"), // JSON blob for company-specific permission overrides
+  grantedByUserId: varchar("granted_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCompanyUserAccessSchema = createInsertSchema(companyUserAccess).omit({ id: true, createdAt: true, updatedAt: true });
+export type CompanyUserAccess = typeof companyUserAccess.$inferSelect;
+export type InsertCompanyUserAccess = z.infer<typeof insertCompanyUserAccessSchema>;
