@@ -671,10 +671,6 @@ export default function ProposalPortalPage() {
       if (attRes.ok) {
         setAttachments(await attRes.json());
       }
-      // Record this visit so next time we can detect new replies
-      if (lsKey) {
-        try { localStorage.setItem(lsKey, String(Date.now())); } catch { /* storage unavailable */ }
-      }
     } catch {
       setError("Failed to load proposal — please check the link and try again.");
     }
@@ -689,6 +685,53 @@ export default function ProposalPortalPage() {
       scrollThreadToBottom();
     }
   }, [loading]);
+
+  // Record the visit timestamp only after the client has actually seen new messages.
+  // If there are unread admin replies, wait until the first one scrolls into view
+  // (IntersectionObserver). Fall back to a 10-second timer in case the user never
+  // scrolls. If there are no unread messages, record after a short 2-second delay.
+  useEffect(() => {
+    if (loading || !lsKey || !proposal) return;
+
+    const hasUnread = (proposal.thread ?? []).some(
+      evt =>
+        evt.eventType === "admin_reply" &&
+        lastViewedAt !== null &&
+        new Date(evt.createdAt).getTime() > lastViewedAt,
+    );
+
+    let observer: IntersectionObserver | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const markViewed = () => {
+      try { localStorage.setItem(lsKey, String(Date.now())); } catch { /* storage unavailable */ }
+      observer?.disconnect();
+      observer = null;
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+    };
+
+    if (hasUnread && firstUnreadRef.current) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some(e => e.isIntersecting)) markViewed();
+        },
+        { threshold: 0.5 },
+      );
+      observer.observe(firstUnreadRef.current);
+      // Fallback: mark as viewed after 10 seconds even if the user never scrolls
+      timer = setTimeout(markViewed, 10_000);
+    } else {
+      // No new messages — record the visit after a brief delay so the timestamp
+      // reflects a real read, not just a page bounce
+      timer = setTimeout(markViewed, 2_000);
+    }
+
+    return () => {
+      observer?.disconnect();
+      if (timer !== null) clearTimeout(timer);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, proposal, lsKey]);
 
   // Reload proposal data (including thread) after client sends a message, then scroll to bottom
   const handleMessageSent = useCallback(async () => {
