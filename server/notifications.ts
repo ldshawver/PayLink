@@ -492,6 +492,67 @@ export async function sendContractEventSms(payload: ContractEventPayload): Promi
   }
 }
 
+export async function sendBrandedProposalReplyEmail(params: {
+  recipientName: string;
+  email: string;
+  proposalTitle: string;
+  messageText: string;
+  actionUrl?: string;
+  branding?: {
+    businessName?: string | null;
+    primaryColor?: string | null;
+    logoUrl?: string | null;
+  };
+  baseUrl?: string;
+}): Promise<{ sent: boolean; error?: string }> {
+  const smtp = await getTransporter();
+  if (!smtp) return { sent: false, error: "SMTP not configured" };
+
+  const { recipientName, email, proposalTitle, messageText, actionUrl, branding, baseUrl } = params;
+  const primaryColor = branding?.primaryColor || "#0d9488";
+  const businessName = branding?.businessName || "Your Service Provider";
+  const logoUrl = branding?.logoUrl;
+  const absoluteLogoUrl = logoUrl
+    ? (logoUrl.startsWith("http") ? logoUrl : `${baseUrl || ""}${logoUrl}`)
+    : null;
+
+  const logoHtml = absoluteLogoUrl
+    ? `<img src="${absoluteLogoUrl}" alt="${businessName}" style="max-height:48px;max-width:180px;object-fit:contain;margin-bottom:8px;" /><br />`
+    : "";
+
+  const actionBtn = actionUrl
+    ? `<a href="${actionUrl}" style="display:inline-block;background:${primaryColor};color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:16px;">View Proposal</a>`
+    : "";
+
+  const subject = `New Reply on Your Proposal: ${proposalTitle}`;
+  const html = `
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+  <div style="background:${primaryColor};padding:20px 24px;border-radius:8px 8px 0 0;">
+    ${logoHtml}
+    <h1 style="color:white;margin:0;font-size:20px;">${businessName}</h1>
+  </div>
+  <div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="font-size:15px;color:#111827;margin-top:0;">Hi <strong>${recipientName}</strong>,</p>
+    <p style="color:#374151;">You have a new reply on your proposal <strong>${proposalTitle}</strong>:</p>
+    <blockquote style="margin:16px 0;padding:12px 16px;background:#ffffff;border-left:4px solid ${primaryColor};border-radius:0 4px 4px 0;color:#111827;font-style:italic;">${messageText}</blockquote>
+    ${actionUrl ? `<p style="color:#6b7280;">Click the button below to view the full proposal and respond.</p>` : ""}
+    ${actionBtn}
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This message was sent on behalf of <strong>${businessName}</strong> via PayLink.</p>
+  </div>
+</div>`.trim();
+
+  const text = `Hi ${recipientName},\n\nYou have a new reply on your proposal "${proposalTitle}":\n\n${messageText}${actionUrl ? `\n\nView Proposal: ${actionUrl}` : ""}\n\n— ${businessName}`;
+
+  try {
+    await smtp.transporter.sendMail({ from: smtp.fromAddress, to: email, subject, text, html });
+    console.log(`[Email] Branded proposal reply sent to ${email} for proposal "${proposalTitle}"`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[Email] Failed branded proposal reply to ${email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
 export async function sendGenericNotificationEmail({ recipientName, email, title, body, actionUrl }: { recipientName: string; email: string; title: string; body: string; actionUrl?: string }): Promise<{ sent: boolean; error?: string }> {
   const smtp = await getTransporter();
   if (!smtp) return { sent: false, error: "SMTP not configured" };

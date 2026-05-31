@@ -11919,7 +11919,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let emailStatus: "sent" | "failed" | "skipped" = "skipped";
       if (notifyClient && proposal.client_email) {
         try {
-          const { sendGenericNotificationEmail } = await import("./notifications");
+          const { sendBrandedProposalReplyEmail } = await import("./notifications");
           const recipientName = proposal.client_name || "Valued Client";
           const proposalTitle = proposal.title || "Proposal";
           const baseUrl = getAppBaseUrl(req);
@@ -11927,12 +11927,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             ? `${baseUrl}/proposal/${req.params.id}?token=${proposal.share_token}`
             : undefined;
 
-          const emailResult = await sendGenericNotificationEmail({
+          // Fetch contractor branding: prefer proposal.branding_id, fall back to contractor_id lookup
+          let branding: { business_name?: string | null; primary_color?: string | null; logo_url?: string | null } | undefined;
+          try {
+            if (proposal.branding_id) {
+              const bRes = await db.execute(sql`SELECT business_name, primary_color, logo_url FROM contractor_branding WHERE id = ${proposal.branding_id} LIMIT 1`);
+              branding = bRes.rows[0] as typeof branding;
+            } else if (proposal.contractor_id) {
+              const bRes = await db.execute(sql`SELECT business_name, primary_color, logo_url FROM contractor_branding WHERE worker_id = ${proposal.contractor_id} LIMIT 1`);
+              branding = bRes.rows[0] as typeof branding;
+            }
+          } catch {
+            // Branding fetch failure is non-fatal — fall back to generic styling
+          }
+
+          const emailResult = await sendBrandedProposalReplyEmail({
             recipientName,
             email: proposal.client_email,
-            title: `New Reply on Proposal: ${proposalTitle}`,
-            body: `You have received a reply regarding your proposal <strong>${proposalTitle}</strong>:<br><br><em>${message.trim()}</em>${portalUrl ? `<br><br>You can view the proposal using the button below.` : ""}`,
+            proposalTitle,
+            messageText: message.trim(),
             actionUrl: portalUrl,
+            branding: branding ? {
+              businessName: branding.business_name,
+              primaryColor: branding.primary_color,
+              logoUrl: branding.logo_url,
+            } : undefined,
+            baseUrl,
           });
 
           if (emailResult.sent) {
