@@ -96,14 +96,46 @@ function PageLoader() {
   );
 }
 
-class AppErrorBoundary extends Component<{ children: React.ReactNode; area?: string }, { error: Error | null }> {
-  state = { error: null as Error | null };
+/** Returns true if the error is a Vite/webpack chunk-load failure after a deployment. */
+function isChunkLoadError(error: Error): boolean {
+  const msg = error.message || "";
+  return (
+    msg.includes("Failed to fetch dynamically imported module") ||
+    msg.includes("Importing a module script failed") ||
+    msg.includes("ChunkLoadError") ||
+    msg.includes("Loading chunk") ||
+    /failed to load.*\.js/i.test(msg)
+  );
+}
+
+/** Reload guard — prevents infinite reload loops (10 s cooldown). */
+function safeReload(): void {
+  const RELOAD_KEY = "paylink_chunk_reload_at";
+  const last = Number(sessionStorage.getItem(RELOAD_KEY) || "0");
+  if (Date.now() - last > 10_000) {
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+    window.location.reload();
+  }
+}
+
+class AppErrorBoundary extends Component<
+  { children: React.ReactNode; area?: string },
+  { error: Error | null; isChunkError: boolean }
+> {
+  state = { error: null as Error | null, isChunkError: false };
 
   static getDerivedStateFromError(error: Error) {
-    return { error };
+    return { error, isChunkError: isChunkLoadError(error) };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Chunk-load errors are expected after deployments — auto-reload silently.
+    if (isChunkLoadError(error)) {
+      safeReload();
+      return;
+    }
+
+    // All other errors get reported to App Doctor.
     fetch("/api/app-doctor/reports", {
       method: "POST",
       credentials: "include",
@@ -122,6 +154,27 @@ class AppErrorBoundary extends Component<{ children: React.ReactNode; area?: str
 
   render() {
     if (!this.state.error) return this.props.children;
+
+    // Chunk-load errors: show a minimal "updating" message while reload fires.
+    if (this.state.isChunkError) {
+      return (
+        <div className="flex min-h-[60vh] items-center justify-center p-6">
+          <div className="max-w-sm rounded-lg border bg-background p-6 shadow-sm text-center">
+            <h2 className="text-lg font-semibold">App Updated</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              A new version of PayLink is available. Reloading now…
+            </p>
+            <button
+              className="mt-4 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+              onClick={safeReload}
+            >
+              Reload Now
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex min-h-[60vh] items-center justify-center p-6">
         <div className="max-w-xl rounded-lg border bg-background p-6 shadow-sm">
