@@ -1887,6 +1887,7 @@ function ProposalDetailPanel({
               <div className="space-y-3" data-testid="thread-messages-container">
                 {(() => {
                   type ThreadItem = { id: string; ts: string; kind: "event" | "negotiation"; data: ProposalEvent | Negotiation };
+                  const clientViewedEvents = events.filter(e => e.eventType === "client_viewed");
                   const items: ThreadItem[] = [
                     ...events.filter(e => e.notes).map(e => ({ id: `evt-${e.id}`, ts: e.createdAt, kind: "event" as const, data: e })),
                     ...negotiations.map(n => ({ id: `neg-${n.id}`, ts: n.createdAt, kind: "negotiation" as const, data: n })),
@@ -1912,8 +1913,11 @@ function ProposalDetailPanel({
                       // ── Chat bubbles for client/admin messages ─────────────
                       if (ev.eventType === "client_message" || ev.eventType === "admin_reply") {
                         const isAdminMsg = ev.eventType === "admin_reply";
+                        const seenAt = isAdminMsg
+                          ? clientViewedEvents.find(v => new Date(v.createdAt).getTime() > new Date(ev.createdAt).getTime())
+                          : undefined;
                         return (
-                          <div key={item.id} className={`flex ${isAdminMsg ? "justify-end" : "justify-start"}`} data-testid={`thread-bubble-${ev.id}`}>
+                          <div key={item.id} className={`flex flex-col ${isAdminMsg ? "items-end" : "items-start"}`} data-testid={`thread-bubble-${ev.id}`}>
                             <div className={cn(
                               "max-w-[80%] rounded-lg px-3 py-2.5 text-sm shadow-sm",
                               isAdminMsg
@@ -1928,6 +1932,12 @@ function ProposalDetailPanel({
                                 {fmtDate(ev.createdAt)}
                               </div>
                             </div>
+                            {isAdminMsg && seenAt && (
+                              <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground" data-testid={`seen-indicator-${ev.id}`}>
+                                <Eye className="h-3 w-3 text-emerald-500" />
+                                <span className="text-emerald-600 dark:text-emerald-400">Seen · {fmtDate(seenAt.createdAt)}</span>
+                              </div>
+                            )}
                           </div>
                         );
                       }

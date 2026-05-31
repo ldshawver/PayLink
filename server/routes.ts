@@ -32713,6 +32713,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         db.execute(sql`UPDATE contractor_proposals SET status = 'viewed', viewed_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} AND status = 'sent'`).catch(() => {});
         proposal.status = "viewed";
       }
+      // Record every client portal visit so admins can see read-receipts
+      db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, actor_name, ip_address) VALUES (${req.params.id}, 'client_viewed', 'Client', ${req.ip || null})`).catch(() => {});
       // Fetch line items
       const liRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id} AND selected = true ORDER BY sort_order ASC`);
       const lineItems = liRes.rows as any[];
