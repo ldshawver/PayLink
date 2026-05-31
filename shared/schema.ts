@@ -4565,6 +4565,39 @@ export const insertFeatureActivationLogSchema = createInsertSchema(featureActiva
 export type FeatureActivationLog = typeof featureActivationLog.$inferSelect;
 export type InsertFeatureActivationLog = z.infer<typeof insertFeatureActivationLogSchema>;
 
+// ── Tenants (top-level billing/legal entity, sits above companies) ───────────
+// A Tenant is the SaaS customer account. One tenant can own multiple companies.
+// Existing company-as-tenant patterns remain unchanged; this is additive.
+export const tenants = pgTable("tenants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  status: text("status").notNull().default("active"), // active | trial | demo | suspended | cancelled
+  primaryAdminUserId: varchar("primary_admin_user_id"),
+  billingContactName: text("billing_contact_name"),
+  billingContactEmail: text("billing_contact_email"),
+  stripeCustomerId: text("stripe_customer_id"),
+  defaultTimezone: text("default_timezone").default("America/Los_Angeles"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, createdAt: true, updatedAt: true });
+export type Tenant = typeof tenants.$inferSelect;
+export type InsertTenant = z.infer<typeof insertTenantSchema>;
+
+// ── Tenant ↔ Company membership ───────────────────────────────────────────────
+export const tenantCompanies = pgTable("tenant_companies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  isPrimary: boolean("is_primary").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertTenantCompanySchema = createInsertSchema(tenantCompanies).omit({ id: true, createdAt: true });
+export type TenantCompany = typeof tenantCompanies.$inferSelect;
+export type InsertTenantCompany = z.infer<typeof insertTenantCompanySchema>;
+
 // ── Earning Types ─────────────────────────────────────────────────────────────
 export const earningTypes = pgTable("earning_types", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
