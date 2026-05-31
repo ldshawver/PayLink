@@ -62,11 +62,11 @@ function ModuleCard({ title, description, href, items, badge }: {
 export default function PlatformHomePage() {
   const { data: licenses = [] } = useQuery<any[]>({ queryKey: ["/api/license-requests"] });
   const { data: projects = [] } = useQuery<any[]>({ queryKey: ["/api/onboarding-projects"] });
-  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/companies"] });
+  const { data: tenants = [] } = useQuery<any[]>({ queryKey: ["/api/tenants"] });
 
   const pendingLicenses = licenses.filter((l: any) => l.status === "pending").length;
   const activeProjects = projects.filter((p: any) => p.status === "active").length;
-  const totalTenants = companies.length;
+  const totalTenants = tenants.length;
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -93,7 +93,7 @@ export default function PlatformHomePage() {
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <StatCard label="Pending License Requests" value={pendingLicenses} icon={FileBadge} href="/platform/license-requests" color="bg-orange-500" />
           <StatCard label="Active Onboarding Projects" value={activeProjects} icon={ClipboardCheck} href="/platform/onboarding-projects" color="bg-green-600" />
-          <StatCard label="Provisioned Tenants" value={totalTenants} icon={Building2} href="/platform/provisioning" color="bg-slate-600" />
+          <StatCard label="Tenants" value={totalTenants} icon={Building2} href="/platform/tenants" color="bg-slate-600" />
         </div>
 
         {/* Module Grid */}
