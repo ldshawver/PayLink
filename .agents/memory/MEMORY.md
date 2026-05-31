@@ -2,3 +2,4 @@
 - [Document Chain Links](document-chain-links.md) — DocRow type has proposalId/contractId/invoiceId/archivedDocumentId; cards render traceability chips.
 - [Backfill PDF Endpoint](backfill-pdf-endpoint.md) — POST /api/contractor-hub/backfill-documents uses generateProposalPdf/generateInvoicePdf (which auto-insert DAM records); contracts need manual Buffer→disk→DAM INSERT pattern.
 - [Contractor Hub action auth](contractor-hub-auth.md) — use canAccessCompany() not === for proposal action endpoints; enterprise admins need cross-company access.
+- [Phase 3A tenant isolation](phase3a-tenant-isolation.md) — canAccessCompany sibling cross-tenant fix; privacy_audit_log/breach_incidents company_id/tenant_id split; product_api_keys hash-mask pattern.

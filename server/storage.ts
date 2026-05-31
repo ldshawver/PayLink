@@ -806,6 +806,7 @@ export interface IStorage {
 
   getProductApiKeys(companyId: string): Promise<ProductApiKey[]>;
   getProductApiKeyByKey(apiKey: string): Promise<ProductApiKey | undefined>;
+  getProductApiKeyByHash(keyHash: string): Promise<ProductApiKey | undefined>;
   createProductApiKey(data: InsertProductApiKey): Promise<ProductApiKey>;
   updateProductApiKey(id: string, data: Partial<ProductApiKey>): Promise<ProductApiKey | undefined>;
   deleteProductApiKey(id: string): Promise<void>;
@@ -3676,6 +3677,10 @@ export class DatabaseStorage implements IStorage {
   }
   async getProductApiKeyByKey(apiKey: string): Promise<ProductApiKey | undefined> {
     const [r] = await db.select().from(productApiKeys).where(eq(productApiKeys.apiKey, apiKey));
+    return r;
+  }
+  async getProductApiKeyByHash(keyHash: string): Promise<ProductApiKey | undefined> {
+    const [r] = await db.select().from(productApiKeys).where(eq(productApiKeys.keyHash, keyHash));
     return r;
   }
   async createProductApiKey(data: InsertProductApiKey): Promise<ProductApiKey> {

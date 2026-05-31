@@ -10,7 +10,7 @@ import path from "path";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
-import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany } from "./tenant-context";
+import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
@@ -295,11 +295,20 @@ async function canAccessCompany(
   if (!userCompanyId) return true;
   if (userCompanyId === targetCompanyId) return true;
 
-  // Enterprise sibling check
+  // Enterprise sibling check — only allowed if both companies share an enterprise_id
+  // AND belong to the same tenant (or neither is yet assigned to a tenant).
+  // Phase 3A: cross-tenant enterprise sibling access is explicitly denied.
   const entRes = await db.execute(sql`
     SELECT 1 FROM companies c1
     JOIN companies c2 ON c1.enterprise_id = c2.enterprise_id AND c1.enterprise_id IS NOT NULL
+    LEFT JOIN tenant_companies tc1 ON tc1.company_id = c1.id
+    LEFT JOIN tenant_companies tc2 ON tc2.company_id = c2.id
     WHERE c1.id = ${userCompanyId} AND c2.id = ${targetCompanyId}
+      AND (
+        tc1.tenant_id IS NULL
+        OR tc2.tenant_id IS NULL
+        OR tc1.tenant_id = tc2.tenant_id
+      )
     LIMIT 1
   `);
   if ((entRes.rows ?? []).length > 0) return true;
@@ -24241,7 +24250,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const apiKey = req.headers["x-api-key"] as string;
       if (!apiKey) return res.status(401).json({ message: "API key required" });
 
-      const keyRecord = await storage.getProductApiKeyByKey(apiKey);
+      // Phase 3A: look up by SHA-256 hash (new pk_* keys), fall back to raw match (legacy / e-sign configs)
+      const keyHash = crypto.createHash("sha256").update(apiKey).digest("hex");
+      const keyRecord = await storage.getProductApiKeyByHash(keyHash) ?? await storage.getProductApiKeyByKey(apiKey);
       if (!keyRecord) return res.status(401).json({ message: "Invalid API key" });
       if (!keyRecord.isActive) return res.status(403).json({ message: "API key is disabled" });
 
@@ -24286,7 +24297,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const companyId = (req as any)._companyId;
       const keys = await storage.getProductApiKeys(companyId);
-      res.json(keys);
+      // Phase 3A: never expose raw api_key for pk_* keys — return maskedKey instead.
+      // JSON e-sign configs (docusign / acrobat_sign) keep their api_key (credential blob).
+      const safeKeys = keys.map(k => {
+        if (k.keyHash) {
+          const { apiKey: _raw, ...rest } = k;
+          return rest;
+        }
+        return k;
+      });
+      res.json(safeKeys);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch product API keys") }); }
   });
 
@@ -24294,14 +24314,22 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const companyId = await getSessionCompanyId(req);
       if (!companyId) return res.status(401).json({ message: "Not authenticated" });
-      const apiKey = `pk_${crypto.randomBytes(32).toString("hex")}`;
+      // Phase 3A: generate key, hash it, build masked display — never persist the raw key
+      const rawKey = `pk_${crypto.randomBytes(32).toString("hex")}`;
+      const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
+      const keyPrefix = rawKey.substring(0, 8);
+      const maskedKey = `${keyPrefix}...${rawKey.slice(-4)}`;
       const key = await storage.createProductApiKey({
         ...req.body,
         companyId,
-        apiKey,
+        apiKey: null,   // raw key is never stored
+        keyHash,
+        keyPrefix,
+        maskedKey,
         createdBy: req.session?.userId,
       });
-      res.status(201).json(key);
+      // Return the full raw key exactly once — user must save it now, it cannot be retrieved later
+      res.status(201).json({ ...key, apiKey: rawKey });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create product API key") }); }
   });
 
@@ -31441,18 +31469,30 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── Security Compliance Routes (Task #10) ─────────────────────────────────
 
   // Helper: write to privacy_audit_log
+  // Phase 3A: company_id (real company) and tenant_id (real tenant from tenant_companies) stored separately.
+  // Passing tenantId alone (legacy) is treated as companyId for backward compat.
   async function writePrivacyAuditLog(opts: {
     actorUserId: string;
     actionType: string;
     dataSubjectId?: string | null;
+    /** @deprecated Pass companyId instead. Treated as companyId for backward compat. */
     tenantId?: string | null;
+    /** Real company ID — takes precedence over tenantId. */
+    companyId?: string | null;
     detail?: string | null;
   }) {
+    const effectiveCompanyId = opts.companyId ?? opts.tenantId ?? null;
+    let realTenantId: string | null = null;
+    if (effectiveCompanyId) {
+      try {
+        realTenantId = await getTenantIdForCompany(effectiveCompanyId);
+      } catch { /* non-fatal — log still written without real tenantId */ }
+    }
     try {
       await db.execute(sql`
-        INSERT INTO privacy_audit_log (actor_user_id, action_type, data_subject_id, tenant_id, detail)
+        INSERT INTO privacy_audit_log (actor_user_id, action_type, data_subject_id, tenant_id, company_id, detail)
         VALUES (${opts.actorUserId}, ${opts.actionType}, ${opts.dataSubjectId ?? null},
-                ${opts.tenantId ?? null}, ${opts.detail ?? null})
+                ${realTenantId}, ${effectiveCompanyId}, ${opts.detail ?? null})
       `);
     } catch (e) {
       console.error("[privacyAuditLog] Failed to write:", e);
@@ -31524,7 +31564,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         actorUserId: userId,
         actionType: "mfa_enrolled",
         dataSubjectId: userId,
-        tenantId: user?.companyId ?? null,
+        companyId: user?.companyId ?? null,
         detail: `User ${user?.username} enrolled TOTP MFA`,
       });
       await writeAuditLog({ actorUserId: userId, targetResource: "auth", changeType: "mfa_enrolled", note: "TOTP MFA enabled", companyId: user?.companyId ?? null });
@@ -31572,7 +31612,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         actorUserId: userId,
         actionType: "mfa_disabled",
         dataSubjectId: userId,
-        tenantId: user?.companyId ?? null,
+        companyId: user?.companyId ?? null,
         detail: `User ${user?.username} disabled TOTP MFA`,
       });
       await writeAuditLog({ actorUserId: userId, targetResource: "auth", changeType: "mfa_disabled", note: "TOTP MFA disabled", companyId: user?.companyId ?? null });
@@ -31728,7 +31768,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         actorUserId: userId,
         actionType: "data_export",
         dataSubjectId: workerId,
-        tenantId: user.companyId,
+        companyId: user.companyId,
         detail: `PII data export for worker ${workerId} (${workerData.first_name} ${workerData.last_name}) by user ${userId}`,
       });
       await writeAuditLog({
@@ -31809,7 +31849,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         actorUserId: userId,
         actionType: "data_anonymization",
         dataSubjectId: workerId,
-        tenantId: user.companyId,
+        companyId: user.companyId,
         detail: `Worker ${workerId} anonymized by user ${userId}. PII overwritten: name, email, phone, address, SSN, bank details. Payroll totals retained.`,
       });
       await writeAuditLog({
@@ -31842,9 +31882,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       let paramIdx = 1;
 
       // Tenant isolation: non-platform users only see their own company's privacy events
+      // Phase 3A: filter by company_id (tenant_id was previously used incorrectly)
       if (!isGlobalViewer) {
         if (!user?.companyId) return res.status(403).json({ message: "No company context" });
-        whereClause += ` AND tenant_id = $${paramIdx++}`;
+        whereClause += ` AND company_id = $${paramIdx++}`;
         params.push(user.companyId);
       }
 
@@ -31905,7 +31946,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!isGlobalViewer) {
         if (!user?.companyId) return res.status(403).json({ message: "No company context" });
         baseParams.push(user.companyId);
-        conditions.push(`tenant_id = $${baseParams.length}`);
+        conditions.push(`company_id = $${baseParams.length}`);
       }
       if (actionType) { baseParams.push(actionType); conditions.push(`action_type = $${baseParams.length}`); }
       if (dataSubjectId) { baseParams.push(dataSubjectId); conditions.push(`data_subject_id = $${baseParams.length}`); }
@@ -31951,6 +31992,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (isGlobalViewer) {
         rows = await dbRaw.$client.query(`
           SELECT id, actor_user_id AS "actorUserId", tenant_id AS "tenantId",
+                 company_id AS "companyId",
                  discovered_at AS "discoveredAt", nature, data_categories AS "dataCategories",
                  approximate_subjects AS "approximateSubjects",
                  response_actions AS "responseActions",
@@ -31962,8 +32004,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         `);
       } else {
         if (!user?.companyId) return res.status(403).json({ message: "No company context" });
+        // Phase 3A: filter by company_id (tenant_id was previously used incorrectly)
         rows = await dbRaw.$client.query(`
           SELECT id, actor_user_id AS "actorUserId", tenant_id AS "tenantId",
+                 company_id AS "companyId",
                  discovered_at AS "discoveredAt", nature, data_categories AS "dataCategories",
                  approximate_subjects AS "approximateSubjects",
                  response_actions AS "responseActions",
@@ -31971,7 +32015,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                  subjects_notified AS "subjectsNotified",
                  containment_complete AS "containmentComplete",
                  created_at AS "createdAt"
-          FROM breach_incidents WHERE tenant_id = $1 ORDER BY created_at DESC
+          FROM breach_incidents WHERE company_id = $1 ORDER BY created_at DESC
         `, [user.companyId]);
       }
       res.json(rows.rows);
@@ -31993,33 +32037,34 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.status(400).json({ message: "discoveredAt, nature, dataCategories, and responseActions are required" });
       }
 
-      // Always record the tenant_id so incidents are scoped correctly
-      const tenantId = user?.companyId ?? null;
+      // Phase 3A: store company_id (real) and resolve real tenant_id from tenant_companies
+      const companyId = user?.companyId ?? null;
+      const tenantId = companyId ? await getTenantIdForCompany(companyId) : null;
 
       const { db: dbRaw } = await import("./db");
       const result = await dbRaw.$client.query(`
         INSERT INTO breach_incidents
-          (actor_user_id, tenant_id, discovered_at, nature, data_categories, approximate_subjects,
+          (actor_user_id, company_id, tenant_id, discovered_at, nature, data_categories, approximate_subjects,
            response_actions, dpa_notified, subjects_notified, containment_complete)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
-      `, [userId, tenantId, discoveredAt, nature, dataCategories, approximateSubjects,
+      `, [userId, companyId, tenantId, discoveredAt, nature, dataCategories, approximateSubjects,
           responseActions, dpaNotified, subjectsNotified, containmentComplete]);
 
       await writePrivacyAuditLog({
         actorUserId: userId,
         actionType: "breach_notification",
-        tenantId,
+        companyId,
         detail: JSON.stringify({ nature, dataCategories, approximateSubjects, dpaNotified, subjectsNotified }),
       });
       await writeAuditLog({
         actorUserId: userId, targetResource: "breach_incidents", changeType: "breach_notification",
-        note: `Breach incident recorded: ${nature.substring(0, 100)}`, companyId: tenantId,
+        note: `Breach incident recorded: ${nature.substring(0, 100)}`, companyId,
       });
       // Platform-scoped notification so platform_super_admin users see it in the global audit log
       await writeAuditLog({
         actorUserId: userId, targetResource: "breach_incidents", changeType: "breach_notification",
-        note: `[PLATFORM ALERT] Breach incident submitted by tenant ${tenantId ?? "unknown"}: ${nature.substring(0, 100)}`,
+        note: `[PLATFORM ALERT] Breach incident submitted by company ${companyId ?? "unknown"} (tenant ${tenantId ?? "unknown"}): ${nature.substring(0, 100)}`,
         companyId: null,
       });
 
@@ -32072,7 +32117,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       await writePrivacyAuditLog({
         actorUserId: userId,
         actionType: "retention_policy_change",
-        tenantId: user?.companyId ?? null,
+        companyId: user?.companyId ?? null,
         detail: `Retention policy ${id}: legalBasis=${legalBasis}, purpose updated`,
       });
 

@@ -3223,6 +3223,86 @@ Thank you,
       ALTER TABLE breach_incidents ADD COLUMN IF NOT EXISTS tenant_id VARCHAR
     `);
 
+    // ── Phase 3A: tenant isolation column additions ────────────────────────
+    // privacy_audit_log: add company_id (tenant_id was incorrectly storing company_id)
+    await run("privacy_audit_log.company_id column", sql`
+      ALTER TABLE privacy_audit_log ADD COLUMN IF NOT EXISTS company_id VARCHAR
+    `);
+    // Backfill company_id from old tenant_id values (they were company IDs all along)
+    await run("privacy_audit_log.company_id backfill", sql`
+      UPDATE privacy_audit_log
+      SET company_id = tenant_id
+      WHERE company_id IS NULL AND tenant_id IS NOT NULL
+    `);
+    // Backfill real tenant_id for rows that now have a company_id
+    await run("privacy_audit_log.tenant_id real backfill", sql`
+      UPDATE privacy_audit_log pal
+      SET tenant_id = (
+        SELECT tc.tenant_id FROM tenant_companies tc WHERE tc.company_id = pal.company_id LIMIT 1
+      )
+      WHERE pal.company_id IS NOT NULL AND pal.tenant_id = pal.company_id
+    `);
+
+    // breach_incidents: add company_id (same mismatch as privacy_audit_log)
+    await run("breach_incidents.company_id column", sql`
+      ALTER TABLE breach_incidents ADD COLUMN IF NOT EXISTS company_id VARCHAR
+    `);
+    await run("breach_incidents.company_id backfill", sql`
+      UPDATE breach_incidents
+      SET company_id = tenant_id
+      WHERE company_id IS NULL AND tenant_id IS NOT NULL
+    `);
+    await run("breach_incidents.tenant_id real backfill", sql`
+      UPDATE breach_incidents bi
+      SET tenant_id = (
+        SELECT tc.tenant_id FROM tenant_companies tc WHERE tc.company_id = bi.company_id LIMIT 1
+      )
+      WHERE bi.company_id IS NOT NULL AND bi.tenant_id = bi.company_id
+    `);
+
+    // product_api_keys: add masking columns (Phase 3A — raw keys never stored for new pk_* keys)
+    await run("product_api_keys.key_hash column", sql`
+      ALTER TABLE product_api_keys ADD COLUMN IF NOT EXISTS key_hash TEXT
+    `);
+    await run("product_api_keys.key_prefix column", sql`
+      ALTER TABLE product_api_keys ADD COLUMN IF NOT EXISTS key_prefix VARCHAR(16)
+    `);
+    await run("product_api_keys.masked_key column", sql`
+      ALTER TABLE product_api_keys ADD COLUMN IF NOT EXISTS masked_key TEXT
+    `);
+    await run("product_api_keys.revoked_at column", sql`
+      ALTER TABLE product_api_keys ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP
+    `);
+    await run("product_api_keys.api_key nullable", sql`
+      ALTER TABLE product_api_keys ALTER COLUMN api_key DROP NOT NULL
+    `);
+
+    // Backfill masking data for existing pk_* keys and then clear raw key
+    try {
+      const existingKeys = await db.execute(sql`
+        SELECT id, api_key FROM product_api_keys
+        WHERE api_key LIKE 'pk_%' AND key_hash IS NULL
+      `);
+      const crypto = await import("crypto");
+      for (const row of (existingKeys.rows ?? []) as Array<{ id: string; api_key: string }>) {
+        const rawKey = row.api_key;
+        const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex");
+        const keyPrefix = rawKey.substring(0, 8);
+        const maskedKey = `${keyPrefix}...${rawKey.slice(-4)}`;
+        await db.execute(sql`
+          UPDATE product_api_keys
+          SET key_hash = ${keyHash}, key_prefix = ${keyPrefix}, masked_key = ${maskedKey}, api_key = NULL
+          WHERE id = ${row.id}
+        `);
+      }
+      if ((existingKeys.rows ?? []).length > 0) {
+        console.log(`[Phase3A] Migrated ${(existingKeys.rows ?? []).length} pk_* keys to hashed format`);
+      }
+    } catch (e) {
+      console.error("[Phase3A] product_api_keys backfill failed (non-fatal):", e);
+    }
+    // ── End Phase 3A migrations ───────────────────────────────────────────
+
     // ── Compliance engine tables ────────────────────────────────────────────
     await run("jurisdictions table", sql`CREATE TABLE IF NOT EXISTS jurisdictions (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -377,3 +377,127 @@ After assigning at least two companies to different tenants via Platform Console
 | `server/tenant-context.ts` | **NEW** — all Phase 2 helpers and middleware |
 | `server/routes.ts` | Added `app.use("/api", withTenantContext)` + import |
 | `TENANT_ISOLATION_AUDIT.md` | **NEW** — this document |
+
+---
+
+## 10. Phase 3A Fixes (May 31, 2026)
+
+Phase 3A implemented the four highest-risk P0 items from Section 7 that were blocking a safe multi-tenant production launch.
+
+### 10.1 Fix: `canAccessCompany` Cross-Tenant Enterprise Sibling Loophole
+
+**Problem:** The enterprise sibling check in `canAccessCompany` (routes.ts:300) only verified that two companies shared an `enterprise_id`. It did NOT verify that both companies belonged to the same tenant. A user in Tenant A could access a company in Tenant B if those two companies shared an enterprise_id — a critical cross-tenant data leak.
+
+**Fix:** The enterprise sibling query now LEFT JOINs `tenant_companies` for both companies and only allows access if:
+- Neither company is yet assigned to a tenant (Phase 2 compatibility — can't determine cross-tenant), OR
+- Both companies are assigned to the **same** tenant.
+
+If both are assigned to **different** tenants, access is denied regardless of shared enterprise_id.
+
+**File:** `server/routes.ts` — `canAccessCompany()` function
+
+---
+
+### 10.2 Fix: `privacy_audit_log` Company/Tenant Column Mismatch
+
+**Problem:** The `writePrivacyAuditLog` helper stored `user.companyId` in the `tenant_id` column. This meant the `tenant_id` column contained company IDs, not tenant IDs. The read endpoints then filtered by `tenant_id = user.companyId`, which happened to work by coincidence — but only because the same value was being compared. As soon as real tenant_id values differ from company_id values, all per-tenant privacy audit queries would return wrong data.
+
+**Fix:**
+- Added `company_id` column to `privacy_audit_log` table (schema + bootstrap migration)
+- `writePrivacyAuditLog` now accepts `companyId` param (preferred) alongside legacy `tenantId` (backward compat)
+- The function resolves the real `tenant_id` via `getTenantIdForCompany()` from the cached tenant-context module
+- Both `company_id` (real company) and `tenant_id` (real tenant, if assigned) are written
+- Backfill migration copies old `tenant_id` values into `company_id`, then re-resolves true `tenant_id` values
+- All 6 `writePrivacyAuditLog` call sites updated from `tenantId: user.companyId` to `companyId: user.companyId`
+- Read endpoints (`GET /api/privacy-audit-log`, `/export-csv`) now filter by `company_id` instead of `tenant_id`
+
+**Files:**
+- `shared/schema.ts` — `privacyAuditLog` table: added `companyId` column
+- `server/index.ts` — Phase 3A migration block: ADD COLUMN + backfill for privacy_audit_log
+- `server/routes.ts` — `writePrivacyAuditLog`, all 6 call sites, both read endpoint query filters
+
+---
+
+### 10.3 Fix: `breach_incidents` Tenant Scoping
+
+**Problem:** Same column mismatch as privacy_audit_log — `breach_incidents.tenant_id` was populated with `user.companyId`. The GET endpoint filtered by `tenant_id = user.companyId`, again working by coincidence. No `company_id` column existed.
+
+**Fix:**
+- Added `company_id` column to `breach_incidents` table
+- Backfill migration copies old `tenant_id` values → `company_id`, then re-resolves real `tenant_id` from `tenant_companies`
+- GET endpoint now filters by `company_id = user.companyId` (not `tenant_id`)
+- POST endpoint resolves real `tenant_id` via `getTenantIdForCompany(companyId)` and writes both columns
+- Both `companyId` and `tenantId` are now returned in GET responses
+
+**Files:**
+- `shared/schema.ts` — `breachIncidents` table: added `companyId` column
+- `server/index.ts` — Phase 3A migration block: ADD COLUMN + backfill for breach_incidents
+- `server/routes.ts` — breach GET filter + breach POST company_id/tenant_id split
+
+---
+
+### 10.4 Fix: `product_api_keys` Raw Secret Storage
+
+**Problem:** Raw `pk_*` webhook authentication keys were stored in plaintext in the `api_key` column. Any database read (backup, query, SQL injection) would expose live secrets. JSON-encoded e-sign credentials (DocuSign, Acrobat Sign) were also stored in the same column — those are handled separately.
+
+**Fix:**
+- Added `key_hash TEXT`, `key_prefix VARCHAR(16)`, `masked_key TEXT`, `revoked_at TIMESTAMP` columns
+- Made `api_key` nullable (raw key is no longer stored for new `pk_*` keys)
+- **POST** `/api/product-api-keys`: generates key → computes SHA-256 hash → stores only hash/prefix/masked → returns full key **once** in creation response; user must save it
+- **GET** `/api/product-api-keys`: for keys with `key_hash`, strips raw `api_key` from response and returns `maskedKey` (e.g. `pk_abcde1...wxyz`). JSON e-sign configs (DocuSign/Acrobat Sign) retain their `api_key` blob since `getCompanyESignConfig()` requires it.
+- **Webhook endpoint** (`POST /api/webhooks/product-events`): now hashes the incoming `x-api-key` header and looks up by `key_hash` first; falls back to raw `api_key` match for legacy/JSON-config keys
+- **Backfill migration**: on startup, finds all existing `pk_*` keys where `key_hash IS NULL`, computes hash/prefix/masked, clears raw `api_key`
+- Added `getProductApiKeyByHash(keyHash)` to storage interface and implementation
+
+**Files:**
+- `shared/schema.ts` — `productApiKeys` table: 4 new columns, `apiKey` nullable
+- `server/index.ts` — Phase 3A migration: 5 ALTER TABLE statements + Node.js backfill loop
+- `server/routes.ts` — product-api-keys GET/POST + webhook endpoint
+- `server/storage.ts` — `getProductApiKeyByHash()` added to interface + implementation
+
+---
+
+### 10.5 Database Migrations Added (Phase 3A)
+
+All migrations are idempotent (`IF NOT EXISTS`, `WHERE IS NULL`):
+
+| Migration | Type |
+|---|---|
+| `privacy_audit_log.company_id column` | ADD COLUMN IF NOT EXISTS |
+| `privacy_audit_log.company_id backfill` | UPDATE WHERE NULL |
+| `privacy_audit_log.tenant_id real backfill` | UPDATE with subquery |
+| `breach_incidents.company_id column` | ADD COLUMN IF NOT EXISTS |
+| `breach_incidents.company_id backfill` | UPDATE WHERE NULL |
+| `breach_incidents.tenant_id real backfill` | UPDATE with subquery |
+| `product_api_keys.key_hash column` | ADD COLUMN IF NOT EXISTS |
+| `product_api_keys.key_prefix column` | ADD COLUMN IF NOT EXISTS |
+| `product_api_keys.masked_key column` | ADD COLUMN IF NOT EXISTS |
+| `product_api_keys.revoked_at column` | ADD COLUMN IF NOT EXISTS |
+| `product_api_keys.api_key nullable` | ALTER COLUMN DROP NOT NULL |
+| product_api_keys backfill | Node.js loop: hash + mask + clear raw key |
+
+---
+
+### 10.6 Remaining P0 Items (Not Yet In Phase 3A)
+
+Per the original plan, Phase 3A targeted the four highest-risk items only. The following remain for Phase 3B (route group enforcement):
+
+| # | Item | Risk |
+|---|---|---|
+| 3B-1 | Wire `assertUserCanAccessCompany` into `/api/payroll-runs*`, `/api/payroll-items*`, `/api/pay-stubs*`, `/api/funding-accounts*` | CRITICAL |
+| 3B-2 | Wire into `/api/workers*`, `/api/time-entries*`, `/api/time-punches*`, `/api/schedules*`, `/api/expenses*` | HIGH |
+| 3B-3 | Wire into `/api/contractor-proposals*`, `/api/contractor-contracts*`, `/api/contractor-invoices*` | MEDIUM |
+| 3B-4 | Add `tenant_id` to `feature_overrides` for tenant-level feature control | MEDIUM |
+| 3B-5 | Block access to unassigned companies (Phase 2 currently warns + allows) | LOW |
+
+---
+
+## 11. Files Changed in Phase 3A
+
+| File | Change |
+|---|---|
+| `shared/schema.ts` | `privacyAuditLog`: +companyId; `breachIncidents`: +companyId; `productApiKeys`: apiKey nullable, +keyHash/keyPrefix/maskedKey/revokedAt |
+| `server/index.ts` | Phase 3A migration block (12 migrations, backfill loop) |
+| `server/routes.ts` | canAccessCompany tenant cross-check; writePrivacyAuditLog rewrite; 6 call sites; privacy_audit_log read filters; breach GET/POST; product-api-keys GET/POST; webhook endpoint |
+| `server/storage.ts` | +getProductApiKeyByHash() to interface + implementation |
+| `TENANT_ISOLATION_AUDIT.md` | Sections 10–11 added |

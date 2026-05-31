@@ -3471,7 +3471,16 @@ export const productApiKeys = pgTable("product_api_keys", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
   productName: text("product_name").notNull(),
-  apiKey: text("api_key").notNull(),
+  /** Raw key — cleared after Phase 3A migration for pk_* keys; preserved for JSON-encoded e-sign configs */
+  apiKey: text("api_key"),
+  /** SHA-256 hash of the raw pk_* key — used for webhook auth lookups (Phase 3A) */
+  keyHash: text("key_hash"),
+  /** First 8 chars of the key for safe display, e.g. pk_abcde1 (Phase 3A) */
+  keyPrefix: varchar("key_prefix", { length: 16 }),
+  /** Display version of the key, e.g. pk_abcde1...wxyz (Phase 3A) */
+  maskedKey: text("masked_key"),
+  /** Set when key is revoked; null = still active (Phase 3A) */
+  revokedAt: timestamp("revoked_at"),
   label: text("label"),
   isActive: boolean("is_active").default(true),
   lastUsedAt: timestamp("last_used_at"),
@@ -4677,8 +4686,10 @@ export const privacyAuditLog = pgTable("privacy_audit_log", {
   actionType: text("action_type").notNull(),
   /** The worker/user whose personal data was acted upon */
   dataSubjectId: varchar("data_subject_id"),
-  /** Company (tenant) context */
+  /** Tenant ID — post Phase 3A backfill: real tenants.id. Pre-3A rows: contained company_id (corrected by migration). */
   tenantId: varchar("tenant_id"),
+  /** Real company ID context — added Phase 3A. Use for company-scoped queries instead of tenantId. */
+  companyId: varchar("company_id"),
   /** JSON or free-text detail about the action */
   detail: text("detail"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -4692,8 +4703,10 @@ export type InsertPrivacyAuditLog = z.infer<typeof insertPrivacyAuditLogSchema>;
 export const breachIncidents = pgTable("breach_incidents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   actorUserId: varchar("actor_user_id").notNull(),
-  /** Tenant (company) that reported the breach — NULL means platform-wide */
+  /** Tenant ID — post Phase 3A backfill: real tenants.id. Pre-3A rows: contained company_id (corrected by migration). */
   tenantId: varchar("tenant_id"),
+  /** Company that reported the breach — added Phase 3A. Use for company-scoped queries. */
+  companyId: varchar("company_id"),
   discoveredAt: timestamp("discovered_at").notNull(),
   nature: text("nature").notNull(),
   dataCategories: text("data_categories").notNull(),
