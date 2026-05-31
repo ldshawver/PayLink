@@ -7277,17 +7277,16 @@ export default function ContractorHubPage() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [newProposal, setNewProposal] = useState(false);
-  const [showProposalCompleted, setShowProposalCompleted] = useState(false);
+  const [proposalLifecycleGroup, setProposalLifecycleGroup] = useState<'active' | 'archived' | 'all'>('active');
   const [showInvoiceCompleted, setShowInvoiceCompleted] = useState(false);
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
 
   const { data: proposals = [], isLoading: proposalsLoading } = useQuery<Proposal[]>({
-    queryKey: ["/api/contractor-proposals", showProposalCompleted],
+    queryKey: ["/api/contractor-proposals", proposalLifecycleGroup],
     queryFn: async () => {
-      const qs = showProposalCompleted ? "?showCompleted=true" : "";
-      const r = await fetch(`/api/contractor-proposals${qs}`, { credentials: "include" });
+      const r = await fetch(`/api/contractor-proposals?lifecycleGroup=${proposalLifecycleGroup}`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
     select: (data: any) => snakeToCamel(data),
@@ -7337,6 +7336,21 @@ export default function ContractorHubPage() {
     onError: (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" }),
   });
 
+  const [restoreDialogProposal, setRestoreDialogProposal] = useState<Proposal | null>(null);
+  const [restoreReason, setRestoreReason] = useState("");
+  const [restoreTargetStatus, setRestoreTargetStatus] = useState("revision_requested");
+  const restoreMutation = useMutation({
+    mutationFn: ({ id, reason, targetStatus }: { id: string; reason: string; targetStatus: string }) =>
+      apiRequest("POST", `/api/contractor-proposals/${id}/restore`, { reason, targetStatus }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      setRestoreDialogProposal(null);
+      setRestoreReason("");
+      toast({ title: "Proposal restored to active workspace" });
+    },
+    onError: (e: any) => toast({ title: (e as any)?.message || "Restore failed", variant: "destructive" }),
+  });
+
   const allCompanies = Array.from(new Set(proposals.map(p => p.companyId).filter(Boolean)))
     .map(id => ({ id, name: (proposals.find(p => p.companyId === id) as any)?.companyName || id }));
 
@@ -7345,8 +7359,7 @@ export default function ContractorHubPage() {
       const matchSearch = !search || p.title?.toLowerCase().includes(search.toLowerCase()) || p.proposalNumber?.toLowerCase().includes(search.toLowerCase());
       const matchStatus = statusFilter === "all" || p.status === statusFilter;
       const matchCompany = companyFilter === "all" || p.companyId === companyFilter;
-      const matchCompleted = showProposalCompleted || statusFilter !== "all" || !["converted_to_contract", "archived_to_documents"].includes(p.status);
-      return matchSearch && matchStatus && matchCompany && matchCompleted;
+      return matchSearch && matchStatus && matchCompany;
     })
     .sort((a, b) => {
       if (sortBy === "date_desc") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -7541,11 +7554,11 @@ export default function ContractorHubPage() {
                       <SelectItem value="amount_asc">Amount: Low → High</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Button variant={showProposalCompleted ? "secondary" : "ghost"} size="sm" className="h-8 gap-1.5 text-xs shrink-0"
-                    onClick={() => setShowProposalCompleted(v => !v)} data-testid="btn-toggle-proposal-completed">
-                    <CheckSquare className="h-3.5 w-3.5" />
-                    {showProposalCompleted ? "Hide Completed" : "Show Completed"}
-                  </Button>
+                  <div className="flex items-center border rounded-md overflow-hidden shrink-0">
+                    <Button variant={proposalLifecycleGroup === 'active' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-3 text-xs rounded-none border-0" onClick={() => setProposalLifecycleGroup('active')} data-testid="btn-proposals-active">Active</Button>
+                    <Button variant={proposalLifecycleGroup === 'archived' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-3 text-xs rounded-none border-0 border-x" onClick={() => setProposalLifecycleGroup('archived')} data-testid="btn-proposals-archive"><Archive className="h-3 w-3 mr-1" />Archive</Button>
+                    <Button variant={proposalLifecycleGroup === 'all' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-3 text-xs rounded-none border-0" onClick={() => setProposalLifecycleGroup('all')} data-testid="btn-proposals-all">All</Button>
+                  </div>
                 </div>
 
                 {proposalsLoading ? (
@@ -7649,17 +7662,35 @@ export default function ContractorHubPage() {
                               {proposal.description && <p className="text-xs text-muted-foreground mt-1 truncate">{proposal.description}</p>}
                             </div>
                             <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                              {isAdmin && proposal.status === "approved" && (
+                              {isAdmin && proposal.status === "approved" && proposalLifecycleGroup !== 'archived' && (
                                 <Button size="sm" variant="ghost" className="h-8 px-2 text-primary text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "convert-to-invoice" })} data-testid={`btn-convert-invoice-${proposal.id}`}>
                                   <FilePlus className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Invoice</span>
                                 </Button>
                               )}
-                              {["draft", "revision_requested"].includes(proposal.status) && (
+                              {/* Restore — directly restorable terminal statuses */}
+                              {isAdmin && proposalLifecycleGroup === 'archived' && ['rejected', 'expired', 'cancelled', 'archived_to_documents'].includes(proposal.status) && (
+                                <Button size="sm" variant="ghost" className="h-8 px-2 text-emerald-600 text-xs opacity-0 group-hover:opacity-100" onClick={() => { setRestoreDialogProposal(proposal); setRestoreReason(""); setRestoreTargetStatus("revision_requested"); }} data-testid={`btn-restore-proposal-${proposal.id}`}>
+                                  <RotateCcw className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Restore</span>
+                                </Button>
+                              )}
+                              {/* Restore — manually archived proposals (is_archived flag, non-finalized status) */}
+                              {isAdmin && proposalLifecycleGroup === 'archived' && !!(proposal as any).isArchived && !['rejected', 'expired', 'cancelled', 'approved', 'superseded', 'voided', 'converted_to_contract', 'archived_to_documents'].includes(proposal.status) && (
+                                <Button size="sm" variant="ghost" className="h-8 px-2 text-emerald-600 text-xs opacity-0 group-hover:opacity-100" onClick={() => { setRestoreDialogProposal(proposal); setRestoreReason(""); setRestoreTargetStatus("draft"); }} data-testid={`btn-restore-flag-proposal-${proposal.id}`}>
+                                  <RotateCcw className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Restore</span>
+                                </Button>
+                              )}
+                              {/* Archive — on active-tab proposals (non-finalized) */}
+                              {isAdmin && proposalLifecycleGroup === 'active' && !['approved', 'converted_to_contract', 'signed', 'fully_signed'].includes(proposal.status) && (
+                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground opacity-0 group-hover:opacity-100" onClick={() => { if (confirm("Archive this proposal? It will move to the Archive tab.")) proposalActionMutation.mutate({ id: proposal.id, action: "archive" }); }} data-testid={`btn-archive-proposal-${proposal.id}`}>
+                                  <Archive className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              {["draft", "revision_requested"].includes(proposal.status) && proposalLifecycleGroup !== 'archived' && (
                                 <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => openBuilderForEdit(proposal)} data-testid={`btn-edit-proposal-${proposal.id}`}>
                                   <Edit className="h-4 w-4" />
                                 </Button>
                               )}
-                              {["draft", "rejected"].includes(proposal.status) && (
+                              {["draft", "rejected"].includes(proposal.status) && proposalLifecycleGroup !== 'archived' && (
                                 <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => { if (confirm("Delete this proposal?")) deleteMutation.mutate(proposal.id); }} data-testid={`btn-delete-proposal-${proposal.id}`}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -7674,6 +7705,40 @@ export default function ContractorHubPage() {
                 )}
               </div>
             )}
+
+            {/* Restore Proposal Dialog */}
+            <Dialog open={!!restoreDialogProposal} onOpenChange={open => { if (!open) setRestoreDialogProposal(null); }}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Restore Proposal</DialogTitle>
+                  <p className="text-sm text-muted-foreground mt-1">Restore <span className="font-medium">"{restoreDialogProposal?.title || 'Untitled Proposal'}"</span> from the archive back to an active state.</p>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <div>
+                    <p className="text-sm font-medium mb-1.5">Reason for restoring <span className="text-destructive">*</span></p>
+                    <Textarea value={restoreReason} onChange={e => setRestoreReason(e.target.value)} placeholder="Why is this proposal being restored?" className="min-h-[80px]" data-testid="textarea-restore-reason" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium mb-1.5">Restore to status</p>
+                    <Select value={restoreTargetStatus} onValueChange={setRestoreTargetStatus}>
+                      <SelectTrigger data-testid="select-restore-target-status"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="revision_requested">Revision Requested</SelectItem>
+                        <SelectItem value="negotiation">In Negotiation</SelectItem>
+                        <SelectItem value="draft">Draft</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setRestoreDialogProposal(null)}>Cancel</Button>
+                  <Button disabled={!restoreReason.trim() || restoreMutation.isPending} onClick={() => restoreDialogProposal && restoreMutation.mutate({ id: restoreDialogProposal.id, reason: restoreReason, targetStatus: restoreTargetStatus })} data-testid="btn-confirm-restore-proposal">
+                    {restoreMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Restore Proposal
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Contracts */}
             {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} initialStatusFilter={statusFilter !== "all" ? statusFilter : null} expiryWarningDays={hubExpiryWarningDays} />}

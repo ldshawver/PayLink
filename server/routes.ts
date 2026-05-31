@@ -10582,10 +10582,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
       const showCompleted = req.query.showCompleted === "true";
-      // Only hide proposals that are fully terminal (converted or explicitly archived).
-      // archived_to_documents_at just means a PDF was stored — NOT that the proposal is done.
-      const completedFilter = showCompleted ? sql`` : sql`AND cp.status NOT IN ('converted_to_contract', 'archived_to_documents')`;
+      const lifecycleGroup = req.query.lifecycleGroup as string | undefined; // active | archived | all
       const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
+
+      // Lifecycle group constants — define what statuses belong to each group
+      const PROPOSAL_ACTIVE_STATUSES = ['draft', 'submitted', 'reviewed', 'revision_requested', 'negotiation', 'sent', 'viewed', 'pending', 'under_review'];
+      const PROPOSAL_ARCHIVED_STATUSES = ['approved', 'rejected', 'expired', 'superseded', 'voided', 'cancelled', 'converted_to_contract', 'archived_to_documents', 'archived'];
+
+      // Build lifecycle filter SQL — takes precedence over showCompleted/showArchived when supplied
+      let lifecycleFilter: ReturnType<typeof sql>;
+      if (lifecycleGroup === 'active') {
+        // Only non-archived proposals in an active workflow state
+        lifecycleFilter = sql`AND cp.status = ANY(${PROPOSAL_ACTIVE_STATUSES}::text[]) AND (cp.is_archived IS NOT TRUE)`;
+      } else if (lifecycleGroup === 'archived') {
+        // Proposals whose status is terminal OR that were explicitly archived via the flag
+        lifecycleFilter = sql`AND (cp.status = ANY(${PROPOSAL_ARCHIVED_STATUSES}::text[]) OR cp.is_archived = TRUE)`;
+      } else if (lifecycleGroup === 'all') {
+        lifecycleFilter = sql``; // no status restriction
+      } else {
+        // Legacy showCompleted / showArchived behaviour (backward compat)
+        const archivedClause = showArchived ? sql`` : sql`AND (cp.is_archived IS NOT TRUE)`;
+        const completedClause = showCompleted ? sql`` : sql`AND cp.status NOT IN ('converted_to_contract', 'archived_to_documents')`;
+        lifecycleFilter = sql`${archivedClause} ${completedClause}`;
+      }
+
       // Owner/admin roles always see all proposals — permission overrides supersede workflow settings.
       const isAdminRole = ["admin", "owner", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
       if (isAdminRole) {
@@ -10603,58 +10623,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             companyFilter = sql`AND cp.company_id = ${filterCompanyId}`;
           }
         }
-        const result = showArchived
-          ? await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
-                     co.name as company_name,
-                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
-              FROM contractor_proposals cp
-              LEFT JOIN workers w ON w.id = cp.contractor_id
-              LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE cp.deleted_at IS NULL ${companyFilter} ${completedFilter}
-              ORDER BY cp.created_at DESC
-            `)
-          : await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
-                     co.name as company_name,
-                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
-              FROM contractor_proposals cp
-              LEFT JOIN workers w ON w.id = cp.contractor_id
-              LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE (cp.is_archived IS NOT TRUE) AND cp.deleted_at IS NULL ${companyFilter} ${completedFilter}
-              ORDER BY cp.created_at DESC
-            `);
+        const result = await db.execute(sql`
+          SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
+                 co.name as company_name,
+                 (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
+          FROM contractor_proposals cp
+          LEFT JOIN workers w ON w.id = cp.contractor_id
+          LEFT JOIN companies co ON co.id = cp.company_id
+          WHERE cp.deleted_at IS NULL ${companyFilter} ${lifecycleFilter}
+          ORDER BY cp.created_at DESC
+        `);
         rows = result.rows ?? (result as any);
       } else {
         // Contractors see their own proposals
         const workerId = user?.workerId;
         if (!workerId) return res.json([]);
-        const result = showArchived
-          ? await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type,
-                     co.name as company_name,
-                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
-              FROM contractor_proposals cp
-              LEFT JOIN workers w ON w.id = cp.contractor_id
-              LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE cp.contractor_id = ${workerId}
-                AND cp.deleted_at IS NULL
-                ${completedFilter}
-              ORDER BY cp.created_at DESC
-            `)
-          : await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type,
-                     co.name as company_name,
-                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
-              FROM contractor_proposals cp
-              LEFT JOIN workers w ON w.id = cp.contractor_id
-              LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE cp.contractor_id = ${workerId}
-                AND (cp.is_archived IS NOT TRUE)
-                AND cp.deleted_at IS NULL
-                ${completedFilter}
-              ORDER BY cp.created_at DESC
-            `);
+        const result = await db.execute(sql`
+          SELECT cp.*, w.first_name, w.last_name, w.worker_type,
+                 co.name as company_name,
+                 (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
+          FROM contractor_proposals cp
+          LEFT JOIN workers w ON w.id = cp.contractor_id
+          LEFT JOIN companies co ON co.id = cp.company_id
+          WHERE cp.contractor_id = ${workerId}
+            AND cp.deleted_at IS NULL
+            ${lifecycleFilter}
+          ORDER BY cp.created_at DESC
+        `);
         rows = result.rows ?? (result as any);
       }
       res.json(rows);
@@ -13666,7 +13661,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const { companyId, linkedEntityId, linkedEntityType, documentType, proposalId, contractId, invoiceId, jobCode, costCenter, folder, showArchived } = req.query as Record<string, string>;
+      const { companyId, linkedEntityId, linkedEntityType, documentType, proposalId, contractId, invoiceId, jobCode, costCenter, folder, showArchived, category, sourceModule, lifecycleStatus, relatedEmployeeId, relatedContractorId, relatedCustomerId } = req.query as Record<string, string>;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const showArchivedBool = showArchived === "true";
       let result;
@@ -13696,6 +13691,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             ${invoiceId ? sql`AND invoice_id = ${invoiceId}` : sql``}
             ${jobCode ? sql`AND job_code ILIKE ${"%" + jobCode + "%"}` : sql``}
             ${costCenter ? sql`AND cost_center ILIKE ${"%" + costCenter + "%"}` : sql``}
+            ${category ? sql`AND category = ${category}` : sql``}
+            ${sourceModule ? sql`AND source_module = ${sourceModule}` : sql``}
+            ${lifecycleStatus ? sql`AND lifecycle_status = ${lifecycleStatus}` : sql``}
+            ${relatedEmployeeId ? sql`AND related_employee_id = ${relatedEmployeeId}` : sql``}
+            ${relatedContractorId ? sql`AND related_contractor_id = ${relatedContractorId}` : sql``}
+            ${relatedCustomerId ? sql`AND related_customer_id = ${relatedCustomerId}` : sql``}
           ORDER BY created_at DESC
         `);
       } else {
@@ -14406,12 +14407,65 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isPlatform && user?.companyId && prop.company_id !== user.companyId) {
         return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
       }
-      if (["approved", "converted_to_contract", "active", "signed", "fully_signed"].includes(prop.status)) {
-        return res.status(400).json({ message: "Cannot archive a final/signed proposal — it is immutable" });
+      if (["approved", "converted_to_contract", "signed", "fully_signed"].includes(prop.status)) {
+        return res.status(400).json({ message: `A "${prop.status}" proposal is finalized and lives in the Archive tab automatically. No action needed.` });
       }
-      await db.execute(sql`UPDATE contractor_proposals SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
+      const { reason } = req.body || {};
+      await db.execute(sql`
+        UPDATE contractor_proposals
+        SET is_archived = TRUE,
+            archived_at = NOW(),
+            archived_by_user_id = ${req.session.userId!},
+            archive_reason = ${reason || null}
+        WHERE id = ${req.params.id}
+      `);
+      await db.execute(sql`
+        INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, notes)
+        VALUES (${req.params.id}, 'archived', ${prop.status}, 'archived', ${req.session.userId!}, ${reason || null})
+      `).catch(() => {});
       res.json({ success: true, id: req.params.id });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive proposal: " + e.message }); }
+  });
+
+  // ── Proposal Restore from Archive ─────────────────────────────────────────
+  app.post("/api/contractor-proposals/:id/restore", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!propRes.rows[0]) return res.status(404).json({ message: "Proposal not found" });
+      const prop = propRes.rows[0] as any;
+      if (!isPlatform && user?.companyId && prop.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
+      }
+      const { reason, targetStatus = "revision_requested" } = req.body || {};
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "Restore reason is required" });
+      // Finalized proposals cannot be directly restored — user must duplicate to create a new revision
+      const DUPLICATE_ONLY = ['approved', 'superseded', 'voided', 'converted_to_contract'];
+      if (DUPLICATE_ONLY.includes(prop.status)) {
+        return res.status(400).json({
+          message: `A "${prop.status}" proposal cannot be directly restored. Duplicate it to create a new revision.`,
+          requiresDuplicate: true,
+        });
+      }
+      const VALID_TARGET_STATUSES = ['revision_requested', 'negotiation', 'draft', 'under_review'];
+      const finalTargetStatus = VALID_TARGET_STATUSES.includes(targetStatus) ? targetStatus : 'revision_requested';
+      const oldStatus = prop.status;
+      await db.execute(sql`
+        UPDATE contractor_proposals
+        SET is_archived = FALSE,
+            status = ${finalTargetStatus},
+            restored_at = NOW(),
+            restored_by_user_id = ${req.session.userId!},
+            restore_reason = ${String(reason)}
+        WHERE id = ${req.params.id}
+      `);
+      await db.execute(sql`
+        INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, notes)
+        VALUES (${req.params.id}, 'restored', ${oldStatus}, ${finalTargetStatus}, ${req.session.userId!}, ${String(reason)})
+      `).catch(() => {});
+      res.json({ success: true, id: req.params.id, previousStatus: oldStatus, status: finalTargetStatus });
+    } catch (e: any) { res.status(500).json({ message: "Failed to restore proposal: " + e.message }); }
   });
 
   // ── Contract Archive ──────────────────────────────────────────────────────

@@ -2038,6 +2038,14 @@ export const contractorProposals = pgTable("contractor_proposals", {
   // ── Archive / document lifecycle (added via migration) ──
   archivedToDocumentsAt: timestamp("archived_to_documents_at"),
   archivedDocumentId: varchar("archived_document_id"),
+  // ── Proposal lifecycle archive fields (added via migration) ──
+  isArchived: boolean("is_archived").default(false),
+  archivedAt: timestamp("archived_at"),
+  archivedByUserId: varchar("archived_by_user_id"),
+  archiveReason: text("archive_reason"),
+  restoredAt: timestamp("restored_at"),
+  restoredByUserId: varchar("restored_by_user_id"),
+  restoreReason: text("restore_reason"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2298,6 +2306,18 @@ export const damDocuments = pgTable("dam_documents", {
   paidAt: timestamp("paid_at"),
   archivedBy: varchar("archived_by"),
   autoArchivePolicyId: varchar("auto_archive_policy_id"),
+  // ── Extended DAM metadata (added via migration) ──
+  sourceModule: text("source_module"),       // contractor_hub | payroll | hr | reports | onboarding | compliance
+  lifecycleStatus: text("lifecycle_status"), // working | generated | finalized | signed | issued | archived | superseded | voided | deleted_soft
+  category: text("category"),               // Proposals | Contracts | Invoices | Expenses | Payroll | Tax Documents | Employee Documents | ...
+  documentNumber: text("document_number"),
+  relatedEmployeeId: varchar("related_employee_id"),
+  relatedContractorId: varchar("related_contractor_id"),
+  relatedCustomerId: varchar("related_customer_id"),
+  relatedVendorId: varchar("related_vendor_id"),
+  relatedPayrollRunId: varchar("related_payroll_run_id"),
+  finalizedByUserId: varchar("finalized_by_user_id"),
+  finalizedAt: timestamp("finalized_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

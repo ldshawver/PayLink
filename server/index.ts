@@ -3687,6 +3687,26 @@ Thank you,
 
     await runInv("contractor_invoices.archived_to_documents_at",  sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_to_documents_at TIMESTAMP`);
     await runInv("contractor_invoices.archived_document_id",      sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_document_id VARCHAR`);
+
+    // ── Proposal lifecycle archive fields ────────────────────────────────────
+    await runInv("contractor_proposals.archived_by_user_id", sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS archived_by_user_id VARCHAR`);
+    await runInv("contractor_proposals.archive_reason",      sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
+    await runInv("contractor_proposals.restored_at",         sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS restored_at TIMESTAMPTZ`);
+    await runInv("contractor_proposals.restored_by_user_id", sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS restored_by_user_id VARCHAR`);
+    await runInv("contractor_proposals.restore_reason",      sqlInv`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS restore_reason TEXT`);
+
+    // ── DAM documents extended metadata ──────────────────────────────────────
+    await runInv("dam_documents.source_module",          sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS source_module TEXT`);
+    await runInv("dam_documents.lifecycle_status",       sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS lifecycle_status TEXT`);
+    await runInv("dam_documents.category",               sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS category TEXT`);
+    await runInv("dam_documents.document_number",        sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS document_number TEXT`);
+    await runInv("dam_documents.related_employee_id",    sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_employee_id VARCHAR`);
+    await runInv("dam_documents.related_contractor_id",  sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_contractor_id VARCHAR`);
+    await runInv("dam_documents.related_customer_id",    sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_customer_id VARCHAR`);
+    await runInv("dam_documents.related_vendor_id",      sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_vendor_id VARCHAR`);
+    await runInv("dam_documents.related_payroll_run_id", sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_payroll_run_id VARCHAR`);
+    await runInv("dam_documents.finalized_by_user_id",   sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_by_user_id VARCHAR`);
+    await runInv("dam_documents.finalized_at",           sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ`);
   }
 
   const { seedDatabase } = await import("./seed");
