@@ -1171,25 +1171,9 @@ export async function registerRoutes(
 
   // ── API JSON-only guard ───────────────────────────────────────────────────────
   // Ensures every /api/* response is application/json.
-  // Sets the default Content-Type header so handlers that forget to call
-  // res.json() still produce a parseable response, and logs a warning on
-  // "finish" whenever a non-JSON content-type is detected so the problem
-  // surfaces in logs immediately without silently returning HTML to clients.
-  app.use("/api", (_req, res, next) => {
-    res.setHeader("Content-Type", "application/json");
-    res.on("finish", () => {
-      const ct = res.getHeader("Content-Type");
-      const ctStr = Array.isArray(ct) ? ct[0] : String(ct ?? "");
-      if (!ctStr.includes("application/json")) {
-        console.warn(
-          `[API JSON guard] Non-JSON response sent for ${_req.method} ${_req.originalUrl} — ` +
-          `Content-Type: ${ctStr || "(none)"}, status: ${res.statusCode}. ` +
-          `This likely means an unregistered route fell through to a non-API handler.`
-        );
-      }
-    });
-    next();
-  });
+  // Implementation lives in server/middleware/api-json-guard.ts so it can be
+  // imported by integration tests without duplicating the guard logic.
+  { const { applyApiJsonGuard } = await import("./middleware/api-json-guard.js"); applyApiJsonGuard(app); }
 
   // ── Feature gate middleware — applied to entire path groups ──────────────────
   // requireFeature() is a hoisted function declaration defined later in this file.

@@ -79,7 +79,8 @@ export async function setupVite(server: Server, app: Express) {
     // causing startsWith("/api/") to silently fail (e.g. "api/app-doctor/reports" has no leading slash).
     const urlPath = req.originalUrl.split("?")[0];
     if (urlPath.startsWith("/api/")) {
-      return res.status(404).json({ message: "API route not found", path: urlPath });
+      const { apiNotFoundHandler } = await import("./middleware/api-not-found.js");
+      return apiNotFoundHandler(req, res);
     }
 
     const url = req.originalUrl;
