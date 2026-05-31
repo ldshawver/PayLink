@@ -7248,7 +7248,6 @@ const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: s
 
 export default function ContractorHubPage() {
   const { toast } = useToast();
-  const [location] = useLocation();
   const initialSection = (() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -7259,16 +7258,34 @@ export default function ContractorHubPage() {
   })();
   const [section, setSection] = useState<HubSection>(initialSection);
 
-  // Keep section in sync when the URL query param changes (e.g. sidebar navigation)
+  // Keep section in sync with the URL — covers sidebar ?section= navigation and browser back/forward.
+  // We cannot use wouter's [location] as the dependency because wouter only tracks the pathname;
+  // same-pathname query-param changes (e.g. sidebar going from ?section=proposals to ?section=contracts)
+  // never change the wouter location value so the effect would never re-fire.
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings","trade"];
-      if (s && valid.includes(s)) setSection(s);
-      else if (!s) setSection("dashboard");
-    } catch {}
-  }, [location]);
+    const VALID_SECTIONS: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings","trade"];
+    const syncSection = () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const s = params.get("section") as HubSection | null;
+        if (s && VALID_SECTIONS.includes(s)) setSection(s);
+        else if (!s) setSection("dashboard");
+      } catch {}
+    };
+    syncSection();
+    // Patch pushState so same-pathname query-param changes are caught (wouter uses pushState for sidebar nav).
+    const origPush = window.history.pushState;
+    window.history.pushState = function (this: History, ...args: Parameters<typeof origPush>) {
+      origPush.apply(this, args);
+      syncSection();
+    };
+    // popstate covers browser back / forward buttons.
+    window.addEventListener("popstate", syncSection);
+    return () => {
+      window.removeEventListener("popstate", syncSection);
+      window.history.pushState = origPush;
+    };
+  }, []); // run once on mount; listeners handle all subsequent URL changes
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -7293,11 +7310,15 @@ export default function ContractorHubPage() {
   const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
 
-  const { data: proposals = [], isLoading: proposalsLoading } = useQuery<Proposal[]>({
+  const { data: proposals = [], isLoading: proposalsLoading, error: proposalsError } = useQuery<Proposal[]>({
     queryKey: ["/api/contractor-proposals", proposalLifecycleGroup],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-proposals?lifecycleGroup=${proposalLifecycleGroup}`, { credentials: "include" });
-      return r.ok ? r.json() : [];
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body?.message || `Failed to load proposals (HTTP ${r.status})`);
+      }
+      return r.json();
     },
     select: (data: any) => snakeToCamel(data),
   });
@@ -7425,6 +7446,14 @@ export default function ContractorHubPage() {
 
   function handleSectionChange(s: HubSection, entityId?: string, statusFilterOverride?: string) {
     setSection(s);
+    // Keep the URL in sync so deep-links and the browser back button reflect the current section.
+    // Use replaceState (not pushState) to avoid polluting the history stack on every tab click.
+    try {
+      const _u = new URL(window.location.href);
+      if (s === "dashboard") _u.searchParams.delete("section");
+      else _u.searchParams.set("section", s);
+      window.history.replaceState({}, "", _u.pathname + (_u.search || ""));
+    } catch {}
     setSearch("");
     setStatusFilter(statusFilterOverride ?? "all");
     setCompanyFilter("all");
@@ -7534,6 +7563,12 @@ export default function ContractorHubPage() {
             {/* Proposals */}
             {section === "proposals" && (
               <div className="space-y-4">
+                {proposalsError && (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive flex items-center gap-2" data-testid="proposals-error-banner">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>{(proposalsError as Error).message || "Failed to load proposals. Check that the Contractor Hub feature is enabled for your account."}</span>
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search proposals..." className="h-8 max-w-xs flex-1 min-w-[160px]" data-testid="input-search-proposals" />
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
