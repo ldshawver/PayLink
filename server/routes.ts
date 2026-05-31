@@ -258,6 +258,30 @@ function isPlatformUser(role: string | null | undefined): boolean {
   return role.startsWith("platform_");
 }
 
+/**
+ * Returns true when a tenant-scoped user is allowed to act on a record belonging
+ * to `targetCompanyId`.  Covers:
+ *   1. Same company (exact match).
+ *   2. Different companies that share the same non-null enterprise_id — an admin
+ *      of Company A can approve/act on proposals from Company B when both belong
+ *      to the same enterprise (same logic as the proposals GET list filter).
+ *   3. null / undefined targetCompanyId — allowed for legacy records without a
+ *      company assignment.
+ * Platform users (no companyId) must be handled by the caller; this helper is
+ * only for tenant-scoped users who have a companyId.
+ */
+async function canAccessCompany(userCompanyId: string, targetCompanyId: string | null | undefined): Promise<boolean> {
+  if (!targetCompanyId) return true;
+  if (userCompanyId === targetCompanyId) return true;
+  const entRes = await db.execute(sql`
+    SELECT 1 FROM companies c1
+    JOIN companies c2 ON c1.enterprise_id = c2.enterprise_id AND c1.enterprise_id IS NOT NULL
+    WHERE c1.id = ${userCompanyId} AND c2.id = ${targetCompanyId}
+    LIMIT 1
+  `);
+  return (entRes.rows ?? []).length > 0;
+}
+
 async function getSessionCompanyId(req: Request): Promise<string | null> {
   if (!req.session?.userId) return null;
   const user = await storage.getUser(req.session.userId);
@@ -11005,7 +11029,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status || "")) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
       const oldStatus = proposal.status;
       await autoSnapshot(req.params.id, proposal, `Approved by ${user?.username || "reviewer"}`, userId);
@@ -11060,7 +11084,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (proposal.status !== "approved") {
         return res.status(400).json({ message: "Only approved proposals can be sent for signature" });
       }
@@ -11245,7 +11269,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status || "")) return res.status(400).json({ message: "Invalid status for rejection" });
       const { rejectionReason } = req.body;
       const oldStatus = proposal.status;
@@ -11294,7 +11318,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       const allowedStatuses = ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review"];
       if (!allowedStatuses.includes(proposal.status || "")) return res.status(400).json({ message: `Cannot request revision from status '${proposal.status}'` });
       const { revisionNotes } = req.body;
@@ -11386,7 +11410,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       if (!["approved", "signed"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Only approved or signed proposals can be converted to invoices" });
       }
@@ -11981,7 +12005,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       const isPlatformUser = !user?.companyId;
-      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!isPlatformUser && !(await canAccessCompany(user!.companyId!, proposal.company_id))) return res.status(403).json({ message: "Forbidden" });
       const allowedForCounter = ["submitted", "sent", "viewed", "revision_requested", "under_review", "approved"];
       if (!allowedForCounter.includes(proposal.status || "")) return res.status(400).json({ message: `Cannot send counteroffer from status '${proposal.status}'` });
       const { counterTerms, counterNotes, counterAmount } = req.body;
