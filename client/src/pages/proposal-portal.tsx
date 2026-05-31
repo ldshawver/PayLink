@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send, Mail, Sparkles,
+  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send, Mail, Sparkles, CornerDownLeft, X,
 } from "lucide-react";
 
 const fmt = (n: number | string | undefined | null) => {
@@ -106,13 +106,57 @@ function ConversationThread({
   accentColor,
   lastViewedAt,
   firstUnreadRef,
+  proposalId,
+  token,
+  onReplySent,
 }: {
   thread: ThreadEvent[];
   businessName: string;
   accentColor: string;
   lastViewedAt: number | null;
   firstUnreadRef: React.RefObject<HTMLDivElement | null>;
+  proposalId: string;
+  token: string;
+  onReplySent?: () => void;
 }) {
+  const [replyingToIdx, setReplyingToIdx] = useState<number | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replySubmitting, setReplySubmitting] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [replyJustSent, setReplyJustSent] = useState(false);
+
+  const handleReplySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyText.trim()) return;
+    setReplySubmitting(true);
+    setReplyError(null);
+    try {
+      const r = await fetch(
+        `/api/portal/proposals/${proposalId}/message?token=${encodeURIComponent(token)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: replyText.trim() }),
+        },
+      );
+      if (!r.ok) {
+        const d = await r.json();
+        setReplyError(d.message || "Could not send reply");
+        setReplySubmitting(false);
+        return;
+      }
+      setReplyText("");
+      setReplyingToIdx(null);
+      setReplyJustSent(true);
+      onReplySent?.();
+      setTimeout(() => setReplyJustSent(false), 4000);
+    } catch {
+      setReplyError("Network error — please try again");
+    } finally {
+      setReplySubmitting(false);
+    }
+  };
+
   if (!thread || thread.length === 0) return null;
 
   let firstUnreadAssigned = false;
@@ -140,6 +184,16 @@ function ConversationThread({
           </span>
         )}
       </h2>
+      {replyJustSent && (
+        <div
+          className="flex items-center gap-2 text-sm rounded-lg px-3 py-2 mb-3"
+          style={{ backgroundColor: accentColor + "15", color: accentColor }}
+          data-testid="reply-sent-confirmation"
+        >
+          <CheckCircle className="h-4 w-4 shrink-0" />
+          <span>Reply sent — the team will be in touch soon.</span>
+        </div>
+      )}
       <div className="space-y-3">
         {thread.map((evt, i) => {
           const isAdminReply = evt.eventType === "admin_reply";
@@ -158,7 +212,7 @@ function ConversationThread({
             <div
               key={i}
               ref={refProp as React.RefObject<HTMLDivElement> | undefined}
-              className={`flex ${isAdminReply ? "justify-end" : "justify-start"}`}
+              className={`flex flex-col ${isAdminReply ? "items-end" : "items-start"}`}
               data-testid={`thread-event-${i}`}
             >
               <div
@@ -191,10 +245,77 @@ function ConversationThread({
                   )}
                 </div>
                 <p className="whitespace-pre-wrap leading-relaxed">{evt.notes || ""}</p>
-                <div className={`text-xs mt-1.5 ${isAdminReply ? "text-white/60" : "text-muted-foreground/70"}`}>
-                  {fmtDateTime(evt.createdAt)}
+                <div className={`text-xs mt-1.5 ${isAdminReply ? "text-white/60" : "text-muted-foreground/70"} flex items-center justify-between gap-3`}>
+                  <span>{fmtDateTime(evt.createdAt)}</span>
+                  {isAdminReply && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyingToIdx(replyingToIdx === i ? null : i);
+                        setReplyText("");
+                        setReplyError(null);
+                      }}
+                      className="flex items-center gap-1 text-white/70 hover:text-white transition-colors"
+                      data-testid={`btn-reply-to-admin-${i}`}
+                    >
+                      <CornerDownLeft className="h-3 w-3" />
+                      Reply
+                    </button>
+                  )}
                 </div>
               </div>
+
+              {/* Inline reply compose box */}
+              {isAdminReply && replyingToIdx === i && (
+                <div
+                  className="mt-2 w-full max-w-[80%] rounded-lg border bg-white shadow-sm p-3 space-y-2"
+                  data-testid={`inline-reply-box-${i}`}
+                >
+                  <form onSubmit={handleReplySubmit} className="space-y-2">
+                    <Textarea
+                      value={replyText}
+                      onChange={e => setReplyText(e.target.value)}
+                      placeholder="Type your reply…"
+                      rows={3}
+                      required
+                      autoFocus
+                      className="resize-none text-sm"
+                      data-testid={`textarea-inline-reply-${i}`}
+                    />
+                    {replyError && (
+                      <div className="flex items-center gap-1.5 text-xs text-destructive">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                        <span>{replyError}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs px-2 text-muted-foreground"
+                        onClick={() => { setReplyingToIdx(null); setReplyText(""); setReplyError(null); }}
+                        data-testid={`btn-cancel-inline-reply-${i}`}
+                      >
+                        <X className="h-3.5 w-3.5 mr-1" />
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={replySubmitting || !replyText.trim()}
+                        className="h-7 text-xs text-white"
+                        style={{ backgroundColor: accentColor, borderColor: accentColor }}
+                        data-testid={`btn-submit-inline-reply-${i}`}
+                      >
+                        {replySubmitting
+                          ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Sending…</>
+                          : <><Send className="h-3.5 w-3.5 mr-1" />Send Reply</>}
+                      </Button>
+                    </div>
+                  </form>
+                </div>
+              )}
             </div>
           );
         })}
@@ -819,6 +940,9 @@ export default function ProposalPortalPage() {
               accentColor={accentColor}
               lastViewedAt={lastViewedAt}
               firstUnreadRef={firstUnreadRef}
+              proposalId={proposal.id}
+              token={token}
+              onReplySent={handleMessageSent}
             />
             {/* Compact reply box rendered directly below the thread */}
             <ClientMessageForm
