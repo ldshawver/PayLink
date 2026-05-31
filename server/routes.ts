@@ -1415,8 +1415,8 @@ export async function registerRoutes(
     res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate });
   });
 
-  // GET /api/auth/effective-access — debug endpoint showing a user's resolved company access
-  app.get("/api/auth/effective-access", requireAuth, async (req, res) => {
+  // GET /api/auth/effective-access — debug endpoint showing a user's resolved company access (admin only)
+  app.get("/api/auth/effective-access", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
