@@ -23263,66 +23263,82 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     });
     const model = process.env.APP_DOCTOR_MODEL || (useXai ? "grok-3-mini" : "gpt-4o-mini");
 
-    const completion = await openai.chat.completions.create({
-      model,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: "You are MyPayLink's AI App Doctor for a production payroll/HR/compliance SaaS. " +
-            "Diagnose runtime errors and propose safe, minimal code fixes for human review. " +
-            "NEVER recommend auto-deploying. NEVER recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls. " +
-            "NEVER recommend changing visual layout/design, login/auth flow, payroll/tax calculations, check layouts, or invoice totals without global admin approval. " +
-            "NEVER recommend destructive DB migrations (DROP, TRUNCATE, DELETE on data). " +
-            "Classify severity_class: minor (single-file, non-structural fix), medium (multi-file workflow change), major (payroll/auth/migration/company-model). " +
-            "Return strict JSON only.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            task: "Diagnose this app error and propose a safe code fix for human review.",
-            safetyRules: [
-              "Do not claim the fix was applied.",
-              "Do not recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls.",
-              "If more information is needed, say what logs/files/tests to inspect.",
-              "Patch text may be pseudocode or a focused diff suggestion, but must be reviewable by an engineer.",
-            ],
-            expectedJson: {
-              summary: "short user-facing diagnosis",
-              rootCause: "likely technical cause",
-              issueCategory: "api_routing|permission_403|database_migration|frontend_render|document_pdf|payroll_calculation|deployment|port_process|twilio_sms|documenso_signature|other",
-              suggestedFix: "what should change",
-              proposedPatch: "reviewable patch/diff/pseudocode or null if not applicable",
-              recommendedFiles: ["paths to inspect or change"],
-              testsToRun: ["commands or flows"],
-              riskLevel: "low|medium|high|critical",
-              severityClass: "minor (single-file non-structural) | medium (multi-file workflow) | major (payroll/auth/migration/company-model)",
-              requiredApproverRole: "admin (minor/medium) or global_admin (major)",
-              testPlan: "numbered steps to verify the fix works",
-              rollbackPlan: "how to undo the fix if something goes wrong",
-            },
-            report: {
-              source: report.source,
-              severity: report.severity,
-              title: report.title,
-              errorMessage: report.error_message,
-              stackTrace: report.stack_trace,
-              route: report.route,
-              context: report.context_json,
-              occurrenceCount: report.occurrence_count,
-            },
-          }),
-        },
-      ],
-      temperature: 0.2,
-      max_tokens: 1800,
-    });
-
     let parsed: any = {};
+    let aiError: string | null = null;
     try {
-      parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
-    } catch {
-      parsed = { summary: completion.choices?.[0]?.message?.content || "AI returned an unreadable response." };
+      const completion = await openai.chat.completions.create({
+        model,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: "You are MyPayLink's AI App Doctor for a production payroll/HR/compliance SaaS. " +
+              "Diagnose runtime errors and propose safe, minimal code fixes for human review. " +
+              "NEVER recommend auto-deploying. NEVER recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls. " +
+              "NEVER recommend changing visual layout/design, login/auth flow, payroll/tax calculations, check layouts, or invoice totals without global admin approval. " +
+              "NEVER recommend destructive DB migrations (DROP, TRUNCATE, DELETE on data). " +
+              "Classify severity_class: minor (single-file, non-structural fix), medium (multi-file workflow change), major (payroll/auth/migration/company-model). " +
+              "Return strict JSON only.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              task: "Diagnose this app error and propose a safe code fix for human review.",
+              safetyRules: [
+                "Do not claim the fix was applied.",
+                "Do not recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls.",
+                "If more information is needed, say what logs/files/tests to inspect.",
+                "Patch text may be pseudocode or a focused diff suggestion, but must be reviewable by an engineer.",
+              ],
+              expectedJson: {
+                summary: "short user-facing diagnosis",
+                rootCause: "likely technical cause",
+                issueCategory: "api_routing|permission_403|database_migration|frontend_render|document_pdf|payroll_calculation|deployment|port_process|twilio_sms|documenso_signature|other",
+                suggestedFix: "what should change",
+                proposedPatch: "reviewable patch/diff/pseudocode or null if not applicable",
+                recommendedFiles: ["paths to inspect or change"],
+                testsToRun: ["commands or flows"],
+                riskLevel: "low|medium|high|critical",
+                severityClass: "minor (single-file non-structural) | medium (multi-file workflow) | major (payroll/auth/migration/company-model)",
+                requiredApproverRole: "admin (minor/medium) or global_admin (major)",
+                testPlan: "numbered steps to verify the fix works",
+                rollbackPlan: "how to undo the fix if something goes wrong",
+              },
+              report: {
+                source: report.source,
+                severity: report.severity,
+                title: report.title,
+                errorMessage: report.error_message,
+                stackTrace: report.stack_trace,
+                route: report.route,
+                context: report.context_json,
+                occurrenceCount: report.occurrence_count,
+              },
+            }),
+          },
+        ],
+        temperature: 0.2,
+        max_tokens: 1800,
+      });
+
+      try {
+        parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
+      } catch {
+        parsed = { summary: completion.choices?.[0]?.message?.content || "AI returned an unreadable response." };
+      }
+    } catch (aiErr: any) {
+      const status = aiErr?.status ?? aiErr?.statusCode ?? "?";
+      const msg = aiErr?.message ?? String(aiErr);
+      aiError = `AI call failed (${model}, HTTP ${status}): ${msg}`.slice(0, 1000);
+      console.error("[AppDoctor] AI call error:", aiError);
+      await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET status = 'open',
+            ai_summary = ${aiError},
+            updated_at = NOW()
+        WHERE id = ${reportId}
+      `);
+      return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
     }
 
     await db.execute(sql`
