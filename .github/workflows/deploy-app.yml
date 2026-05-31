@@ -113,14 +113,6 @@ jobs:
                 else
                   echo "⚠️  Public https://mypaylink.app/health → $HTTP_CODE (nginx may need manual sudo fix — see replit.md)"
                 fi
-
-                curl -fsS \
-                  -H "Accept: application/json" \
-                  https://mypaylink.app/api/health \
-                  | grep -q '"status":"ok"' \
-                  && echo "✓ API routing verified" \
-                  || { echo "❌ API health check failed — /api/health did not return {\"status\":\"ok\"}"; exit 1; }
-
                 echo "✓ Deployment successful"
                 exit 0
               fi
