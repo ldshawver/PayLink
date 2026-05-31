@@ -10,6 +10,7 @@ import path from "path";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
+import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany } from "./tenant-context";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
@@ -1065,6 +1066,12 @@ export async function registerRoutes(
     res.setHeader("Content-Type", "application/json");
     res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
   });
+
+  // ── Tenant context middleware — Phase 2 ──────────────────────────────────────
+  // Populates req.tenantId, req.resolvedCompanyId, req.accessibleCompanyIds
+  // on every /api/* request from an authenticated session.
+  // Does NOT block requests in Phase 2 — use assertUserCanAccessCompany() explicitly.
+  app.use("/api", withTenantContext);
 
   // ── Payroll lifecycle schema migration (idempotent) ─────────────────────────
   try {
@@ -26770,6 +26777,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         ON CONFLICT (tenant_id, company_id) DO UPDATE SET is_primary = EXCLUDED.is_primary
         RETURNING *
       `, [req.params.id, companyId, isPrimary]);
+      invalidateTenantCache(companyId);
       res.status(201).json(rows[0]);
     } catch (e: any) {
       if (e.code === "23503") return res.status(400).json({ message: "Company not found" });
@@ -26784,6 +26792,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         `DELETE FROM tenant_companies WHERE tenant_id = $1 AND company_id = $2`,
         [req.params.id, req.params.companyId]
       );
+      invalidateTenantCache(req.params.companyId);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to remove company from tenant") });
