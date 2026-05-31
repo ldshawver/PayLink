@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Bot, Bug, CheckCircle2, GitPullRequest, Loader2, RefreshCw, ShieldAlert, Siren,
   Activity, Server, Cpu, Database, AlertTriangle, TicketCheck, XCircle, ExternalLink,
-  ClipboardList, FlaskConical, RotateCcw, Tag
+  ClipboardList, FlaskConical, RotateCcw, Tag, MessageSquare, Webhook, FileText, Radio
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -94,6 +94,13 @@ type Diagnostics = {
     last7dByCategory: Record<string, number>;
   };
   repairTickets: { open: number; pendingApproval: number };
+  pm2Logs: { out: string[]; err: string[] } | null;
+  recentHttpErrors: Array<{ ts: string; method: string; path: string; status: number }> | null;
+  twilioStatus: { configured: boolean; accountSid: string; fromNumber: string } | null;
+  documensoWebhooks: {
+    unprocessed: number;
+    recentErrors: Array<{ id: string; eventType: string; processingError: string; createdAt: string }>;
+  } | null;
 };
 
 type Company = { id: string; name: string };
@@ -483,6 +490,109 @@ export default function AppDoctorPage() {
                       </Badge>
                     ))}
                   </div>
+                </div>
+              )}
+              {/* Twilio status */}
+              <div className="flex items-start gap-2 rounded-lg border p-3" data-testid="diag-twilio-status">
+                <MessageSquare className={`h-4 w-4 mt-0.5 ${diag.twilioStatus?.configured ? "text-green-600" : "text-amber-500"}`} />
+                <div>
+                  <p className="text-xs font-medium">Twilio / SMS</p>
+                  <p className={`text-sm font-semibold ${diag.twilioStatus?.configured ? "text-green-600" : "text-amber-500"}`}>
+                    {diag.twilioStatus?.configured ? "Configured" : "Not configured"}
+                  </p>
+                  {diag.twilioStatus?.accountSid && (
+                    <p className="text-xs text-muted-foreground">SID: {diag.twilioStatus.accountSid}</p>
+                  )}
+                  {diag.twilioStatus?.fromNumber && diag.twilioStatus.fromNumber !== "not set" && (
+                    <p className="text-xs text-muted-foreground">From: {diag.twilioStatus.fromNumber}</p>
+                  )}
+                </div>
+              </div>
+              {/* Documenso webhooks */}
+              <div className="flex items-start gap-2 rounded-lg border p-3" data-testid="diag-documenso-status">
+                <Webhook className={`h-4 w-4 mt-0.5 ${(diag.documensoWebhooks?.unprocessed ?? 0) > 0 || (diag.documensoWebhooks?.recentErrors?.length ?? 0) > 0 ? "text-amber-500" : "text-green-600"}`} />
+                <div>
+                  <p className="text-xs font-medium">Documenso Webhooks</p>
+                  <p className={`text-sm font-semibold ${(diag.documensoWebhooks?.unprocessed ?? 0) > 0 ? "text-amber-500" : "text-green-600"}`}>
+                    {diag.documensoWebhooks?.unprocessed ?? 0} unprocessed
+                  </p>
+                  {(diag.documensoWebhooks?.recentErrors?.length ?? 0) > 0 && (
+                    <p className="text-xs text-destructive">{diag.documensoWebhooks.recentErrors.length} recent errors</p>
+                  )}
+                </div>
+              </div>
+              {/* Recent HTTP errors */}
+              {(diag.recentHttpErrors?.length ?? 0) > 0 && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="diag-recent-http-errors">
+                  <p className="text-xs font-medium mb-2 flex items-center gap-1">
+                    <Radio className="h-3 w-3 text-destructive" />
+                    Recent HTTP Errors (last {diag.recentHttpErrors.length})
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left py-1 pr-3 font-medium text-muted-foreground">Time</th>
+                          <th className="text-left py-1 pr-3 font-medium text-muted-foreground">Method</th>
+                          <th className="text-left py-1 pr-3 font-medium text-muted-foreground">Path</th>
+                          <th className="text-left py-1 font-medium text-muted-foreground">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {diag.recentHttpErrors.slice(0, 15).map((e, i) => (
+                          <tr key={i} className="border-b last:border-0">
+                            <td className="py-1 pr-3 text-muted-foreground whitespace-nowrap">{new Date(e.ts).toLocaleTimeString()}</td>
+                            <td className="py-1 pr-3 font-mono">{e.method}</td>
+                            <td className="py-1 pr-3 font-mono truncate max-w-[240px]" title={e.path}>{e.path}</td>
+                            <td className={`py-1 font-semibold ${e.status >= 500 ? "text-destructive" : "text-amber-600"}`}>{e.status}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {/* Documenso webhook error details */}
+              {(diag.documensoWebhooks?.recentErrors?.length ?? 0) > 0 && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border border-destructive/30 p-3" data-testid="diag-documenso-errors">
+                  <p className="text-xs font-medium mb-2 flex items-center gap-1 text-destructive">
+                    <Webhook className="h-3 w-3" />
+                    Documenso Webhook Errors
+                  </p>
+                  <div className="space-y-1">
+                    {diag.documensoWebhooks.recentErrors.map((e) => (
+                      <div key={e.id} className="text-xs bg-muted/50 rounded px-2 py-1">
+                        <span className="font-medium">{e.eventType}</span>
+                        <span className="text-muted-foreground ml-2">{new Date(e.createdAt).toLocaleString()}</span>
+                        <p className="text-destructive mt-0.5 font-mono">{e.processingError}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* PM2 / application log snippets */}
+              {((diag.pm2Logs?.out?.length ?? 0) > 0 || (diag.pm2Logs?.err?.length ?? 0) > 0) && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="diag-pm2-logs">
+                  <p className="text-xs font-medium mb-2 flex items-center gap-1">
+                    <FileText className="h-3 w-3" />
+                    PM2 / Application Logs (last {Math.max(diag.pm2Logs.out.length, diag.pm2Logs.err.length)} lines)
+                  </p>
+                  {diag.pm2Logs.err.length > 0 && (
+                    <div className="mb-2">
+                      <p className="text-xs text-destructive font-medium mb-1">Error log:</p>
+                      <pre className="text-xs bg-muted/60 rounded p-2 overflow-x-auto max-h-40 whitespace-pre-wrap break-all font-mono leading-4">
+                        {diag.pm2Logs.err.slice(-20).join("\n")}
+                      </pre>
+                    </div>
+                  )}
+                  {diag.pm2Logs.out.length > 0 && (
+                    <div>
+                      <p className="text-xs text-muted-foreground font-medium mb-1">Output log:</p>
+                      <pre className="text-xs bg-muted/60 rounded p-2 overflow-x-auto max-h-40 whitespace-pre-wrap break-all font-mono leading-4">
+                        {diag.pm2Logs.out.slice(-20).join("\n")}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

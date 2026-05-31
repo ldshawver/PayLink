@@ -34,6 +34,76 @@ function safeErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// ── App Doctor: in-memory HTTP error ring buffer ────────────────────────────
+interface HttpErrorEntry { ts: string; method: string; path: string; status: number; }
+const _httpErrorRingBuffer: HttpErrorEntry[] = [];
+const HTTP_ERROR_RING_MAX = 200;
+function recordHttpError(method: string, urlPath: string, status: number) {
+  _httpErrorRingBuffer.push({ ts: new Date().toISOString(), method, path: urlPath, status });
+  if (_httpErrorRingBuffer.length > HTTP_ERROR_RING_MAX) _httpErrorRingBuffer.shift();
+}
+
+// ── App Doctor: log file helpers ─────────────────────────────────────────────
+const _SECRET_PATTERNS = [
+  /\b(sk-[A-Za-z0-9]{20,})\b/g,
+  /\b(xai-[A-Za-z0-9]{20,})\b/g,
+  /AUTH_TOKEN=[^\s&]*/gi,
+  /PASSWORD=[^\s&]*/gi,
+  /SESSION_SECRET=[^\s&]*/gi,
+  /TOKEN=[^\s&]*/gi,
+  /DATABASE_URL=\S+/gi,
+  /:[^@\s]{8,}@/g,
+];
+function _sanitizeLogLine(line: string): string {
+  let s = line;
+  for (const p of _SECRET_PATTERNS) s = s.replace(p, "[REDACTED]");
+  return s;
+}
+function _tailLogFile(filePath: string, maxLines = 60): string[] {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const stat = fs.statSync(filePath);
+    if (stat.size === 0) return [];
+    const BUF = 40960;
+    const start = Math.max(0, stat.size - BUF);
+    const fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(Math.min(BUF, stat.size));
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    const text = buf.toString("utf8");
+    return text.split("\n").filter(l => l.trim()).slice(-maxLines).map(_sanitizeLogLine);
+  } catch { return []; }
+}
+function _getPm2Logs(maxLines = 60): { out: string[]; err: string[] } {
+  const home = os.homedir();
+  const names = ["paylink", "app", "server", "index"];
+  const bases = [
+    path.join(home, ".pm2", "logs"),
+    "/var/log/pm2",
+    "/tmp/.pm2/logs",
+  ];
+  let out: string[] = [], err: string[] = [];
+  for (const base of bases) {
+    for (const name of names) {
+      if (!out.length) out = _tailLogFile(path.join(base, `${name}-out.log`), maxLines);
+      if (!err.length) err = _tailLogFile(path.join(base, `${name}-error.log`), maxLines);
+    }
+    if (out.length || err.length) break;
+  }
+  // Also try numbered pm2 logs (e.g. paylink-out-0.log)
+  if (!out.length || !err.length) {
+    for (const base of bases) {
+      for (const name of names) {
+        for (let i = 0; i < 3; i++) {
+          if (!out.length) out = _tailLogFile(path.join(base, `${name}-out-${i}.log`), maxLines);
+          if (!err.length) err = _tailLogFile(path.join(base, `${name}-error-${i}.log`), maxLines);
+        }
+      }
+    }
+  }
+  return { out: out.slice(-maxLines), err: err.slice(-maxLines) };
+}
+
 function getAppBaseUrl(req: Request): string {
   if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/+$/, "");
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
@@ -1074,6 +1144,14 @@ export async function registerRoutes(
   app.get("/api/health", (_req, res) => {
     res.setHeader("Content-Type", "application/json");
     res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // ── App Doctor: HTTP error tracking ─────────────────────────────────────────
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.on("finish", () => {
+      if (res.statusCode >= 400) recordHttpError(_req.method, _req.path, res.statusCode);
+    });
+    next();
   });
 
   // ── Tenant context middleware — Phase 2 ──────────────────────────────────────
@@ -23346,30 +23424,68 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const diagUser = await storage.getUser(req.session.userId!);
+      const diagIsPlatform = isPlatformUser(diagUser?.role);
+      const diagCompanyId = diagIsPlatform
+        ? (typeof req.query.companyId === "string" ? req.query.companyId : undefined)
+        : diagUser?.companyId;
+
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
-      const errorCounts = pgRows<any>(await db.execute(sql`
-        SELECT severity, COUNT(*) as cnt FROM app_doctor_reports
-        WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY severity
-      `));
-      const statusCounts = pgRows<any>(await db.execute(sql`
-        SELECT status, COUNT(*) as cnt FROM app_doctor_reports
-        WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY status
-      `));
-      const categoryBreakdown = pgRows<any>(await db.execute(sql`
-        SELECT issue_category, COUNT(*) as cnt FROM app_doctor_reports
-        WHERE created_at > NOW() - INTERVAL '7 days' AND issue_category IS NOT NULL GROUP BY issue_category ORDER BY cnt DESC
-      `));
-      const openTicketRow = pgRow<any>(await db.execute(sql`
-        SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets
-        WHERE status IN ('draft','pending_approval')
-      `));
-      const pendingApprovalRow = pgRow<any>(await db.execute(sql`
-        SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status = 'pending_approval'
-      `));
+      // Reports and tickets are scoped to the user's company (or global for platform users).
+      const [errorCounts, statusCounts, categoryBreakdown, openTicketRow, pendingApprovalRow] = await Promise.all([
+        diagCompanyId
+          ? db.execute(sql`SELECT severity, COUNT(*) as cnt FROM app_doctor_reports WHERE company_id = ${diagCompanyId} AND created_at > NOW() - INTERVAL '24 hours' GROUP BY severity`).then(r => pgRows<any>(r))
+          : db.execute(sql`SELECT severity, COUNT(*) as cnt FROM app_doctor_reports WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY severity`).then(r => pgRows<any>(r)),
+        diagCompanyId
+          ? db.execute(sql`SELECT status, COUNT(*) as cnt FROM app_doctor_reports WHERE company_id = ${diagCompanyId} AND created_at > NOW() - INTERVAL '7 days' GROUP BY status`).then(r => pgRows<any>(r))
+          : db.execute(sql`SELECT status, COUNT(*) as cnt FROM app_doctor_reports WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY status`).then(r => pgRows<any>(r)),
+        diagCompanyId
+          ? db.execute(sql`SELECT issue_category, COUNT(*) as cnt FROM app_doctor_reports WHERE company_id = ${diagCompanyId} AND created_at > NOW() - INTERVAL '7 days' AND issue_category IS NOT NULL GROUP BY issue_category ORDER BY cnt DESC`).then(r => pgRows<any>(r))
+          : db.execute(sql`SELECT issue_category, COUNT(*) as cnt FROM app_doctor_reports WHERE created_at > NOW() - INTERVAL '7 days' AND issue_category IS NOT NULL GROUP BY issue_category ORDER BY cnt DESC`).then(r => pgRows<any>(r)),
+        diagCompanyId
+          ? db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE company_id = ${diagCompanyId} AND status IN ('draft','pending_approval')`).then(r => pgRow<any>(r))
+          : db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status IN ('draft','pending_approval')`).then(r => pgRow<any>(r)),
+        diagCompanyId
+          ? db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE company_id = ${diagCompanyId} AND status = 'pending_approval'`).then(r => pgRow<any>(r))
+          : db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status = 'pending_approval'`).then(r => pgRow<any>(r)),
+      ]);
 
       const toMap = (rows: any[]) => Object.fromEntries(rows.map(r => [r.severity || r.status || r.issue_category, parseInt(r.cnt)]));
+
+      // ── Platform-only: raw logs, global HTTP errors, service config ────────────
+      // These contain server-wide data that must not be exposed to tenant-scoped roles.
+      let pm2Logs: { out: string[]; err: string[] } = { out: [], err: [] };
+      let recentHttpErrors: HttpErrorEntry[] = [];
+      let twilioStatus: { configured: boolean; accountSid: string; fromNumber: string } | null = null;
+      let documensoWebhooks: { unprocessed: number; recentErrors: Array<{ id: string; eventType: string; processingError: string; createdAt: string }> } | null = null;
+
+      if (diagIsPlatform) {
+        pm2Logs = _getPm2Logs(60);
+        recentHttpErrors = [..._httpErrorRingBuffer].reverse().slice(0, 50);
+
+        const twilioSid = process.env.TWILIO_ACCOUNT_SID || "";
+        twilioStatus = {
+          configured: !!(twilioSid && process.env.TWILIO_AUTH_TOKEN),
+          accountSid: twilioSid ? twilioSid.slice(0, 8) + "…" : "not set",
+          fromNumber: process.env.TWILIO_FROM_NUMBER || "not set",
+        };
+
+        const [docUnprocessedRow, docRecentErrors] = await Promise.all([
+          db.execute(sql`SELECT COUNT(*) as cnt FROM documenso_webhook_events WHERE processed = false`).then(r => pgRow<any>(r)).catch(() => ({ cnt: "0" })),
+          db.execute(sql`SELECT id, event_type, processing_error, created_at FROM documenso_webhook_events WHERE processing_error IS NOT NULL AND processing_error != '' ORDER BY created_at DESC LIMIT 10`).then(r => pgRows<any>(r)).catch(() => [] as any[]),
+        ]);
+        documensoWebhooks = {
+          unprocessed: parseInt(docUnprocessedRow?.cnt || "0"),
+          recentErrors: docRecentErrors.map((r: any) => ({
+            id: String(r.id),
+            eventType: r.event_type,
+            processingError: r.processing_error,
+            createdAt: r.created_at,
+          })),
+        };
+      }
 
       res.json({
         timestamp: new Date().toISOString(),
@@ -23396,6 +23512,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           open: parseInt(openTicketRow?.cnt || "0"),
           pendingApproval: parseInt(pendingApprovalRow?.cnt || "0"),
         },
+        // Platform-only fields (null for tenant-scoped users)
+        pm2Logs: diagIsPlatform ? pm2Logs : null,
+        recentHttpErrors: diagIsPlatform ? recentHttpErrors : null,
+        twilioStatus,
+        documensoWebhooks,
       });
     } catch (e: any) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to collect diagnostics") });
