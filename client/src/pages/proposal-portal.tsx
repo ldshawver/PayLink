@@ -643,6 +643,9 @@ export default function ProposalPortalPage() {
   // Sentinel ref at the bottom of the thread — used for auto-scroll
   const threadBottomRef = useRef<HTMLDivElement | null>(null);
 
+  // Track the last known thread length so polling can detect new replies
+  const prevThreadLengthRef = useRef<number>(0);
+
   function scrollThreadToBottom() {
     setTimeout(() => threadBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   }
@@ -678,6 +681,39 @@ export default function ProposalPortalPage() {
   }, [proposalId, token, lsKey]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Silent background poll — fetches just the proposal JSON without touching error/loading state.
+  // If the request fails (network blip, transient 5xx) the existing proposal data is preserved
+  // and the user sees no disruption. Only called by the polling interval, never on initial load.
+  const pollForUpdates = useCallback(async () => {
+    if (!proposalId || !token) return;
+    try {
+      const r = await fetch(`/api/portal/proposals/${proposalId}?token=${encodeURIComponent(token)}`);
+      if (!r.ok) return; // silently skip — keep existing data
+      const propData = await r.json();
+      setProposal(propData);
+    } catch {
+      // network error — keep existing proposal data, do nothing
+    }
+  }, [proposalId, token]);
+
+  // Periodic polling: re-fetch proposal data every 30 seconds so new admin replies
+  // appear automatically without the client needing to reload the page.
+  useEffect(() => {
+    if (!proposalId || !token) return;
+    const id = setInterval(pollForUpdates, 30_000);
+    return () => clearInterval(id);
+  }, [pollForUpdates, proposalId, token]);
+
+  // When the thread grows (detected after any loadData call, including polls),
+  // scroll to the bottom so the newest reply is immediately visible.
+  useEffect(() => {
+    const newLen = proposal?.thread?.length ?? 0;
+    if (newLen > prevThreadLengthRef.current && prevThreadLengthRef.current > 0) {
+      scrollThreadToBottom();
+    }
+    prevThreadLengthRef.current = newLen;
+  }, [proposal?.thread?.length]);
 
   // On load: scroll to the thread bottom so the latest message is always visible
   useEffect(() => {
