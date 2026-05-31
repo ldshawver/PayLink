@@ -26635,6 +26635,161 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: "Failed to fetch contractors" }); }
   });
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // PLATFORM TENANT MANAGEMENT — platform_admin / platform_super_admin only
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // List all tenants with company counts
+  app.get("/api/tenants", requireAuth, requirePlatformRole(), async (_req, res) => {
+    try {
+      const { rows } = await db.$client.query(`
+        SELECT t.*,
+               COUNT(tc.company_id)::int AS company_count
+        FROM tenants t
+        LEFT JOIN tenant_companies tc ON tc.tenant_id = t.id
+        GROUP BY t.id
+        ORDER BY
+          CASE t.status WHEN 'active' THEN 0 WHEN 'trial' THEN 1 WHEN 'demo' THEN 2 WHEN 'suspended' THEN 3 ELSE 4 END,
+          t.name ASC
+      `);
+      res.json(rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        status: r.status,
+        primaryAdminUserId: r.primary_admin_user_id,
+        billingContactName: r.billing_contact_name,
+        billingContactEmail: r.billing_contact_email,
+        stripeCustomerId: r.stripe_customer_id,
+        defaultTimezone: r.default_timezone,
+        notes: r.notes,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        companyCount: r.company_count,
+      })));
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch tenants") });
+    }
+  });
+
+  // Create a new tenant — platform_super_admin only
+  app.post("/api/tenants", requireAuth, requireSuperAdmin(), async (req, res) => {
+    try {
+      const { name, slug, status = "trial", billingContactName, billingContactEmail, defaultTimezone, notes } = req.body;
+      if (!name || !slug) return res.status(400).json({ message: "name and slug are required" });
+      const cleanSlug = slug.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+      const { rows } = await db.$client.query(
+        `INSERT INTO tenants (name, slug, status, billing_contact_name, billing_contact_email, default_timezone, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [name, cleanSlug, status, billingContactName || null, billingContactEmail || null, defaultTimezone || "America/Los_Angeles", notes || null]
+      );
+      const r = rows[0];
+      res.status(201).json({
+        id: r.id, name: r.name, slug: r.slug, status: r.status,
+        billingContactName: r.billing_contact_name, billingContactEmail: r.billing_contact_email,
+        stripeCustomerId: r.stripe_customer_id, defaultTimezone: r.default_timezone,
+        notes: r.notes, createdAt: r.created_at, updatedAt: r.updated_at, companyCount: 0,
+      });
+    } catch (e: any) {
+      if (e.code === "23505") return res.status(409).json({ message: "A tenant with that slug already exists" });
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create tenant") });
+    }
+  });
+
+  // Get single tenant with assigned companies
+  app.get("/api/tenants/:id", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const { rows: tenantRows } = await db.$client.query(`SELECT * FROM tenants WHERE id = $1`, [req.params.id]);
+      if (!tenantRows.length) return res.status(404).json({ message: "Tenant not found" });
+      const t = tenantRows[0];
+      const { rows: companyRows } = await db.$client.query(`
+        SELECT c.id, c.name, c.status, tc.is_primary, tc.created_at AS assigned_at
+        FROM tenant_companies tc
+        JOIN companies c ON c.id = tc.company_id
+        WHERE tc.tenant_id = $1
+        ORDER BY tc.is_primary DESC, c.name ASC
+      `, [req.params.id]);
+      res.json({
+        id: t.id, name: t.name, slug: t.slug, status: t.status,
+        primaryAdminUserId: t.primary_admin_user_id,
+        billingContactName: t.billing_contact_name, billingContactEmail: t.billing_contact_email,
+        stripeCustomerId: t.stripe_customer_id, defaultTimezone: t.default_timezone,
+        notes: t.notes, createdAt: t.created_at, updatedAt: t.updated_at,
+        companies: companyRows.map((c: any) => ({
+          id: c.id, name: c.name, status: c.status,
+          isPrimary: c.is_primary, assignedAt: c.assigned_at,
+        })),
+      });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch tenant") });
+    }
+  });
+
+  // Update tenant — platform_admin can edit status/billing; super_admin can do anything
+  app.patch("/api/tenants/:id", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const allowed = ["active", "trial", "demo", "suspended", "cancelled"];
+      const { name, status, billingContactName, billingContactEmail, defaultTimezone, notes, stripeCustomerId } = req.body;
+      if (status && !allowed.includes(status)) return res.status(400).json({ message: "Invalid status" });
+      const { rows } = await db.$client.query(`
+        UPDATE tenants
+        SET name                 = COALESCE($1, name),
+            status               = COALESCE($2, status),
+            billing_contact_name = COALESCE($3, billing_contact_name),
+            billing_contact_email= COALESCE($4, billing_contact_email),
+            default_timezone     = COALESCE($5, default_timezone),
+            notes                = COALESCE($6, notes),
+            stripe_customer_id   = COALESCE($7, stripe_customer_id),
+            updated_at           = NOW()
+        WHERE id = $8
+        RETURNING *
+      `, [name || null, status || null, billingContactName ?? null, billingContactEmail ?? null,
+          defaultTimezone || null, notes ?? null, stripeCustomerId || null, req.params.id]);
+      if (!rows.length) return res.status(404).json({ message: "Tenant not found" });
+      const t = rows[0];
+      res.json({
+        id: t.id, name: t.name, slug: t.slug, status: t.status,
+        billingContactName: t.billing_contact_name, billingContactEmail: t.billing_contact_email,
+        stripeCustomerId: t.stripe_customer_id, defaultTimezone: t.default_timezone,
+        notes: t.notes, createdAt: t.created_at, updatedAt: t.updated_at,
+      });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to update tenant") });
+    }
+  });
+
+  // Assign a company to a tenant — super_admin only
+  app.post("/api/tenants/:id/companies", requireAuth, requireSuperAdmin(), async (req, res) => {
+    try {
+      const { companyId, isPrimary = false } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const { rows } = await db.$client.query(`
+        INSERT INTO tenant_companies (tenant_id, company_id, is_primary)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (tenant_id, company_id) DO UPDATE SET is_primary = EXCLUDED.is_primary
+        RETURNING *
+      `, [req.params.id, companyId, isPrimary]);
+      res.status(201).json(rows[0]);
+    } catch (e: any) {
+      if (e.code === "23503") return res.status(400).json({ message: "Company not found" });
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to assign company to tenant") });
+    }
+  });
+
+  // Remove a company from a tenant — super_admin only
+  app.delete("/api/tenants/:id/companies/:companyId", requireAuth, requireSuperAdmin(), async (req, res) => {
+    try {
+      await db.$client.query(
+        `DELETE FROM tenant_companies WHERE tenant_id = $1 AND company_id = $2`,
+        [req.params.id, req.params.companyId]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to remove company from tenant") });
+    }
+  });
+
   // ── Tenant Provisioning ────────────────────────────────────────────────────
   {
     const { handleProvisioningEvent, getProvisioningStatus } = await import("./provisioning/TenantProvisioningService");

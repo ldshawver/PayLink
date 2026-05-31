@@ -3349,6 +3349,38 @@ Thank you,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+    await run("tenants table", sql`CREATE TABLE IF NOT EXISTS tenants (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'active',
+      primary_admin_user_id VARCHAR,
+      billing_contact_name TEXT,
+      billing_contact_email TEXT,
+      stripe_customer_id TEXT,
+      default_timezone TEXT DEFAULT 'America/Los_Angeles',
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("tenant_companies table", sql`CREATE TABLE IF NOT EXISTS tenant_companies (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id VARCHAR NOT NULL,
+      company_id VARCHAR NOT NULL,
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (tenant_id, company_id)
+    )`);
+    await run("tenants seed: Alavont Holding", sql`
+      INSERT INTO tenants (name, slug, status, notes)
+      VALUES ('Alavont Holding', 'alavont-holding', 'active', 'Primary production tenant')
+      ON CONFLICT (slug) DO NOTHING
+    `);
+    await run("tenants seed: Demo Tenant", sql`
+      INSERT INTO tenants (name, slug, status, notes)
+      VALUES ('Demo Tenant', 'demo-tenant', 'demo', 'Sales demo and test tenant')
+      ON CONFLICT (slug) DO NOTHING
+    `);
     await run("company_user_access backfill", sql`
       INSERT INTO company_user_access (user_id, company_id, role, is_default_company, is_active, worker_type)
       SELECT id, company_id, COALESCE(role, 'employee'), TRUE, TRUE,

@@ -135,6 +135,13 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
     module: "provisioning",
     sections: [
       {
+        label: "Tenants",
+        icon: Building2,
+        url: "/platform/tenants",
+        module: "provisioning",
+        items: [],
+      },
+      {
         label: "Tenant Provisioning",
         icon: ServerCog,
         url: "/platform/provisioning",

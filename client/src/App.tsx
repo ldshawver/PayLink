@@ -85,6 +85,7 @@ const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
+const PlatformTenantsPage = lazy(() => import("@/pages/platform-tenants"));
 const MarketingHomePage = lazy(() => import("@/pages/marketing-home"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -424,6 +425,7 @@ function PlatformRouter() {
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
           <Route path="/platform/audit" component={PlatformAuditPage} />
           <Route path="/platform/app-doctor" component={AppDoctorPage} />
+          <Route path="/platform/tenants" component={PlatformTenantsPage} />
           <Route path="/platform/gdpr-inventory" component={GdprInventoryPage} />
           <Route path="/platform/privacy-audit-log" component={PrivacyAuditLogPage} />
           <Route path="/platform/breach-response" component={BreachResponsePage} />
