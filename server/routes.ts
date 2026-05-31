@@ -744,7 +744,7 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
 
     const pdfBuffer = doc.output("arraybuffer");
     const fileName = `proposal-${(proposal.proposal_number || proposalId).replace(/[^a-z0-9]/gi, "_")}-${Date.now()}.pdf`;
-    const uploadDir = path.join(process.cwd(), "uploads");
+    const uploadDir = resolvedUploadDir;
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
     const filePath = path.join(uploadDir, fileName);
     fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
@@ -942,7 +942,7 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
 
     const pdfBuffer = doc.output("arraybuffer");
     const fileName = `invoice-${(invoice.invoice_number || invoiceId).replace(/[^a-z0-9]/gi, "_")}-${Date.now()}.pdf`;
-    const uploadDir = path.join(process.cwd(), "uploads");
+    const uploadDir = resolvedUploadDir;
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
     const filePath = path.join(uploadDir, fileName);
     fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
@@ -10618,7 +10618,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const pdfBuf = await generateContractPdf(c.id);
           if (pdfBuf) {
             const fName = `contract-backfill-${c.id.slice(0, 8)}-${Date.now()}.pdf`;
-            const uploadDir = path.join(process.cwd(), "uploads");
+            const uploadDir = resolvedUploadDir;
             if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
             const fPath = path.join(uploadDir, fName);
             fs.writeFileSync(fPath, pdfBuf);
