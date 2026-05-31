@@ -26809,6 +26809,20 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           defaultTimezone || null, notes ?? null, stripeCustomerId || null, req.params.id]);
       if (!rows.length) return res.status(404).json({ message: "Tenant not found" });
       const t = rows[0];
+      // Invalidate tenant-context cache for all companies in this tenant so that
+      // status changes (e.g., suspended → active, active → cancelled) take effect
+      // immediately rather than waiting for the 30-second TTL to expire.
+      try {
+        const companyRows = await db.$client.query<{ company_id: string }>(
+          `SELECT company_id FROM tenant_companies WHERE tenant_id = $1`,
+          [req.params.id]
+        );
+        for (const { company_id } of companyRows.rows) {
+          invalidateTenantCache(company_id);
+        }
+      } catch (cacheErr) {
+        console.error("[TenantCache] Failed to invalidate after tenant status update:", cacheErr);
+      }
       res.json({
         id: t.id, name: t.name, slug: t.slug, status: t.status,
         billingContactName: t.billing_contact_name, billingContactEmail: t.billing_contact_email,

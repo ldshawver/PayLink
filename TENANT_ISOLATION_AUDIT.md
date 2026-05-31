@@ -6,6 +6,15 @@
 
 ---
 
+> ⚠️ **Phase 2 Scope Warning:** Phase 2 does **not** yet enforce tenant isolation globally. It creates
+> the tenant context foundation (`withTenantContext` middleware, `req.tenantId`, `req.resolvedCompanyId`,
+> `req.accessibleCompanyIds`) and documents enforcement gaps. Suspended/cancelled tenants are only
+> blocked on routes that explicitly call `assertUserCanAccessCompany`. Most routes do **not** yet call
+> it — see Section 5 for the full list and Section 7 for the Phase 3/P0 remediation plan.
+> Full per-route enforcement is scoped to Phase 4.
+
+---
+
 ## 1. What Already Existed (Pre-Phase-2)
 
 | Helper / Feature | Location | Notes |
@@ -313,13 +322,13 @@ The current `canAccessCompany` helper:
 ### P0 — Must Do Before Production Multi-Tenant Launch
 1. **Assign all existing companies to tenants** via Platform Console → Tenants → Assign Company. Production companies → Alavont Holding. Demo companies → Demo Tenant.
 2. **Fix `canAccessCompany`** to reject cross-tenant enterprise siblings (two companies in the same enterprise but different tenants should NOT cross).
-3. **Protect financial endpoints** (`payroll-runs`, `funding-accounts`, `payroll-payment-records`) with `assertUserCanAccessCompany`.
+3. **Wire `assertUserCanAccessCompany` into all financial/payroll/employee/contractor route groups** — payroll-runs, funding-accounts, payroll-payment-records, workers, time-entries, time-punches, schedules, expenses, documents, contractor-proposals, contractor-contracts, contractor-invoices (see Section 5 for full list).
+4. **Fix `privacy_audit_log.tenant_id`** — column is currently populated with `user.companyId` (a company ID) instead of the actual `tenants.id`. This causes tenant-level audit queries to return incorrect results and must be corrected before any compliance reporting.
+5. **Fix `breach_incidents`** — table has no `company_id` or effective `tenant_id`; breach records are entirely unscoped and could surface across tenants in the audit UI. Add `company_id` column and enforce scoping in API and UI.
+6. **Mask API keys in `product_api_keys`** — raw secret key values are stored in the database. Move to masked (`sk-...last4`) + hashed storage pattern before any multi-tenant production launch.
 
 ### P1 — High Priority
-4. **Fix `privacy_audit_log.tenant_id`** to store actual `tenants.id` instead of `companies.id`.
-5. **Fix `breach_incidents`** — add `company_id` column, enforce scoping in UI and API.
-6. **Add `tenant_id` to `feature_overrides`** — allow platform to set features at tenant level (inherited by all companies in tenant).
-7. **Mask API keys in `product_api_keys`** — store only masked version post-creation.
+7. **Add `tenant_id` to `feature_overrides`** — allow platform to set features at tenant level (inherited by all companies in tenant).
 
 ### P2 — Phase 4 Scope
 8. **Wire `assertUserCanAccessCompany` into major route groups** — workers, payroll, time entries, expenses, documents.
