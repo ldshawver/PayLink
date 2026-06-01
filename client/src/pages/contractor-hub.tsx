@@ -5221,7 +5221,10 @@ function DocumentsSection() {
 
   const { data: proposals = [] } = useQuery<Proposal[]>({
     queryKey: ["/api/contractor-proposals", showArchived],
-    queryFn: async () => { const r = await fetch(`/api/contractor-proposals${showArchived ? "?showArchived=true" : ""}`, { credentials: "include" }); return r.ok ? r.json() : []; },
+    queryFn: async () => {
+      const r = await apiRequest("GET", `/api/contractor-proposals${showArchived ? "?showArchived=true" : ""}`);
+      return r.json();
+    },
     select: (d: any) => snakeToCamel(d),
   });
   const { data: contracts = [] } = useQuery<Contract[]>({
@@ -7313,11 +7316,7 @@ export default function ContractorHubPage() {
   const { data: proposals = [], isLoading: proposalsLoading, error: proposalsError } = useQuery<Proposal[]>({
     queryKey: ["/api/contractor-proposals", proposalLifecycleGroup],
     queryFn: async () => {
-      const r = await fetch(`/api/contractor-proposals?lifecycleGroup=${proposalLifecycleGroup}`, { credentials: "include" });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body?.message || `Failed to load proposals (HTTP ${r.status})`);
-      }
+      const r = await apiRequest("GET", `/api/contractor-proposals?lifecycleGroup=${proposalLifecycleGroup}`);
       return r.json();
     },
     select: (data: any) => snakeToCamel(data),

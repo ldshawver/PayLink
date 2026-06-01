@@ -23272,128 +23272,213 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   async function saveAppDoctorAnalysis(reportId: string, analysisInput: AppDoctorAnalysis) {
     const analysis = sanitizeAppDoctorAnalysis(analysisInput);
-    await db.execute(sql`
+    const recommendedPayload = JSON.stringify({ files: analysis.recommendedFiles || [], tests: analysis.testsToRun || [] });
+
+    // Save the original/base App Doctor columns first. These columns are present on
+    // every deployed schema version, so this is the acceptance-critical write that
+    // makes Analyze return a usable report even when external AI providers fail.
+    const baseReport = pgRow<any>(await db.execute(sql`
       UPDATE app_doctor_reports
       SET status = 'ai_review_ready',
-          ai_summary = ${analysis.summary || null},
-          ai_root_cause = ${analysis.rootCause || null},
-          ai_suggested_fix = ${analysis.suggestedFix || null},
-          ai_patch = ${analysis.proposedPatch || null},
-          recommended_files = ${JSON.stringify({ files: analysis.recommendedFiles || [], tests: analysis.testsToRun || [] })},
-          risk_level = ${analysis.riskLevel || null},
-          issue_category = ${analysis.issueCategory || null},
-          severity_class = ${analysis.severityClass || null},
-          required_approver_role = ${analysis.requiredApproverRole || null},
-          test_plan = ${analysis.testPlan || null},
-          rollback_plan = ${analysis.rollbackPlan || null},
+          ai_summary = ${analysis.summary || null}::text,
+          ai_root_cause = ${analysis.rootCause || null}::text,
+          ai_suggested_fix = ${analysis.suggestedFix || null}::text,
+          ai_patch = ${analysis.proposedPatch || null}::text,
+          recommended_files = ${recommendedPayload}::text,
+          risk_level = ${analysis.riskLevel || null}::text,
           updated_at = NOW()
-      WHERE id = ${reportId}
-    `);
+      WHERE id = ${reportId}::varchar
+      RETURNING *
+    `));
 
-    return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+    if (!baseReport) return null;
+
+    // Enhanced classification columns are best-effort for older/self-hosted DBs.
+    // A missing enhanced column must never turn an otherwise usable analysis into
+    // a 500 response.
+    try {
+      return pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET issue_category = ${analysis.issueCategory || null}::text,
+            severity_class = ${analysis.severityClass || null}::text,
+            required_approver_role = ${analysis.requiredApproverRole || null}::text,
+            test_plan = ${analysis.testPlan || null}::text,
+            rollback_plan = ${analysis.rollbackPlan || null}::text,
+            updated_at = NOW()
+        WHERE id = ${reportId}::varchar
+        RETURNING *
+      `)) || baseReport;
+    } catch (e: any) {
+      console.warn("[AppDoctor] enhanced analysis columns unavailable; base analysis saved:", e?.message || e);
+      return baseReport;
+    }
+  }
+
+  type AppDoctorAiProvider = "openai" | "xai";
+
+  type AppDoctorAiAttempt = {
+    provider: AppDoctorAiProvider;
+    apiKey?: string;
+    model: string;
+    baseURL?: string;
+  };
+
+  function getAppDoctorAiAttempts(): AppDoctorAiAttempt[] {
+    const openaiApiKey = (process.env.OPENAI_API_KEY || "").trim();
+    const xaiApiKey = (process.env.XAI_API_KEY || "").trim();
+    const preferredProvider = String(process.env.APP_DOCTOR_PROVIDER || "").toLowerCase();
+    const sharedModel = (process.env.APP_DOCTOR_MODEL || "").trim();
+    const attempts: AppDoctorAiAttempt[] = [];
+
+    if (openaiApiKey) {
+      attempts.push({
+        provider: "openai",
+        apiKey: openaiApiKey,
+        model: (process.env.APP_DOCTOR_OPENAI_MODEL || sharedModel || "gpt-4o-mini").trim(),
+      });
+    }
+
+    if (xaiApiKey) {
+      attempts.push({
+        provider: "xai",
+        apiKey: xaiApiKey,
+        model: (process.env.APP_DOCTOR_XAI_MODEL || sharedModel || "grok-3-mini").trim(),
+        baseURL: "https://api.x.ai/v1",
+      });
+    }
+
+    if (preferredProvider === "xai") {
+      attempts.sort((a, b) => (a.provider === "xai" ? -1 : b.provider === "xai" ? 1 : 0));
+    } else if (preferredProvider === "openai") {
+      attempts.sort((a, b) => (a.provider === "openai" ? -1 : b.provider === "openai" ? 1 : 0));
+    }
+
+    return attempts.filter((attempt) => !!attempt.apiKey && !!attempt.model);
+  }
+
+  function parseAppDoctorAiJson(content: string | null | undefined): AppDoctorAnalysis {
+    const text = String(content || "").trim();
+    if (!text) throw new Error("AI provider returned an empty response");
+
+    try {
+      return JSON.parse(text);
+    } catch (directError: any) {
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+      if (fenced) return JSON.parse(fenced);
+
+      const firstBrace = text.indexOf("{");
+      const lastBrace = text.lastIndexOf("}");
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+      }
+
+      throw new Error(`AI response was not valid JSON: ${directError?.message || "parse failed"}`);
+    }
+  }
+
+  function buildAppDoctorAiMessages(report: any) {
+    return [
+      {
+        role: "system" as const,
+        content: "You are MyPayLink's AI App Doctor for a production payroll/HR/compliance SaaS. " +
+          "Diagnose runtime errors and propose safe, minimal code fixes for human review. " +
+          "NEVER recommend auto-deploying. NEVER recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls. " +
+          "NEVER recommend changing visual layout/design, login/auth flow, payroll/tax calculations, check layouts, or invoice totals without global admin approval. " +
+          "NEVER recommend destructive DB migrations (DROP, TRUNCATE, DELETE on data). " +
+          "Classify severity_class: minor (single-file, non-structural fix), medium (multi-file workflow change), major (payroll/auth/migration/company-model). " +
+          "Return strict JSON only.",
+      },
+      {
+        role: "user" as const,
+        content: JSON.stringify({
+          task: "Diagnose this app error and propose a safe code fix for human review.",
+          safetyRules: [
+            "Do not claim the fix was applied.",
+            "Do not recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls.",
+            "If more information is needed, say what logs/files/tests to inspect.",
+            "Patch text may be pseudocode or a focused diff suggestion, but must be reviewable by an engineer.",
+          ],
+          expectedJson: {
+            summary: "short user-facing diagnosis",
+            rootCause: "likely technical cause",
+            issueCategory: "api_routing|permission_403|database_migration|frontend_render|document_pdf|payroll_calculation|deployment|port_process|twilio_sms|documenso_signature|other",
+            suggestedFix: "what should change",
+            proposedPatch: "reviewable patch/diff/pseudocode or null if not applicable",
+            recommendedFiles: ["paths to inspect or change"],
+            testsToRun: ["commands or flows"],
+            riskLevel: "low|medium|high|critical",
+            severityClass: "minor (single-file non-structural) | medium (multi-file workflow) | major (payroll/auth/migration/company-model)",
+            requiredApproverRole: "admin (minor/medium) or global_admin (major)",
+            testPlan: "numbered steps to verify the fix works",
+            rollbackPlan: "how to undo the fix if something goes wrong",
+          },
+          report: {
+            source: report.source,
+            severity: report.severity,
+            title: report.title,
+            errorMessage: report.error_message,
+            stackTrace: report.stack_trace,
+            route: report.route,
+            context: report.context_json,
+            occurrenceCount: report.occurrence_count,
+          },
+        }),
+      },
+    ];
   }
 
   async function analyzeAppDoctorReport(reportId: string): Promise<any | null> {
-    const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+    const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}::varchar`));
     if (!report) return null;
 
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    const xaiApiKey = process.env.XAI_API_KEY;
-    const aiApiKey = openaiApiKey || xaiApiKey;
-    if (!aiApiKey) {
-      return saveAppDoctorAnalysis(reportId, buildLocalAppDoctorAnalysis(report, "OPENAI_API_KEY or XAI_API_KEY is not configured"));
+    const attempts = getAppDoctorAiAttempts();
+    const failureReasons: string[] = [];
+
+    if (attempts.length === 0) {
+      failureReasons.push("OPENAI_API_KEY and XAI_API_KEY are not configured, or no App Doctor model was selected");
+    } else {
+      const { default: OpenAI } = await import("openai");
+      const messages = buildAppDoctorAiMessages(report);
+
+      for (const attempt of attempts) {
+        try {
+          console.log(`[AppDoctor] analyzing report ${reportId} with ${attempt.provider}:${attempt.model}`);
+          const client = new OpenAI({
+            apiKey: attempt.apiKey,
+            ...(attempt.baseURL ? { baseURL: attempt.baseURL } : {}),
+          });
+          const completion = await client.chat.completions.create({
+            model: attempt.model,
+            response_format: { type: "json_object" },
+            messages,
+            temperature: 0.2,
+            max_tokens: 1800,
+          });
+          const parsed = parseAppDoctorAiJson(completion.choices?.[0]?.message?.content);
+          return await saveAppDoctorAnalysis(reportId, {
+            summary: parsed.summary,
+            rootCause: parsed.rootCause,
+            suggestedFix: parsed.suggestedFix,
+            proposedPatch: parsed.proposedPatch,
+            recommendedFiles: parsed.recommendedFiles,
+            testsToRun: parsed.testsToRun,
+            riskLevel: parsed.riskLevel,
+            issueCategory: parsed.issueCategory,
+            severityClass: parsed.severityClass,
+            requiredApproverRole: parsed.requiredApproverRole,
+            testPlan: parsed.testPlan,
+            rollbackPlan: parsed.rollbackPlan,
+          });
+        } catch (aiError: any) {
+          const reason = `${attempt.provider}:${attempt.model} failed (${aiError?.message || aiError})`;
+          failureReasons.push(reason);
+          console.error("[AppDoctor] external AI analysis failed; trying fallback if available:", reason);
+        }
+      }
     }
 
-    const { default: OpenAI } = await import("openai");
-    const useXai = !openaiApiKey && !!xaiApiKey;
-    const openai = new OpenAI({
-      apiKey: aiApiKey,
-      ...(useXai ? { baseURL: "https://api.x.ai/v1" } : {}),
-    });
-    const model = process.env.APP_DOCTOR_MODEL || (useXai ? "grok-3-mini" : "gpt-4o-mini");
-
-    let completion: any;
-    try {
-      completion = await openai.chat.completions.create({
-      model,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: "You are MyPayLink's AI App Doctor for a production payroll/HR/compliance SaaS. " +
-            "Diagnose runtime errors and propose safe, minimal code fixes for human review. " +
-            "NEVER recommend auto-deploying. NEVER recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls. " +
-            "NEVER recommend changing visual layout/design, login/auth flow, payroll/tax calculations, check layouts, or invoice totals without global admin approval. " +
-            "NEVER recommend destructive DB migrations (DROP, TRUNCATE, DELETE on data). " +
-            "Classify severity_class: minor (single-file, non-structural fix), medium (multi-file workflow change), major (payroll/auth/migration/company-model). " +
-            "Return strict JSON only.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            task: "Diagnose this app error and propose a safe code fix for human review.",
-            safetyRules: [
-              "Do not claim the fix was applied.",
-              "Do not recommend bypassing payroll, tax, ACH, tenant isolation, or compliance controls.",
-              "If more information is needed, say what logs/files/tests to inspect.",
-              "Patch text may be pseudocode or a focused diff suggestion, but must be reviewable by an engineer.",
-            ],
-            expectedJson: {
-              summary: "short user-facing diagnosis",
-              rootCause: "likely technical cause",
-              issueCategory: "api_routing|permission_403|database_migration|frontend_render|document_pdf|payroll_calculation|deployment|port_process|twilio_sms|documenso_signature|other",
-              suggestedFix: "what should change",
-              proposedPatch: "reviewable patch/diff/pseudocode or null if not applicable",
-              recommendedFiles: ["paths to inspect or change"],
-              testsToRun: ["commands or flows"],
-              riskLevel: "low|medium|high|critical",
-              severityClass: "minor (single-file non-structural) | medium (multi-file workflow) | major (payroll/auth/migration/company-model)",
-              requiredApproverRole: "admin (minor/medium) or global_admin (major)",
-              testPlan: "numbered steps to verify the fix works",
-              rollbackPlan: "how to undo the fix if something goes wrong",
-            },
-            report: {
-              source: report.source,
-              severity: report.severity,
-              title: report.title,
-              errorMessage: report.error_message,
-              stackTrace: report.stack_trace,
-              route: report.route,
-              context: report.context_json,
-              occurrenceCount: report.occurrence_count,
-            },
-          }),
-        },
-      ],
-      temperature: 0.2,
-      max_tokens: 1800,
-      });
-    } catch (aiError: any) {
-      console.error("[AppDoctor] external AI analysis failed; using local diagnosis:", aiError?.message || aiError);
-      return saveAppDoctorAnalysis(reportId, buildLocalAppDoctorAnalysis(report, aiError?.message || "AI provider request failed"));
-    }
-
-    let parsed: any = {};
-    try {
-      parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
-    } catch {
-      parsed = { summary: completion.choices?.[0]?.message?.content || "AI returned an unreadable response." };
-    }
-
-    return saveAppDoctorAnalysis(reportId, {
-      summary: parsed.summary,
-      rootCause: parsed.rootCause,
-      suggestedFix: parsed.suggestedFix,
-      proposedPatch: parsed.proposedPatch,
-      recommendedFiles: parsed.recommendedFiles,
-      testsToRun: parsed.testsToRun,
-      riskLevel: parsed.riskLevel,
-      issueCategory: parsed.issueCategory,
-      severityClass: parsed.severityClass,
-      requiredApproverRole: parsed.requiredApproverRole,
-      testPlan: parsed.testPlan,
-      rollbackPlan: parsed.rollbackPlan,
-    });
+    const localReason = failureReasons.join("; ") || "AI providers failed";
+    return await saveAppDoctorAnalysis(reportId, buildLocalAppDoctorAnalysis(report, localReason));
   }
 
   app.get("/api/app-doctor/reports", requireAuth, requireRole("admin", "manager"), async (req, res) => {
@@ -23461,7 +23546,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         SET status = COALESCE(${allowedStatus.includes(status) ? status : null}, status),
             pr_url = COALESCE(${prUrl || null}, pr_url),
             updated_at = NOW()
-        WHERE id = ${reportId}
+        WHERE id = ${reportId}::varchar
         RETURNING *
       `));
       if (!result) return res.status(404).json({ message: "Report not found" });
@@ -23560,7 +23645,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { reportId } = req.body || {};
       if (!reportId) return res.status(400).json({ message: "reportId required" });
-      const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+      const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}::varchar`));
       if (!report) return res.status(404).json({ message: "Report not found" });
 
       const severityClass = report.severity_class || "medium";
