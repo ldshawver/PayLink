@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// =============================================================================
+// -----------------------------------------------------------------------------
 // Homepage integrity guard — fails if the approved marketing homepage is missing
 // required elements. Run via: node scripts/check-homepage-guard.js
 // Add to CI to prevent accidental replacement of the marketing homepage.
@@ -8,7 +8,7 @@
 //   1. public-site/public/index.html  — static HTML served at / by Express
 //   2. client/src/pages/marketing-home.tsx — React fallback (if static missing)
 // Both must contain the required elements.
-// =============================================================================
+// -----------------------------------------------------------------------------
 
 import { readFileSync, existsSync } from "fs";
 import { resolve, dirname } from "path";

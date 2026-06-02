@@ -1,10 +1,10 @@
-// =============================================================================
+// -----------------------------------------------------------------------------
 // APPROVED MYPAYLINK MARKETING HOMEPAGE — DO NOT MODIFY WITHOUT ADMIN APPROVAL.
 // Required hero: time punch card visual with Clock In modal for employee number + PIN.
 // Do not replace with login screen or direct clock-in page.
 // Protected routes: / (public), /login (separate), /clock-in (separate)
 // See: docs/marketing-homepage-lock.md for the full protection policy.
-// =============================================================================
+// -----------------------------------------------------------------------------
 
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";

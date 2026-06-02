@@ -244,7 +244,7 @@ function StrictRoleGuard({ roles, children }: { roles: string[]; children: React
   return <>{children}</>;
 }
 
-// =============================================================================
+// -----------------------------------------------------------------------------
 // MYPAYLINK SCOPE LOCK
 // This product is payroll / HR / workforce / finance infrastructure.
 // Do NOT replace any route or dashboard with CRM, sales, marketing, or LUXit flows.
@@ -252,7 +252,7 @@ function StrictRoleGuard({ roles, children }: { roles: string[]; children: React
 //   Scheduling, Expenses, Documents, Reports, Compliance, Check Printing.
 // Forbidden: deal-pipeline, leads, campaigns, sales dashboard, marketing views.
 // See: docs/project-scope-guardrails.md
-// =============================================================================
+// -----------------------------------------------------------------------------
 function AuthenticatedRouter() {
   return (
     <Suspense fallback={<PageLoader />}>
@@ -453,12 +453,12 @@ function PlatformRoleGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// =============================================================================
+// -----------------------------------------------------------------------------
 // MYPAYLINK SCOPE LOCK
 // This product is payroll/HR/workforce/finance infrastructure.
 // Do not replace with CRM, sales, marketing, or LUXit flows.
 // See: docs/project-scope-guardrails.md
-// =============================================================================
+// -----------------------------------------------------------------------------
 function PlatformRouter() {
   return (
     <PlatformRoleGuard>

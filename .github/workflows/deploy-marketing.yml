@@ -42,7 +42,7 @@ jobs:
             MARKETING_PUBLIC="/var/tmp/paylink-marketing-build"
             WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
-            echo "========== MARKETING DEPLOY START =========="
+            echo "---------- MARKETING DEPLOY START ----------"
             echo "User: $(whoami)"
             echo "Marketing public: $MARKETING_PUBLIC"
             echo "Web root: $WEB_ROOT"
@@ -57,4 +57,4 @@ jobs:
             find "$WEB_ROOT" -type f -exec chmod 644 {} \;
             find "$WEB_ROOT" -type d -exec chmod 755 {} \;
 
-            echo "========== MARKETING DEPLOY SUCCESS =========="
+            echo "---------- MARKETING DEPLOY SUCCESS ----------"

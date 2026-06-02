@@ -5,9 +5,9 @@ APP_DIR="/home/paylinkssh/paylink-app/PayLink"
 BACKUP_DIR="/home/paylinkssh/backups"
 ENV_FILE="/etc/paylink/.env"
 
-echo "=========================================="
+echo "------------------------------------------"
 echo "PayLink Deploy - $(date)"
-echo "=========================================="
+echo "------------------------------------------"
 
 # Validate required production files exist
 if [ ! -f "$ENV_FILE" ]; then
@@ -108,7 +108,7 @@ fi
 # Keep only 10 most recent backups
 ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
-echo "=========================================="
+echo "------------------------------------------"
 echo "Deploy Complete! Health: $HEALTH | Ready: $READY"
 echo "$(date)"
-echo "=========================================="
+echo "------------------------------------------"
