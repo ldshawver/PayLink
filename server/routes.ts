@@ -23312,9 +23312,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     });
     const model = process.env.APP_DOCTOR_MODEL || (useXai ? "grok-3-mini" : "gpt-4o-mini");
 
-    let completion: any;
+    let parsed: any = {};
+    let aiError: string | null = null;
+
     try {
-      completion = await openai.chat.completions.create({
+      const completion = await openai.chat.completions.create({
       model,
       response_format: { type: "json_object" },
       messages: [
@@ -23368,16 +23370,23 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       temperature: 0.2,
       max_tokens: 1800,
       });
-    } catch (aiError: any) {
-      console.error("[AppDoctor] external AI analysis failed; using local diagnosis:", aiError?.message || aiError);
-      return saveAppDoctorAnalysis(reportId, buildLocalAppDoctorAnalysis(report, aiError?.message || "AI provider request failed"));
-    }
 
-    let parsed: any = {};
-    try {
-      parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
-    } catch {
-      parsed = { summary: completion.choices?.[0]?.message?.content || "AI returned an unreadable response." };
+      try {
+        parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
+      } catch {
+        parsed = { summary: completion.choices?.[0]?.message?.content || "AI returned an unreadable response." };
+      }
+    } catch (error: any) {
+      aiError = error?.message || "AI provider request failed";
+      console.error("[AppDoctor] external AI analysis failed:", aiError);
+      await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET status = 'open',
+            ai_summary = ${aiError},
+            updated_at = NOW()
+        WHERE id = ${reportId}
+      `);
+      return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
     }
 
     return saveAppDoctorAnalysis(reportId, {
