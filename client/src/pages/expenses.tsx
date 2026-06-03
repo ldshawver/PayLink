@@ -929,7 +929,7 @@ export default function ExpensesPage() {
                       <TableCell>{statusBadge(e.status)}</TableCell>
                       <TableCell>{paymentStatusBadge(e.paymentStatus)}{e.checkNumber && <span className="text-xs text-muted-foreground ml-1">#{e.checkNumber}</span>}</TableCell>
                       <TableCell>
-                        {isAdmin && e.status === "approved" && e.paymentStatus !== "paid" && (
+                        {isAdmin && e.paymentStatus !== "paid" && e.status !== "rejected" && (
                           <div className="flex gap-1">
                             <Button size="sm" variant="outline" onClick={() => openPrintCheck(e)} data-testid={`button-print-check-${e.id}`}>
                               <Printer className="h-3 w-3 mr-1" /> Print Check
