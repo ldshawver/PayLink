@@ -18223,31 +18223,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         page.drawText("BANK LOGO", { x: Math.round(bankCenterX - 18), y: z1y(0.26), size: 5.5, font: hv, color: rgb(0.5, 0.5, 0.5) });
         bankLogoEmbedded = true;
       } else {
-        try {
-          let blBytes: Buffer;
-          if (bankLogoUrl.startsWith("/uploads/") || bankLogoUrl.startsWith("uploads/")) {
-            const rel = bankLogoUrl.startsWith("/") ? bankLogoUrl.slice(1) : bankLogoUrl;
-            blBytes = await fs.promises.readFile(path.join(resolvedUploadDir, path.basename(rel)));
-          } else {
-            const https = await import("https");
-            const http  = await import("http");
-            blBytes = await new Promise((resolve, reject) => {
-              const proto = bankLogoUrl.startsWith("https") ? https : http;
-              (proto as any).get(bankLogoUrl, (resp: any) => {
-                const cks: Buffer[] = [];
-                resp.on("data", (c: Buffer) => cks.push(c));
-                resp.on("end", () => resolve(Buffer.concat(cks)));
-                resp.on("error", reject);
-              }).on("error", reject);
-            });
+        // bankLogoUrl must be a local upload path (/uploads/...) — remote URLs are not
+        // accepted here to prevent SSRF. Upload the logo via the file upload endpoint first.
+        if (bankLogoUrl.startsWith("/uploads/") || bankLogoUrl.startsWith("uploads/")) {
+          try {
+            const rel      = bankLogoUrl.startsWith("/") ? bankLogoUrl.slice(1) : bankLogoUrl;
+            const blBytes  = await fs.promises.readFile(path.join(resolvedUploadDir, path.basename(rel)));
+            const blIsPng  = bankLogoUrl.toLowerCase().endsWith(".png") || blBytes[0] === 0x89;
+            const blImg    = blIsPng ? await doc.embedPng(blBytes) : await doc.embedJpg(blBytes);
+            const blW = Math.round(1.4 * 72), blH = Math.round(0.22 * 72);
+            page.drawImage(blImg, { x: Math.round(bankCenterX - blW / 2), y: z1y(0.32), width: blW, height: blH });
+            bankLogoEmbedded = true;
+          } catch (blErr) {
+            console.warn("[CHECK_PDF] Bank logo embed failed (skipped):", blErr);
           }
-          const blIsPng = bankLogoUrl.toLowerCase().endsWith(".png") || blBytes[0] === 0x89;
-          const blImg   = blIsPng ? await doc.embedPng(blBytes) : await doc.embedJpg(blBytes);
-          const blW = Math.round(1.4 * 72), blH = Math.round(0.22 * 72);
-          page.drawImage(blImg, { x: Math.round(bankCenterX - blW / 2), y: z1y(0.32), width: blW, height: blH });
-          bankLogoEmbedded = true;
-        } catch (blErr) {
-          console.warn("[CHECK_PDF] Bank logo embed failed (skipped):", blErr);
+        } else {
+          console.warn("[CHECK_PDF] bankLogoUrl rejected — only local /uploads/ paths are allowed (remote URLs blocked to prevent SSRF).");
         }
       }
     }
