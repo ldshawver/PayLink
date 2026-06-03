@@ -23861,7 +23861,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const [owner, repo] = githubRepo.split("/");
       const slug = (ticket.report_title || "repair").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
-      const branchName = `app-doctor/fix-${req.params.id.slice(0, 8)}-${slug}`;
+      let branchName = `app-doctor/fix-${req.params.id.slice(0, 8)}-${slug}`;
       const ghHeaders = {
         Authorization: `token ${githubToken}`,
         Accept: "application/vnd.github.v3+json",
@@ -23870,18 +23870,54 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       };
       const ghBase = `https://api.github.com/repos/${owner}/${repo}`;
 
-      // Get base SHA
+      // Get base SHA — return real GitHub error if this fails
       const refRes = await fetch(`${ghBase}/git/ref/heads/main`, { headers: ghHeaders });
-      if (!refRes.ok) throw new Error(`GitHub ref fetch failed: ${refRes.status}`);
+      if (!refRes.ok) {
+        const refErr: any = await refRes.json().catch(() => ({}));
+        console.error("[AppDoctor] create-pr failed — could not fetch main ref:", refRes.status, refErr);
+        return res.status(502).json({
+          message: "Failed to fetch base branch from GitHub",
+          githubStatus: refRes.status,
+          githubError: refErr,
+        });
+      }
       const refData: any = await refRes.json();
       const baseSha = refData.object?.sha;
 
-      // Create branch
-      await fetch(`${ghBase}/git/refs`, {
+      // Create branch — if it already exists (422) append a timestamp suffix and retry once
+      const branchRes = await fetch(`${ghBase}/git/refs`, {
         method: "POST",
         headers: ghHeaders,
         body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
       });
+      if (!branchRes.ok) {
+        const branchErr: any = await branchRes.json().catch(() => ({}));
+        if (branchRes.status === 422) {
+          // Branch already exists — make a unique name with a timestamp
+          branchName = `${branchName}-${Date.now()}`;
+          const retryRes = await fetch(`${ghBase}/git/refs`, {
+            method: "POST",
+            headers: ghHeaders,
+            body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+          });
+          if (!retryRes.ok) {
+            const retryErr: any = await retryRes.json().catch(() => ({}));
+            console.error("[AppDoctor] create-pr failed — branch creation retry failed:", retryRes.status, retryErr);
+            return res.status(502).json({
+              message: "Failed to create GitHub branch (original branch already exists; timestamp-suffixed retry also failed)",
+              githubStatus: retryRes.status,
+              githubError: retryErr,
+            });
+          }
+        } else {
+          console.error("[AppDoctor] create-pr failed — branch creation failed:", branchRes.status, branchErr);
+          return res.status(502).json({
+            message: "Failed to create GitHub branch",
+            githubStatus: branchRes.status,
+            githubError: branchErr,
+          });
+        }
+      }
 
       // Compose PR body
       let affectedFilesList: string[] = [];
@@ -23911,7 +23947,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         `> ⚠️ This PR was created by **App Doctor**. Review carefully before merging. Do **not** auto-merge. Do **not** push directly to main.`,
       ].join("\n");
 
-      // Create PR
+      // Create PR — return real GitHub error body and status on failure
       const prRes = await fetch(`${ghBase}/pulls`, {
         method: "POST",
         headers: ghHeaders,
@@ -23923,17 +23959,28 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         }),
       });
       if (!prRes.ok) {
-        const err: any = await prRes.json().catch(() => ({}));
-        throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+        const prErr: any = await prRes.json().catch(() => ({}));
+        console.error("[AppDoctor] create-pr failed — PR creation failed:", prRes.status, prErr);
+        return res.status(502).json({
+          message: "Failed to create GitHub PR",
+          githubStatus: prRes.status,
+          githubError: prErr,
+        });
       }
       const pr: any = await prRes.json();
 
-      // Add labels (best-effort)
+      // Add labels (best-effort — never fails the request)
       await fetch(`${ghBase}/issues/${pr.number}/labels`, {
         method: "POST",
         headers: ghHeaders,
         body: JSON.stringify({ labels: ["app-doctor", "bugfix", "needs-review", `severity-${ticket.severity_class}`] }),
       }).catch(() => {});
+
+      // Guard: only mark pr_created if we actually have a PR URL
+      if (!pr.html_url) {
+        console.error("[AppDoctor] create-pr failed — PR created but html_url missing:", pr);
+        return res.status(502).json({ message: "PR was created but GitHub did not return a URL", githubResponse: pr });
+      }
 
       const updated = pgRow<any>(await db.execute(sql`
         UPDATE app_doctor_repair_tickets
@@ -23944,7 +23991,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       res.json({ ...updated, prUrl: pr.html_url });
     } catch (e: any) {
-      res.status(500).json({ message: safeErrorMessage(e, "Failed to create GitHub PR") });
+      console.error("[AppDoctor] create-pr failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create GitHub PR"), error: e?.message });
     }
   });
 
