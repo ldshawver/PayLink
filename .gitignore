@@ -1,16 +1,94 @@
-node_modules
-dist
-uploads/
-.DS_Store
-server/public
-vite.config.ts.*
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build Output
+dist/
+build/
+coverage/
+.next/
+out/
+
+# Environment Files
 .env
 .env.*
 !.env.example
-*.tar.gz.env
-ecosystem.config.cjs
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups
+*.bak
+*.backup
+*.old
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+logs/
+
+# Uploads
+uploads/
 attached_assets/*
+
+# Allowed Assets
 !attached_assets/PayLink_Logo_transparent_1771416877301.png
 !attached_assets/Gen-4_5_Create_a_cinematic_animated_background_video_for_a_mod_1774400668621.mp4
+
+# SSH Keys
+.ssh/
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Certificates
+*.pem
+*.p12
+*.crt
+*.key
+
+# IDE Files
+.vscode/
+.idea/
+
+# Mac
+.DS_Store
+
+# Testing
 tests/.tmp/
-uploads/
+playwright-report/
+test-results/
+
+# Temporary
+tmp/
+temp/
+
+# Generated PDFs
+*.pdf
+
+# PM2
+.pm2/
+
+# Replit
+.replit
+.replit.nix
+
+# Server Files
+server/public
+
+# Vite
+vite.config.ts.*
+
+# Ecosystem
+ecosystem.config.cjs
