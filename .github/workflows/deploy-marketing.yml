@@ -2,8 +2,11 @@ name: Deploy Marketing Site
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths:
+      - "marketing/**"
+      - "public/**"
+      - ".github/workflows/deploy-marketing.yml"
   workflow_dispatch:
 
 concurrency:
@@ -42,19 +45,9 @@ jobs:
             MARKETING_PUBLIC="/var/tmp/paylink-marketing-build"
             WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
-            echo "========== MARKETING DEPLOY START =========="
-            echo "User: $(whoami)"
-            echo "Marketing public: $MARKETING_PUBLIC"
-            echo "Web root: $WEB_ROOT"
+            test -d "$MARKETING_PUBLIC"
+            test -d "$WEB_ROOT"
 
-            test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing shared marketing build dir: $MARKETING_PUBLIC"; exit 1; }
-            test -d "$WEB_ROOT" || { echo "ERROR: Missing marketing web root: $WEB_ROOT"; exit 1; }
-
-            echo "==> Sync static marketing files"
             rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"
-
-            echo "==> Fix file permissions"
             find "$WEB_ROOT" -type f -exec chmod 644 {} \;
             find "$WEB_ROOT" -type d -exec chmod 755 {} \;
-
-            echo "========== MARKETING DEPLOY SUCCESS =========="
