@@ -143,6 +143,7 @@ type ViewMode = "day" | "week" | "month";
 const RESPONSIBILITY_POLICY = "Scheduled shifts remain the responsibility of the originally assigned employee or contractor unless and until the shift has been accepted by an eligible replacement and fully approved by an authorized supervisor or manager.";
 
 function MarketplaceSection({ workers, schedules, companies, departments, currentUser, isAdminOrManager, shiftOffers, claimOfferMutation, approveOfferMutation, rejectOfferMutation, withdrawOfferMutation, setRejectOfferId, setRejectNote, setRejectDialogOpen }: any) {
+  const timeFormat = useTimeFormat();
   const [marketplaceSubTab, setMarketplaceSubTab] = useState("available");
   const [postDialogOpen, setPostDialogOpen] = useState(false);
   const [ackResponsibility, setAckResponsibility] = useState(false);
