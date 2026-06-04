@@ -25576,7 +25576,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         "{{next_shift}}": "Mon Apr 7 9:00 AM-5:00 PM",
         "{{items}}": "  • 3 time punches\n  • 2 timecards",
         "{{content}}": "Thursday Apr 10: 8:00 AM – 4:00 PM — Warehouse",
-        "{{url}}": "https://mypaylink.app/app",
+        "{{url}}": `${getAppBaseUrl(req)}/app/schedule`,
       };
 
       const fill = (tpl: string) => Object.entries(sampleVars).reduce((t, [k, v]) => t.replaceAll(k, v), tpl);

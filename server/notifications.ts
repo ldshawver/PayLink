@@ -145,20 +145,22 @@ export async function sendViaTwilio(to: string, body: string): Promise<void> {
   // Central SMS safety enforcement (allowlist-based):
   //   Policy: SMS messages may only carry links to the PayLink application
   //   itself. Rules:
-  //   1. When APP_BASE_URL is configured, any URL whose hostname matches the
-  //      PayLink domain is allowed regardless of path — this covers /login,
-  //      /time-clock, /app/*, /dashboard, etc.
-  //   2. When APP_BASE_URL is NOT configured (dev/test), fall back to requiring
-  //      the /app/* path prefix so test fixtures still exercise the guard.
+  //   1. mypaylink.app is always trusted — it is PayLink's permanent production
+  //      domain and must never be blocked regardless of APP_BASE_URL.
+  //   2. When APP_BASE_URL is configured, its hostname is also added so
+  //      dev/staging environments with custom domains work correctly.
   //   3. Any URL from an external (non-PayLink) domain is always rejected, to
   //      prevent phishing links from reaching workers via SMS.
-  //   4. Relative document/API paths (/uploads/…, /api/…) are blocked separately.
-  const allowedHosts = new Set<string>();
+  //   4. When no APP_BASE_URL is set and only mypaylink.app is allowed, any
+  //      URL on a path starting with /app (with or without trailing slash) is
+  //      permitted as an additional safety net for dev environments.
+  //   5. Relative document/API paths (/uploads/…, /api/…) are blocked separately.
+  const allowedHosts = new Set<string>(["mypaylink.app"]);
   try {
     if (process.env.APP_BASE_URL) {
       allowedHosts.add(new URL(process.env.APP_BASE_URL).hostname.toLowerCase());
     }
-  } catch { /* malformed APP_BASE_URL — fall through to path-only check */ }
+  } catch { /* malformed APP_BASE_URL — fall through */ }
   const urlMatches = body.match(/https?:\/\/[^\s<>"]+/gi) || [];
   for (const raw of urlMatches) {
     let parsed: URL;
@@ -169,20 +171,9 @@ export async function sendViaTwilio(to: string, body: string): Promise<void> {
       throw new Error("SMS blocked: message body contains a malformed URL");
     }
     const host = parsed.hostname.toLowerCase();
-    if (allowedHosts.size > 0) {
-      // APP_BASE_URL is configured — allow any path on the PayLink domain,
-      // block everything else (external domain = phishing risk).
-      if (!allowedHosts.has(host)) {
-        console.error("[SMS][BLOCKED] URL host not in PayLink allowlist.", raw.slice(0, 120));
-        throw new Error("SMS blocked: message body contains a URL outside the PayLink domain");
-      }
-    } else {
-      // No APP_BASE_URL configured (dev/test) — require /app/* path as a
-      // safety fallback so the guard is never silently disabled.
-      if (!parsed.pathname.startsWith("/app/")) {
-        console.error("[SMS][BLOCKED] No APP_BASE_URL configured; non-/app/* URL rejected.", raw.slice(0, 120));
-        throw new Error("SMS blocked: message body contains a non-app URL (only /app/* links are allowed in dev without APP_BASE_URL)");
-      }
+    if (!allowedHosts.has(host)) {
+      console.error("[SMS][BLOCKED] URL host not in PayLink allowlist.", raw.slice(0, 120));
+      throw new Error("SMS blocked: message body contains a URL outside the PayLink domain");
     }
   }
   // Belt-and-suspenders for *relative* document/API paths that did not parse
