@@ -9,10 +9,6 @@ channel = "stable-24_05"
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 5904
-externalPort = 3001
-
 [env]
 PORT = "5000"
 
@@ -47,6 +43,9 @@ task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow]]
 name = "api-json-guard"
 author = "agent"
@@ -72,6 +71,7 @@ SMTP_AUTHENTICATION = "Required"
 [agent]
 integrations = ["stripe:1.0.0"]
 expertMode = true
+stack = "FULLSTACK_JS"
 
 [postMerge]
 path = "scripts/post-merge.sh"
