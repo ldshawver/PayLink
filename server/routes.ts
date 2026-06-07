@@ -1135,6 +1135,84 @@ export async function registerRoutes(
   }
 
   const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
+  // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
+  // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
+  // auth, analytics, and webhook paths listed in publicWritePaths.
+  //
+  // Per-domain entries make protected areas self-documenting and ensure new
+  // routes added under these prefixes are automatically covered. The global
+  // catch-all at the end handles any route not listed below.
+  const _demoReadOnlyPrefixes: string[] = [
+    // ── Payroll & Compensation ──────────────────────────────────────────────
+    "/api/payroll-runs", "/api/payroll-payment-records", "/api/payroll-payment-methods",
+    "/api/payroll-items", "/api/payroll-reimbursements",
+    "/api/pay-periods", "/api/pay-period-schedules",
+    "/api/pay-stub-amendments", "/api/pay-stub-transactions", "/api/pay-stub-accounts",
+    "/api/checks", "/api/check-templates", "/api/check-print-audit",
+    "/api/1099-summaries", "/api/taxes-deductions", "/api/tax-wizard",
+    "/api/remittance-agencies", "/api/remittance-sources", "/api/remittance-agency-events",
+    "/api/pay-codes", "/api/earning-types", "/api/pay-methods", "/api/pay-formulas",
+    "/api/contributing-pay-codes", "/api/contributing-shifts",
+    "/api/secondary-wage-groups", "/api/wage-history",
+    // ── Workers & Employees ─────────────────────────────────────────────────
+    "/api/workers", "/api/employee-contacts", "/api/employee-groups",
+    "/api/employee-titles", "/api/employee-wage-groups",
+    "/api/worker-agreements", "/api/worker-documents", "/api/worker-languages",
+    "/api/worker-memberships", "/api/worker-onboarding",
+    "/api/commissions", "/api/new-hire-defaults",
+    // ── Scheduling ──────────────────────────────────────────────────────────
+    "/api/schedules", "/api/recurring-schedules", "/api/shift-offers",
+    "/api/schedule-preferences", "/api/schedule-policies",
+    // ── Time & Attendance ───────────────────────────────────────────────────
+    "/api/time-entries", "/api/time-punches", "/api/time-off-requests",
+    "/api/clock-in-requests",
+    "/api/absence-policies", "/api/accrual-accounts", "/api/accrual-balances",
+    "/api/accrual-policies", "/api/accrual-policy-milestones",
+    "/api/break-policies", "/api/meal-policies", "/api/rounding-policies",
+    "/api/regular-time-policies", "/api/overtime-policies",
+    "/api/exception-policies", "/api/premium-policies",
+    "/api/holiday-policies", "/api/holidays",
+    // ── Invoices & Billing ──────────────────────────────────────────────────
+    "/api/invoices", "/api/invoice-templates", "/api/invoice-term-settings",
+    "/api/invoice-approval-workflows", "/api/invoice-attachments",
+    "/api/recurring-billing", "/api/payments", "/api/payment-method-configs",
+    "/api/customers", "/api/trade-transactions",
+    // ── Contractor Hub ──────────────────────────────────────────────────────
+    "/api/contractor-invoices", "/api/contractor-proposals", "/api/contractor-contracts",
+    "/api/contractor-payments", "/api/contractor-templates", "/api/contractor-branding",
+    "/api/contractor-notifications", "/api/contractor-reminders",
+    "/api/contractor-workflow-settings", "/api/contractor-documents",
+    "/api/contractor-hub", "/api/proposal-attachments", "/api/proposal-line-items",
+    // ── Documents & Signatures ──────────────────────────────────────────────
+    "/api/documents", "/api/document-folders", "/api/document-versions",
+    "/api/document-acls", "/api/document-retention", "/api/document-retention-policies",
+    "/api/dam-documents", "/api/signature-packages", "/api/system-documents",
+    "/api/biz-documents", "/api/biz-document-items", "/api/biz-document-attachments",
+    "/api/agreement-templates", "/api/onboarding-documents",
+    "/api/onboarding-packets", "/api/onboarding-packet-steps",
+    // ── HR & Policy ─────────────────────────────────────────────────────────
+    "/api/positions", "/api/departments", "/api/jobs", "/api/cost-centers",
+    "/api/divisions", "/api/branches", "/api/legal-entities",
+    "/api/schedule-policies", "/api/policy-groups",
+    "/api/qualifications", "/api/qualification-groups",
+    "/api/reviews", "/api/approval-reminders",
+    "/api/expenses", "/api/expense-categories", "/api/receipts",
+    "/api/recurring-expenses",
+    // ── Settings & Configuration ─────────────────────────────────────────────
+    "/api/companies", "/api/company-branding",
+    "/api/roles", "/api/role-permissions", "/api/permission-groups", "/api/user-roles",
+    "/api/users", "/api/stations", "/api/funding-accounts",
+    "/api/webhook-configs", "/api/automation-rules",
+    "/api/notifications", "/api/notification-preferences",
+    "/api/messages", "/api/saved-reports",
+    "/api/currencies", "/api/inventory",
+    "/api/compliance", "/api/eligibility-rule-sets",
+  ];
+  for (const prefix of _demoReadOnlyPrefixes) {
+    app.use(prefix, blockDemoWrites);
+  }
+  // Global catch-all: any /api route not covered by the explicit list above
+  // is also demo-read-only, except provisioning, auth, and webhook exceptions.
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
