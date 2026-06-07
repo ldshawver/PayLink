@@ -20510,6 +20510,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let companyId: string;
       let userId: string;
 
+      // Generate a URL-safe slug from the company name; uniqueness enforced by DB constraint
+      const baseSlug = companyName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "trial";
+      const tenantSlug = baseSlug + "-" + Date.now().toString(36);
+
       await db.execute(sql`BEGIN`);
       try {
         const companyResult = await db.execute(sql`
@@ -20525,6 +20529,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           RETURNING id
         `);
         userId = userResult.rows[0].id as string;
+
+        // Create tenant record and link company
+        const tenantResult = await db.execute(sql`
+          INSERT INTO tenants (name, slug, status, billing_contact_name, billing_contact_email, primary_admin_user_id)
+          VALUES (${companyName}, ${tenantSlug}, 'trial', ${`${firstName} ${lastName}`}, ${email}, ${userId})
+          RETURNING id
+        `);
+        const tenantId = tenantResult.rows[0].id as string;
+
+        await db.execute(sql`
+          INSERT INTO tenant_companies (tenant_id, company_id, is_primary)
+          VALUES (${tenantId}, ${companyId}, TRUE)
+        `);
 
         await db.execute(sql`
           INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, terms_version, privacy_version, signup_ip)
