@@ -3,3 +3,6 @@
 - [Backfill PDF Endpoint](backfill-pdf-endpoint.md) — POST /api/contractor-hub/backfill-documents uses generateProposalPdf/generateInvoicePdf (which auto-insert DAM records); contracts need manual Buffer→disk→DAM INSERT pattern.
 - [Contractor Hub action auth](contractor-hub-auth.md) — use canAccessCompany() not === for proposal action endpoints; enterprise admins need cross-company access.
 - [Phase 3A tenant isolation](phase3a-tenant-isolation.md) — canAccessCompany sibling cross-tenant fix; privacy_audit_log/breach_incidents company_id/tenant_id split; product_api_keys hash-mask pattern.
+- [Drizzle ANY array SQL fix](drizzle-any-array-fix.md) — Drizzle sql template literals cannot bind JS arrays as ${arr}::text[]; use sql.join with IN clause instead.
+- [Stripe client env fallback](stripe-client-env.md) — stripeClient.ts checks STRIPE_SECRET_KEY env var first before Replit connector; needed for dev environments without connector configured.
+- [Contractor Hub Onboarding Tab](contractor-hub-onboarding.md) — OnboardingSection added to hub; uses /api/worker-onboarding (admin only); HubSection type and all valid-section arrays must include "onboarding".

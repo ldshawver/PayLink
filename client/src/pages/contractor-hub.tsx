@@ -29,7 +29,8 @@ import {
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
   FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban, Reply, RefreshCw,
-  ArrowLeftRight, PenLine, GitBranch, HandshakeIcon
+  ArrowLeftRight, PenLine, GitBranch, HandshakeIcon, UserPlus, ClipboardList,
+  UserCheck
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -67,7 +68,7 @@ class ProposalErrorBoundary extends Component<
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "payments" | "messages" | "branding" | "settings" | "trade";
+type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "onboarding" | "payments" | "messages" | "branding" | "settings" | "trade";
 
 interface Proposal {
   id: string; proposalNumber: string; title: string; description: string;
@@ -4045,6 +4046,33 @@ function InvoiceDetailPanel({
             </TabsContent>
 
             <TabsContent value="payments" className="m-0 p-6 space-y-4">
+              {!isAdmin && !["paid", "void", "voided", "voided_duplicate", "rejected_duplicate"].includes(invoice.status) && balance > 0 && !proposalBlocked && (
+                <Card className="border-primary/30">
+                  <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><CreditCard className="h-4 w-4 text-primary" /> Pay Online</CardTitle></CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-xs text-muted-foreground">Pay this invoice securely online with a credit or debit card.</p>
+                    <div className="flex items-center justify-between py-1">
+                      <span className="text-sm">Balance Due</span>
+                      <span className="text-lg font-bold text-primary">{fmt(balance)}</span>
+                    </div>
+                    <Button className="w-full" data-testid="btn-stripe-pay-invoice"
+                      onClick={async () => {
+                        try {
+                          const resp = await apiRequest("POST", `/api/contractor-invoices/${invoice.id}/stripe-checkout-session`, {});
+                          const data = await resp.json();
+                          if (data.checkoutUrl) window.location.href = data.checkoutUrl;
+                          else toast({ title: "Payment setup failed", description: data.message || "No checkout URL returned", variant: "destructive" });
+                        } catch (e: any) {
+                          toast({ title: "Payment setup failed", description: e?.message || "Could not create payment session", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      <CreditCard className="h-4 w-4 mr-2" /> Pay {fmt(balance)} with Card
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">Secured by Stripe. You will be redirected to complete payment.</p>
+                  </CardContent>
+                </Card>
+              )}
               {isAdmin && !["paid", "void"].includes(invoice.status) && !proposalBlocked && balance > 0 && (
                 <Card>
                   <CardHeader className="pb-2"><CardTitle className="text-sm">Record Payment</CardTitle></CardHeader>
@@ -7233,12 +7261,266 @@ function TradeSection() {
   );
 }
 
+// ─── Onboarding Section ───────────────────────────────────────────────────────
+const ONBOARDING_STATUS_CONFIG: Record<string, { label: string; color: string }> = {
+  draft:     { label: "Draft",     color: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
+  invited:   { label: "Invited",   color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" },
+  started:   { label: "In Progress", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" },
+  submitted: { label: "Submitted", color: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" },
+  approved:  { label: "Approved",  color: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" },
+  rejected:  { label: "Rejected",  color: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" },
+};
+
+function OnboardingBadge({ status }: { status: string }) {
+  const cfg = ONBOARDING_STATUS_CONFIG[status] ?? { label: status, color: "bg-slate-100 text-slate-700" };
+  return <span className={cn("inline-flex items-center px-2 py-0.5 rounded text-xs font-medium", cfg.color)}>{cfg.label}</span>;
+}
+
+function OnboardingSection({ isAdmin }: { isAdmin: boolean }) {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newType, setNewType] = useState("contractor");
+  const [newPackageKey, setNewPackageKey] = useState("contractor_standard");
+  const [newWorkerId, setNewWorkerId] = useState("");
+
+  const { data: onboardings = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/worker-onboarding"],
+    enabled: isAdmin,
+    select: (d: any) => snakeToCamel(Array.isArray(d) ? d : []),
+    refetchInterval: 30000,
+  });
+
+  const { data: workers = [] } = useQuery<any[]>({
+    queryKey: ["/api/workers"],
+    enabled: isAdmin && createOpen,
+    select: (d: any) => Array.isArray(d) ? d : [],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (body: any) => apiRequest("POST", "/api/worker-onboarding", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/worker-onboarding"] });
+      toast({ title: "Onboarding record created" });
+      setCreateOpen(false);
+      setNewWorkerId("");
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to create", variant: "destructive" }),
+  });
+
+  const filtered = onboardings
+    .filter(o => {
+      const name = `${o.firstName || ""} ${o.lastName || ""}`.toLowerCase();
+      const matchSearch = !search || name.includes(search.toLowerCase()) || o.packageKey?.toLowerCase().includes(search.toLowerCase());
+      const matchStatus = statusFilter === "all" || o.status === statusFilter;
+      const matchType = typeFilter === "all" || o.workerType === typeFilter;
+      return matchSearch && matchStatus && matchType;
+    });
+
+  const summaryByStatus = Object.fromEntries(
+    Object.keys(ONBOARDING_STATUS_CONFIG).map(k => [k, onboardings.filter(o => o.status === k).length])
+  );
+
+  if (!isAdmin) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground space-y-3">
+        <UserCheck className="h-12 w-12 opacity-25" />
+        <p className="font-medium text-base">Your Onboarding</p>
+        <p className="text-sm max-w-sm">Your onboarding packet and required steps are managed by your administrator. Please contact them for access or status updates.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      {!isLoading && onboardings.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {Object.entries(ONBOARDING_STATUS_CONFIG).map(([key, cfg]) => (
+            <button
+              key={key}
+              onClick={() => setStatusFilter(statusFilter === key ? "all" : key)}
+              className={cn(
+                "border rounded-lg p-3 text-center transition-colors cursor-pointer",
+                statusFilter === key ? "border-primary bg-primary/5" : "hover:bg-muted/30"
+              )}
+              data-testid={`btn-onboarding-filter-${key}`}
+            >
+              <div className="text-lg font-bold">{summaryByStatus[key] || 0}</div>
+              <div className="text-xs text-muted-foreground">{cfg.label}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by name or package..."
+          className="h-8 max-w-xs flex-1 min-w-[160px]"
+          data-testid="input-search-onboarding"
+        />
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-8 w-36" data-testid="select-onboarding-status"><SelectValue placeholder="All Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            {Object.entries(ONBOARDING_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="h-8 w-36" data-testid="select-onboarding-type"><SelectValue placeholder="All Types" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="contractor">Contractor</SelectItem>
+            <SelectItem value="employee">Employee</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button size="sm" className="h-8 ml-auto gap-1.5" onClick={() => setCreateOpen(true)} data-testid="btn-new-onboarding">
+          <UserPlus className="h-3.5 w-3.5" /> New Onboarding
+        </Button>
+      </div>
+
+      {/* List */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-muted-foreground border border-dashed rounded-lg">
+          <ClipboardList className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">{onboardings.length === 0 ? "No onboarding records yet" : "No records match your filter"}</p>
+          {onboardings.length === 0 && (
+            <Button className="mt-4" size="sm" onClick={() => setCreateOpen(true)} data-testid="btn-first-onboarding">
+              <UserPlus className="h-4 w-4 mr-1" /> Create First Onboarding
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((o: any) => (
+            <div key={o.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors" data-testid={`row-onboarding-${o.id}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-sm">
+                      {o.firstName && o.lastName ? `${o.firstName} ${o.lastName}` : o.workerId || "Unknown Worker"}
+                    </p>
+                    <OnboardingBadge status={o.status} />
+                    <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded capitalize">
+                      {o.workerType || "contractor"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+                    <span>Package: <span className="font-medium text-foreground">{o.packageKey || "standard"}</span></span>
+                    {o.completionPercent != null && (
+                      <>
+                        <span>·</span>
+                        <span className="flex items-center gap-1">
+                          <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div className="h-full bg-primary rounded-full" style={{ width: `${o.completionPercent}%` }} />
+                          </div>
+                          {o.completionPercent}%
+                        </span>
+                      </>
+                    )}
+                    {o.startedAt && <><span>·</span><span>Started {new Date(o.startedAt).toLocaleDateString()}</span></>}
+                    {o.submittedAt && <><span>·</span><span>Submitted {new Date(o.submittedAt).toLocaleDateString()}</span></>}
+                    {o.approvedAt && <><span>·</span><span className="text-green-600">Approved {new Date(o.approvedAt).toLocaleDateString()}</span></>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {o.status === "submitted" && (
+                    <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded font-medium">
+                      Awaiting Review
+                    </span>
+                  )}
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>New Onboarding Record</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label className="text-xs mb-1.5 block">Worker Type</Label>
+              <Select value={newType} onValueChange={v => { setNewType(v); setNewPackageKey(v === "contractor" ? "contractor_standard" : "employee_standard"); }}>
+                <SelectTrigger data-testid="select-new-onboarding-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="contractor">Contractor</SelectItem>
+                  <SelectItem value="employee">Employee / New Hire</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1.5 block">Onboarding Package</Label>
+              <Select value={newPackageKey} onValueChange={setNewPackageKey}>
+                <SelectTrigger data-testid="select-new-onboarding-package"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {newType === "contractor" ? (
+                    <>
+                      <SelectItem value="contractor_standard">Standard Contractor</SelectItem>
+                      <SelectItem value="contractor_minimal">Minimal (existing relationship)</SelectItem>
+                      <SelectItem value="contractor_full">Full (new relationship + docs)</SelectItem>
+                    </>
+                  ) : (
+                    <>
+                      <SelectItem value="employee_standard">Standard Employee</SelectItem>
+                      <SelectItem value="employee_full">Full New Hire Packet</SelectItem>
+                      <SelectItem value="employee_minimal">Minimal (transfer/rehire)</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1.5 block">Worker</Label>
+              <Select value={newWorkerId} onValueChange={setNewWorkerId}>
+                <SelectTrigger data-testid="select-new-onboarding-worker"><SelectValue placeholder="Select a worker..." /></SelectTrigger>
+                <SelectContent>
+                  {(workers as any[]).map((w: any) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.firstName || w.first_name} {w.lastName || w.last_name}
+                      {w.workerType || w.worker_type ? ` (${w.workerType || w.worker_type})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!newWorkerId || createMutation.isPending}
+              onClick={() => createMutation.mutate({ workerId: newWorkerId, workerType: newType, packageKey: newPackageKey, status: "draft" })}
+              data-testid="btn-confirm-create-onboarding"
+            >
+              {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Create Onboarding
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: string }> }[] = [
   { id: "dashboard", label: "Overview", icon: LayoutDashboard },
   { id: "proposals", label: "Proposals", icon: FileText },
   { id: "contracts", label: "Contracts", icon: FileSignature },
   { id: "invoices", label: "Invoices", icon: Receipt },
   { id: "documents", label: "Working Documents", icon: FolderOpen },
+  { id: "onboarding", label: "Onboarding", icon: UserPlus },
   { id: "payments", label: "Payments", icon: CreditCard },
   { id: "messages", label: "Messages", icon: MessageSquare },
   { id: "branding", label: "Profile & Branding", icon: Palette },
@@ -7252,7 +7534,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings","trade"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","onboarding","payments","messages","branding","settings","trade"];
       return (s && valid.includes(s)) ? s : "dashboard";
     } catch { return "dashboard"; }
   })();
@@ -7263,7 +7545,7 @@ export default function ContractorHubPage() {
   // same-pathname query-param changes (e.g. sidebar going from ?section=proposals to ?section=contracts)
   // never change the wouter location value so the effect would never re-fire.
   useEffect(() => {
-    const VALID_SECTIONS: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings","trade"];
+    const VALID_SECTIONS: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","onboarding","payments","messages","branding","settings","trade"];
     const syncSection = () => {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -7502,6 +7784,7 @@ export default function ContractorHubPage() {
               {section === "contracts" && `${contracts.length} contract${contracts.length !== 1 ? "s" : ""}`}
               {section === "invoices" && `${invoices.length} invoice${invoices.length !== 1 ? "s" : ""} · ${overdueInvoices} overdue`}
               {section === "documents" && "Active working documents — drafts, pending review, and supporting files"}
+              {section === "onboarding" && (isAdmin ? "Manage contractor and employee onboarding packets" : "Your onboarding status and required steps")}
               {section === "payments" && "Payment history and remittance"}
               {section === "messages" && "Activity notifications and workflow events"}
               {section === "branding" && "Profile and proposal templates"}
@@ -8039,6 +8322,9 @@ export default function ContractorHubPage() {
 
             {/* Working Documents */}
             {section === "documents" && <DocumentsSection />}
+
+            {/* Onboarding */}
+            {section === "onboarding" && <OnboardingSection isAdmin={isAdmin} />}
 
             {/* Payments */}
             {section === "payments" && <PaymentsSection invoices={invoices} />}

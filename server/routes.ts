@@ -10583,13 +10583,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const PROPOSAL_ARCHIVED_STATUSES = ['approved', 'rejected', 'expired', 'superseded', 'voided', 'cancelled', 'converted_to_contract', 'archived_to_documents', 'archived'];
 
       // Build lifecycle filter SQL — takes precedence over showCompleted/showArchived when supplied
+      // NOTE: Drizzle sql`` binds JS arrays as a single parameter which Postgres rejects with ::text[].
+      // Use sql.join with an IN clause instead to safely expand the list into individual bound params.
       let lifecycleFilter: ReturnType<typeof sql>;
       if (lifecycleGroup === 'active') {
-        // Only non-archived proposals in an active workflow state
-        lifecycleFilter = sql`AND cp.status = ANY(${PROPOSAL_ACTIVE_STATUSES}::text[]) AND (cp.is_archived IS NOT TRUE)`;
+        const activeList = sql.join(PROPOSAL_ACTIVE_STATUSES.map((s: string) => sql`${s}`), sql`, `);
+        lifecycleFilter = sql`AND cp.status IN (${activeList}) AND (cp.is_archived IS NOT TRUE)`;
       } else if (lifecycleGroup === 'archived') {
-        // Proposals whose status is terminal OR that were explicitly archived via the flag
-        lifecycleFilter = sql`AND (cp.status = ANY(${PROPOSAL_ARCHIVED_STATUSES}::text[]) OR cp.is_archived = TRUE)`;
+        const archivedList = sql.join(PROPOSAL_ARCHIVED_STATUSES.map((s: string) => sql`${s}`), sql`, `);
+        lifecycleFilter = sql`AND (cp.status IN (${archivedList}) OR cp.is_archived = TRUE)`;
       } else if (lifecycleGroup === 'all') {
         lifecycleFilter = sql``; // no status restriction
       } else {
@@ -10646,7 +10648,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         rows = result.rows ?? (result as any);
       }
       res.json(rows);
-    } catch (e) { res.status(500).json({ message: "Failed to fetch proposals" }); }
+    } catch (e: any) {
+      console.error("[contractor-proposals] fetch error:", e?.message, e?.stack);
+      res.status(500).json({ message: "Failed to fetch proposals", detail: e?.message });
+    }
   });
 
   // POST /api/contractor-hub/backfill-documents — scan completed records without DAM links and generate/link PDFs
@@ -12278,6 +12283,56 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to record payment" }); }
   });
 
+  // POST /api/contractor-invoices/:id/stripe-checkout-session — create Stripe Checkout session for online payment
+  app.post("/api/contractor-invoices/:id/stripe-checkout-session", requireAuth, async (req, res) => {
+    try {
+      const invoiceRes = await db.execute(sql`SELECT ci.*, w.first_name, w.last_name, w.work_email FROM contractor_invoices ci LEFT JOIN workers w ON w.id = ci.contractor_id WHERE ci.id = ${req.params.id}`);
+      if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
+      const invoice = invoiceRes.rows[0] as any;
+      if (["paid", "void", "voided", "voided_duplicate", "rejected_duplicate"].includes(invoice.status)) {
+        return res.status(400).json({ message: `Invoice is ${invoice.status} — no payment required` });
+      }
+      const balance = parseFloat(invoice.balance_due ?? invoice.amount ?? "0");
+      if (balance <= 0) return res.status(400).json({ message: "No balance due on this invoice" });
+      const user = await storage.getUser(req.session.userId!);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const workerId = user?.workerId;
+      if (!isAdmin && invoice.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      const { getUncachableStripeClient } = await import('./stripeClient.js');
+      const stripe = await getUncachableStripeClient();
+      const baseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
+      const invoiceRef = invoice.invoice_number || req.params.id.slice(0, 8);
+      const amountCents = Math.round(balance * 100);
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [{
+          price_data: {
+            currency: (invoice.currency || "usd").toLowerCase(),
+            product_data: {
+              name: invoice.title || `Invoice #${invoiceRef}`,
+              description: invoice.description || undefined,
+            },
+            unit_amount: amountCents,
+          },
+          quantity: 1,
+        }],
+        mode: "payment",
+        success_url: `${baseUrl}/app/contractor-hub?section=invoices&payment=success&id=${req.params.id}`,
+        cancel_url: `${baseUrl}/app/contractor-hub?section=invoices&payment=cancelled&id=${req.params.id}`,
+        metadata: {
+          invoiceId: req.params.id,
+          invoiceNumber: invoiceRef,
+          companyId: invoice.company_id || "",
+        },
+        customer_email: invoice.work_email || undefined,
+      });
+      res.json({ checkoutUrl: session.url, sessionId: session.id });
+    } catch (e: any) {
+      console.error("Stripe checkout session error:", e);
+      res.status(500).json({ message: e?.message || "Failed to create payment session" });
+    }
+  });
+
   // GET /api/contractor-invoices/:id/reminder-logs
   app.get("/api/contractor-invoices/:id/reminder-logs", requireAuth, async (req, res) => {
     try {
@@ -13698,7 +13753,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             AND (company_id = ${cid} OR (company_id IS NULL AND worker_id IN (SELECT id FROM workers WHERE company_id = ${cid})))
             ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``}
             ${linkedEntityType ? sql`AND linked_entity_type = ${linkedEntityType}` : sql``}
-            ${effectiveDocTypes && effectiveDocTypes.length > 0 ? sql`AND document_type = ANY(${effectiveDocTypes})` : sql``}
+            ${effectiveDocTypes && effectiveDocTypes.length > 0 ? sql`AND document_type IN (${sql.join(effectiveDocTypes.map((t: string) => sql`${t}`), sql`, `)})` : sql``}
             ${proposalId ? sql`AND proposal_id = ${proposalId}` : sql``}
             ${contractId ? sql`AND contract_id = ${contractId}` : sql``}
             ${invoiceId ? sql`AND invoice_id = ${invoiceId}` : sql``}
