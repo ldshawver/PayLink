@@ -1515,6 +1515,8 @@ export async function registerRoutes(
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
+      || req.path === "/trial/signup"
+      || req.path === "/analytics/event"
       || req.path === "/license/request"
       || req.path.startsWith("/portal/")) {
       return next();

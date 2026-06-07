@@ -91,6 +91,10 @@
               <input type="checkbox" id="termsAccepted" name="termsAccepted" required data-testid="checkbox-terms">
               <label for="termsAccepted">I agree to the <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a> and represent that I have authority to bind my organization to this agreement.</label>
             </div>
+            <div class="form-group form-checkbox">
+              <input type="checkbox" id="smsConsent" name="smsConsent" data-testid="checkbox-sms-consent">
+              <label for="smsConsent">I consent to receive SMS messages from PayLink about my account, payroll alerts, and product updates. Message &amp; data rates may apply. Reply STOP to opt out at any time.</label>
+            </div>
             <button type="submit" class="btn-primary btn-lg btn-full" id="submitBtn" data-testid="button-submit-trial">
               Start My Free Trial →
             </button>
@@ -190,7 +194,7 @@
       var successDiv = document.getElementById('signupSuccess');
       var submitBtn = document.getElementById('submitBtn');
 
-      fetch('https://mypaylink.app/api/analytics/event', {
+      fetch('/api/analytics/event', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventName: 'signup_started', pageSource: 'signup' })
@@ -202,6 +206,16 @@
         submitBtn.disabled = true;
         submitBtn.textContent = 'Creating your account...';
 
+        var formPassword = document.getElementById('password').value;
+
+        if (formPassword.length < 8) {
+          errorDiv.textContent = 'Password must be at least 8 characters';
+          errorDiv.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Start My Free Trial \u2192';
+          return;
+        }
+
         var data = {
           firstName: document.getElementById('firstName').value.trim(),
           lastName: document.getElementById('lastName').value.trim(),
@@ -210,49 +224,66 @@
           jobTitle: document.getElementById('jobTitle').value.trim(),
           employeeCount: document.getElementById('employeeCount').value ? parseInt(document.getElementById('employeeCount').value) : null,
           phone: document.getElementById('phone').value.trim(),
-          password: document.getElementById('password').value,
-          termsAccepted: document.getElementById('termsAccepted').checked
+          password: formPassword,
+          termsAccepted: document.getElementById('termsAccepted').checked,
+          smsConsent: document.getElementById('smsConsent').checked
         };
 
-        if (data.password && data.password.length < 8) {
-          errorDiv.textContent = 'Password must be at least 8 characters';
-          errorDiv.style.display = 'block';
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Start My Free Trial \u2192';
-          return;
-        }
-
-        fetch('https://mypaylink.app/api/trial/signup', {
+        fetch('/api/trial/signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify(data)
         })
         .then(function(res) { return res.json().then(function(body) { return { ok: res.ok, body: body }; }); })
         .then(function(result) {
           if (!result.ok) {
-            throw new Error(result.body.message || 'Something went wrong');
+            throw new Error(result.body.message || 'Something went wrong. Please try again.');
           }
-          form.style.display = 'none';
-          document.getElementById('credUsername').textContent = result.body.username;
-          var pwRow = document.getElementById('credPasswordRow');
-          if (data.password) {
-            pwRow.style.display = 'none';
-          } else {
-            document.getElementById('credPassword').textContent = result.body.temporaryPassword;
-          }
-          successDiv.style.display = 'block';
 
-          fetch('https://mypaylink.app/api/analytics/event', {
+          fetch('/api/analytics/event', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ eventName: 'trial_started', pageSource: 'signup' })
           }).catch(function() {});
+
+          var signupBody = result.body;
+          var loginPassword = formPassword || signupBody.temporaryPassword;
+
+          submitBtn.textContent = 'Logging you in\u2026';
+
+          return fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ username: signupBody.username, password: loginPassword })
+          })
+          .then(function(loginRes) {
+            return loginRes.json().then(function(loginBody) {
+              return { loginOk: loginRes.ok, loginBody: loginBody, signupBody: signupBody, loginPassword: loginPassword };
+            });
+          });
+        })
+        .then(function(r) {
+          if (r.loginOk) {
+            window.location.href = '/app/onboarding';
+          } else {
+            form.style.display = 'none';
+            document.getElementById('credUsername').textContent = r.signupBody.username;
+            var pwRow = document.getElementById('credPasswordRow');
+            if (formPassword) {
+              pwRow.style.display = 'none';
+            } else {
+              document.getElementById('credPassword').textContent = r.loginPassword;
+            }
+            successDiv.style.display = 'block';
+          }
         })
         .catch(function(err) {
           errorDiv.textContent = err.message;
           errorDiv.style.display = 'block';
           submitBtn.disabled = false;
-          submitBtn.textContent = 'Start My Free Trial →';
+          submitBtn.textContent = 'Start My Free Trial \u2192';
         });
       });
     })();
