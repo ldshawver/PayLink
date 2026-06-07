@@ -22,8 +22,10 @@ import {
   Clock, Users, DollarSign, FileText, BarChart3, Shield,
   CheckCircle2, ArrowRight, Menu, X, Building2, CalendarClock,
   Receipt, Briefcase, Globe, Lock, LogIn, AlertCircle,
+  Sparkles, Loader2,
 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { apiRequest } from "@/lib/queryClient";
 
 const FEATURES = [
   {
@@ -274,6 +276,20 @@ export default function MarketingHomePage() {
   const [, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [clockInOpen, setClockInOpen] = useState(false);
+  const [demoPending, setDemoPending] = useState(false);
+
+  const handleLaunchDemo = async () => {
+    setDemoPending(true);
+    try {
+      const res = await apiRequest("POST", "/api/demo/provision", {});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to start demo");
+      setLocation("/app");
+    } catch (e: any) {
+      alert(e?.message || "Could not start demo. Please try again.");
+      setDemoPending(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-50 flex flex-col">
@@ -374,10 +390,15 @@ export default function MarketingHomePage() {
                 size="lg"
                 variant="outline"
                 className="border-white/40 text-white hover:bg-white/10 font-semibold"
-                onClick={() => setClockInOpen(true)}
-                data-testid="button-hero-clock-in"
+                onClick={handleLaunchDemo}
+                disabled={demoPending}
+                data-testid="button-hero-launch-demo"
               >
-                <Clock className="mr-2 h-5 w-5" /> Employee clock-in
+                {demoPending ? (
+                  <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Setting up demo…</>
+                ) : (
+                  <><Sparkles className="mr-2 h-5 w-5" /> Launch Demo</>
+                )}
               </Button>
             </div>
 
