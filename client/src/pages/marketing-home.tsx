@@ -323,7 +323,7 @@ export default function MarketingHomePage() {
             <Button variant="ghost" size="sm" onClick={() => setLocation("/login")} data-testid="link-nav-login">
               Log in
             </Button>
-            <Button size="sm" onClick={() => setLocation("/login")} data-testid="button-nav-get-started">
+            <Button size="sm" onClick={() => setLocation("/signup")} data-testid="button-nav-get-started">
               Get started free <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
           </div>
@@ -353,7 +353,7 @@ export default function MarketingHomePage() {
             <Button variant="outline" size="sm" onClick={() => setLocation("/login")} data-testid="link-mobile-login">
               Log in
             </Button>
-            <Button size="sm" onClick={() => setLocation("/login")} data-testid="button-mobile-get-started">
+            <Button size="sm" onClick={() => setLocation("/signup")} data-testid="button-mobile-get-started">
               Get started free
             </Button>
           </div>

@@ -51,6 +51,7 @@ export default function SignupPage() {
   const onSubmit = async (values: SignupForm) => {
     setIsSubmitting(true);
     try {
+      // apiRequest throws on non-2xx, so we catch errors in the outer catch block
       const signupRes = await apiRequest("POST", "/api/trial/signup", {
         companyName: values.companyName,
         firstName: values.firstName,
@@ -59,34 +60,23 @@ export default function SignupPage() {
         password: values.password,
         termsAccepted: values.termsAccepted,
       });
-
       const signupData = await signupRes.json();
 
-      if (!signupRes.ok) {
-        toast({
-          title: "Signup failed",
-          description: signupData.message || "Could not create your account. Please try again.",
-          variant: "destructive",
+      // Auto-login with the returned credentials
+      try {
+        await apiRequest("POST", "/api/auth/login", {
+          username: signupData.username,
+          password: signupData.temporaryPassword,
         });
-        setIsSubmitting(false);
-        return;
-      }
-
-      const loginRes = await apiRequest("POST", "/api/auth/login", {
-        username: signupData.username,
-        password: signupData.temporaryPassword,
-      });
-
-      if (!loginRes.ok) {
+        setLocation("/app/onboarding");
+      } catch {
+        // Login step failed — account was created; direct user to login
         toast({
-          title: "Account created",
-          description: "Your account was created. Please log in with your credentials.",
+          title: "Account created!",
+          description: "Please log in with your new credentials.",
         });
         setLocation("/login");
-        return;
       }
-
-      setLocation("/app/onboarding");
     } catch (e: any) {
       toast({
         title: "Signup failed",
@@ -194,6 +184,7 @@ export default function SignupPage() {
                   <FormControl>
                     <Input
                       type="password"
+                      autoComplete="new-password"
                       placeholder="At least 8 characters"
                       data-testid="input-password"
                       {...field}
