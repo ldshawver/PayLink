@@ -10419,23 +10419,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } catch (notifErr) { console.error("[Invoice] Notify paid failed:", notifErr); }
 
       // Generate paid invoice PDF and archive to Business Documents
+      let archiveWarning: string | null = null;
       try {
         const invFullRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`);
         const invRow = invFullRes.rows[0] as any;
         if (invRow) {
-          const pdfPath = await generateInvoicePdf(req.params.id, invRow, req.session.userId!).catch((e: unknown) => {
-            console.warn("[Invoice mark-paid] PDF generation failed:", e instanceof Error ? e.message : String(e)); return null;
-          });
+          let pdfErr: unknown = null;
+          const pdfPath = await generateInvoicePdf(req.params.id, invRow, req.session.userId!).catch((e: unknown) => { pdfErr = e; return null; });
           if (pdfPath) {
             const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${req.params.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
             const damDocId = (damRes?.rows[0] as any)?.id || null;
             await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
             if (damDocId) await db.execute(sql`UPDATE dam_documents SET paid_at = NOW() WHERE id = ${damDocId}`).catch(() => {});
+          } else {
+            const err = pdfErr || new Error("generateInvoicePdf returned null");
+            const reportId = await recordPdfGenerationFailure({ kind: "invoice", entityId: req.params.id, companyId: inv.companyId, actorUserId: req.session.userId, error: err, route: "POST /api/contractor-invoices/:id/mark-paid" });
+            archiveWarning = `Invoice marked paid, but the PDF could not be archived to Business Documents. A repair ticket was created${reportId ? ` (report ${reportId})` : ""}.`;
           }
         }
-      } catch (archiveErr) { console.warn("[Invoice mark-paid] Archive to documents failed:", archiveErr); }
+      } catch (archiveErr) {
+        const reportId = await recordPdfGenerationFailure({ kind: "invoice", entityId: req.params.id, companyId: inv.companyId, actorUserId: req.session.userId, error: archiveErr, route: "POST /api/contractor-invoices/:id/mark-paid" });
+        archiveWarning = `Invoice marked paid, but archiving to Business Documents failed. A repair ticket was created${reportId ? ` (report ${reportId})` : ""}.`;
+      }
 
-      res.json(updated);
+      res.json(archiveWarning ? { ...updated, archiveWarning } : updated);
     } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
   });
 
@@ -13169,6 +13176,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         RETURNING *
       `);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      // If the contract transitioned into a closing state, cancel any open Documenso signature requests
+      const CONTRACT_CLOSING_STATUSES = ["void", "voided", "cancelled", "canceled", "superseded", "terminated", "completed"];
+      if (status && CONTRACT_CLOSING_STATUSES.includes(status) && status !== contract.status) {
+        await closeDocumensoSignatureRequestsForContract(req.params.id, status, req.session.userId!).catch((e) => console.error("[Contract patch] Documenso close failed:", e instanceof Error ? e.message : String(e)));
+      }
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to update contract: " + e.message }); }
   });
@@ -13353,6 +13365,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot${reason ? ": " + reason : ""}`);
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      // Close any open Documenso signature requests so the document can no longer be signed
+      await closeDocumensoSignatureRequestsForContract(req.params.id, "voided", req.session.userId!).catch((e) => console.error("[Contract void] Documenso close failed:", e instanceof Error ? e.message : String(e)));
       // Notify contractor of void
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
@@ -13823,9 +13837,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                 if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
                   await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = NOW(), signed_pdf_path = ${"/uploads/" + fname}, updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
                 }
+              } else {
+                await recordPdfGenerationFailure({ kind: "signed_contract_download", entityId: sigReq.related_record_id, companyId: sigReq.company_id, actorUserId: null, error: new Error("downloadCompletedDocument returned null"), route: "POST /api/webhooks/documenso:document.completed" }).catch(() => {});
               }
             } catch (dlErr: any) {
               console.error("[DocumensoWebhook] PDF download error:", dlErr.message);
+              await recordPdfGenerationFailure({ kind: "signed_contract_download", entityId: sigReq.related_record_id, companyId: sigReq.company_id, actorUserId: null, error: dlErr, route: "POST /api/webhooks/documenso:document.completed" }).catch(() => {});
             }
           } else if (eventType === "document.declined") {
             await db.execute(sql`UPDATE documenso_signature_requests SET status = 'declined', declined_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
@@ -14845,6 +14862,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "Cannot archive a final/active/completed contract — it is immutable" });
       }
       await db.execute(sql`UPDATE contractor_contracts SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
+      // Close any open Documenso signature requests for the archived contract
+      await closeDocumensoSignatureRequestsForContract(req.params.id, "archived", req.session.userId!).catch((e) => console.error("[Contract archive] Documenso close failed:", e instanceof Error ? e.message : String(e)));
       res.json({ success: true, id: req.params.id });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive contract: " + e.message }); }
   });
