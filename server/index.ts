@@ -189,6 +189,18 @@ app.post(
             await db.execute(sql`UPDATE invoices SET status = 'overdue' WHERE id = ${paymentResult.rows[0].invoice_id}`);
           }
         }
+      } else if (eventType === "checkout.session.completed") {
+        // Contractor Hub online invoice payment reconciliation (P0)
+        const session = event.data.object;
+        if (session?.metadata?.invoiceId && (session.payment_status === "paid" || session.status === "complete")) {
+          try {
+            const { reconcileContractorInvoiceStripePayment } = await import("./routes");
+            const reconResult = await reconcileContractorInvoiceStripePayment(session);
+            console.log("[StripeWebhook] Contractor invoice reconciliation:", reconResult);
+          } catch (reconErr) {
+            console.error("[StripeWebhook] Contractor invoice reconciliation failed:", reconErr);
+          }
+        }
       }
 
       // ── Tenant billing lifecycle events ────────────────────────────────

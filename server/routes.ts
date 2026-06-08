@@ -1010,6 +1010,220 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
   }
 }
 
+// ── P1: PDF generation/archive failure capture ─────────────────────────────
+// Surfaces a failed PDF generation/archive as (1) an App Doctor dashboard
+// exception, (2) a pending App Doctor repair ticket, and (3) an audit entry.
+// De-duplicates by fingerprint so repeated failures bump occurrence_count
+// instead of flooding. Returns the report id (or null on its own failure).
+async function recordPdfGenerationFailure(opts: {
+  kind: string; // 'invoice' | 'contract' | 'signed_contract_download'
+  entityId: string;
+  companyId?: string | null;
+  actorUserId?: string | null;
+  error: unknown;
+  route?: string | null;
+}): Promise<string | null> {
+  const errMsg = opts.error instanceof Error ? opts.error.message : String(opts.error);
+  const stack = opts.error instanceof Error ? opts.error.stack || null : null;
+  const companyId = opts.companyId || null;
+  const route = opts.route ? String(opts.route).slice(0, 500) : null;
+  const title = `PDF generation/archive failed for ${opts.kind} ${String(opts.entityId).slice(0, 8)}`;
+  let reportId: string | null = null;
+  try {
+    const fingerprint = crypto
+      .createHash("sha256")
+      .update([companyId || "platform", "pdf_generation", opts.kind, errMsg.slice(0, 800)].join("|"))
+      .digest("hex");
+    const existing = await db.execute(sql`
+      SELECT id FROM app_doctor_reports
+      WHERE fingerprint = ${fingerprint} AND (${companyId}::varchar IS NULL OR company_id = ${companyId})
+      ORDER BY created_at DESC LIMIT 1`);
+    reportId = (existing.rows[0] as any)?.id || null;
+    if (reportId) {
+      await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET occurrence_count = occurrence_count + 1, updated_at = NOW(),
+            status = CASE WHEN status = 'reviewed' THEN 'reopened' ELSE status END
+        WHERE id = ${reportId}`);
+    } else {
+      const ins = await db.execute(sql`
+        INSERT INTO app_doctor_reports
+          (company_id, user_id, source, severity, status, title, error_message, stack_trace, route, context_json, fingerprint)
+        VALUES (${companyId}, ${opts.actorUserId || null}, 'pdf_generation', 'high', 'open', ${title}, ${errMsg}, ${stack}, ${route}, ${JSON.stringify({ kind: opts.kind, entityId: opts.entityId })}, ${fingerprint})
+        RETURNING id`);
+      reportId = (ins.rows[0] as any)?.id || null;
+      if (reportId) {
+        const affectedFiles = `server/routes.ts (${opts.kind === "invoice" ? "generateInvoicePdf" : opts.kind === "contract" ? "generateContractPdf" : "documenso downloadCompletedDocument"})`;
+        await db.execute(sql`
+          INSERT INTO app_doctor_repair_tickets
+            (report_id, company_id, status, severity_class, required_approver_role, affected_files, test_plan, rollback_plan, created_by_user_id)
+          VALUES (${reportId}, ${companyId}, 'pending_approval', 'high', 'admin', ${affectedFiles},
+            ${`Re-run ${opts.kind} document generation for entity ${opts.entityId}; confirm a PDF is produced and a dam_documents row is created/linked.`},
+            ${`PDF generation performs no destructive mutation; safe to retry. If a partial dam_documents row exists for this entity, remove it before retrying.`},
+            ${opts.actorUserId || null})`).catch((e) => console.error("[PdfFailure] repair ticket insert failed:", e));
+      }
+    }
+    await writeAuditLog({
+      actorUserId: opts.actorUserId || "system",
+      targetResource: `${opts.kind}:${opts.entityId}`,
+      changeType: "pdf_generation_failed",
+      afterValue: errMsg.slice(0, 500),
+      note: `PDF generation/archive failure captured as App Doctor report ${reportId || "(none)"}`,
+      companyId,
+    });
+  } catch (e) {
+    console.error("[PdfFailure] recordPdfGenerationFailure error:", e);
+  }
+  return reportId;
+}
+
+// ── P1: Documenso void/cancel synchronization ──────────────────────────────
+// When a contract leaves an active signing lifecycle (void / cancel / supersede
+// / terminate / complete / archive), cancel any still-open Documenso signature
+// requests remotely (so the document can no longer be signed) and sync the local
+// request status to 'voided'. Best-effort per request; writes one audit entry.
+async function closeDocumensoSignatureRequestsForContract(
+  contractId: string,
+  reason: string,
+  actorUserId?: string | null,
+): Promise<{ closed: number }> {
+  let closed = 0;
+  let companyId: string | null = null;
+  try {
+    const reqsRes = await db.execute(sql`
+      SELECT * FROM documenso_signature_requests
+      WHERE related_record_id = ${contractId}
+        AND document_type IN ('contract', 'contractor_hub_contract')
+        AND status = ANY(ARRAY['draft','generated','sent_for_signature','sent','viewed','partially_signed','signed'])`);
+    const reqs = reqsRes.rows as any[];
+    if (reqs.length === 0) return { closed: 0 };
+    companyId = (reqs[0] as any)?.company_id || null;
+    const { voidDocument } = await import("./services/documenso.js");
+    for (const r of reqs) {
+      if (r.documenso_document_id) {
+        try {
+          await voidDocument(String(r.documenso_document_id));
+        } catch (e) {
+          console.error(`[DocumensoVoid] Failed to void remote document ${r.documenso_document_id}:`, e instanceof Error ? e.message : String(e));
+          // Continue: still mark local request voided so UI/state stays consistent.
+        }
+      }
+      await db.execute(sql`UPDATE documenso_signature_requests SET status = 'voided', updated_at = NOW() WHERE id = ${r.id}`);
+      closed++;
+    }
+    await writeAuditLog({
+      actorUserId: actorUserId || "system",
+      targetResource: `contractor_contract:${contractId}`,
+      changeType: "documenso_signature_voided",
+      afterValue: `voided ${closed} signature request(s)`,
+      note: `Contract ${reason}: closed open Documenso signature requests`,
+      companyId,
+    });
+  } catch (e) {
+    console.error("[DocumensoVoid] closeDocumensoSignatureRequestsForContract error:", e);
+  }
+  return { closed };
+}
+
+// ── P0: Stripe contractor-invoice payment reconciliation ───────────────────
+// Invoked by the Stripe webhook (checkout.session.completed). Records the online
+// payment against the contractor invoice, advances its paid status, archives the
+// paid invoice PDF to Business Documents, and writes an audit entry. Idempotent:
+// a repeated webhook carrying the same Stripe reference is a no-op.
+export async function reconcileContractorInvoiceStripePayment(session: {
+  id?: string;
+  payment_intent?: string | null;
+  amount_total?: number | null;
+  currency?: string | null;
+  metadata?: Record<string, any> | null;
+}): Promise<{ reconciled: boolean; reason?: string; invoiceId?: string }> {
+  const invoiceId = session.metadata?.invoiceId ? String(session.metadata.invoiceId) : null;
+  if (!invoiceId) return { reconciled: false, reason: "no_invoice_id" };
+  const stripeRef = String(session.payment_intent || session.id || "").trim();
+  if (!stripeRef) return { reconciled: false, reason: "no_stripe_reference", invoiceId };
+  try {
+    const invRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`);
+    const invoice = invRes.rows[0] as any;
+    if (!invoice) return { reconciled: false, reason: "invoice_not_found", invoiceId };
+
+    // Idempotency: skip if a payment with this Stripe reference is already recorded.
+    const dup = await db.execute(sql`
+      SELECT id FROM contractor_payments
+      WHERE invoice_id = ${invoiceId} AND (reference_number = ${stripeRef} OR external_payment_id = ${stripeRef})
+      LIMIT 1`);
+    if (dup.rows[0]) return { reconciled: false, reason: "already_reconciled", invoiceId };
+
+    const amount = session.amount_total != null
+      ? Number(session.amount_total) / 100
+      : parseFloat(invoice.balance_due ?? invoice.amount ?? "0");
+
+    // 1. Payment record
+    await db.execute(sql`
+      INSERT INTO contractor_payments
+        (invoice_id, company_id, contractor_id, amount, payment_method, payment_provider, external_payment_id, status, reference_number, notes, recorded_by_user_id)
+      VALUES (${invoiceId}, ${invoice.company_id}, ${invoice.contractor_id}, ${amount}, 'stripe', 'stripe', ${stripeRef}, 'completed', ${stripeRef}, 'Online payment via Stripe Checkout', ${null})`);
+
+    // 2. Advance invoice paid status
+    const newAmountPaid = parseFloat(invoice.amount_paid ?? "0") + amount;
+    const total = parseFloat(invoice.amount ?? "0");
+    const newBalance = Math.max(0, total - newAmountPaid);
+    const fullyPaid = newBalance <= 0.01;
+    const newStatus = fullyPaid ? "paid" : "partially_paid";
+    await db.execute(sql`
+      UPDATE contractor_invoices
+      SET amount_paid = ${newAmountPaid}, balance_due = ${newBalance}, status = ${newStatus},
+          paid_at = ${fullyPaid ? sql`NOW()` : sql`paid_at`}, updated_at = NOW()
+      WHERE id = ${invoiceId}`);
+
+    // 3. Archive paid invoice PDF to Business Documents (only once fully paid)
+    if (fullyPaid) {
+      try {
+        const invFullRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`);
+        const invRow = invFullRes.rows[0] as any;
+        const pdfPath = invRow ? await generateInvoicePdf(invoiceId, invRow, null as unknown as string) : null;
+        if (pdfPath) {
+          const damRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${invoiceId} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+          const damDocId = (damRes?.rows[0] as any)?.id || null;
+          await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${invoiceId}`).catch(() => {});
+          if (damDocId) await db.execute(sql`UPDATE dam_documents SET paid_at = NOW() WHERE id = ${damDocId}`).catch(() => {});
+        } else {
+          await recordPdfGenerationFailure({ kind: "invoice", entityId: invoiceId, companyId: invoice.company_id, actorUserId: null, error: new Error("generateInvoicePdf returned null during Stripe reconciliation"), route: "stripe.webhook:checkout.session.completed" });
+        }
+      } catch (archiveErr) {
+        await recordPdfGenerationFailure({ kind: "invoice", entityId: invoiceId, companyId: invoice.company_id, actorUserId: null, error: archiveErr, route: "stripe.webhook:checkout.session.completed" });
+      }
+    }
+
+    // 4. Audit log
+    await writeAuditLog({
+      actorUserId: "stripe_webhook",
+      targetResource: `contractor_invoice:${invoiceId}`,
+      changeType: "contractor_invoice_paid_stripe",
+      beforeValue: invoice.status,
+      afterValue: newStatus,
+      note: `Stripe Checkout payment $${amount.toFixed(2)} (ref ${stripeRef})`,
+      companyId: invoice.company_id || null,
+    });
+
+    // 5. Notify contractor (best-effort)
+    try {
+      const baseUrl = process.env.APP_BASE_URL || "";
+      await db.execute(sql`
+        INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read)
+        SELECT ${invoice.company_id}, u.id, ${fullyPaid ? "invoice_paid" : "payment_received"},
+               ${fullyPaid ? "Invoice Paid" : "Payment Received"},
+               ${"A Stripe payment of $" + amount.toFixed(2) + " was applied to your invoice."},
+               ${baseUrl + "/app/contractor-hub"}, false
+        FROM users u WHERE u.worker_id = ${invoice.contractor_id} LIMIT 1`).catch(() => {});
+    } catch { /* best-effort */ }
+
+    return { reconciled: true, invoiceId };
+  } catch (e) {
+    console.error("[StripeReconcile] error:", e);
+    return { reconciled: false, reason: "error", invoiceId };
+  }
+}
+
 // Helper: recalculate contractor proposal subtotal/total from line items
 async function recalcProposalTotals(proposalId: string) {
   const items = await db.execute(sql`SELECT line_total, taxable, selected FROM proposal_line_items WHERE proposal_id = ${proposalId} AND selected = TRUE`);
