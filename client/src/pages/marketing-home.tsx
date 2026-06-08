@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 const FEATURES = [
   {
@@ -277,6 +278,7 @@ export default function MarketingHomePage() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [clockInOpen, setClockInOpen] = useState(false);
   const [demoPending, setDemoPending] = useState(false);
+  const { toast } = useToast();
 
   const handleLaunchDemo = async () => {
     setDemoPending(true);
@@ -286,7 +288,7 @@ export default function MarketingHomePage() {
       if (!res.ok) throw new Error(data.message || "Failed to start demo");
       setLocation("/app");
     } catch (e: any) {
-      alert(e?.message || "Could not start demo. Please try again.");
+      toast({ title: "Demo unavailable", description: e?.message || "Could not start demo. Please try again.", variant: "destructive" });
       setDemoPending(false);
     }
   };
@@ -381,7 +383,7 @@ export default function MarketingHomePage() {
               <Button
                 size="lg"
                 className="bg-white text-[hsl(184,96%,19%)] hover:bg-gray-100 font-semibold shadow-lg"
-                onClick={() => setLocation("/login")}
+                onClick={() => setLocation("/signup")}
                 data-testid="button-hero-start-trial"
               >
                 Start free trial <ArrowRight className="ml-2 h-5 w-5" />
@@ -503,7 +505,7 @@ export default function MarketingHomePage() {
           <Button
             size="lg"
             className="bg-white text-[hsl(184,96%,19%)] hover:bg-gray-100 font-semibold shadow-lg"
-            onClick={() => setLocation("/login")}
+            onClick={() => setLocation("/signup")}
             data-testid="button-cta-start-trial"
           >
             Get started free <ArrowRight className="ml-2 h-5 w-5" />

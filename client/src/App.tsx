@@ -87,6 +87,7 @@ const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
 const PlatformTenantsPage = lazy(() => import("@/pages/platform-tenants"));
 const MarketingHomePage = lazy(() => import("@/pages/marketing-home"));
+const SignupPage = lazy(() => import("@/pages/signup"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
   return (
@@ -692,6 +693,17 @@ function AppContent() {
           <LoginPage />
         </Suspense>
       </BiometricGate>
+    );
+  }
+
+  if (location === "/signup") {
+    if (!isLoading && user) {
+      return <RedirectToApp />;
+    }
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <SignupPage />
+      </Suspense>
     );
   }
 
