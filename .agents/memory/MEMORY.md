@@ -6,3 +6,4 @@
 - [Drizzle ANY array SQL fix](drizzle-any-array-fix.md) — Drizzle sql template literals cannot bind JS arrays as ${arr}::text[]; use sql.join with IN clause instead.
 - [Stripe client env fallback](stripe-client-env.md) — stripeClient.ts checks STRIPE_SECRET_KEY env var first before Replit connector; needed for dev environments without connector configured.
 - [Contractor Hub Onboarding Tab](contractor-hub-onboarding.md) — OnboardingSection added to hub; uses /api/worker-onboarding (admin only); HubSection type and all valid-section arrays must include "onboarding".
+- [Marketing static routing](marketing-static-routing.md) — /signup, /, /demo etc. serve static public-site HTML via MARKETING_PAGES (vite.ts + static.ts), intercepting before React SPA; React pages for those paths are dead code.
