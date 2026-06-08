@@ -9181,7 +9181,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/upload", requireAuth, upload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/receipts/upload", requireAuth, blockDemoWrites, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const filePath = `/uploads/${req.file.filename}`;
@@ -9192,7 +9192,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/receipts/ai-scan", requireAuth, upload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/receipts/ai-scan", requireAuth, blockDemoWrites, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No receipt image provided" });
       const apiKey = process.env.OPENAI_API_KEY;
@@ -10334,7 +10334,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
-  app.post("/api/contractor-invoices/:id/attachments", requireAuth, documentUpload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/contractor-invoices/:id/attachments", requireAuth, blockDemoWrites, documentUpload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file" });
       const inv = await storage.getContractorInvoice(req.params.id);
@@ -11766,7 +11766,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Use the token-gated /api/portal/proposals/:id/attachments?token=... instead.
 
   // POST /api/contractor-proposals/:id/attachments
-  app.post("/api/contractor-proposals/:id/attachments", requireAuth, documentUpload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/contractor-proposals/:id/attachments", requireAuth, blockDemoWrites, documentUpload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const { attachmentType } = req.body;
@@ -13883,7 +13883,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch document" }); }
   });
 
-  app.post("/api/dam-documents", requireAuth, documentUpload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/dam-documents", requireAuth, blockDemoWrites, documentUpload.single("file"), async (req: any, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
@@ -14164,7 +14164,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch branding" }); }
   });
 
-  app.post("/api/contractor-branding", requireAuth, upload.single("logo"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/contractor-branding", requireAuth, blockDemoWrites, upload.single("logo"), async (req: any, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
@@ -26716,7 +26716,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
   });
 
-  app.post("/api/trade-transactions/:id/attachments", requireAuth, requireRole("admin", "manager"), upload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/trade-transactions/:id/attachments", requireAuth, requireRole("admin", "manager"), blockDemoWrites, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const userId = req.session.userId as string;
@@ -26750,7 +26750,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: "Failed to fetch contractor documents" }); }
   });
 
-  app.post("/api/contractor-documents/upload", requireAuth, requireRole("admin", "manager"), upload.single("file"), blockDemoWrites, async (req: any, res) => {
+  app.post("/api/contractor-documents/upload", requireAuth, requireRole("admin", "manager"), blockDemoWrites, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const userId = req.session.userId as string;
@@ -27778,7 +27778,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // Logo upload for branding
-  app.post("/api/company-branding/logo", requireAuth, requireRole("admin", "manager"), upload.single("file"), blockDemoWrites, async (req, res) => {
+  app.post("/api/company-branding/logo", requireAuth, requireRole("admin", "manager"), blockDemoWrites, upload.single("file"), async (req, res) => {
     try {
       const user = req.user as any;
       const companyId = user.companyId;
@@ -28140,7 +28140,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
   });
 
-  app.post("/api/biz-documents/:id/attachments", requireAuth, upload.single("file"), blockDemoWrites, async (req, res) => {
+  app.post("/api/biz-documents/:id/attachments", requireAuth, blockDemoWrites, upload.single("file"), async (req, res) => {
     try {
       const user = req.user as any;
       const doc = await storage.getBizDocument(req.params.id);
