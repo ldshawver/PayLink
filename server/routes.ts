@@ -2824,7 +2824,7 @@ export async function registerRoutes(
   });
 
   // ── Payroll Pre-Flight Review (Structured Rule Engine + optional AI summary) ──
-  app.post("/api/payroll-runs/:id/ai-review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/payroll-runs/:id/ai-review", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -4239,7 +4239,7 @@ export async function registerRoutes(
   });
 
   // ── Submit ACH Batch ───────────────────────────────────────────────────────
-  app.post("/api/payroll-runs/:id/submit-ach", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-runs/:id/submit-ach", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -4480,7 +4480,7 @@ export async function registerRoutes(
   });
 
   // ── Reverse Payroll Run ─────────────────────────────────────────────────────
-  app.post("/api/payroll-runs/:id/reverse", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-runs/:id/reverse", requireAuth, requireRole("admin"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -4572,7 +4572,7 @@ export async function registerRoutes(
   });
 
   // ── Reconcile payment record ────────────────────────────────────────────────
-  app.post("/api/payroll-payment-records/:id/reconcile", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-payment-records/:id/reconcile", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const { notes } = req.body || {};
@@ -4606,7 +4606,7 @@ export async function registerRoutes(
   });
 
   // ── Run-level Reconcile ────────────────────────────────────────────────────
-  app.post("/api/payroll-runs/:id/reconcile", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-runs/:id/reconcile", requireAuth, requireRole("admin"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -4740,7 +4740,7 @@ export async function registerRoutes(
   });
 
   // ── Mark payment record as paid (manual reconcile) ─────────────────────────
-  app.post("/api/payroll-payment-records/:id/mark-paid", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-payment-records/:id/mark-paid", requireAuth, requireRole("admin"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const { notes } = req.body || {};
@@ -4832,7 +4832,7 @@ export async function registerRoutes(
   // ── Bulk Lock Payroll Runs ─────────────────────────────────────────────────
   // Locks every eligible run for a company: must be processed, approved, not
   // already locked, and (if useDirectDeposit) have ACH submitted/settled.
-  app.post("/api/payroll-runs/bulk-lock", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-runs/bulk-lock", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const requestUser = await storage.getUser(req.session.userId!);
       const { companyId } = req.body;
@@ -5190,7 +5190,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/payroll-runs/:id/disburse-stripe", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-runs/:id/disburse-stripe", requireAuth, requireRole("admin"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -5499,7 +5499,7 @@ export async function registerRoutes(
   });
 
   // Reset a payroll run to draft — platform_super_admin only, clears ACH/lock state for test/admin recovery
-  app.post("/api/payroll-runs/:id/reset-to-draft", requireAuth, requireRole("admin", "platform_super_admin"), async (req, res) => {
+  app.post("/api/payroll-runs/:id/reset-to-draft", requireAuth, requireRole("admin", "platform_super_admin"), blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -5551,7 +5551,7 @@ export async function registerRoutes(
   });
 
   // ── Repair-period: realign periodStart/periodEnd/payDate for a single draft/processed run ──
-  app.post("/api/payroll-runs/:id/repair-period", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post("/api/payroll-runs/:id/repair-period", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -5621,7 +5621,7 @@ export async function registerRoutes(
   });
 
   // ── Bulk-repair: realign all draft/processed runs for a company ────────────
-  app.post("/api/companies/:companyId/repair-payroll-periods", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post("/api/companies/:companyId/repair-payroll-periods", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       const { companyId } = req.params;
       const repairUser = await storage.getUser(req.session.userId!);
@@ -5762,7 +5762,7 @@ export async function registerRoutes(
   });
 
   // Recalculate YTD for all payroll items of a company — fixes ytd_gross/ytd_net stored values
-  app.post("/api/payroll/recalculate-ytd", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post("/api/payroll/recalculate-ytd", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       const { companyId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
@@ -5846,7 +5846,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/time-punches", async (req, res) => {
+  app.post("/api/time-punches", blockDemoWrites, async (req, res) => {
     try {
       if (req.session.userId) {
         const user = await storage.getUser(req.session.userId);
@@ -6899,7 +6899,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/schedules/generate", async (req, res) => {
+  app.post("/api/schedules/generate", blockDemoWrites, async (req, res) => {
     try {
       const { companyId, startDate, endDate } = req.body;
       if (!companyId || !startDate || !endDate) {
@@ -8299,7 +8299,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/employee-contacts", requireAuth, async (req, res) => {
+  app.post("/api/employee-contacts", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const data = { ...req.body };
@@ -8322,7 +8322,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/employee-contacts/:id", requireAuth, async (req, res) => {
+  app.patch("/api/employee-contacts/:id", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       // Non-manager tenant users can only edit their own contacts
@@ -8349,7 +8349,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/employee-contacts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.delete("/api/employee-contacts/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       await storage.deleteEmployeeContact(req.params.id);
@@ -8647,7 +8647,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/policy-groups/quick-setup", requireAuth, async (req, res) => {
+  app.post("/api/policy-groups/quick-setup", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const existing = await storage.getPolicyGroups();
       const existingNames = new Set(existing.map(e => e.name));
@@ -9620,7 +9620,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
   });
 
-  app.post("/api/expenses/:id/attachments", requireAuth, upload.single("file"), async (req: any, res) => {
+  app.post("/api/expenses/:id/attachments", requireAuth, blockDemoWrites, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const expense = await storage.getExpense(req.params.id);
@@ -9646,7 +9646,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── AI Extraction for Expenses ────────────────────────────────────────
-  app.post("/api/expenses/ai-scan", requireAuth, upload.single("file"), async (req: any, res) => {
+  app.post("/api/expenses/ai-scan", requireAuth, blockDemoWrites, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const filePath = `/uploads/${req.file.filename}`;
@@ -9747,7 +9747,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/expenses/:id/print-check — generate vendor check PDF + mark expense as paid
-  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const expRow = pgRow<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
@@ -10423,7 +10423,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
-  app.patch("/api/payroll-reimbursements/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/payroll-reimbursements/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const existing = await storage.getPayrollReimbursementItem(req.params.id);
       if (!existing) return res.status(404).json({ message: "Not found" });
@@ -14934,7 +14934,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Transactional stub amendment endpoint: atomically updates pay stub values and records amendment audit entry
-  app.post("/api/payroll-items/:id/amend", requireRole("admin", "platform_super_admin"), async (req, res) => {
+  app.post("/api/payroll-items/:id/amend", requireRole("admin", "platform_super_admin"), blockDemoWrites, async (req, res) => {
     try {
       const { payrollItems: piTable, payStubAmendments } = await import("../shared/schema.js");
       const [existingItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
@@ -15050,7 +15050,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.status(500).json({ message: "Failed to fetch employee wage groups" });
     }
   });
-  app.post("/api/employee-wage-groups", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/employee-wage-groups", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const { workerId, wageGroupId } = req.body;
       if (!workerId || !wageGroupId) {
@@ -15067,7 +15067,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.status(500).json({ message: "Failed to assign wage group" });
     }
   });
-  app.delete("/api/employee-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.delete("/api/employee-wage-groups/:id", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       await storage.deleteEmployeeWageGroup(req.params.id as string);
       res.json({ message: "Wage group assignment removed" });
@@ -15420,7 +15420,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/worker-documents", requireAuth, documentUpload.single("file"), async (req: any, res) => {
+  app.post("/api/worker-documents", requireAuth, blockDemoWrites, documentUpload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const fileUrl = `/uploads/${req.file.filename}`;
@@ -15447,7 +15447,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/worker-documents/:id", requireAuth, async (req, res) => {
+  app.delete("/api/worker-documents/:id", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       // Non-manager tenant users can only delete their own documents; managers scoped to company
@@ -15833,7 +15833,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Deactivate all but the most-recently-updated active schedule ─────────
-  app.post("/api/pay-period-schedules/deactivate-extras", requireAuth, async (req, res) => {
+  app.post("/api/pay-period-schedules/deactivate-extras", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const companyId = req.query.companyId as string || req.body.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
@@ -15937,7 +15937,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/pay-period-schedules", requireAuth, async (req, res) => {
+  app.post("/api/pay-period-schedules", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       // ── Enforce single active schedule per company ─────────────────────────
       if (req.body.isActive) {
@@ -15954,7 +15954,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/pay-period-schedules/:id", requireAuth, async (req, res) => {
+  app.patch("/api/pay-period-schedules/:id", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const existing = await storage.getPayPeriodSchedule(req.params.id);
       if (!existing) return res.status(404).json({ message: "Not found" });
@@ -16010,7 +16010,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/pay-period-schedules/:id", requireAuth, async (req, res) => {
+  app.delete("/api/pay-period-schedules/:id", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       await storage.deletePayPeriodSchedule(req.params.id);
       res.json({ message: "Deleted" });
@@ -16769,7 +16769,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/schedule-policies", requireRole("admin"), async (req, res) => {
+  app.post("/api/schedule-policies", requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       const item = await storage.createSchedulePolicy(req.body);
       res.status(201).json(item);
@@ -16779,7 +16779,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/schedule-policies/:id", requireRole("admin"), async (req, res) => {
+  app.patch("/api/schedule-policies/:id", requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       const item = await storage.updateSchedulePolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -16790,7 +16790,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/schedule-policies/:id", requireRole("admin"), async (req, res) => {
+  app.delete("/api/schedule-policies/:id", requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       await storage.deleteSchedulePolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -17097,7 +17097,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/schedule-policies/quick-setup", requireAuth, async (req, res) => {
+  app.post("/api/schedule-policies/quick-setup", requireAuth, blockDemoWrites, async (req, res) => {
     try {
       const { companyId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
@@ -19248,7 +19248,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/checks/:payrollItemId/void — formal void with required reason
-  app.post("/api/checks/:payrollItemId/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/checks/:payrollItemId/void", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const { payrollItemId } = req.params;
       const { voidReason }    = req.body;
@@ -19293,7 +19293,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/checks/:payrollItemId/reprint — log reprint event AND return PDF bytes
-  app.post("/api/checks/:payrollItemId/reprint", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/checks/:payrollItemId/reprint", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const { payrollItemId } = req.params;
       const userId = req.session.userId;
@@ -19556,13 +19556,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch YTD summary" }); }
   });
 
-  app.post("/api/payroll-payment-records", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/payroll-payment-records", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       res.status(201).json(await storage.createPayrollPaymentRecord(req.body));
     } catch (e) { res.status(500).json({ message: "Failed to create payment record" }); }
   });
 
-  app.patch("/api/payroll-payment-records/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/payroll-payment-records/:id", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const r = await storage.updatePayrollPaymentRecord(req.params.id, req.body);
       if (!r) return res.status(404).json({ message: "Not found" });
@@ -19570,7 +19570,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to update payment record" }); }
   });
 
-  app.delete("/api/payroll-payment-records/:id", requireRole("admin"), async (req, res) => {
+  app.delete("/api/payroll-payment-records/:id", requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
       await storage.deletePayrollPaymentRecord(req.params.id);
       res.json({ message: "Deleted" });
@@ -32185,7 +32185,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── Data Anonymization ──────────────────────────────────────────────────────
 
-  app.post("/api/workers/:id/anonymize", requireAuth, requireRole("admin", "tenant_owner", "tenant_admin"), async (req: any, res) => {
+  app.post("/api/workers/:id/anonymize", requireAuth, requireRole("admin", "tenant_owner", "tenant_admin"), blockDemoWrites, async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const { id: workerId } = req.params;
@@ -32699,7 +32699,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // POST /api/payroll-runs/:id/preflight — run compliance engine for the payroll run
-  app.post("/api/payroll-runs/:id/preflight", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/payroll-runs/:id/preflight", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
       const { evaluateCompliance } = await import("./compliance-engine.js");
       const run = await storage.getPayrollRun(req.params.id);
