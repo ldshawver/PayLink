@@ -22,7 +22,7 @@ import {
   Clock, Users, DollarSign, FileText, BarChart3, Shield,
   CheckCircle2, ArrowRight, Menu, X, Building2, CalendarClock,
   Receipt, Briefcase, Globe, Lock, LogIn, AlertCircle,
-  Sparkles, Loader2,
+  Sparkles, Loader2, ChevronDown,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/queryClient";
@@ -359,7 +359,7 @@ export default function MarketingHomePage() {
       </header>
 
       {/* ── Hero ─────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-[hsl(184,96%,10%)] via-[hsl(184,80%,16%)] to-[hsl(200,70%,22%)] text-white py-20 md:py-28 px-4">
+      <section className="relative overflow-hidden bg-gradient-to-br from-[hsl(184,96%,10%)] via-[hsl(184,80%,16%)] to-[hsl(200,70%,22%)] text-white py-20 md:py-28 px-4 min-h-[calc(92vh-4rem)]">
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-16 -left-16 w-72 h-72 bg-white/5 rounded-full blur-2xl pointer-events-none" />
 
@@ -416,6 +416,16 @@ export default function MarketingHomePage() {
             <TimePunchCard onClockIn={() => setClockInOpen(true)} />
           </div>
         </div>
+
+        {/* Scroll cue — absolutely pinned to hero bottom, always above the fold */}
+        <button
+          data-testid="button-scroll-cue"
+          onClick={() => document.getElementById("features")?.scrollIntoView({ behavior: "smooth" })}
+          className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 text-white/50 hover:text-white/80 transition-colors bg-transparent border-0 cursor-pointer"
+        >
+          <span className="text-xs tracking-widest uppercase">Scroll to see more</span>
+          <ChevronDown className="h-4 w-4 animate-bounce" />
+        </button>
       </section>
 
       {/* ── Features grid ────────────────────────────────────────────── */}
