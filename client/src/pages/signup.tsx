@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/form";
 import { Building2, Loader2, ArrowRight } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 
 const signupSchema = z.object({
@@ -33,6 +34,7 @@ type SignupForm = z.infer<typeof signupSchema>;
 
 export default function SignupPage() {
   const [, setLocation] = useLocation();
+  const { login } = useAuth();
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -62,12 +64,9 @@ export default function SignupPage() {
       });
       const signupData = await signupRes.json();
 
-      // Auto-login with the returned credentials
+      // Auto-login using useAuth().login() so the auth cache is updated before redirect
       try {
-        await apiRequest("POST", "/api/auth/login", {
-          username: signupData.username,
-          password: signupData.temporaryPassword,
-        });
+        await login(signupData.username, signupData.temporaryPassword);
         setLocation("/app/onboarding");
       } catch {
         // Login step failed — account was created; direct user to login
