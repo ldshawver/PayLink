@@ -1,24 +1,28 @@
 ---
 name: CI lockfile firewall URLs break GitHub Actions
-description: Why pushes to GitHub main can deadlock on failing required CI checks
+description: Troubleshooting rule — GH013 + required checks failing at npm ci on GitHub
 ---
-The committed `package-lock.json` contains `resolved` URLs pointing to
-`http://package-firewall.replit.local/...` (Replit's internal package proxy).
+**Rule of thumb:** If a GitHub push to a protected branch is rejected with
+`GH013` / "required status checks", and those checks fail during dependency
+install (`npm ci`) rather than at the real build/test step, inspect the committed
+`package-lock.json` for `resolved` hosts that are NOT a public registry. A
+non-public host in the lockfile is the usual culprit.
 
-**Symptom:** GitHub Actions `npm ci` fails at install with
-`npm error code EAI_AGAIN ... getaddrinfo EAI_AGAIN package-firewall.replit.local`.
-The `build`, `test`, and `typecheck` jobs die during install (never run their
-real step); only jobs without `npm ci` (e.g. `repo-audit`) pass.
+**This repo's specific case:** `package-lock.json` carries `resolved` URLs
+pointing at `http://package-firewall.replit.local/...` (Replit's internal package
+proxy). That host only resolves inside Replit, so GitHub Actions `npm ci` dies
+with `EAI_AGAIN getaddrinfo package-firewall.replit.local`. Jobs that run
+`npm ci` (build/test/typecheck) fail at install; jobs without it (e.g.
+`repo-audit`) still pass.
 
-**Why it matters:** `main` is protected by a GitHub ruleset that requires those
-status checks to pass. Because the checks can never pass while the lockfile points
-at the unreachable host, NO push to `main` is accepted — and the fix itself can't
-be landed without a push. That is a deadlock only the repo owner can break by
-temporarily relaxing/bypassing the branch ruleset, or by landing a corrected
-lockfile via an allowed path.
+**Why it can deadlock:** when the branch ruleset requires those checks AND the
+fix lives in the lockfile, a *direct* push to `main` can never satisfy the checks.
+Escape routes: (a) repo owner relaxes/bypasses the ruleset, or (b) land the
+corrected lockfile through the normal PR flow — `ci.yml` runs on push to
+non-`main` branches and on PRs, so a fixed lockfile on a feature branch makes the
+PR checks pass, then merge.
 
-**How to apply:** If a GitHub push to `main` is rejected with GH013 / "required
-status checks", check the Actions logs for the firewall host before assuming the
-code is broken. Deploy (`deploy-app.yml`) uses pnpm, not `npm ci`, so it is not
-affected — this is a CI-only break. The durable fix is regenerating the lockfile
-against the public npm registry (sensitive: touches package-lock.json).
+**Durable fix:** rewrite the lockfile `resolved` hosts to the public registry
+(`https://registry.npmjs.org`); integrity hashes are content-based and stay valid.
+This is CI-only — `deploy-app.yml` uses pnpm (not `npm ci`), so production deploys
+are unaffected. Treat lockfile edits as sensitive.
