@@ -8,3 +8,4 @@
 - [Drizzle ANY array SQL fix](drizzle-any-array-fix.md) — Drizzle sql template literals cannot bind JS arrays as ${arr}::text[]; use sql.join with IN clause instead.
 - [Stripe client env fallback](stripe-client-env.md) — stripeClient.ts checks STRIPE_SECRET_KEY env var first before Replit connector; needed for dev environments without connector configured.
 - [Contractor Hub Onboarding Tab](contractor-hub-onboarding.md) — OnboardingSection added to hub; uses /api/worker-onboarding (admin only); HubSection type and all valid-section arrays must include "onboarding".
+- [CI lockfile firewall URLs](ci-lockfile-firewall-urls.md) — committed package-lock.json resolved URLs point to package-firewall.replit.local; breaks GitHub Actions npm ci → required checks fail → branch-protected push to main deadlocks.
