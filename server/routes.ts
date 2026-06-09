@@ -11,6 +11,7 @@ import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
+import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
@@ -17550,6 +17551,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!username || !password) {
         return res.status(400).json({ message: "Username and password are required" });
       }
+
+      // ── CRITICAL privilege-escalation / tenant-isolation guard ──────────────
+      // requireRole("admin") legacy-expands to include tenant_admin/tenant_owner,
+      // so without this a tenant admin could mint a platform_super_admin or a
+      // company-less (global) account and seize cross-tenant control.
+      const requestor = await storage.getUser(req.session.userId!);
+      const desiredRole = role || "employee";
+      // Tenant admins create within their own company; default missing companyId
+      // to their own scope rather than silently creating a global user.
+      let effectiveCompanyId: string | null = companyId || null;
+      if (!isPlatformUser(requestor?.role) && !effectiveCompanyId) {
+        effectiveCompanyId = requestor?.companyId || null;
+      }
+      const decision = evaluateUserProvisioning({
+        requestor: { role: requestor?.role, companyId: requestor?.companyId },
+        desiredRole,
+        desiredCompanyId: effectiveCompanyId,
+        desiredCompanyAccessible: effectiveCompanyId
+          ? await canAccessCompany(requestor!, effectiveCompanyId)
+          : false,
+      });
+      if (!decision.allowed) {
+        return res.status(decision.status ?? 403).json({ message: decision.message });
+      }
+
       const existing = await storage.getUserByUsername(username);
       if (existing) {
         return res.status(409).json({ message: "Username already exists" });
@@ -17558,8 +17584,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.createUser({
         username,
         password: hashedPassword,
-        role: role || "employee",
-        companyId: companyId || null,
+        role: desiredRole,
+        companyId: effectiveCompanyId,
         workerId: workerId || null,
         isActive: true,
       });
@@ -17605,6 +17631,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (password) {
         updateData.password = await bcrypt.hash(password, 10);
       }
+
+      // ── CRITICAL privilege-escalation / tenant-isolation guard ──────────────
+      // Block tenant admins from (a) escalating any user to a platform/system
+      // role, (b) editing users outside their company scope (cross-tenant), and
+      // (c) moving a user to a global/out-of-scope company.
+      const requestor = await storage.getUser(req.session.userId!);
+      const target = await storage.getUser(req.params.id);
+      if (!target) return res.status(404).json({ message: "User not found" });
+      const decision = evaluateUserProvisioning({
+        requestor: { role: requestor?.role, companyId: requestor?.companyId },
+        desiredRole: ("role" in updateData) ? updateData.role : undefined,
+        desiredCompanyId: ("companyId" in updateData) ? updateData.companyId : undefined,
+        desiredCompanyAccessible: ("companyId" in updateData && updateData.companyId)
+          ? await canAccessCompany(requestor!, updateData.companyId)
+          : false,
+        targetCompanyId: target.companyId ?? null,
+        targetCompanyAccessible: await canAccessCompany(requestor!, target.companyId),
+        targetRole: target.role,
+      });
+      if (!decision.allowed) {
+        return res.status(decision.status ?? 403).json({ message: decision.message });
+      }
+
       const user = await storage.updateUser(req.params.id, updateData);
       if (!user) return res.status(404).json({ message: "User not found" });
       res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, isActive: user.isActive });
