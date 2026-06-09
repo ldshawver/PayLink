@@ -12,6 +12,7 @@ import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
 import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
+import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
@@ -6818,6 +6819,25 @@ export async function registerRoutes(
       const { workerId, companyId, date, startTime, endTime, department, jobId, positionId, costCenterId, note } = req.body;
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
+      }
+      // Company ownership guard — tenant users may only create schedules in
+      // companies they can access (own company, enterprise sibling, or explicit
+      // grant). Platform users are unchanged. Cross-company scheduling for an
+      // authorized company is still allowed; cross-tenant writes are blocked.
+      const schedCreator = await storage.getUser(req.session.userId!);
+      const schedAccess = evaluateScheduleAccess({
+        isPlatformUser: isPlatformUser(schedCreator?.role),
+        requestorCompanyId: schedCreator?.companyId,
+        targetCompanyId: companyId,
+        targetCompanyAccessible: schedCreator
+          ? await canAccessCompany(
+              { id: schedCreator.id, companyId: schedCreator.companyId, role: schedCreator.role },
+              companyId,
+            )
+          : false,
+      });
+      if (!schedAccess.allowed) {
+        return res.status(schedAccess.status ?? 403).json({ message: schedAccess.message });
       }
       // Validate worker exists — cross-company scheduling is explicitly allowed
       // (a worker may be scheduled at any company, not just their home company)

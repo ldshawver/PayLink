@@ -22,11 +22,13 @@ with the pure decision module `server/auth/user-provisioning-guard.ts`
 (`evaluateUserProvisioning`), wired into both handlers; platform users left
 unchanged by design.
 
-**Systemic gap (audited, NOT yet fixed):** the same trust-req.body.companyId
-pattern recurs across org-hierarchy CRUD — POST /api/schedules, and
-enterprises/branches/divisions/cost-centers create/update — plus several GET list
-endpoints (enterprises/branches/divisions) that return all rows with no auth
-middleware or scope filter. Contrast: PATCH /api/schedules/:id and PATCH
+**Systemic gap (audited):** the same trust-req.body.companyId pattern recurs
+across org-hierarchy CRUD. FIXED so far: POST /api/schedules (now uses pure
+`evaluateScheduleAccess` in server/auth/schedule-access-guard.ts +
+canAccessCompany). STILL OPEN (audited, not yet fixed):
+enterprises/branches/divisions/cost-centers create/update trust req.body, plus
+several GET list endpoints (enterprises/branches/divisions) return all rows with
+no auth middleware or scope filter. Contrast: PATCH /api/schedules/:id and PATCH
 /api/users/:id DO guard ownership, so the pattern to copy already exists in-repo.
 
 **How to apply:** when adding/reviewing any company-scoped write endpoint, copy
