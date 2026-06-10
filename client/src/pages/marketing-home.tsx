@@ -22,8 +22,10 @@ import {
   Clock, Users, DollarSign, FileText, BarChart3, Shield,
   CheckCircle2, ArrowRight, Menu, X, Building2, CalendarClock,
   Receipt, Briefcase, Globe, Lock, LogIn, AlertCircle,
+  Sparkles, Loader2, ChevronDown,
 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { apiRequest } from "@/lib/queryClient";
 
 const FEATURES = [
   {
@@ -274,6 +276,20 @@ export default function MarketingHomePage() {
   const [, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [clockInOpen, setClockInOpen] = useState(false);
+  const [demoPending, setDemoPending] = useState(false);
+
+  const handleLaunchDemo = async () => {
+    setDemoPending(true);
+    try {
+      const res = await apiRequest("POST", "/api/demo/provision", {});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to start demo");
+      setLocation("/app");
+    } catch (e: any) {
+      alert(e?.message || "Could not start demo. Please try again.");
+      setDemoPending(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-50 flex flex-col">
@@ -343,7 +359,7 @@ export default function MarketingHomePage() {
       </header>
 
       {/* ── Hero ─────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-[hsl(184,96%,10%)] via-[hsl(184,80%,16%)] to-[hsl(200,70%,22%)] text-white py-20 md:py-28 px-4">
+      <section className="relative overflow-hidden bg-gradient-to-br from-[hsl(184,96%,10%)] via-[hsl(184,80%,16%)] to-[hsl(200,70%,22%)] text-white py-20 md:py-28 px-4 min-h-[calc(92vh-4rem)]">
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-white/5 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-16 -left-16 w-72 h-72 bg-white/5 rounded-full blur-2xl pointer-events-none" />
 
@@ -374,10 +390,15 @@ export default function MarketingHomePage() {
                 size="lg"
                 variant="outline"
                 className="border-white/40 text-white hover:bg-white/10 font-semibold"
-                onClick={() => setClockInOpen(true)}
-                data-testid="button-hero-clock-in"
+                onClick={handleLaunchDemo}
+                disabled={demoPending}
+                data-testid="button-hero-launch-demo"
               >
-                <Clock className="mr-2 h-5 w-5" /> Employee clock-in
+                {demoPending ? (
+                  <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Setting up demo…</>
+                ) : (
+                  <><Sparkles className="mr-2 h-5 w-5" /> Launch Demo</>
+                )}
               </Button>
             </div>
 
@@ -395,6 +416,16 @@ export default function MarketingHomePage() {
             <TimePunchCard onClockIn={() => setClockInOpen(true)} />
           </div>
         </div>
+
+        {/* Scroll cue — absolutely pinned to hero bottom, always above the fold */}
+        <button
+          data-testid="button-scroll-cue"
+          onClick={() => document.getElementById("features")?.scrollIntoView({ behavior: "smooth" })}
+          className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 text-white/50 hover:text-white/80 transition-colors bg-transparent border-0 cursor-pointer"
+        >
+          <span className="text-xs tracking-widest uppercase">Scroll to see more</span>
+          <ChevronDown className="h-4 w-4 animate-bounce" />
+        </button>
       </section>
 
       {/* ── Features grid ────────────────────────────────────────────── */}

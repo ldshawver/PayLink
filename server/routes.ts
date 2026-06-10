@@ -11,6 +11,8 @@ import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
+import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
+import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
@@ -1135,6 +1137,84 @@ export async function registerRoutes(
   }
 
   const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
+  // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
+  // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
+  // auth, analytics, and webhook paths listed in publicWritePaths.
+  //
+  // Per-domain entries make protected areas self-documenting and ensure new
+  // routes added under these prefixes are automatically covered. The global
+  // catch-all at the end handles any route not listed below.
+  const _demoReadOnlyPrefixes: string[] = [
+    // ── Payroll & Compensation ──────────────────────────────────────────────
+    "/api/payroll-runs", "/api/payroll-payment-records", "/api/payroll-payment-methods",
+    "/api/payroll-items", "/api/payroll-reimbursements",
+    "/api/pay-periods", "/api/pay-period-schedules",
+    "/api/pay-stub-amendments", "/api/pay-stub-transactions", "/api/pay-stub-accounts",
+    "/api/checks", "/api/check-templates", "/api/check-print-audit",
+    "/api/1099-summaries", "/api/taxes-deductions", "/api/tax-wizard",
+    "/api/remittance-agencies", "/api/remittance-sources", "/api/remittance-agency-events",
+    "/api/pay-codes", "/api/earning-types", "/api/pay-methods", "/api/pay-formulas",
+    "/api/contributing-pay-codes", "/api/contributing-shifts",
+    "/api/secondary-wage-groups", "/api/wage-history",
+    // ── Workers & Employees ─────────────────────────────────────────────────
+    "/api/workers", "/api/employee-contacts", "/api/employee-groups",
+    "/api/employee-titles", "/api/employee-wage-groups",
+    "/api/worker-agreements", "/api/worker-documents", "/api/worker-languages",
+    "/api/worker-memberships", "/api/worker-onboarding",
+    "/api/commissions", "/api/new-hire-defaults",
+    // ── Scheduling ──────────────────────────────────────────────────────────
+    "/api/schedules", "/api/recurring-schedules", "/api/shift-offers",
+    "/api/schedule-preferences", "/api/schedule-policies",
+    // ── Time & Attendance ───────────────────────────────────────────────────
+    "/api/time-entries", "/api/time-punches", "/api/time-off-requests",
+    "/api/clock-in-requests",
+    "/api/absence-policies", "/api/accrual-accounts", "/api/accrual-balances",
+    "/api/accrual-policies", "/api/accrual-policy-milestones",
+    "/api/break-policies", "/api/meal-policies", "/api/rounding-policies",
+    "/api/regular-time-policies", "/api/overtime-policies",
+    "/api/exception-policies", "/api/premium-policies",
+    "/api/holiday-policies", "/api/holidays",
+    // ── Invoices & Billing ──────────────────────────────────────────────────
+    "/api/invoices", "/api/invoice-templates", "/api/invoice-term-settings",
+    "/api/invoice-approval-workflows", "/api/invoice-attachments",
+    "/api/recurring-billing", "/api/payments", "/api/payment-method-configs",
+    "/api/customers", "/api/trade-transactions",
+    // ── Contractor Hub ──────────────────────────────────────────────────────
+    "/api/contractor-invoices", "/api/contractor-proposals", "/api/contractor-contracts",
+    "/api/contractor-payments", "/api/contractor-templates", "/api/contractor-branding",
+    "/api/contractor-notifications", "/api/contractor-reminders",
+    "/api/contractor-workflow-settings", "/api/contractor-documents",
+    "/api/contractor-hub", "/api/proposal-attachments", "/api/proposal-line-items",
+    // ── Documents & Signatures ──────────────────────────────────────────────
+    "/api/documents", "/api/document-folders", "/api/document-versions",
+    "/api/document-acls", "/api/document-retention", "/api/document-retention-policies",
+    "/api/dam-documents", "/api/signature-packages", "/api/system-documents",
+    "/api/biz-documents", "/api/biz-document-items", "/api/biz-document-attachments",
+    "/api/agreement-templates", "/api/onboarding-documents",
+    "/api/onboarding-packets", "/api/onboarding-packet-steps",
+    // ── HR & Policy ─────────────────────────────────────────────────────────
+    "/api/positions", "/api/departments", "/api/jobs", "/api/cost-centers",
+    "/api/divisions", "/api/branches", "/api/legal-entities",
+    "/api/schedule-policies", "/api/policy-groups",
+    "/api/qualifications", "/api/qualification-groups",
+    "/api/reviews", "/api/approval-reminders",
+    "/api/expenses", "/api/expense-categories", "/api/receipts",
+    "/api/recurring-expenses",
+    // ── Settings & Configuration ─────────────────────────────────────────────
+    "/api/companies", "/api/company-branding",
+    "/api/roles", "/api/role-permissions", "/api/permission-groups", "/api/user-roles",
+    "/api/users", "/api/stations", "/api/funding-accounts",
+    "/api/webhook-configs", "/api/automation-rules",
+    "/api/notifications", "/api/notification-preferences",
+    "/api/messages", "/api/saved-reports",
+    "/api/currencies", "/api/inventory",
+    "/api/compliance", "/api/eligibility-rule-sets",
+  ];
+  for (const prefix of _demoReadOnlyPrefixes) {
+    app.use(prefix, blockDemoWrites);
+  }
+  // Global catch-all: any /api route not covered by the explicit list above
+  // is also demo-read-only, except provisioning, auth, and webhook exceptions.
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -1515,6 +1595,8 @@ export async function registerRoutes(
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
+      || req.path === "/trial/signup"
+      || req.path === "/analytics/event"
       || req.path === "/license/request"
       || req.path.startsWith("/portal/")) {
       return next();
@@ -6738,6 +6820,25 @@ export async function registerRoutes(
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
+      // Company ownership guard — tenant users may only create schedules in
+      // companies they can access (own company, enterprise sibling, or explicit
+      // grant). Platform users are unchanged. Cross-company scheduling for an
+      // authorized company is still allowed; cross-tenant writes are blocked.
+      const schedCreator = await storage.getUser(req.session.userId!);
+      const schedAccess = evaluateScheduleAccess({
+        isPlatformUser: isPlatformUser(schedCreator?.role),
+        requestorCompanyId: schedCreator?.companyId,
+        targetCompanyId: companyId,
+        targetCompanyAccessible: schedCreator
+          ? await canAccessCompany(
+              { id: schedCreator.id, companyId: schedCreator.companyId, role: schedCreator.role },
+              companyId,
+            )
+          : false,
+      });
+      if (!schedAccess.allowed) {
+        return res.status(schedAccess.status ?? 403).json({ message: schedAccess.message });
+      }
       // Validate worker exists — cross-company scheduling is explicitly allowed
       // (a worker may be scheduled at any company, not just their home company)
       const schedWorker = await storage.getWorker(workerId);
@@ -10583,13 +10684,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const PROPOSAL_ARCHIVED_STATUSES = ['approved', 'rejected', 'expired', 'superseded', 'voided', 'cancelled', 'converted_to_contract', 'archived_to_documents', 'archived'];
 
       // Build lifecycle filter SQL — takes precedence over showCompleted/showArchived when supplied
+      // NOTE: Drizzle sql`` binds JS arrays as a single parameter which Postgres rejects with ::text[].
+      // Use sql.join with an IN clause instead to safely expand the list into individual bound params.
       let lifecycleFilter: ReturnType<typeof sql>;
       if (lifecycleGroup === 'active') {
-        // Only non-archived proposals in an active workflow state
-        lifecycleFilter = sql`AND cp.status = ANY(${PROPOSAL_ACTIVE_STATUSES}::text[]) AND (cp.is_archived IS NOT TRUE)`;
+        const activeList = sql.join(PROPOSAL_ACTIVE_STATUSES.map((s: string) => sql`${s}`), sql`, `);
+        lifecycleFilter = sql`AND cp.status IN (${activeList}) AND (cp.is_archived IS NOT TRUE)`;
       } else if (lifecycleGroup === 'archived') {
-        // Proposals whose status is terminal OR that were explicitly archived via the flag
-        lifecycleFilter = sql`AND (cp.status = ANY(${PROPOSAL_ARCHIVED_STATUSES}::text[]) OR cp.is_archived = TRUE)`;
+        const archivedList = sql.join(PROPOSAL_ARCHIVED_STATUSES.map((s: string) => sql`${s}`), sql`, `);
+        lifecycleFilter = sql`AND (cp.status IN (${archivedList}) OR cp.is_archived = TRUE)`;
       } else if (lifecycleGroup === 'all') {
         lifecycleFilter = sql``; // no status restriction
       } else {
@@ -10646,7 +10749,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         rows = result.rows ?? (result as any);
       }
       res.json(rows);
-    } catch (e) { res.status(500).json({ message: "Failed to fetch proposals" }); }
+    } catch (e: any) {
+      console.error("[contractor-proposals] fetch error:", e?.message, e?.stack);
+      res.status(500).json({ message: "Failed to fetch proposals", detail: e?.message });
+    }
   });
 
   // POST /api/contractor-hub/backfill-documents — scan completed records without DAM links and generate/link PDFs
@@ -12278,6 +12384,56 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to record payment" }); }
   });
 
+  // POST /api/contractor-invoices/:id/stripe-checkout-session — create Stripe Checkout session for online payment
+  app.post("/api/contractor-invoices/:id/stripe-checkout-session", requireAuth, async (req, res) => {
+    try {
+      const invoiceRes = await db.execute(sql`SELECT ci.*, w.first_name, w.last_name, w.work_email FROM contractor_invoices ci LEFT JOIN workers w ON w.id = ci.contractor_id WHERE ci.id = ${req.params.id}`);
+      if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
+      const invoice = invoiceRes.rows[0] as any;
+      if (["paid", "void", "voided", "voided_duplicate", "rejected_duplicate"].includes(invoice.status)) {
+        return res.status(400).json({ message: `Invoice is ${invoice.status} — no payment required` });
+      }
+      const balance = parseFloat(invoice.balance_due ?? invoice.amount ?? "0");
+      if (balance <= 0) return res.status(400).json({ message: "No balance due on this invoice" });
+      const user = await storage.getUser(req.session.userId!);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const workerId = user?.workerId;
+      if (!isAdmin && invoice.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      const { getUncachableStripeClient } = await import('./stripeClient.js');
+      const stripe = await getUncachableStripeClient();
+      const baseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
+      const invoiceRef = invoice.invoice_number || req.params.id.slice(0, 8);
+      const amountCents = Math.round(balance * 100);
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [{
+          price_data: {
+            currency: (invoice.currency || "usd").toLowerCase(),
+            product_data: {
+              name: invoice.title || `Invoice #${invoiceRef}`,
+              description: invoice.description || undefined,
+            },
+            unit_amount: amountCents,
+          },
+          quantity: 1,
+        }],
+        mode: "payment",
+        success_url: `${baseUrl}/app/contractor-hub?section=invoices&payment=success&id=${req.params.id}`,
+        cancel_url: `${baseUrl}/app/contractor-hub?section=invoices&payment=cancelled&id=${req.params.id}`,
+        metadata: {
+          invoiceId: req.params.id,
+          invoiceNumber: invoiceRef,
+          companyId: invoice.company_id || "",
+        },
+        customer_email: invoice.work_email || undefined,
+      });
+      res.json({ checkoutUrl: session.url, sessionId: session.id });
+    } catch (e: any) {
+      console.error("Stripe checkout session error:", e);
+      res.status(500).json({ message: e?.message || "Failed to create payment session" });
+    }
+  });
+
   // GET /api/contractor-invoices/:id/reminder-logs
   app.get("/api/contractor-invoices/:id/reminder-logs", requireAuth, async (req, res) => {
     try {
@@ -13698,7 +13854,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             AND (company_id = ${cid} OR (company_id IS NULL AND worker_id IN (SELECT id FROM workers WHERE company_id = ${cid})))
             ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``}
             ${linkedEntityType ? sql`AND linked_entity_type = ${linkedEntityType}` : sql``}
-            ${effectiveDocTypes && effectiveDocTypes.length > 0 ? sql`AND document_type = ANY(${effectiveDocTypes})` : sql``}
+            ${effectiveDocTypes && effectiveDocTypes.length > 0 ? sql`AND document_type IN (${sql.join(effectiveDocTypes.map((t: string) => sql`${t}`), sql`, `)})` : sql``}
             ${proposalId ? sql`AND proposal_id = ${proposalId}` : sql``}
             ${contractId ? sql`AND contract_id = ${contractId}` : sql``}
             ${invoiceId ? sql`AND invoice_id = ${invoiceId}` : sql``}
@@ -17415,6 +17571,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!username || !password) {
         return res.status(400).json({ message: "Username and password are required" });
       }
+
+      // ── CRITICAL privilege-escalation / tenant-isolation guard ──────────────
+      // requireRole("admin") legacy-expands to include tenant_admin/tenant_owner,
+      // so without this a tenant admin could mint a platform_super_admin or a
+      // company-less (global) account and seize cross-tenant control.
+      const requestor = await storage.getUser(req.session.userId!);
+      const desiredRole = role || "employee";
+      // Tenant admins create within their own company; default missing companyId
+      // to their own scope rather than silently creating a global user.
+      let effectiveCompanyId: string | null = companyId || null;
+      if (!isPlatformUser(requestor?.role) && !effectiveCompanyId) {
+        effectiveCompanyId = requestor?.companyId || null;
+      }
+      const decision = evaluateUserProvisioning({
+        requestor: { role: requestor?.role, companyId: requestor?.companyId },
+        desiredRole,
+        desiredCompanyId: effectiveCompanyId,
+        desiredCompanyAccessible: effectiveCompanyId
+          ? await canAccessCompany(requestor!, effectiveCompanyId)
+          : false,
+      });
+      if (!decision.allowed) {
+        return res.status(decision.status ?? 403).json({ message: decision.message });
+      }
+
       const existing = await storage.getUserByUsername(username);
       if (existing) {
         return res.status(409).json({ message: "Username already exists" });
@@ -17423,8 +17604,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.createUser({
         username,
         password: hashedPassword,
-        role: role || "employee",
-        companyId: companyId || null,
+        role: desiredRole,
+        companyId: effectiveCompanyId,
         workerId: workerId || null,
         isActive: true,
       });
@@ -17470,6 +17651,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (password) {
         updateData.password = await bcrypt.hash(password, 10);
       }
+
+      // ── CRITICAL privilege-escalation / tenant-isolation guard ──────────────
+      // Block tenant admins from (a) escalating any user to a platform/system
+      // role, (b) editing users outside their company scope (cross-tenant), and
+      // (c) moving a user to a global/out-of-scope company.
+      const requestor = await storage.getUser(req.session.userId!);
+      const target = await storage.getUser(req.params.id);
+      if (!target) return res.status(404).json({ message: "User not found" });
+      const decision = evaluateUserProvisioning({
+        requestor: { role: requestor?.role, companyId: requestor?.companyId },
+        desiredRole: ("role" in updateData) ? updateData.role : undefined,
+        desiredCompanyId: ("companyId" in updateData) ? updateData.companyId : undefined,
+        desiredCompanyAccessible: ("companyId" in updateData && updateData.companyId)
+          ? await canAccessCompany(requestor!, updateData.companyId)
+          : false,
+        targetCompanyId: target.companyId ?? null,
+        targetCompanyAccessible: await canAccessCompany(requestor!, target.companyId),
+        targetRole: target.role,
+      });
+      if (!decision.allowed) {
+        return res.status(decision.status ?? 403).json({ message: decision.message });
+      }
+
       const user = await storage.updateUser(req.params.id, updateData);
       if (!user) return res.status(404).json({ message: "User not found" });
       res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, isActive: user.isActive });
@@ -20453,6 +20657,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let companyId: string;
       let userId: string;
 
+      // Generate a URL-safe slug from the company name; uniqueness enforced by DB constraint
+      const baseSlug = companyName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "trial";
+      const tenantSlug = baseSlug + "-" + Date.now().toString(36);
+
       await db.execute(sql`BEGIN`);
       try {
         const companyResult = await db.execute(sql`
@@ -20468,6 +20676,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           RETURNING id
         `);
         userId = userResult.rows[0].id as string;
+
+        // Create tenant record and link company
+        const tenantResult = await db.execute(sql`
+          INSERT INTO tenants (name, slug, status, billing_contact_name, billing_contact_email, primary_admin_user_id)
+          VALUES (${companyName}, ${tenantSlug}, 'trial', ${`${firstName} ${lastName}`}, ${email}, ${userId})
+          RETURNING id
+        `);
+        const tenantId = tenantResult.rows[0].id as string;
+
+        await db.execute(sql`
+          INSERT INTO tenant_companies (tenant_id, company_id, is_primary)
+          VALUES (${tenantId}, ${companyId}, TRUE)
+        `);
 
         await db.execute(sql`
           INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, terms_version, privacy_version, signup_ip)

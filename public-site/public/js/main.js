@@ -307,3 +307,55 @@ document.addEventListener('DOMContentLoaded', () => {
     startAuto();
   }
 });
+
+/* ── Launch Demo ──────────────────────────────────────────────────────────── */
+window.launchDemo = function(trigger) {
+  if (window._demoLaunching) return;
+  window._demoLaunching = true;
+
+  var allBtns = document.querySelectorAll('[data-demo-trigger]');
+  allBtns.forEach(function(el) {
+    var textEl = el.querySelector('.btn-demo-text');
+    var loadEl = el.querySelector('.btn-demo-loading');
+    if (textEl && loadEl) {
+      textEl.style.display = 'none';
+      loadEl.style.display = 'inline';
+    } else {
+      el.setAttribute('data-orig-text', el.textContent.trim());
+      el.textContent = 'Setting up demo\u2026';
+    }
+    el.style.opacity = '0.75';
+    el.style.pointerEvents = 'none';
+  });
+
+  fetch('/api/demo/provision', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({})
+  })
+  .then(function(res) {
+    return res.json().then(function(d) { return { ok: res.ok, data: d }; });
+  })
+  .then(function(r) {
+    if (!r.ok) throw new Error(r.data.message || 'Failed to start demo');
+    window.location.href = '/app';
+  })
+  .catch(function(err) {
+    window._demoLaunching = false;
+    allBtns.forEach(function(el) {
+      var textEl = el.querySelector('.btn-demo-text');
+      var loadEl = el.querySelector('.btn-demo-loading');
+      if (textEl && loadEl) {
+        textEl.style.display = 'inline';
+        loadEl.style.display = 'none';
+      } else {
+        var orig = el.getAttribute('data-orig-text');
+        if (orig) el.textContent = orig;
+      }
+      el.style.opacity = '';
+      el.style.pointerEvents = '';
+    });
+    alert(err.message || 'Could not start demo. Please try again.');
+  });
+};

@@ -1,0 +1,126 @@
+name: CI
+
+# Runs the required status checks (build, test, typecheck, repo-audit) so that
+# branch-protection rules on `main` can be satisfied.
+#
+# Triggers:
+#   - pull_request targeting main  -> produces the status checks GitHub requires
+#     before a PR can merge.
+#   - push to any feature branch (everything except main) -> early feedback while
+#     working, before a PR is opened. main itself is covered via the PR checks and
+#     the separate deploy-* workflows, so it is excluded here to avoid duplicate runs.
+#   - workflow_dispatch -> lets us trigger every check manually from the Actions tab.
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npx tsx server/__tests__/api-json-guard.test.ts
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+  repo-audit:
+    name: repo-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check for merge conflict markers
+        run: |
+          echo "Scanning for unresolved merge conflict markers..."
+          if grep -rEn '^(<<<<<<<|>>>>>>>|=======)$' \
+              --include='*.ts' --include='*.tsx' --include='*.js' \
+              --include='*.jsx' --include='*.json' --include='*.css' \
+              --include='*.html' --include='*.yml' --include='*.yaml' \
+              . ; then
+            echo "::error::Merge conflict markers found in the repository."
+            exit 1
+          fi
+          echo "No merge conflict markers found."
+
+      - name: Validate package.json
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json is valid JSON')"
+
+      - name: Ensure no committed .env secrets
+        run: |
+          echo "Checking that no .env secret files are tracked by git..."
+          tracked=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::Secret .env file(s) committed to the repo:"
+            echo "$tracked"
+            exit 1
+          fi
+          echo "No committed .env secret files found."

@@ -48,7 +48,7 @@
         <li><a href="/features">Features</a></li>
         <li><a href="/pricing">Pricing</a></li>
         <li><a href="/security">Security</a></li>
-        <li><a href="/demo" class="nav-cta-outline">View Demo</a></li>
+        <li><a href="#" class="nav-cta-outline" data-demo-trigger onclick="event.preventDefault();launchDemo(this)" data-testid="button-nav-launch-demo"><span class="btn-demo-text">View Demo</span><span class="btn-demo-loading" style="display:none">Setting up&hellip;</span></a></li>
         <li><a href="/app.html?route=%2Flogin" class="nav-cta-outline">Sign In</a></li>
         <li><a href="/signup" class="nav-cta">Start Free Trial</a></li>
       </ul>
@@ -58,7 +58,7 @@
       <a href="/features">Features</a>
       <a href="/pricing">Pricing</a>
       <a href="/security">Security</a>
-      <a href="/demo">View Demo</a>
+      <a href="#" data-demo-trigger onclick="event.preventDefault();launchDemo(this)">View Demo</a>
       <a href="/signup">Start Free Trial</a>
       <a href="/app.html?route=%2Flogin">Sign In →</a>
     </div>
@@ -759,7 +759,7 @@
         <p>Start your free 30-day trial today. No credit card. Full platform access from day one.</p>
         <div class="hero-buttons" style="justify-content: center;">
           <a href="/signup" class="btn-primary">Start Free Trial →</a>
-          <a href="/demo" class="btn-secondary">View Live Demo →</a>
+          <a href="#" class="btn-secondary" data-demo-trigger onclick="event.preventDefault();launchDemo(this)" data-testid="button-cta-launch-demo"><span class="btn-demo-text">View Live Demo &rarr;</span><span class="btn-demo-loading" style="display:none">Setting up demo&hellip;</span></a>
         </div>
       </div>
     </div>
@@ -781,7 +781,7 @@
             <li><a href="/features">Features</a></li>
             <li><a href="/pricing">Pricing</a></li>
             <li><a href="/security">Security</a></li>
-            <li><a href="/demo">View Demo</a></li>
+            <li><a href="#" data-demo-trigger onclick="event.preventDefault();launchDemo(this)">View Demo</a></li>
           </ul>
         </div>
         <div>
