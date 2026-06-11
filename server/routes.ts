@@ -126,6 +126,11 @@ const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
   "/api/auth/mfa/confirm",
 ]);
 
+/** Type-safe query string extractor — returns the value only when it is a plain string. */
+function queryStr(val: unknown): string | undefined {
+  return typeof val === "string" ? val : undefined;
+}
+
 function requireAuth<P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
     return res.status(401).json({ message: "Not authenticated" });
@@ -338,7 +343,7 @@ function enforceCompanyScope(source: "query" | "body" = "query") {
   return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
     const sessionCompanyId = await getSessionCompanyId(req);
     if (!sessionCompanyId) return res.status(401).json({ message: "Not authenticated" });
-    const requestedCompanyId = source === "query" ? (req.query.companyId as string) : req.body?.companyId;
+    const requestedCompanyId = source === "query" ? queryStr(req.query.companyId) : req.body?.companyId;
     if (requestedCompanyId && requestedCompanyId !== sessionCompanyId) {
       return res.status(403).json({ message: "Access denied: company mismatch" });
     }
@@ -1931,7 +1936,7 @@ export async function registerRoutes(
   app.get("/api/workers", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const qCompanyId = req.query.companyId as string | undefined;
+      const qCompanyId = queryStr(req.query.companyId);
       // ?scheduling=true — managers building a schedule can pick workers from any company.
       // Cross-company scheduling is explicitly supported (a worker may be scheduled at any company).
       const forScheduling = req.query.scheduling === "true";
@@ -5232,7 +5237,7 @@ export async function registerRoutes(
     try {
       const { companyId } = await resolveTreasuryCompanyId(req);
       if (!companyId) return res.status(400).json({ code: "COMPANY_CONTEXT_REQUIRED", message: "Select a company before viewing Treasury transactions." });
-      const payrollRunId = req.query.payrollRunId as string | undefined;
+      const payrollRunId = queryStr(req.query.payrollRunId);
       const transactions = await storage.getTreasuryOutboundPayments(companyId, payrollRunId);
       res.json(transactions);
     } catch (error: any) {
@@ -7209,7 +7214,7 @@ export async function registerRoutes(
   app.get("/api/payroll-runs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       // Explicit ?companyId param always wins for all roles.
       // Tenant users (any non-platform role with a companyId) are force-scoped to their company.
       // Platform users see all runs unless they pass ?companyId.
@@ -7471,7 +7476,7 @@ export async function registerRoutes(
    */
   app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
     try {
-      const year = parseInt((req.query.year as string) || String(new Date().getFullYear()), 10);
+      const year = parseInt(queryStr(req.query.year) || String(new Date().getFullYear()), 10);
       const worker = await storage.getWorker(req.params.id);
       const ytd = await storage.getEmployeeYTD(req.params.id, year, worker?.companyId ?? undefined);
       res.json(ytd);
@@ -7488,7 +7493,7 @@ export async function registerRoutes(
    */
   app.get("/api/companies/:id/ytd-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const year = parseInt((req.query.year as string) || String(new Date().getFullYear()), 10);
+      const year = parseInt(queryStr(req.query.year) || String(new Date().getFullYear()), 10);
       const workers = await storage.getWorkers(req.params.id);
       const results = await Promise.all(
         workers.map(async (w) => {
@@ -7897,7 +7902,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string | undefined)
+        ? (queryStr(req.query.companyId))
         : (user.companyId ?? undefined);
       const departments = await storage.getDepartments(companyId);
       res.json(departments);
@@ -7950,7 +7955,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string | undefined)
+        ? (queryStr(req.query.companyId))
         : (user.companyId ?? undefined);
       const branches = await storage.getBranches(companyId);
       res.json(branches);
@@ -8053,7 +8058,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string | undefined)
+        ? (queryStr(req.query.companyId))
         : (user.companyId ?? undefined);
       const result = await storage.getDivisions(companyId);
       res.json(result);
@@ -8105,7 +8110,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string | undefined)
+        ? (queryStr(req.query.companyId))
         : (user.companyId ?? undefined);
       const result = await storage.getPositions(companyId);
       res.json(result);
@@ -8172,7 +8177,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string | undefined)
+        ? (queryStr(req.query.companyId))
         : (user.companyId ?? undefined);
       const result = await storage.getCostCenters(companyId);
       res.json(result);
@@ -8224,7 +8229,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string | undefined)
+        ? (queryStr(req.query.companyId))
         : (user.companyId ?? undefined);
       const result = await storage.getJobs(companyId);
       res.json(result);
@@ -8291,10 +8296,10 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string)
+        ? queryStr(req.query.companyId)
         : user.companyId;
       if (!companyId) return res.status(400).json({ message: "Company context required" });
-      const employeeId = req.query.employeeId as string | undefined;
+      const employeeId = queryStr(req.query.employeeId);
       const relations = await storage.getEmployeeManagerRelations(companyId, employeeId);
       res.json(relations);
     } catch (error) {
@@ -8396,7 +8401,7 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
       const companyId = isPlatformUser(user.role)
-        ? (req.query.companyId as string)
+        ? queryStr(req.query.companyId)
         : user.companyId;
       if (!companyId) return res.status(400).json({ message: "Company context required" });
       if (!isPlatformUser(user.role) && user.companyId && user.companyId !== companyId) {
@@ -8471,7 +8476,7 @@ export async function registerRoutes(
   // Accrual Accounts
   app.get("/api/accrual-accounts", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const accounts = await storage.getAccrualAccounts(companyId);
       res.json(accounts);
     } catch (error) {
@@ -8549,7 +8554,7 @@ export async function registerRoutes(
   app.get("/api/accrual-balances", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let workerId = req.query.workerId as string | undefined;
+      let workerId = queryStr(req.query.workerId);
       // Non-manager tenant users can only see their own balances
       if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
@@ -8589,7 +8594,7 @@ export async function registerRoutes(
   app.get("/api/employee-contacts", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let workerId = req.query.workerId as string | undefined;
+      let workerId = queryStr(req.query.workerId);
       // Non-manager tenant users can only see their own contacts
       if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
@@ -8673,7 +8678,7 @@ export async function registerRoutes(
   app.get("/api/pay-methods", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let workerId = req.query.workerId as string | undefined;
+      let workerId = queryStr(req.query.workerId);
       // Non-manager tenant users can only see their own pay methods (contains sensitive banking data)
       if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
@@ -8775,7 +8780,7 @@ export async function registerRoutes(
   // Pay Periods
   app.get("/api/pay-periods", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const periods = await storage.getPayPeriods(companyId);
       res.json(periods);
     } catch (error) {
@@ -8810,7 +8815,7 @@ export async function registerRoutes(
   // Taxes & Deductions
   app.get("/api/taxes-deductions", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const taxesDeductions = await storage.getTaxesDeductions(companyId);
       res.json(taxesDeductions);
     } catch (error) {
@@ -8908,7 +8913,7 @@ export async function registerRoutes(
   // Policy Groups
   app.get("/api/policy-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const groups = await storage.getPolicyGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -8978,7 +8983,7 @@ export async function registerRoutes(
   // Pay Codes
   app.get("/api/pay-codes", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const codes = await storage.getPayCodes(companyId);
       res.json(codes);
     } catch (error) {
@@ -9053,7 +9058,7 @@ export async function registerRoutes(
   // Holidays
   app.get("/api/holidays", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const holidays = await storage.getHolidays(companyId);
       res.json(holidays);
     } catch (error) {
@@ -9131,8 +9136,8 @@ export async function registerRoutes(
   // Qualifications
   app.get("/api/qualifications", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      const workerId = req.query.workerId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
+      const workerId = queryStr(req.query.workerId);
       const qualifications = await storage.getQualifications(companyId, workerId);
       res.json(qualifications);
     } catch (error) {
@@ -9177,8 +9182,8 @@ export async function registerRoutes(
   // Reviews
   app.get("/api/reviews", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      const workerId = req.query.workerId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
+      const workerId = queryStr(req.query.workerId);
       const reviews = await storage.getReviews(companyId, workerId);
       res.json(reviews);
     } catch (error) {
@@ -9222,7 +9227,7 @@ export async function registerRoutes(
 
   app.get("/api/kpi-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const groups = await storage.getKpiGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -9264,7 +9269,7 @@ export async function registerRoutes(
 
   app.get("/api/qualification-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const groups = await storage.getQualificationGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -9306,7 +9311,7 @@ export async function registerRoutes(
 
   app.get("/api/worker-languages", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const languages = await storage.getWorkerLanguages(companyId);
       res.json(languages);
     } catch (error) {
@@ -9348,7 +9353,7 @@ export async function registerRoutes(
 
   app.get("/api/worker-memberships", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const memberships = await storage.getWorkerMemberships(companyId);
       res.json(memberships);
     } catch (error) {
@@ -9395,7 +9400,7 @@ export async function registerRoutes(
 
   app.get("/api/stations", async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const items = await storage.getStations(companyId);
       res.json(items);
     } catch (error) {
@@ -10691,7 +10696,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   // ── Recurring Expense Templates ───────────────────────────────────────
   app.get("/api/recurring-expenses", requireAuth, async (req, res) => {
-    try { res.json(await storage.getRecurringExpenseTemplates(req.query.companyId as string)); }
+    try { res.json(await storage.getRecurringExpenseTemplates(queryStr(req.query.companyId))); }
     catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
@@ -10761,7 +10766,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Accounting Export ─────────────────────────────────────────────────
   app.get("/api/expenses/export/csv", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
-      const allExpenses = await storage.getExpenses(req.query.companyId as string);
+      const allExpenses = await storage.getExpenses(queryStr(req.query.companyId));
       const allWorkers = await storage.getWorkers();
       const allCompanies = await storage.getCompanies();
 
@@ -10791,7 +10796,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices/export/csv", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
-      const allInvs = await storage.getContractorInvoices(req.query.companyId as string);
+      const allInvs = await storage.getContractorInvoices(queryStr(req.query.companyId));
       const allWorkers = await storage.getWorkers();
       const allCompanies = await storage.getCompanies();
 
@@ -10958,8 +10963,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
       const showCompleted = req.query.showCompleted === "true";
-      const lifecycleGroup = req.query.lifecycleGroup as string | undefined; // active | archived | all
-      const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
+      const lifecycleGroup = queryStr(req.query.lifecycleGroup); // active | archived | all
+      const filterCompanyId = isPlatformUser ? (queryStr(req.query.companyId)) : companyId;
 
       // Lifecycle group constants — define what statuses belong to each group
       const PROPOSAL_ACTIVE_STATUSES = ['draft', 'submitted', 'reviewed', 'revision_requested', 'negotiation', 'sent', 'viewed', 'pending', 'under_review'];
@@ -15297,7 +15302,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/secondary-wage-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const items = await storage.getSecondaryWageGroups(companyId);
       res.json(items);
     } catch (error) {
@@ -15346,7 +15351,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/employee-wage-groups", requireAuth, async (req, res) => {
     try {
-      const workerId = req.query.workerId as string | undefined;
+      const workerId = queryStr(req.query.workerId);
       const items = await storage.getEmployeeWageGroups(workerId);
       res.json(items);
     } catch (error) {
@@ -15383,7 +15388,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/currencies", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const items = await storage.getCurrencies(companyId);
       res.json(items);
     } catch (error) {
@@ -15463,7 +15468,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Recurring Schedules
   app.get("/api/recurring-schedules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const schedules = await storage.getRecurringSchedules(companyId);
       res.json(schedules);
     } catch (error) {
@@ -15518,7 +15523,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/remittance-sources", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const sources = await storage.getRemittanceSources(companyId);
       res.json(sources);
     } catch (error) {
@@ -15560,7 +15565,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/remittance-agencies", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const agencies = await storage.getRemittanceAgencies(companyId);
       res.json(agencies);
     } catch (error) {
@@ -15602,7 +15607,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/remittance-agency-events", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const agencyId = req.query.agencyId as string;
+      const agencyId = queryStr(req.query.agencyId);
       if (!agencyId) return res.status(400).json({ message: "agencyId required" });
       const events = await storage.getRemittanceAgencyEvents(agencyId);
       res.json(events);
@@ -15695,7 +15700,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/worker-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let workerId = req.query.workerId as string;
+      let workerId = queryStr(req.query.workerId);
       // Non-manager tenant users can only see their own documents
       if (user && !isManagerRole(user.role)) {
         if (!user.workerId) return res.json([]);
@@ -15840,7 +15845,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-stub-accounts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const accounts = await storage.getPayStubAccounts(companyId);
       res.json(accounts);
     } catch (error) {
@@ -15924,7 +15929,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-stub-amendments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const amendments = await storage.getPayStubAmendments(companyId);
       res.json(amendments);
     } catch (error) {
@@ -15981,7 +15986,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-stub-transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const transactions = await storage.getPayStubTransactions(companyId);
       res.json(transactions);
     } catch (error) {
@@ -16035,7 +16040,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Earning Types ─────────────────────────────────────────────────────────
   app.get("/api/earning-types", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const types = await storage.getEarningTypes(companyId);
       res.json(types);
@@ -16055,13 +16060,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const companyId = (!isPlatformUser(user?.role) && user?.companyId)
         ? user.companyId
-        : req.query.companyId as string;
+        : queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const filters = {
-        workerId: req.query.workerId as string | undefined,
-        status: req.query.status as string | undefined,
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        workerId: queryStr(req.query.workerId),
+        status: queryStr(req.query.status),
+        startDate: queryStr(req.query.startDate),
+        endDate: queryStr(req.query.endDate),
       };
       const list = await storage.getCommissions(companyId, filters);
       res.json(list);
@@ -16105,8 +16110,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Must be declared BEFORE /:id to avoid route conflict.
   app.get("/api/pay-period-schedules/resolve-period", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string;
-      const payDate = req.query.payDate as string;
+      const companyId = queryStr(req.query.companyId);
+      const payDate = queryStr(req.query.payDate);
       if (!companyId || !payDate) {
         return res.status(400).json({ message: "companyId and payDate are required" });
       }
@@ -16139,7 +16144,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Deactivate all but the most-recently-updated active schedule ─────────
   app.post("/api/pay-period-schedules/deactivate-extras", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string || req.body.companyId;
+      const companyId = queryStr(req.query.companyId) ?? req.body?.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const schedules = await storage.getPayPeriodSchedules(companyId);
       const active = schedules.filter(s => s.isActive);
@@ -16168,7 +16173,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/pay-period-schedules/:companyId/resolve-debug", requireAuth, async (req, res) => {
     try {
       const { companyId } = req.params;
-      const dateParam = (req.query.date as string) || new Date().toISOString().split("T")[0];
+      const dateParam = queryStr(req.query.date) || new Date().toISOString().split("T")[0];
 
       const schedules = await storage.getPayPeriodSchedules(companyId);
       const active = schedules.filter(s => s.isActive);
@@ -16232,7 +16237,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-period-schedules", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const schedules = await storage.getPayPeriodSchedules(companyId);
       res.json(schedules);
     } catch (error) {
@@ -16327,7 +16332,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Employee Titles
   app.get("/api/employee-titles", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const titles = await storage.getEmployeeTitles(companyId);
       res.json(titles);
     } catch (error) {
@@ -16374,7 +16379,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Employee Groups
   app.get("/api/employee-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const groups = await storage.getEmployeeGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -16428,7 +16433,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/wage-history", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let workerId = req.query.workerId as string | undefined;
+      let workerId = queryStr(req.query.workerId);
       // Non-manager tenant users can only see their own wage history
       if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
@@ -16498,7 +16503,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // New Hire Defaults
   app.get("/api/new-hire-defaults", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const defaults = await storage.getNewHireDefaults(companyId);
       res.json(defaults);
     } catch (error) {
@@ -17191,7 +17196,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Accrual Policy Milestones
   app.get("/api/accrual-policy-milestones", requireAuth, async (req, res) => {
     try {
-      const accrualPolicyId = req.query.accrualPolicyId as string;
+      const accrualPolicyId = queryStr(req.query.accrualPolicyId);
       if (!accrualPolicyId) return res.status(400).json({ message: "accrualPolicyId required" });
       const items = await storage.getAccrualPolicyMilestones(accrualPolicyId);
       res.json(items);
@@ -17728,7 +17733,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/role-permissions", requireRole("admin"), async (req, res) => {
     try {
-      const roleId = req.query.roleId as string | undefined;
+      const roleId = queryStr(req.query.roleId);
       if (roleId) {
         const items = await storage.getRolePermissions(roleId);
         res.json(items);
@@ -17801,7 +17806,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/user-roles", requireRole("admin"), async (req, res) => {
     try {
-      const userId = req.query.userId as string | undefined;
+      const userId = queryStr(req.query.userId);
       const items = await storage.getUserRoles(userId);
       res.json(items);
     } catch (error) {
@@ -17994,7 +17999,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Tax Wizard — Real Backend Calculations + Filing Snapshots ────────────
   app.get("/api/tax-wizard/snapshots", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const snapshots = await storage.getTaxFilingSnapshots(companyId);
       res.json(snapshots);
@@ -18163,7 +18168,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/check-templates", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const templates = await storage.getCheckTemplates(companyId);
       res.json(templates);
     } catch (error) {
@@ -19122,7 +19127,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Registered BEFORE /api/checks/:payrollItemId/pdf to avoid param capture.
   app.get("/api/checks/calibration-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const rsId = req.query.remittanceSourceId as string;
+      const rsId = queryStr(req.query.remittanceSourceId);
       if (!rsId) return res.status(400).json({ message: "remittanceSourceId is required" });
 
       const rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE id = ${rsId}`));
@@ -19184,7 +19189,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
       const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
-      const compId = runRow?.company_id ?? "";
+      if (!runRow) return res.status(404).json({ message: "Payroll run not found" });
+      const compId = runRow.company_id;
 
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
@@ -19659,7 +19665,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
       const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
-      const compId = runRow?.company_id ?? "";
+      if (!runRow) return res.status(404).json({ message: "Payroll run not found" });
+      const compId = runRow.company_id;
 
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
@@ -19757,7 +19764,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/payroll-payment-methods", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let companyId = req.query.companyId as string | undefined;
+      let companyId = queryStr(req.query.companyId);
       // Tenant users may only fetch payment methods for their own company
       if (!isPlatformUser(user?.role) && user?.companyId) {
         companyId = user.companyId;
@@ -19816,7 +19823,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Funding Accounts ──────────────────────────────────────────────────────
   app.get("/api/funding-accounts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       res.json(await storage.getFundingAccounts(companyId));
     } catch (e) { res.status(500).json({ message: "Failed to fetch funding accounts" }); }
   });
@@ -19872,8 +19879,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/payroll-payment-records", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let companyId = req.query.companyId as string | undefined;
-      const payrollRunId = req.query.payrollRunId as string | undefined;
+      let companyId = queryStr(req.query.companyId);
+      const payrollRunId = queryStr(req.query.payrollRunId);
       // All non-platform users (admins and managers alike) are force-scoped to their company.
       // This prevents a tenant admin passing ?companyId=<other_company> to read cross-company records.
       if (!isPlatformUser(user?.role) && user?.companyId) {
@@ -19886,7 +19893,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/payroll-payment-records/ytd-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let companyId = req.query.companyId as string | undefined;
+      let companyId = queryStr(req.query.companyId);
       // All non-platform users force-scoped to their company
       if (!isPlatformUser(user?.role) && user?.companyId) {
         companyId = user.companyId;
@@ -20389,7 +20396,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/payroll-audit", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const issues: { severity: "error" | "warning" | "info"; category: string; message: string; entity?: string }[] = [];
 
       const companies = await storage.getCompanies();
@@ -20466,8 +20473,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Shift Marketplace Listings ────────────────────────────────────────────
   app.get("/api/marketplace/listings", requireAuth, requireFeature("tenant.schedule.marketplace"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      const status = req.query.status as string | undefined;
+      const companyId = queryStr(req.query.companyId);
+      const status = queryStr(req.query.status);
       const listings = await storage.getMarketplaceListings(companyId, status);
       res.json(listings);
     } catch (e) { res.status(500).json({ message: "Failed to fetch marketplace listings" }); }
@@ -20565,8 +20572,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Shift Marketplace Requests ──────────────────────────────────────────
   app.get("/api/marketplace/requests", requireAuth, async (req, res) => {
     try {
-      const listingId = req.query.listingId as string | undefined;
-      const workerId = req.query.workerId as string | undefined;
+      const listingId = queryStr(req.query.listingId);
+      const workerId = queryStr(req.query.workerId);
       const requests = await storage.getMarketplaceRequests(listingId, workerId);
       res.json(requests);
     } catch (e) { res.status(500).json({ message: "Failed to fetch marketplace requests" }); }
@@ -20850,7 +20857,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Eligibility Rule Sets ───────────────────────────────────────────────
   app.get("/api/eligibility-rule-sets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const sets = await storage.getEligibilityRuleSets(companyId);
       res.json(sets);
     } catch (e) { res.status(500).json({ message: "Failed to fetch eligibility rule sets" }); }
@@ -20881,8 +20888,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Schedule Audit Logs ─────────────────────────────────────────────────
   app.get("/api/schedule-audit-logs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const companyId = queryStr(req.query.companyId);
+      const limit = req.query.limit ? parseInt(queryStr(req.query.limit) ?? "0") : undefined;
       const logs = await storage.getScheduleAuditLogs(companyId, limit);
       res.json(logs);
     } catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
@@ -21892,8 +21899,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/customers", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      const customerType = req.query.customerType as string | undefined;
+      const companyId = queryStr(req.query.companyId);
+      const customerType = queryStr(req.query.customerType);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getCustomers(companyId, customerType);
       res.json(rows);
@@ -21937,7 +21944,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/invoice-templates", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const rows = await storage.getInvoiceTemplates(companyId);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice templates") }); }
@@ -21970,7 +21977,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/invoices", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getInvoices(companyId);
       res.json(rows);
@@ -22319,7 +22326,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getPayments(companyId);
       res.json(rows);
@@ -22349,7 +22356,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/payment-method-configs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       let configs = await storage.getPaymentMethodConfigs(companyId);
       if (configs.length === 0) {
@@ -22732,7 +22739,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/recurring-billing", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getRecurringBillingProfiles(companyId);
       res.json(rows);
@@ -22952,7 +22959,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/document-versions", requireAuth, async (req, res) => {
     try {
-      const documentId = req.query.documentId as string;
+      const documentId = queryStr(req.query.documentId);
       if (!documentId) return res.status(400).json({ message: "documentId is required" });
       const rows = await storage.getDocumentVersions(documentId);
       res.json(rows);
@@ -23029,7 +23036,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   app.get("/api/document-audit-logs", requireAuth, enforceCompanyScope("query"), async (req, res) => {
     try {
       const companyId = (req as any)._companyId;
-      const documentId = req.query.documentId as string;
+      const documentId = queryStr(req.query.documentId);
       if (documentId) {
         const rows = await storage.getDocumentAuditLogs(documentId);
         return res.json(rows);
@@ -23043,8 +23050,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const companyId = (req as any)._companyId;
       const logs = await storage.getDocumentAuditLogsByCompany(companyId);
-      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : null;
-      const endDate = req.query.endDate ? new Date(req.query.endDate as string) : null;
+      const startDate = req.query.startDate ? new Date(queryStr(req.query.startDate) ?? "") : null;
+      const endDate = req.query.endDate ? new Date(queryStr(req.query.endDate) ?? "") : null;
       let filtered = logs;
       if (startDate) filtered = filtered.filter(l => l.createdAt && new Date(l.createdAt) >= startDate);
       if (endDate) filtered = filtered.filter(l => l.createdAt && new Date(l.createdAt) <= endDate);
@@ -23373,7 +23380,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/onboarding-packet-steps", requireAuth, async (req, res) => {
     try {
-      const packetId = req.query.packetId as string;
+      const packetId = queryStr(req.query.packetId);
       if (!packetId) return res.status(400).json({ message: "packetId is required" });
       const rows = await storage.getOnboardingPacketSteps(packetId);
       res.json(rows);
@@ -23535,7 +23542,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/automation-rules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getAutomationRules(companyId);
       res.json(rows);
@@ -23569,9 +23576,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/notifications", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
-      const userId = req.query.userId as string | undefined;
+      const userId = queryStr(req.query.userId);
       const rows = await storage.getNotifications(companyId, userId);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch notifications") }); }
@@ -24377,7 +24384,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/portal/validate", async (req, res) => {
     try {
-      const token = req.query.token as string;
+      const token = queryStr(req.query.token);
       if (!token) return res.status(400).json({ message: "Token required" });
       const r = await storage.getPortalAccessTokenByToken(token);
       if (!r) return res.status(404).json({ message: "Invalid or expired token" });
@@ -24438,7 +24445,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/portal/onboarding/validate", async (req, res) => {
     try {
-      const token = req.query.token as string;
+      const token = queryStr(req.query.token);
       if (!token) return res.status(400).json({ message: "Token required" });
       const r = await storage.getPortalAccessTokenByToken(token);
       if (!r) return res.status(404).json({ message: "Invalid or expired token" });
@@ -24885,8 +24892,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   app.get("/api/onboarding-documents", requireAuth, enforceCompanyScope("query"), async (req, res) => {
     try {
       const companyId = (req as any)._companyId;
-      const projectId = req.query.projectId as string | undefined;
-      const templateId = req.query.templateId as string | undefined;
+      const projectId = queryStr(req.query.projectId);
+      const templateId = queryStr(req.query.templateId);
       const docs = await storage.getOnboardingDocuments(companyId, projectId, templateId);
       res.json(docs);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding documents") }); }
@@ -24941,7 +24948,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   app.get("/api/engagement-events", requireAuth, enforceCompanyScope("query"), async (req, res) => {
     try {
       const companyId = (req as any)._companyId;
-      const customerId = req.query.customerId as string | undefined;
+      const customerId = queryStr(req.query.customerId);
       const events = await storage.getEngagementEvents(companyId, customerId);
       res.json(events);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch engagement events") }); }
@@ -25718,7 +25725,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const companyId = (req.session as (typeof req.session) & { companyId?: string })?.companyId;
       if (!companyId) return res.status(403).json({ message: "No company context" });
-      const provider = req.query.provider as string | undefined;
+      const provider = queryStr(req.query.provider);
       const events = await storage.getWebhookEventsByCompany(companyId, provider);
       res.json(events);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch webhook events") }); }
@@ -26395,7 +26402,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const myWorkerId = user?.workerId ?? null;
       const userRole = user?.role || "employee";
 
-      const folder = req.query.folder as string || "inbox";
+      const folder = queryStr(req.query.folder) ?? "inbox";
 
       let rows: any[];
       if (folder === "sent") {
@@ -27291,7 +27298,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/permissions/audit-log", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
-      const limit = parseInt(req.query.limit as string) || 100;
+      const limit = parseInt(queryStr(req.query.limit) ?? "0") || 100;
       const logs = await storage.getAuthorizationAuditLogs(limit);
       res.json(logs);
     } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
@@ -27299,8 +27306,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/audit-log", requireAuth, requireRole("admin", "platform_super_admin"), async (req: any, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-      const offset = parseInt(req.query.offset as string) || 0;
+      const limit = Math.min(parseInt(queryStr(req.query.limit) ?? "0") || 50, 200);
+      const offset = parseInt(queryStr(req.query.offset) ?? "0") || 0;
       const { changeType, companyId, actorUserId, fromDate, toDate, targetResource } = req.query;
 
       const currentUser = await storage.getUser(req.session?.userId);
@@ -27693,7 +27700,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ─── Agreement Templates ───────────────────────────────────────────────────
   app.get("/api/agreement-templates", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = queryStr(req.query.companyId);
       const templates = await storage.getAgreementTemplates(companyId);
       res.json(templates);
     } catch (e) { res.status(500).json({ message: "Failed to fetch agreement templates" }); }
@@ -27791,7 +27798,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const user = await storage.getUser(req.session.userId!);
       // Managers can only see onboardings for their company
-      let companyId = req.query.companyId as string;
+      let companyId = queryStr(req.query.companyId);
       if (user?.role === "manager" && user.companyId) {
         companyId = user.companyId;
       }
@@ -31993,8 +32000,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // GET /api/feature-registry/log — activation audit log (platform admins)
   app.get("/api/feature-registry/log", requireAuth, requirePlatformRole(), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      const featureKey = req.query.featureKey as string | undefined;
+      const companyId = queryStr(req.query.companyId);
+      const featureKey = queryStr(req.query.featureKey);
       let q = sql`
         SELECT
           id,
@@ -33455,7 +33462,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // GET /api/portal/proposals/:id — public proposal data for the client portal
   app.get("/api/portal/proposals/:id", async (req, res) => {
     try {
-      const token = req.query.token as string | undefined;
+      const token = queryStr(req.query.token);
       const proposal = await validatePortalToken(req.params.id, token, res);
       if (!proposal) return;
       // Mark as viewed if currently in 'sent' state
@@ -33545,7 +33552,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // POST /api/portal/proposals/:id/approve — public client approval (token required)
   app.post("/api/portal/proposals/:id/approve", async (req, res) => {
     try {
-      const token = req.query.token as string | undefined || req.body.token;
+      const token = queryStr(req.query.token) || req.body.token;
       const { approvalName, approvalEmail, approvalNotes } = req.body;
       if (!approvalName || !approvalEmail) {
         return res.status(400).json({ message: "Name and email are required" });
@@ -33572,7 +33579,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // GET /api/portal/proposals/:id/attachments — list attachments (token required)
   app.get("/api/portal/proposals/:id/attachments", async (req, res) => {
     try {
-      const token = req.query.token as string | undefined;
+      const token = queryStr(req.query.token);
       const proposal = await validatePortalToken(req.params.id, token, res);
       if (!proposal) return;
       const result = await db.execute(sql`
@@ -33588,7 +33595,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // POST /api/portal/proposals/:id/message — client sends a question/comment (token required)
   app.post("/api/portal/proposals/:id/message", async (req, res) => {
     try {
-      const token = req.query.token as string | undefined || req.body.token;
+      const token = queryStr(req.query.token) || req.body.token;
       const proposal = await validatePortalToken(req.params.id, token, res);
       if (!proposal) return;
       const { message, senderName, senderEmail } = req.body;
@@ -33661,7 +33668,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // GET /api/portal/proposals/:id/attachments/:attId/download — stream file (token required)
   app.get("/api/portal/proposals/:id/attachments/:attId/download", async (req, res) => {
     try {
-      const token = req.query.token as string | undefined;
+      const token = queryStr(req.query.token);
       const proposal = await validatePortalToken(req.params.id, token, res);
       if (!proposal) return;
       const attRes = await db.execute(sql`
