@@ -14,7 +14,7 @@ import type { Request, Response } from "express";
  * Usage:
  *   app.use("/api/{*path}", apiNotFoundHandler);
  */
-export function apiNotFoundHandler(req: Request, res: Response): void {
+export function apiNotFoundHandler(req: Pick<Request, "originalUrl">, res: Response): void {
   const urlPath = req.originalUrl.split("?")[0];
   res.status(404).json({ message: "API route not found", path: urlPath });
 }

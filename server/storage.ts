@@ -354,7 +354,7 @@ export interface IStorage {
 
   getRemittanceSources(companyId?: string): Promise<RemittanceSource[]>;
   createRemittanceSource(data: InsertRemittanceSource): Promise<RemittanceSource>;
-  updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined>;
+  updateRemittanceSource(id: string, data: Partial<InsertRemittanceSource>): Promise<RemittanceSource | undefined>;
   deleteRemittanceSource(id: string): Promise<void>;
 
   getRemittanceAgencies(companyId?: string): Promise<RemittanceAgency[]>;
@@ -1864,11 +1864,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(remittanceSources).orderBy(desc(remittanceSources.createdAt));
   }
   async createRemittanceSource(data: InsertRemittanceSource): Promise<RemittanceSource> {
-    const [r] = await db.insert(remittanceSources).values(data as unknown as typeof remittanceSources.$inferInsert).returning();
+    const [r] = await db.insert(remittanceSources).values(data).returning();
     return r;
   }
-  async updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined> {
-    const [r] = await db.update(remittanceSources).set(data as unknown as Partial<typeof remittanceSources.$inferInsert>).where(eq(remittanceSources.id, id)).returning();
+  async updateRemittanceSource(id: string, data: Partial<InsertRemittanceSource>): Promise<RemittanceSource | undefined> {
+    const [r] = await db.update(remittanceSources).set(data).where(eq(remittanceSources.id, id)).returning();
     return r;
   }
   async deleteRemittanceSource(id: string): Promise<void> {

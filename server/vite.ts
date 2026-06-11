@@ -80,7 +80,7 @@ export async function setupVite(server: Server, app: Express) {
     const urlPath = req.originalUrl.split("?")[0];
     if (urlPath.startsWith("/api/")) {
       const { apiNotFoundHandler } = await import("./middleware/api-not-found.js");
-      return apiNotFoundHandler(req as Request, res);
+      return apiNotFoundHandler(req, res);
     }
 
     const url = req.originalUrl;

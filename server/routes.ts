@@ -1,4 +1,5 @@
 import type { Express, Request, Response, NextFunction } from "express";
+import type { ParamsDictionary } from "express-serve-static-core";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { calculateWorkerPay } from "./payroll-calculator";
@@ -36,7 +37,7 @@ function safeErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function getAppBaseUrl(req: Request): string {
+function getAppBaseUrl(req: Pick<Request, "headers" | "protocol">): string {
   if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/+$/, "");
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
@@ -125,7 +126,7 @@ const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
   "/api/auth/mfa/confirm",
 ]);
 
-function requireAuth(req: Request, res: Response, next: NextFunction) {
+function requireAuth<P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
     return res.status(401).json({ message: "Not authenticated" });
   }
@@ -173,7 +174,7 @@ function expandRoleForGuard(role: string): string[] {
 }
 
 function requireRole(...roles: string[]) {
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
     if (!req.session?.userId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -201,7 +202,7 @@ function requirePlatformRole() {
     "platform_super_admin", "platform_admin", "platform_sales",
     "platform_implementation", "platform_support", "platform_billing", "platform_auditor",
   ];
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
     if (!req.session?.userId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -217,7 +218,7 @@ function requirePlatformRole() {
 }
 
 function requireSuperAdmin() {
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
     if (!req.session?.userId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -229,7 +230,7 @@ function requireSuperAdmin() {
   };
 }
 
-function blockDemoWrites(req: Request, res: Response, next: NextFunction) {
+function blockDemoWrites<P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) {
   if (req.session?.isDemo && req.method !== "GET") {
     return res.status(403).json({ message: "Demo mode is read-only. Sign up for a free trial to make changes." });
   }
@@ -334,7 +335,7 @@ async function getSessionCompanyId(req: Request): Promise<string | null> {
 }
 
 function enforceCompanyScope(source: "query" | "body" = "query") {
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
     const sessionCompanyId = await getSessionCompanyId(req);
     if (!sessionCompanyId) return res.status(401).json({ message: "Not authenticated" });
     const requestedCompanyId = source === "query" ? (req.query.companyId as string) : req.body?.companyId;
@@ -406,7 +407,7 @@ async function checkIsDirectReport(
   return inEMR || inFlat;
 }
 
-async function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
+async function requireActiveSubscription<P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) {
   if (!req.session?.userId) return next();
   try {
     const user = await storage.getUser(req.session.userId!);
@@ -1268,11 +1269,11 @@ export async function registerRoutes(
   // is also demo-read-only, except provisioning, auth, and webhook exceptions.
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
-    blockDemoWrites(req as Request, res, next);
+    blockDemoWrites(req, res, next);
   });
   app.use("/api", (req, res, next) => {
     if (req.method === "GET" || publicWritePaths.some(p => req.path.startsWith(p))) return next();
-    requireActiveSubscription(req as Request, res, next);
+    requireActiveSubscription(req, res, next);
   });
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/app-doctor/")) return next();
@@ -1284,7 +1285,7 @@ export async function registerRoutes(
         ? body
         : body?.message || body?.error || `API request failed with HTTP ${res.statusCode}`;
       setImmediate(() => {
-        recordAppDoctorReport(req as Request, {
+        recordAppDoctorReport(req, {
           source: "api_500_response",
           severity: res.statusCode >= 500 ? "high" : "medium",
           title: `${req.method} ${req.originalUrl} failed`,
@@ -1659,7 +1660,7 @@ export async function registerRoutes(
       || req.path.startsWith("/portal/")) {
       return next();
     }
-    requireAuth(req as Request, res, next);
+    requireAuth(req, res, next);
   });
 
   // Populate req.user from session for all authenticated API routes
@@ -2295,7 +2296,7 @@ export async function registerRoutes(
               const workerObj = await storage.getWorker(workerId);
               const workerName = workerObj ? `${workerObj.firstName} ${workerObj.lastName}` : workerId;
               const managers = companyUsers.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive);
-              const appUrl = getAppBaseUrl(req as Request);
+              const appUrl = getAppBaseUrl(req);
               const subject = `Clock-In Approval Required — ${workerName}`;
               const bodyText = `${workerName} is ${lateMin} minutes late and needs manager approval to clock in.\n\nApprove at ${appUrl}/app/attendance?tab=clock-in-approvals`;
               for (const mgr of managers) {
@@ -2565,7 +2566,7 @@ export async function registerRoutes(
             const companyMgrs = await storage.getUsersByCompany(effectiveCompanyId);
             const managers = companyMgrs.filter(u => isManagerRole(u.role) && u.isActive);
             const workerName = `${worker.firstName} ${worker.lastName}`;
-            const appUrl = getAppBaseUrl(req as Request);
+            const appUrl = getAppBaseUrl(req);
             const reasonLabel = requestType === "early_clockin"
               ? `Early clock-in (${Math.abs(minutesDiff)} min early)`
               : requestType === "late_clockin"
@@ -2827,7 +2828,7 @@ export async function registerRoutes(
                   (u.role === "admin" || u.role === "manager") && u.isActive
                 );
                 const workerName = `${worker.firstName} ${worker.lastName}`;
-                const appUrl = getAppBaseUrl(req as Request);
+                const appUrl = getAppBaseUrl(req);
                 const subject = `Late Clock-Out — ${workerName}`;
                 const bodyText = `${workerName} clocked out ${lateClockOutMin} minutes after their scheduled end time.\n\nScheduled end: ${workerSchedule.endTime}\nActual clock-out: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: coTz })}\n\nView timesheet: ${appUrl}/app/attendance`;
                 for (const mgr of managers) {
@@ -4809,7 +4810,7 @@ export async function registerRoutes(
   // ── Get audit logs for a payroll run ───────────────────────────────────────
   app.get(["/api/payroll-runs/:id/audit-logs", "/api/payroll-runs/:id/audit-log"], requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
-      const run = await storage.getPayrollRun(req.params.id);
+      const run = await storage.getPayrollRun(String(req.params.id));
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
       const user = await storage.getUser(req.session.userId!);
       if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
@@ -6046,7 +6047,7 @@ export async function registerRoutes(
                 const clkCoUsers = await storage.getUsersByCompany(clkEffectiveCompanyId);
                 const managers = clkCoUsers.filter((u) => isManagerRole(u.role) && u.isActive);
                 const workerNameForClk = `${worker.firstName} ${worker.lastName}`;
-                const appUrlForClk = getAppBaseUrl(req as Request);
+                const appUrlForClk = getAppBaseUrl(req);
                 const reasonLabelForClk = clkRequestType === "early_clockin" ? `Early clock-in (${Math.abs(clkMinutesDiff)} min early)` : clkRequestType === "late_clockin" ? `Late clock-in (${clkMinutesDiff} min late)` : "Unscheduled clock-in";
                 const subjectForClk = `Clock-In Approval Required — ${workerNameForClk}`;
                 const bodyTextForClk = `${workerNameForClk} needs clock-in approval (${reasonLabelForClk}). Approve at ${appUrlForClk}/app/attendance?tab=clock-in-approvals`;
@@ -11461,7 +11462,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Email admins/managers about the new submission
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
-        const baseUrl = getAppBaseUrl(req as Request);
+        const baseUrl = getAppBaseUrl(req);
         const cwRes = await db.execute(sql`SELECT first_name, last_name FROM workers WHERE id = ${proposal.contractor_id}`);
         const cw = firstRow<{ first_name: string | null; last_name: string | null }>(cwRes);
         const contractorName = cw ? `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "A contractor" : "A contractor";
@@ -21002,7 +21003,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         temporaryPassword: tempPassword,
         companyId,
         trialEnd: trialEnd.toISOString(),
-        loginUrl: `${getAppBaseUrl(req as Request)}/app`
+        loginUrl: `${getAppBaseUrl(req)}/app`
       });
     } catch (e) {
       console.error("Trial signup error:", e);
@@ -21425,7 +21426,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       req.session.role    = "admin";
       req.session.isDemo  = true;
 
-      const baseUrl = getAppBaseUrl(req as Request);
+      const baseUrl = getAppBaseUrl(req);
 
       req.session.save((saveErr) => {
         if (saveErr) {
@@ -23589,7 +23590,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Captures runtime errors, asks AI for a safe diagnosis/proposed patch,
   // and notifies tenant admins/owners for review. It does not auto-deploy.
   // ══════════════════════════════════════════════════════════════════════
-  async function recordAppDoctorReport(req: Request, input: {
+  async function recordAppDoctorReport<P extends ParamsDictionary>(req: Request<P>, input: {
     companyId?: string | null;
     userId?: string | null;
     source?: string;
@@ -25283,7 +25284,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       if (provider === "acrobat_sign") {
         const acrobatAdapter = adapter as AcrobatSignAdapter;
-        const rawBodyForVoi = (req as unknown as Request & { rawBody?: string | Buffer }).rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+        const rawBodyFallback: string = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+        const rawBodyForVoi: string | Buffer = req.rawBody ?? rawBodyFallback;
         const voiEnvelopeId = acrobatAdapter.extractEnvelopeIdFromPayload(rawBodyForVoi);
         let voiCompanyConfig: CompanyESignConfig | undefined;
         if (voiEnvelopeId) {
@@ -25301,7 +25303,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           return res.status(200).json({ xAdobeSignClientId: voiResult.clientId });
         }
       }
-      const rawBody = (req as unknown as Request & { rawBody?: string | Buffer }).rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+      const rawBodyFallback: string = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+      const rawBody: string | Buffer = req.rawBody ?? rawBodyFallback;
 
       let webhookCompanyConfig: CompanyESignConfig | undefined;
       const preExtractedEnvelopeId = adapter.extractEnvelopeIdFromPayload(rawBody);
@@ -26319,16 +26322,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         // collapse this into the helper.
         const twilio = (await import("twilio")).default;
         const client = twilio(accountSid, authToken);
-        const msgParams: Record<string, string> = {
+        type TwilioCreateParams = Parameters<typeof client.messages.create>[0];
+        const msgParams: TwilioCreateParams = {
           body: "PayLink test message — SMS notifications are working correctly!",
           to: normalizePhone(toPhone),
+          ...(messagingServiceSid
+            ? { messagingServiceSid }
+            : { from: normalizePhone(fromNumber!) }),
         };
-        if (messagingServiceSid) {
-          msgParams.messagingServiceSid = messagingServiceSid;
-        } else {
-          msgParams.from = normalizePhone(fromNumber!);
-        }
-        await client.messages.create(msgParams as unknown as Parameters<typeof client.messages.create>[0]);
+        await client.messages.create(msgParams);
 
         await storage.updateSmsConfigTestResult("success");
         await writeAuditLog({
@@ -28493,11 +28495,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   app.post("/api/biz-documents/:id/attachments", requireAuth, upload.single("file"), async (req, res) => {
     try {
       const user = req.user as any;
-      const doc = await storage.getBizDocument(req.params.id);
+      const doc = await storage.getBizDocument(String(req.params.id));
       if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
       if (!req.file) return res.status(400).json({ message: "No file" });
       const attachment = await storage.createBizDocumentAttachment({
-        documentId: req.params.id,
+        documentId: String(req.params.id),
         filePath: `/uploads/${req.file.filename}`,
         fileName: req.file.originalname,
         fileType: req.file.mimetype,

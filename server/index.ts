@@ -61,7 +61,7 @@ app.use((req, res, next) => {
 
 declare module "http" {
   interface IncomingMessage {
-    rawBody: unknown;
+    rawBody?: string | Buffer;
   }
 }
 

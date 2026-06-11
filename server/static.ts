@@ -41,7 +41,7 @@ export function serveStatic(app: Express) {
     );
   }
 
-  function sendAppShell(req: Request, res: Response) {
+  function sendAppShell(req: Pick<Request, "path">, res: Response) {
     const appShell = path.resolve(distPath, "app.html");
     const shellPath = fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html");
     const headers: Record<string, string> = {
@@ -117,6 +117,6 @@ export function serveStatic(app: Express) {
     if (STATIC_ASSET_PREFIXES.some(p => req.path.startsWith(p)) || API_ROUTES.has(req.path)) {
       return next();
     }
-    sendAppShell(req as Request, res);
+    sendAppShell(req, res);
   });
 }
