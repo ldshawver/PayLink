@@ -8292,14 +8292,22 @@ export async function registerRoutes(
       if (!isPlatformUser(user.role) && user.companyId && existingRow.company_id !== user.companyId) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
-      const relation = await storage.updateEmployeeManagerRelation(req.params.id, req.body);
+      // Strip immutable / scope-sensitive fields so a tenant cannot elevate themselves
+      const { companyId: _c, employeeId: _e, id: _id, createdAt: _ca, ...allowedUpdates } = req.body as Record<string, unknown>;
+      // Self-manager guard: after update, managerId must not equal employeeId
+      const targetManagerId = allowedUpdates.managerId ?? existingRow.manager_id;
+      const targetEmployeeId = existingRow.employee_id;
+      if (targetManagerId === targetEmployeeId) {
+        return res.status(400).json({ message: "An employee cannot be their own manager" });
+      }
+      const relation = await storage.updateEmployeeManagerRelation(req.params.id, allowedUpdates);
       if (!relation) return res.status(404).json({ message: "Relation not found" });
       await writeAuditLog({
         actorUserId: req.session!.userId!,
         targetResource: "employee_manager_relations",
         changeType: "update",
         beforeValue: JSON.stringify({ employeeId: existingRow.employee_id, managerId: existingRow.manager_id }),
-        afterValue: JSON.stringify(req.body),
+        afterValue: JSON.stringify(allowedUpdates),
         companyId: existingRow.company_id,
       });
       res.json(relation);
@@ -8381,9 +8389,15 @@ export async function registerRoutes(
         reports: OrgNode[];
       };
 
+      const visited = new Set<string>();
       const buildNode = (workerId: string): OrgNode => {
+        if (visited.has(workerId)) {
+          console.warn(`[OrgChart] cycle detected at workerId=${workerId} — truncating branch`);
+          return { workerId, firstName: "(cycle)", lastName: "", jobTitle: null, department: null, reports: [] };
+        }
+        visited.add(workerId);
         const w = workerMap.get(workerId);
-        return {
+        const node: OrgNode = {
           workerId,
           firstName: w?.firstName ?? "",
           lastName: w?.lastName ?? "",
@@ -8391,6 +8405,8 @@ export async function registerRoutes(
           department: w?.department ?? null,
           reports: (reportsByManager.get(workerId) ?? []).map(buildNode),
         };
+        visited.delete(workerId);
+        return node;
       };
 
       const rootIds = workersAll
