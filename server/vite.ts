@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request } from "express";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
@@ -80,7 +80,7 @@ export async function setupVite(server: Server, app: Express) {
     const urlPath = req.originalUrl.split("?")[0];
     if (urlPath.startsWith("/api/")) {
       const { apiNotFoundHandler } = await import("./middleware/api-not-found.js");
-      return apiNotFoundHandler(req, res);
+      return apiNotFoundHandler(req as Request, res);
     }
 
     const url = req.originalUrl;

@@ -117,6 +117,6 @@ export function serveStatic(app: Express) {
     if (STATIC_ASSET_PREFIXES.some(p => req.path.startsWith(p)) || API_ROUTES.has(req.path)) {
       return next();
     }
-    sendAppShell(req, res);
+    sendAppShell(req as Request, res);
   });
 }

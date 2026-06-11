@@ -1864,11 +1864,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(remittanceSources).orderBy(desc(remittanceSources.createdAt));
   }
   async createRemittanceSource(data: InsertRemittanceSource): Promise<RemittanceSource> {
-    const [r] = await db.insert(remittanceSources).values(data).returning();
+    const [r] = await db.insert(remittanceSources).values(data as unknown as typeof remittanceSources.$inferInsert).returning();
     return r;
   }
   async updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined> {
-    const [r] = await db.update(remittanceSources).set(data).where(eq(remittanceSources.id, id)).returning();
+    const [r] = await db.update(remittanceSources).set(data as unknown as Partial<typeof remittanceSources.$inferInsert>).where(eq(remittanceSources.id, id)).returning();
     return r;
   }
   async deleteRemittanceSource(id: string): Promise<void> {
@@ -4004,7 +4004,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(workers)
       .where(and(
         eq(workers.companyId, companyId),
-        eq(workers.departmentId, departmentId),
+        eq(workers.department, departmentId),
         eq(workers.isActive, true)
       ))
       .orderBy(workers.lastName, workers.firstName);

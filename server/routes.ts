@@ -52,12 +52,12 @@ async function getCompanyESignConfig(companyId: string): Promise<CompanyESignCon
   const config: CompanyESignConfig = {};
   if (docusignKey) {
     try {
-      config.docusign = JSON.parse(docusignKey.apiKey);
+      config.docusign = JSON.parse(docusignKey.apiKey ?? "");
     } catch { /* fall back to env vars */ }
   }
   if (acrobatKey) {
     try {
-      config.acrobat_sign = JSON.parse(acrobatKey.apiKey);
+      config.acrobat_sign = JSON.parse(acrobatKey.apiKey ?? "");
     } catch { /* fall back to env vars */ }
   }
   return Object.keys(config).length > 0 ? config : undefined;
@@ -454,14 +454,14 @@ async function requireActiveSubscription(req: Request, res: Response, next: Next
 // If multiple finalized runs exist for the same company + pay period, only one
 // should count toward YTD.  Preference order: "paid" > "processed"; within
 // the same status the most recently processed run (latest processedAt) wins.
-type RunLike = { id: string; periodStart: string; periodEnd: string; status: string; processedAt?: Date | string | null; payDate?: string | null };
+type RunLike = { id: string; periodStart: string; periodEnd: string; status: string | null; processedAt?: Date | string | null; payDate?: string | null };
 function deduplicateByPeriod<T extends RunLike>(runs: T[]): T[] {
   const best = new Map<string, T>();
   for (const r of runs) {
     const key = `${r.periodStart}::${r.periodEnd}`;
     const prev = best.get(key);
     if (!prev) { best.set(key, r); continue; }
-    const rankStatus = (s: string) => s === "paid" ? 2 : s === "processed" ? 1 : 0;
+    const rankStatus = (s: string | null) => s === "paid" ? 2 : s === "processed" ? 1 : 0;
     const rRank = rankStatus(r.status);
     const pRank = rankStatus(prev.status);
     if (rRank > pRank) { best.set(key, r); continue; }
@@ -569,10 +569,10 @@ function periodsPerYearFromSchedule(type: string): number {
 // Narrow typed accessor for db.execute() results — replaces ad-hoc
 // `(result.rows ?? (result as any))[0]` patterns in contractor lifecycle
 // handlers with a single, typed extraction point.
-type DbExecResult<T> = { rows?: T[] } | T[];
+type DbExecResult<T> = { rows?: T[] | Record<string, unknown>[] } | T[] | Record<string, unknown>[];
 function firstRow<T>(r: DbExecResult<T>): T | undefined {
-  if (Array.isArray(r)) return r[0];
-  return r.rows?.[0];
+  if (Array.isArray(r)) return r[0] as T | undefined;
+  return r.rows?.[0] as T | undefined;
 }
 
 interface ProposalRow {
@@ -587,6 +587,22 @@ interface ProposalRow {
   scope_of_work?: string | null;
   description?: string | null;
   assumptions?: string | null;
+  exclusions?: string | null;
+  allowances?: string | null;
+  materials?: string | null;
+  notes?: string | null;
+  terms?: string | null;
+  warranty_notes?: string | null;
+  schedule_notes?: string | null;
+  payment_terms?: string | null;
+  issue_date?: string | null;
+  expiration_date?: string | null;
+  currency?: string | null;
+  job_id?: string | null;
+  cost_center_id?: string | null;
+  parent_proposal_id?: string | null;
+  is_change_order?: boolean | null;
+  line_items?: string | Record<string, unknown>[] | null;
   subtotal?: string | null;
   amount?: string | null;
   tax_amount?: string | null;
@@ -594,6 +610,7 @@ interface ProposalRow {
   total?: string | null;
   template_id?: string | null;
   branding_id?: string | null;
+  signature_package_id?: string | null;
   // Contractor and company identity — populated by generateProposalPdf from DB joins
   contractor_name?: string | null;
   contractor_email?: string | null;
@@ -1251,11 +1268,11 @@ export async function registerRoutes(
   // is also demo-read-only, except provisioning, auth, and webhook exceptions.
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
-    blockDemoWrites(req, res, next);
+    blockDemoWrites(req as Request, res, next);
   });
   app.use("/api", (req, res, next) => {
     if (req.method === "GET" || publicWritePaths.some(p => req.path.startsWith(p))) return next();
-    requireActiveSubscription(req, res, next);
+    requireActiveSubscription(req as Request, res, next);
   });
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/app-doctor/")) return next();
@@ -1267,7 +1284,7 @@ export async function registerRoutes(
         ? body
         : body?.message || body?.error || `API request failed with HTTP ${res.statusCode}`;
       setImmediate(() => {
-        recordAppDoctorReport(req, {
+        recordAppDoctorReport(req as Request, {
           source: "api_500_response",
           severity: res.statusCode >= 500 ? "high" : "medium",
           title: `${req.method} ${req.originalUrl} failed`,
@@ -1366,7 +1383,7 @@ export async function registerRoutes(
         req.session.userId = user.id;
         req.session.username = user.username;
         req.session.mfaEnrollmentRequired = true;
-        return req.session.save((err) => {
+        return req.session.save((err: Error | null) => {
           if (err) {
             console.error("Session save error (mfa-enroll):", err);
             return res.status(500).json({ message: "Login failed" });
@@ -1395,7 +1412,7 @@ export async function registerRoutes(
         const w = await storage.getWorker(user.workerId);
         if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
       }
-      req.session.save((err) => {
+      req.session.save((err: Error | null) => {
         if (err) {
           console.error("Session save error (login):", err);
           return res.status(500).json({ message: "Login failed" });
@@ -1452,7 +1469,7 @@ export async function registerRoutes(
         const w = await storage.getWorker(user.workerId);
         if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
       }
-      req.session.save((err) => {
+      req.session.save((err: Error | null) => {
         if (err) {
           console.error("Session save error (mfa-verify):", err);
           return res.status(500).json({ message: "MFA verification failed" });
@@ -1618,7 +1635,7 @@ export async function registerRoutes(
       req.session.userId = user.id;
       req.session.username = user.username;
       const workerInfo = { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, companyId: worker.companyId };
-      req.session.save((err) => {
+      req.session.save((err: Error | null) => {
         if (err) {
           console.error("Session save error (pin-login):", err);
           return res.status(500).json({ message: "Login failed" });
@@ -1642,7 +1659,7 @@ export async function registerRoutes(
       || req.path.startsWith("/portal/")) {
       return next();
     }
-    requireAuth(req, res, next);
+    requireAuth(req as Request, res, next);
   });
 
   // Populate req.user from session for all authenticated API routes
@@ -2132,7 +2149,7 @@ export async function registerRoutes(
       req.session.userId = user.id;
       req.session.username = user.username;
       const company = await storage.getCompany(worker.companyId);
-      req.session.save((err) => {
+      req.session.save((err: Error | null) => {
         if (err) {
           console.error("Session save error:", err);
           return res.status(500).json({ message: "Authentication failed" });
@@ -2278,7 +2295,7 @@ export async function registerRoutes(
               const workerObj = await storage.getWorker(workerId);
               const workerName = workerObj ? `${workerObj.firstName} ${workerObj.lastName}` : workerId;
               const managers = companyUsers.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive);
-              const appUrl = getAppBaseUrl(req);
+              const appUrl = getAppBaseUrl(req as Request);
               const subject = `Clock-In Approval Required — ${workerName}`;
               const bodyText = `${workerName} is ${lateMin} minutes late and needs manager approval to clock in.\n\nApprove at ${appUrl}/app/attendance?tab=clock-in-approvals`;
               for (const mgr of managers) {
@@ -2398,7 +2415,7 @@ export async function registerRoutes(
         if (user.isActive === false) return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
         req.session.userId = user.id;
         req.session.username = user.username;
-        req.session.save((err) => {
+        req.session.save((err: Error | null) => {
           if (err) return res.status(500).json({ message: "Authentication failed" });
           res.json({ id: user!.id, username: user!.username, role: user!.role, workerId: user!.workerId, companyId: user!.companyId, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
         });
@@ -2414,7 +2431,7 @@ export async function registerRoutes(
           req.session.userId = matchUser.id;
           req.session.username = matchUser.username;
           const workerRecord = matchUser.workerId ? await storage.getWorker(matchUser.workerId) : null;
-          req.session.save((err) => {
+          req.session.save((err: Error | null) => {
             if (err) return res.status(500).json({ message: "Authentication failed" });
             res.json({
               id: matchUser.id,
@@ -2458,7 +2475,7 @@ export async function registerRoutes(
       await new Promise<void>((resolve, reject) => {
         req.session.userId = clockInUser!.id;
         req.session.username = clockInUser!.username;
-        req.session.save((err) => { if (err) reject(err); else resolve(); });
+        req.session.save((err: Error | null) => { if (err) reject(err); else resolve(); });
       });
 
       // Duplicate clock-in prevention
@@ -2548,7 +2565,7 @@ export async function registerRoutes(
             const companyMgrs = await storage.getUsersByCompany(effectiveCompanyId);
             const managers = companyMgrs.filter(u => isManagerRole(u.role) && u.isActive);
             const workerName = `${worker.firstName} ${worker.lastName}`;
-            const appUrl = getAppBaseUrl(req);
+            const appUrl = getAppBaseUrl(req as Request);
             const reasonLabel = requestType === "early_clockin"
               ? `Early clock-in (${Math.abs(minutesDiff)} min early)`
               : requestType === "late_clockin"
@@ -2665,9 +2682,10 @@ export async function registerRoutes(
             positionTitle = (pos as any).title || null;
           }
         }
-      } else if (openEntry?.positionId) {
+      } else if ((openEntry as typeof openEntry & { positionId?: string | null })?.positionId) {
         const allPositions = await storage.getPositions(worker.companyId);
-        const pos = allPositions.find((p: any) => p.id === openEntry.positionId);
+        const openEntryPosId = (openEntry as typeof openEntry & { positionId?: string | null }).positionId;
+        const pos = allPositions.find((p: any) => p.id === openEntryPosId);
         if (pos) {
           positionPayType = (pos as any).payType || null;
           positionIsTipped = (pos as any).isTipped === true;
@@ -2809,7 +2827,7 @@ export async function registerRoutes(
                   (u.role === "admin" || u.role === "manager") && u.isActive
                 );
                 const workerName = `${worker.firstName} ${worker.lastName}`;
-                const appUrl = getAppBaseUrl(req);
+                const appUrl = getAppBaseUrl(req as Request);
                 const subject = `Late Clock-Out — ${workerName}`;
                 const bodyText = `${workerName} clocked out ${lateClockOutMin} minutes after their scheduled end time.\n\nScheduled end: ${workerSchedule.endTime}\nActual clock-out: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: coTz })}\n\nView timesheet: ${appUrl}/app/attendance`;
                 for (const mgr of managers) {
@@ -2917,7 +2935,7 @@ export async function registerRoutes(
       const hoursPerWorker: Record<string, { reg: number; ot: number; dt: number }> = {};
       for (const e of entries) {
         if (!hoursPerWorker[e.workerId]) hoursPerWorker[e.workerId] = { reg: 0, ot: 0, dt: 0 };
-        hoursPerWorker[e.workerId].reg += parseFloat(e.regularHours?.toString() || "0");
+        hoursPerWorker[e.workerId].reg += parseFloat((e as typeof e & { regularHours?: string | null }).regularHours?.toString() || "0");
         hoursPerWorker[e.workerId].ot += parseFloat(e.overtimeHours?.toString() || "0");
         hoursPerWorker[e.workerId].dt += parseFloat(e.doubleTimeHours?.toString() || "0");
       }
@@ -2939,7 +2957,7 @@ export async function registerRoutes(
         // Skip inactive workers — they may appear in processed items if terminated mid-period
         if (worker && worker.isActive === false) continue;
         const workerName = worker ? `${worker.firstName} ${worker.lastName}` : `Worker ${item.workerId.slice(0, 8)}`;
-        const isContractor = worker?.workerType === "contractor" || worker?.employmentType === "contractor";
+        const isContractor = worker?.workerType === "contractor";
         const payType = (item.payType || (worker as any)?.payType || "hourly") as string;
         const isSalary = payType === "salary";
         const payRate = parseFloat(item.payRate?.toString() || "0");
@@ -3244,13 +3262,13 @@ export async function registerRoutes(
       const allPositionsForPayroll = await storage.getPositions(run.companyId);
       const volunteerPositionIds = new Set(allPositionsForPayroll.filter((p: any) => p.isVolunteer).map((p: any) => p.id));
       if (volunteerPositionIds.size > 0) {
-        entries = entries.filter(e => !(e.positionId && volunteerPositionIds.has(String(e.positionId))));
+        entries = entries.filter(e => !(((e as typeof e & { positionId?: string | null }).positionId) && volunteerPositionIds.has(String((e as typeof e & { positionId?: string | null }).positionId))));
       }
       // Commission-only positions: hours are tracked but don't generate hourly pay.
       // Commission pay comes separately from the commissions table.
       const commissionPositionIds = new Set(allPositionsForPayroll.filter((p: any) => p.payType === "commission").map((p: any) => p.id));
       if (commissionPositionIds.size > 0) {
-        entries = entries.filter(e => !(e.positionId && commissionPositionIds.has(String(e.positionId))));
+        entries = entries.filter(e => !(((e as typeof e & { positionId?: string | null }).positionId) && commissionPositionIds.has(String((e as typeof e & { positionId?: string | null }).positionId))));
       }
       const allWorkers = await storage.getWorkers(run.companyId);
       // Treat null as active (handles workers added before the isActive column existed)
@@ -3563,8 +3581,8 @@ export async function registerRoutes(
           let amAmt = 0;
           if (am.amountType === "percentage") {
             amAmt = grossPay * (parseFloat(am.percent || "0") / 100);
-          } else if (parseFloat(am.rate || "0") > 0 && parseFloat(am.units || "0") > 0) {
-            amAmt = parseFloat(am.rate) * parseFloat(am.units);
+          } else if (parseFloat(am.rate ?? "0") > 0 && parseFloat(am.units ?? "0") > 0) {
+            amAmt = parseFloat(am.rate ?? "0") * parseFloat(am.units ?? "0");
           } else {
             amAmt = parseFloat(am.amount || "0");
           }
@@ -4408,7 +4426,7 @@ export async function registerRoutes(
               periodStart: run.periodStart || "",
               periodEnd: run.periodEnd || "",
               batchId,
-              totalAmount: String(updated?.totalNetPay || 0),
+              totalAmount: String(updated?.totalNet || 0),
             });
           }
         }
@@ -4778,7 +4796,7 @@ export async function registerRoutes(
       const records = await storage.getPayrollPaymentRecords(run.companyId, run.id);
       // Workers can only see their own payment record
       if (user?.role === "worker") {
-        const worker = (await storage.getWorkers(run.companyId)).find(w => w.userId === user.id);
+        const worker = user?.workerId ? await storage.getWorker(user.workerId) : undefined;
         if (!worker) return res.json([]);
         return res.json(records.filter(r => r.workerId === worker.id));
       }
@@ -5301,7 +5319,7 @@ export async function registerRoutes(
 
       const validationInput = directDepositItems.map(item => {
         const pm = payMethodMap.get(item.workerId);
-        return { worker: { firstName: "", lastName: item.workerName || item.workerId, id: item.workerId } as any, payMethod: pm, netPay: parseFloat(item.netPay || "0") };
+        return { worker: { firstName: "", lastName: (item as typeof item & { workerName?: string }).workerName || item.workerId, id: item.workerId } as any, payMethod: pm, netPay: parseFloat(item.netPay || "0") };
       });
 
       const { valid, errors } = validatePayrollReadiness(validationInput);
@@ -5316,7 +5334,7 @@ export async function registerRoutes(
         const netPay = parseFloat(item.netPay || "0");
         if (netPay <= 0) continue;
         const amountCents = Math.round(netPay * 100);
-        const workerName = item.workerName || item.workerId;
+        const workerName = (item as typeof item & { workerName?: string }).workerName || item.workerId;
 
         try {
           const payment = await createOutboundPayment({
@@ -5972,14 +5990,14 @@ export async function registerRoutes(
 
           // First look in the worker's home company, then search all companies.
           // This handles cross-company shifts (worker scheduled at a different company).
-          const homeTodaySchedules = await storage.getSchedulesByDateRange(worker.companyId, todayForClk, todayForClk);
-          let workerSchedule: any = homeTodaySchedules.find((s: any) => s.workerId === worker.id);
-          let clkEffectiveCompanyId: string = worker.companyId;
+          const homeTodaySchedules = await storage.getSchedulesByDateRange(worker!.companyId, todayForClk, todayForClk);
+          let workerSchedule: any = homeTodaySchedules.find((s: any) => s.workerId === worker!.id);
+          let clkEffectiveCompanyId: string = worker!.companyId;
 
           if (!workerSchedule) {
             const { schedules: schedulesTable } = await import("../shared/schema.js");
             const crossSchedules = await db.select().from(schedulesTable)
-              .where(and(eq(schedulesTable.workerId, worker.id), eq(schedulesTable.date, todayForClk)))
+              .where(and(eq(schedulesTable.workerId, worker!.id), eq(schedulesTable.date, todayForClk)))
               .limit(1);
             if (crossSchedules[0]) {
               workerSchedule = crossSchedules[0];
@@ -5987,7 +6005,7 @@ export async function registerRoutes(
               // Reload timezone for the effective (cross-company) company
               const effectiveCompanyForClk = await storage.getCompany(clkEffectiveCompanyId);
               companyTzForClk = (effectiveCompanyForClk as any)?.timezone || companyTzForClk;
-              console.log(`[TIME-PUNCHES] Worker ${worker.firstName} ${worker.lastName} has cross-company schedule at companyId=${clkEffectiveCompanyId} (home=${worker.companyId})`);
+              console.log(`[TIME-PUNCHES] Worker ${worker!.firstName} ${worker!.lastName} has cross-company schedule at companyId=${clkEffectiveCompanyId} (home=${worker.companyId})`);
             }
           }
 
@@ -6028,7 +6046,7 @@ export async function registerRoutes(
                 const clkCoUsers = await storage.getUsersByCompany(clkEffectiveCompanyId);
                 const managers = clkCoUsers.filter((u) => isManagerRole(u.role) && u.isActive);
                 const workerNameForClk = `${worker.firstName} ${worker.lastName}`;
-                const appUrlForClk = getAppBaseUrl(req);
+                const appUrlForClk = getAppBaseUrl(req as Request);
                 const reasonLabelForClk = clkRequestType === "early_clockin" ? `Early clock-in (${Math.abs(clkMinutesDiff)} min early)` : clkRequestType === "late_clockin" ? `Late clock-in (${clkMinutesDiff} min late)` : "Unscheduled clock-in";
                 const subjectForClk = `Clock-In Approval Required — ${workerNameForClk}`;
                 const bodyTextForClk = `${workerNameForClk} needs clock-in approval (${reasonLabelForClk}). Approve at ${appUrlForClk}/app/attendance?tab=clock-in-approvals`;
@@ -6064,8 +6082,8 @@ export async function registerRoutes(
       }
 
       const punch = await storage.createTimePunch({
-        workerId: worker.id,
-        companyId: worker.companyId,
+        workerId: worker!.id,
+        companyId: worker!.companyId,
         punchType: req.body.punchType,
         punchTime: new Date(),
         note: req.body.note ?? null,
@@ -7565,7 +7583,7 @@ export async function registerRoutes(
       const allPositionsForCreate = await storage.getPositions(companyId);
       const volunteerPosIds = new Set(allPositionsForCreate.filter((p: any) => p.isVolunteer).map((p: any) => p.id));
       if (volunteerPosIds.size > 0) {
-        entries = entries.filter(e => !(e.positionId && volunteerPosIds.has(String(e.positionId))));
+        entries = entries.filter(e => !((e as typeof e & { positionId?: string | null }).positionId && volunteerPosIds.has(String((e as typeof e & { positionId?: string | null }).positionId))));
       }
       const allWorkers = await storage.getWorkers(companyId);
       // Treat null as active (handles workers added before the isActive column existed)
@@ -11216,7 +11234,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                   VALUES (${proposal.id}, ${name}, ${li.description ?? null}, ${li.category ?? null}, ${qty}, ${li.unit ?? null}, ${price}, ${li.cost ?? null}, ${li.markupPercent ?? li.markup_percent ?? null}, ${li.taxable ?? false}, ${li.optional ?? false}, ${li.selected ?? true}, ${idx}, ${lineTotal}, FALSE)
                 `).catch(() => {});
               }
-              await recalcProposalTotals(proposal.id).catch(() => {});
+              await recalcProposalTotals((proposal as Record<string, string>).id).catch(() => {});
             }
           }
         } catch (tplErr) { console.warn("[ContractorProposals] Template line items auto-create failed:", tplErr); }
@@ -11239,16 +11257,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
       // Guard: admin/manager cannot edit locked/superseded versions
-      if (isManager && !isOwner && ["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes(proposal.status || "")) {
+      if (isManager && !isOwner && ["superseded", "archived", "converted_to_contract", "converted_to_invoice"].includes((proposal.status as string | null) || "")) {
         return res.status(400).json({ message: "Cannot edit a superseded or locked proposal. Create a new revision from the active version." });
       }
       // Guard: admin cannot edit contractor-owned proposals when it is the contractor's turn to act
       if (isManager && !isOwner && proposal.contractor_id &&
-          ["draft", "countered", "counteroffer_pending", "revision_requested"].includes(proposal.status || "")) {
+          ["draft", "countered", "counteroffer_pending", "revision_requested"].includes((proposal.status as string | null) || "")) {
         return res.status(403).json({ message: "This proposal is currently with the contractor. Admins cannot edit contractor-owned proposals in draft, countered, or revision-requested states." });
       }
       // Guard: contractor can only edit their own draft/revision_requested/countered proposals
-      if (isOwner && !isManager && !["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status || "")) {
+      if (isOwner && !isManager && !["draft", "revision_requested", "countered", "counteroffer_pending"].includes((proposal.status as string | null) || "")) {
         return res.status(400).json({ message: "Cannot edit a submitted proposal. Wait for admin review or respond to the counteroffer." });
       }
       const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency,
@@ -11340,7 +11358,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isOwner = user?.workerId === proposal.contractor_id;
       const isManager = ["admin", "manager"].includes(user?.role || "");
       if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
-      if (!["draft", "rejected"].includes(proposal.status)) {
+      if (!["draft", "rejected"].includes((proposal.status ?? "") as string)) {
         return res.status(400).json({ message: "Only draft or rejected proposals can be deleted" });
       }
       const deletionReason: string = (req.body as any)?.reason || null;
@@ -11443,7 +11461,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Email admins/managers about the new submission
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
-        const baseUrl = getAppBaseUrl(req);
+        const baseUrl = getAppBaseUrl(req as Request);
         const cwRes = await db.execute(sql`SELECT first_name, last_name FROM workers WHERE id = ${proposal.contractor_id}`);
         const cw = firstRow<{ first_name: string | null; last_name: string | null }>(cwRes);
         const contractorName = cw ? `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "A contractor" : "A contractor";
@@ -11866,7 +11884,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Generate invoice number
       const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_invoices WHERE contractor_id = ${proposal.contractor_id}`);
       const count = Number(firstRow<{ c: string | number }>(countResult)?.c ?? 0);
-      const invoiceNumber = `INV-${proposal.contractor_id.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
+      const invoiceNumber = `INV-${String(proposal.contractor_id ?? "").slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
       const today = new Date().toISOString().split("T")[0];
 
       // Default the invoice template to the global "Standard Invoice" if the
@@ -13495,6 +13513,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
         const wRes = await db.execute(sql`SELECT u.email, u.phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
         const recipient = wRes.rows[0] as any;
+        const baseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
         const payload = { event: "contract_activated" as const, recipientName: recipient?.name || "Contractor", email: recipient?.email, phone: recipient?.phone, contractTitle: contract.title, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
         sendContractEventEmail(payload).catch(() => {});
         sendContractEventSms(payload).catch(() => {});
@@ -14070,7 +14089,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await storage.createExpenseApprovalAction({
         objectType: "contractor_invoice", objectId: req.params.id, actionType: "override_requested",
         actorUserId: req.session.userId, companyId: inv.companyId,
-        note: overrideReason,
+        notes: overrideReason,
       });
       // Notify admin/manager of override request via contractor notifications
       createContractorNotification({ companyId: inv.companyId, notificationType: "invoice_override_requested", title: `Override Requested: Invoice #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: overrideReason || "A contractor has requested a payment override for an invoice.", entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=invoices&id=${req.params.id}` }).catch(() => {});
@@ -15683,7 +15702,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } else if (isManagerRole(user?.role) && !isAdminRole(user?.role) && workerId) {
         // Managers can only access workers in their company
         const worker = await storage.getWorker(workerId);
-        if (!worker || worker.companyId !== user.companyId) {
+        if (!worker || worker.companyId !== user?.companyId) {
           return res.status(403).json({ message: "Not authorized" });
         }
       }
@@ -15716,7 +15735,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         workerId = user.workerId;
       } else if (isManagerRole(user?.role) && !isAdminRole(user?.role) && workerId) {
         const worker = await storage.getWorker(workerId);
-        if (!worker || worker.companyId !== user.companyId) {
+        if (!worker || worker.companyId !== user?.companyId) {
           return res.status(403).json({ message: "Not authorized" });
         }
       }
@@ -16429,7 +16448,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actorUserId: req.session.userId!,
         targetResource: `wage_history:${entry.id}`,
         changeType: "wage_history_created",
-        afterValue: JSON.stringify({ workerId: entry.workerId, payType: entry.payType, rate: entry.rate }),
+        afterValue: JSON.stringify({ workerId: entry.workerId, payType: entry.wageType, rate: entry.wage }),
         companyId: user?.companyId,
       });
       res.status(201).json(entry);
@@ -17585,7 +17604,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/roles", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const { isSystem, ...body } = req.body;
       const data = insertRoleSchema.parse(body);
       const item = await storage.createRole(data);
@@ -17598,7 +17617,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.patch("/api/roles/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const { isSystem, ...data } = req.body;
       const item = await storage.updateRole(req.params.id, data);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -17612,7 +17631,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/roles/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const role = await storage.getRole(req.params.id);
       if (role?.isSystem) return res.status(400).json({ message: "Cannot delete system roles" });
       await storage.deleteRole(req.params.id);
@@ -17725,7 +17744,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/role-permissions", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const data = insertRolePermissionSchema.parse(req.body);
       const item = await storage.createRolePermission(data);
       res.status(201).json(item);
@@ -17737,7 +17756,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.patch("/api/role-permissions/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const item = await storage.updateRolePermission(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
@@ -17750,7 +17769,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/role-permissions/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       await storage.deleteRolePermission(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -17762,7 +17781,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/role-permissions/bulk", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const { roleId, permissions } = req.body;
       if (!roleId || !permissions) return res.status(400).json({ message: "roleId and permissions required" });
       await storage.deleteRolePermissionsByRole(roleId);
@@ -17793,7 +17812,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/user-roles", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       const data = insertUserRoleSchema.parse(req.body);
       const item = await storage.createUserRole(data);
       res.status(201).json(item);
@@ -17805,7 +17824,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/user-roles/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      if (!assertRoleMgmtAccess(user?.role ?? undefined, res)) return;
       await storage.deleteUserRole(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -18358,7 +18377,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       amount: number; checkNumber?: string; memo?: string;
     };
   }): Promise<Uint8Array> {
-    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { PDFDocument, StandardFonts, rgb, degrees } = await import("pdf-lib");
     const fontkit = (await import("@pdf-lib/fontkit")).default;
     const { item, worker, run, company, remittanceSource, isCalibration, isVoid, isReprint } = params;
     const doc = await PDFDocument.create();
@@ -18535,7 +18554,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // VOID watermark only — REPRINT is a UI label only, never printed on PDF
     if (isVoid)
       page.drawText("VOID", { x: z1x(1.5), y: z1y(2.0), size: 80, font: hvB,
-        color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
+        color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: degrees(30) });
 
     // ── Company icon — x 0.25in, y 0.22in, 0.35in × 0.35in — LEFT of name/address ─
     // Icon box top-left at (0.25in, 0.22in); bottom of box = 0.22+0.35 = 0.57in from check top
@@ -19058,7 +19077,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         page.drawLine({ start: { x: gx, y: 0 }, end: { x: gx, y: H }, color: gc, thickness: 0.15, opacity: 0.4 });
       page.drawText("CALIBRATION TEST — NOT A REAL CHECK", {
         x: 85, y: H / 2 + 20, size: 18, font: hvB, color: rgb(0.7, 0.7, 0.7), opacity: 0.45,
-        rotate: { type: "degrees" as const, angle: 45 },
+        rotate: degrees(45),
       });
     }
 
@@ -19066,7 +19085,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   }
 
   // Typed interfaces for raw SQL rows returned by check PDF endpoints.
-  interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; }
+  interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; status: string | null; }
   interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; phone: string; ein: string; }
   interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; }
   interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; institution: string | null; }
@@ -19156,7 +19175,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/checks/:payrollItemId/pdf — single-check server PDF
   app.get("/api/checks/:payrollItemId/pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { payrollItemId } = req.params;
+      const payrollItemId = String(req.params.payrollItemId);
       const isCalibration = req.query.mode === "calibration" || req.query.mode === "test";
       const isVoid        = req.query.mode === "void";
 
@@ -19164,7 +19183,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
       const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
-      const compId = runRow?.company_id || itemRow.companyId;
+      const compId = runRow?.company_id ?? "";
 
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
@@ -19237,7 +19256,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     workerMap: Record<string, { first_name: string; last_name: string }>;
     company: { name?: string | null; ein?: string | null } | null;
   }): Promise<Uint8Array> {
-    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { PDFDocument, StandardFonts, rgb, degrees } = await import("pdf-lib");
     const { run, allItems, workerMap, company } = params;
     const doc = await PDFDocument.create();
     const hv  = await doc.embedFont(StandardFonts.Helvetica);
@@ -19481,7 +19500,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         merged.addPage(pg);
       } else {
         for (const item of items) {
-          const w = workerMap[item.worker_id] || null;
+          const w = workerMap[item.worker_id as string] || null;
           // Normalize raw SQL snake_case row to camelCase before passing to renderCheckPdf.
           const normalizedItem = {
             netPay:          item.net_pay,
@@ -19567,7 +19586,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const priorPrintedSet = new Set<string>(pgRows<{ worker_id: string }>(priorPrintedRaw).map(r => r.worker_id).filter(Boolean));
 
         for (const item of items) {
-          const itemEventType = priorPrintedSet.has(item.worker_id) ? "reprint" : "print";
+          const itemEventType = priorPrintedSet.has(item.worker_id as string) ? "reprint" : "print";
           await db.execute(sql`
             INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
             VALUES (${runId}, ${compId}, ${userId || null}, 1, ${item.net_pay || 0}, 'ok', '[]', false, 'server-pdf', ${itemEventType}, ${item.worker_id || null}, ${item.check_number || null})
@@ -19587,7 +19606,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/checks/:payrollItemId/void — formal void with required reason
   app.post("/api/checks/:payrollItemId/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { payrollItemId } = req.params;
+      const payrollItemId = String(req.params.payrollItemId);
       const { voidReason }    = req.body;
       if (!voidReason || !String(voidReason).trim()) return res.status(400).json({ message: "voidReason is required" });
 
@@ -19632,14 +19651,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/checks/:payrollItemId/reprint — log reprint event AND return PDF bytes
   app.post("/api/checks/:payrollItemId/reprint", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { payrollItemId } = req.params;
+      const payrollItemId = String(req.params.payrollItemId);
       const userId = req.session.userId;
 
       const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
       const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
-      const compId = runRow?.company_id || itemRow.companyId;
+      const compId = runRow?.company_id ?? "";
 
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
@@ -19998,7 +20017,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           for (const rec of flat) {
             if (rec.payrollItemId && rec.workerId === user.workerId) {
               recordsByItem[rec.payrollItemId] = {
-                status: rec.status,
+                status: rec.status ?? "pending",
                 paidAt: rec.paidAt ?? null,
                 failureReason: rec.failureReason ?? null,
                 reconciledAt: rec.reconciledAt ?? null,
@@ -20382,7 +20401,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
         for (const le of legalEntities) {
           if (!le.ein) {
-            issues.push({ severity: "error", category: "EIN Missing", message: `Legal entity "${le.name}" under ${company.name} has no EIN`, entity: le.name });
+            issues.push({ severity: "error", category: "EIN Missing", message: `Legal entity "${le.legalName}" under ${company.name} has no EIN`, entity: le.legalName });
           }
         }
 
@@ -20983,7 +21002,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         temporaryPassword: tempPassword,
         companyId,
         trialEnd: trialEnd.toISOString(),
-        loginUrl: `${getAppBaseUrl(req)}/app`
+        loginUrl: `${getAppBaseUrl(req as Request)}/app`
       });
     } catch (e) {
       console.error("Trial signup error:", e);
@@ -21406,7 +21425,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       req.session.role    = "admin";
       req.session.isDemo  = true;
 
-      const baseUrl = getAppBaseUrl(req);
+      const baseUrl = getAppBaseUrl(req as Request);
 
       req.session.save((saveErr) => {
         if (saveErr) {
@@ -22315,7 +22334,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           const allPayments = await storage.getPayments(invoice.companyId);
           const invoicePayments = allPayments.filter(p => p.invoiceId === invoice.id && p.status !== "failed" && p.status !== "refunded");
           const totalPaid = invoicePayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
-          const invoiceTotal = parseFloat(invoice.totalAmount);
+          const invoiceTotal = parseFloat(invoice.totalAmount ?? "0");
           const newStatus = totalPaid >= invoiceTotal ? "paid" : "partially_paid";
           await storage.updateInvoice(invoice.id, { status: newStatus, amountPaid: totalPaid.toFixed(2), amountDue: (invoiceTotal - totalPaid).toFixed(2) });
         }
@@ -23303,7 +23322,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         ],
       };
       const steps = templateSteps[req.body.templateName] || templateSteps["Standard Onboarding"];
-      const createdSteps = [];
+      const createdSteps: Array<{ id: string; [key: string]: unknown }> = [];
       for (let i = 0; i < steps.length; i++) {
         const step = await storage.createOnboardingPacketStep({
           packetId: packet.id,
@@ -24404,7 +24423,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             description: item.description || "",
             quantity: item.quantity || "1",
             unitPrice: item.unitPrice || "0",
-            total: item.total || "0",
+            amount: item.total || "0",
             taxable: item.taxable ?? false,
           });
         }
@@ -24639,7 +24658,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           if (t.id) {
             await storage.updateOnboardingTemplateTask(t.id, safeFields);
           } else {
-            await storage.createOnboardingTemplateTask({ ...safeFields, templateId: req.params.id });
+            await storage.createOnboardingTemplateTask({ title: (safeFields.title as string) || "", ...safeFields, templateId: req.params.id });
           }
         }
       }
@@ -25264,7 +25283,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       if (provider === "acrobat_sign") {
         const acrobatAdapter = adapter as AcrobatSignAdapter;
-        const rawBodyForVoi = req.rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+        const rawBodyForVoi = (req as unknown as Request & { rawBody?: string | Buffer }).rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
         const voiEnvelopeId = acrobatAdapter.extractEnvelopeIdFromPayload(rawBodyForVoi);
         let voiCompanyConfig: CompanyESignConfig | undefined;
         if (voiEnvelopeId) {
@@ -25282,7 +25301,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           return res.status(200).json({ xAdobeSignClientId: voiResult.clientId });
         }
       }
-      const rawBody = req.rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+      const rawBody = (req as unknown as Request & { rawBody?: string | Buffer }).rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
 
       let webhookCompanyConfig: CompanyESignConfig | undefined;
       const preExtractedEnvelopeId = adapter.extractEnvelopeIdFromPayload(rawBody);
@@ -25400,6 +25419,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
                     const version = await storage.createDocumentVersion({
                       documentId: docId.trim(),
+                      sha256: "",
                       versionNumber: nextVersion,
                       fileName: pdfResult.fileName,
                       fileUrl: `/uploads/${pdfFileName}`,
@@ -25693,7 +25713,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/webhook-events", requireRole("admin"), async (req, res) => {
     try {
-      const companyId = req.session?.companyId;
+      const companyId = (req.session as (typeof req.session) & { companyId?: string })?.companyId;
       if (!companyId) return res.status(403).json({ message: "No company context" });
       const provider = req.query.provider as string | undefined;
       const events = await storage.getWebhookEventsByCompany(companyId, provider);
@@ -25756,7 +25776,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const { getTransporter } = await import("./notifications.js");
         const smtp = await getTransporter();
         if (smtp) {
-          const interestLabel = interest.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+          const interestLabel = interest.replace(/-/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
           const nameLabel = [firstName, lastName].filter(Boolean).join(" ") || "(not provided)";
           await smtp.transporter.sendMail({
             from: smtp.fromAddress,
@@ -26308,7 +26328,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         } else {
           msgParams.from = normalizePhone(fromNumber!);
         }
-        await client.messages.create(msgParams);
+        await client.messages.create(msgParams as unknown as Parameters<typeof client.messages.create>[0]);
 
         await storage.updateSmsConfigTestResult("success");
         await writeAuditLog({
@@ -26448,7 +26468,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         JOIN staff_messages sm ON sm.id = smr.message_id
         WHERE smr.worker_id = ${myWorkerId} AND smr.read_at IS NULL
       `);
-      const count = parseInt((result.rows ?? result as any)[0]?.count ?? "0", 10);
+      const count = parseInt(String((result.rows?.[0] as Record<string, unknown>)?.count ?? "0"), 10);
       res.json({ count });
     } catch (err) {
       res.json({ count: 0 });
@@ -27803,12 +27823,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       // Create default steps based on packageKey
       const packageKey = data.packageKey || "contractor_standard";
-      const defaultSteps: { stepKey: string; stepTitle: string; stepType: string; sequence: number; isRequired: boolean; metadata?: string }[] = [
-        { stepKey: "personal_info", stepTitle: "Personal Information", stepType: "form", sequence: 1, isRequired: true },
-        { stepKey: "agreement_sign", stepTitle: "Review & Sign Agreement", stepType: "signature", sequence: 2, isRequired: true },
-        { stepKey: "tax_info", stepTitle: "Tax Information (W-9)", stepType: "document_upload", sequence: 3, isRequired: true },
-        { stepKey: "bank_info", stepTitle: "Banking / Payment Details", stepType: "form", sequence: 4, isRequired: false },
-        { stepKey: "review_complete", stepTitle: "Submission Complete", stepType: "review", sequence: 5, isRequired: true },
+      const defaultSteps: { stepKey: string; title: string; stepType: string; sequence: number; required: boolean; metadata?: string }[] = [
+        { stepKey: "personal_info", title: "Personal Information", stepType: "form", sequence: 1, required: true },
+        { stepKey: "agreement_sign", title: "Review & Sign Agreement", stepType: "signature", sequence: 2, required: true },
+        { stepKey: "tax_info", title: "Tax Information (W-9)", stepType: "document_upload", sequence: 3, required: true },
+        { stepKey: "bank_info", title: "Banking / Payment Details", stepType: "form", sequence: 4, required: false },
+        { stepKey: "review_complete", title: "Submission Complete", stepType: "review", sequence: 5, required: true },
       ];
       if (packageKey === "contractor_1099") {
         // Already has W-9 step; 1099-specific extras would go here
@@ -27826,9 +27846,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         companyId: o.companyId,
         workerId: o.workerId,
         onboardingId: o.id,
-        action: "onboarding_created",
-        performedBy: (req as any).user?.id || "system",
-        notes: `Onboarding package '${packageKey}' created`,
+        eventType: "onboarding_created",
+        actorUserId: (req as any).user?.id || undefined,
+        afterJson: `Onboarding package '${packageKey}' created`,
       });
 
       res.status(201).json({ onboarding: o, inviteToken: rawToken });
@@ -27870,9 +27890,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const newStatus = action === "approve" ? "approved" : "rejected";
       const o = await storage.updateWorkerOnboarding(req.params.id, {
         status: newStatus,
-        reviewedAt: new Date(),
-        reviewedBy: (req as any).user?.id || null,
-        reviewNotes: notes || null,
+        approvedAt: newStatus === "approved" ? new Date() : undefined,
+        approvedBy: newStatus === "approved" ? ((req as any).user?.id || null) : undefined,
+        managerNotes: notes || null,
       });
       if (!o) return res.status(404).json({ message: "Onboarding not found" });
       // On approval: populate worker profile from step form data
@@ -27880,9 +27900,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         try {
           const steps = await storage.getOnboardingSteps(o.id);
           // personal_info step → update worker profile
-          const personalStep = steps.find(s => s.stepKey === "personal_info" && s.workerData);
-          if (personalStep?.workerData) {
-            const pd = JSON.parse(personalStep.workerData as string);
+          const personalStep = steps.find(s => s.stepKey === "personal_info" && s.dataJson);
+          if (personalStep?.dataJson) {
+            const pd = JSON.parse(personalStep.dataJson as string);
             const profileUpdate: Record<string, any> = {};
             const fieldMap: Record<string, string> = {
               phone: "phone", mobilePhone: "mobilePhone", homePhone: "homePhone",
@@ -27903,9 +27923,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             }
           }
           // bank_info step → create pay method record (idempotent: skip if identical record already exists)
-          const bankStep = steps.find(s => s.stepKey === "bank_info" && s.workerData);
-          if (bankStep?.workerData) {
-            const bd = JSON.parse(bankStep.workerData as string);
+          const bankStep = steps.find(s => s.stepKey === "bank_info" && s.dataJson);
+          if (bankStep?.dataJson) {
+            const bd = JSON.parse(bankStep.dataJson as string);
             if (bd.routingNumber && bd.accountNumber) {
               const existingMethods = await storage.getPayMethods(o.workerId);
               const alreadyExists = existingMethods.some(
@@ -27934,9 +27954,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         companyId: o.companyId,
         workerId: o.workerId,
         onboardingId: o.id,
-        action: `onboarding_${newStatus}`,
-        performedBy: (req as any).user?.id || "system",
-        notes: notes || null,
+        eventType: `onboarding_${newStatus}`,
+        actorUserId: (req as any).user?.id || undefined,
+        afterJson: notes || null,
       });
       res.json(o);
     } catch (e) { res.status(500).json({ message: "Failed to review onboarding" }); }
@@ -28003,9 +28023,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           companyId: o.companyId,
           workerId: o.workerId,
           onboardingId: o.id,
-          action: "portal_accessed",
-          performedBy: "worker",
-          notes: "Worker first accessed onboarding portal",
+          eventType: "portal_accessed",
+          afterJson: "Worker first accessed onboarding portal",
         });
       }
       // Strip sensitive fields from response
@@ -28025,7 +28044,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const step = await storage.updateOnboardingStep(req.params.stepId, {
         status: "completed",
         completedAt: new Date(),
-        workerData: formData ? JSON.stringify(formData) : null,
+        dataJson: formData ? JSON.stringify(formData) : null,
       });
       if (!step) return res.status(404).json({ message: "Step not found" });
       await storage.createOnboardingAuditLogEntry({
@@ -28033,22 +28052,20 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         workerId: o.workerId,
         onboardingId: o.id,
         stepId: req.params.stepId,
-        action: "step_completed",
-        performedBy: "worker",
-        notes: notes || `Step '${step.stepTitle}' completed`,
+        eventType: "step_completed",
+        afterJson: notes || `Step '${step.title}' completed`,
       });
       // Check if all required steps are done → mark submitted
       const allSteps = await storage.getOnboardingSteps(o.id);
-      const allRequiredDone = allSteps.filter(s => s.isRequired).every(s => s.status === "completed" || s.id === step.id);
+      const allRequiredDone = allSteps.filter(s => s.required).every(s => s.status === "completed" || s.id === step.id);
       if (allRequiredDone) {
         await storage.updateWorkerOnboarding(o.id, { status: "submitted", submittedAt: new Date() });
         await storage.createOnboardingAuditLogEntry({
           companyId: o.companyId,
           workerId: o.workerId,
           onboardingId: o.id,
-          action: "onboarding_submitted",
-          performedBy: "worker",
-          notes: "All required steps completed — onboarding submitted for review",
+          eventType: "onboarding_submitted",
+          afterJson: "All required steps completed — onboarding submitted for review",
         });
       }
       res.json({ step, allRequiredDone });
@@ -28070,6 +28087,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         workerId: o.workerId,
         onboardingId: o.id,
         templateId: agreementTemplateId || o.agreementTemplateId || null,
+        renderedHtml: "",
         status: "signed",
         signedAt: new Date(),
         signedByName,
@@ -28079,9 +28097,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         companyId: o.companyId,
         workerId: o.workerId,
         onboardingId: o.id,
-        action: "agreement_signed",
-        performedBy: "worker",
-        notes: `Agreement signed by ${signedByName}`,
+        eventType: "agreement_signed",
+        afterJson: `Agreement signed by ${signedByName}`,
       });
       res.json(agreement);
     } catch (e) { res.status(500).json({ message: "Failed to sign agreement" }); }
@@ -28366,16 +28383,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (doc.documentType !== "proposal") return res.status(400).json({ message: "Only proposals can be converted" });
       const items = await storage.getBizDocumentItems(doc.id);
       const invNumber = await generateDocNumber(user.companyId, "invoice");
+      const { id: _proposalId, createdAt: _caProp, updatedAt: _uaProp, ...docData } = doc;
       const inv = await storage.createBizDocument({
-        ...doc,
-        id: undefined as any,
+        ...docData,
         documentType: "invoice",
         documentNumber: invNumber,
         status: "draft",
         convertedFromId: doc.id,
         createdByUserId: user.id,
-        createdAt: undefined as any,
-        updatedAt: undefined as any,
       });
       if (items.length) {
         await storage.replaceBizDocumentItems(inv.id, items.map(i => ({
@@ -31080,7 +31095,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           LEFT JOIN jobs j ON j.id = w.default_branch_id
           WHERE r.company_id = ${companyId}
             AND r.status = 'pending'
-            AND r.worker_id = ANY(ARRAY[${sql.raw(allowedWorkerIds!.map((id: string) => "'" + id + "'").join(","))}])
+            AND r.worker_id = ANY(ARRAY[${sql.raw((allowedWorkerIds as string[]).map((id: string) => "'" + id + "'").join(","))}])
           ORDER BY r.requested_at ASC
           LIMIT 20
         `);
@@ -31139,7 +31154,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
           WHERE r.company_id = ${companyId}
             AND r.status = 'pending'
-            AND r.worker_id = ANY(ARRAY[${sql.raw(allowedWorkerIds!.map((id: string) => "'" + id + "'").join(","))}])
+            AND r.worker_id = ANY(ARRAY[${sql.raw((allowedWorkerIds as string[]).map((id: string) => "'" + id + "'").join(","))}])
           ORDER BY r.created_at ASC
           LIMIT 20
         `);
@@ -31240,7 +31255,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Helper: returns accessible cost-center and job ID sets for a manager/supervisor.
   // Admins (any admin role variant) get isAdmin=true; managers/supervisors get filtered sets
   // derived from their direct reports. IDs are kept as strings to match varchar/UUID columns.
-  async function getKpiCallerScope(userId: number, companyId: number): Promise<{ isAdmin: boolean; costCenterIds: Set<string>; jobIds: Set<string> }> {
+  async function getKpiCallerScope(userId: string, companyId: string | number): Promise<{ isAdmin: boolean; costCenterIds: Set<string>; jobIds: Set<string> }> {
     const user = await storage.getUser(userId);
     if (!user) return { isAdmin: false, costCenterIds: new Set(), jobIds: new Set() };
     // Use the existing isAdminRole helper which covers all admin role variants
@@ -31965,7 +31980,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const rows = result.rows ?? (result as any);
       const flags: Record<string, boolean> = {};
       for (const row of rows) {
-        flags[row.feature_key] = toBool(row.enabled);
+        flags[(row as Record<string, unknown>).feature_key as string] = toBool(row.enabled);
       }
       res.json({ all: false, flags });
     } catch (e: any) {
@@ -32181,7 +32196,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         let effective: boolean;
         if (row.override_enabled == null) {
           effective = toBool(row.default_on);
-        } else if (row.override_expires_at && new Date(row.override_expires_at) < new Date()) {
+        } else if (row.override_expires_at && new Date(row.override_expires_at as string) < new Date()) {
           effective = toBool(row.default_on);
         } else {
           effective = toBool(row.override_enabled);
@@ -33469,7 +33484,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           AND event_type IN ('client_message', 'admin_reply')
         ORDER BY created_at ASC
       `);
-      const thread = ((threadRes as any).rows ?? threadRes as any[]).map((r: any) => ({
+      const thread = ((threadRes as unknown as {rows?: unknown[]}).rows ?? []).map((r: any) => ({
         eventType: r.event_type,
         notes: r.notes,
         actorName: r.actor_name || null,

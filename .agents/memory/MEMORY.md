@@ -9,5 +9,6 @@
 - [Stripe client env fallback](stripe-client-env.md) — stripeClient.ts checks STRIPE_SECRET_KEY env var first before Replit connector; needed for dev environments without connector configured.
 - [Contractor Hub Onboarding Tab](contractor-hub-onboarding.md) — OnboardingSection added to hub; uses /api/worker-onboarding (admin only); HubSection type and all valid-section arrays must include "onboarding".
 - [CI lockfile firewall URLs](ci-lockfile-firewall-urls.md) — committed package-lock.json resolved URLs point to package-firewall.replit.local; breaks GitHub Actions npm ci → required checks fail → branch-protected push to main deadlocks.
+- [Express ParamsDictionary augmentation rules](express-params-augmentation.md) — required named props (not optional) + req as Request casts at app.use lambdas; never change helper signatures to Request<{}>.
 - [deploy-app.yml SSH timeout](deploy-ssh-timeout.md) — auto-deploy can fail at SSH dial-timeout (infra, not code); prod may still be healthy, verify /health & /ready independently.
 - [Org hierarchy dual reporting model](org-hierarchy-dual-model.md) — workers.manager_id (flat, no FK, used by approvals) vs employee_manager_relations (recursive, used by authz, no CRUD API); they can drift.

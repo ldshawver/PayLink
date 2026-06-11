@@ -112,12 +112,12 @@ export class WebhookHandlers {
             // ── Worker-level notifications on paid/failed ─────────────────────
             try {
               if (newStatus === "paid" || newStatus === "failed") {
-                const worker = await storage.getWorker(paymentRecord.workerId);
+                const worker = paymentRecord.workerId ? await storage.getWorker(paymentRecord.workerId) : null;
                 if (worker) {
                   const periodLabel = paymentRecord.payDate || "your last pay period";
                   const amount = `$${Number(paymentRecord.netPayAmount || 0).toFixed(2)}`;
                   await storage.createNotification({
-                    companyId: paymentRecord.companyId,
+                    companyId: paymentRecord.companyId!,
                     userId: null,
                     workerId: worker.id,
                     customerId: null,
@@ -199,7 +199,7 @@ export class WebhookHandlers {
                     companyId: run.companyId,
                     payrollRunId: run.id,
                     actorId: "stripe_webhook",
-                    event: newRunStatus,
+                    event: newRunStatus!,
                     previousStatus: run.status,
                     newStatus: newRunStatus,
                     notes: `Run status updated from aggregated payment record statuses (stripe: ${type})`,
