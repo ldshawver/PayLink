@@ -1,7 +1,7 @@
 # PayLink Disaster Recovery Runbook
 
 **Classification:** Internal — Restricted  
-**Last Updated:** 2026-05-02  
+**Last Updated:** 2026-06-11  
 **Owner:** PayLink Platform Engineering  
 **Review Cycle:** Quarterly
 
@@ -94,8 +94,8 @@ psql paylink_production -c "
 ```bash
 pm2 restart paylink
 sleep 15
-curl http://127.0.0.1:8001/health   # expect 200
-curl http://127.0.0.1:8001/ready    # expect 200 with database:connected
+curl http://127.0.0.1:8000/health   # expect 200
+curl https://mypaylink.app/health   # expect 200 (nginx routing)
 pm2 logs paylink --lines 50 --nostream
 ```
 
@@ -115,14 +115,23 @@ git log --oneline -20
 git reset --hard <COMMIT_SHA>
 
 # Reinstall and rebuild
-npm ci --legacy-peer-deps
-npm run build
+pnpm install --frozen-lockfile=false --reporter=append-only
+pnpm build
 
 # Restart
-pm2 start dist/index.cjs --name paylink --cwd /home/paylinkssh/paylink-app/PayLink \
-  --interpreter node --node-args="-r dotenv/config" \
+APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+pm2 start "$APP_PATH/dist/index.cjs" \
+  --name paylink \
+  --cwd "$APP_PATH" \
+  --interpreter node \
+  --node-args="--require dotenv/config" \
   -- dotenv_config_path=/etc/paylink/.env
 pm2 save --force
+
+# Verify
+sleep 5
+curl http://127.0.0.1:8000/health
+curl https://mypaylink.app/health
 ```
 
 ### Rollback via GitHub Actions
@@ -175,7 +184,134 @@ Run this checklist each quarter. Record date and initials of engineer performing
 
 ---
 
-## 9. Cross-References
+## 9. Deployment Monitoring & Rollback Runbook
+
+### 9.1 How the Automated Deploy Pipeline Works
+
+Every push to `main` (and any manual `workflow_dispatch`) triggers `.github/workflows/deploy-app.yml`:
+
+| Stage | What it does | Failure behaviour |
+|-------|-------------|-------------------|
+| **SSH connectivity check** | Opens SSH connection, confirms host is reachable | Fails fast — no code touched |
+| **Pre-flight env check** | Verifies `/etc/paylink/.env` exists; checks `DATABASE_URL`, `SESSION_SECRET`, `APP_BASE_URL` | Fails fast — no code touched |
+| **Deploy** | `git reset --hard origin/main` → install deps → build → nginx config → PM2 restart | Proceeds to health check |
+| **Health check** | Polls `http://127.0.0.1:8000/health` up to 30× (3 s apart) | Triggers auto-rollback on failure |
+| **Auto-rollback** | Resets to previous commit, rebuilds, restarts PM2, re-polls `/health` | Logs outcome; exits 1 (fails CI) |
+| **Public routing check** | Polls `https://mypaylink.app/health` | Warning only — nginx sudo may be unavailable |
+| **Notification** | GitHub Actions `core.notice` (success) or `core.setFailed` (failure) | Visible in Actions summary and PR checks |
+
+### 9.2 Monitoring Checklist (After Every Deploy)
+
+1. Open GitHub → Actions → `Deploy PayLink App` → confirm the run is green.
+2. Click the run → expand **Deploy to VPS** step → look for `✓ Deployment complete`.
+3. Check `https://mypaylink.app/health` returns `{"status":"ok"}`.
+4. If the public health check shows a warning (nginx routing), see §9.5 below.
+
+### 9.3 Automated Rollback (Triggered by Pipeline)
+
+When the internal health check fails after deploy, the pipeline automatically:
+1. Captures PM2 logs (last 80 lines) for diagnostics.
+2. `git reset --hard <prev-commit>` on the VPS.
+3. Reinstalls deps and rebuilds from the previous commit.
+4. Restarts PM2 and re-checks `/health`.
+5. Reports rollback outcome in the Actions log; exits non-zero so the run is marked **failed**.
+
+**You will see this in the Actions log:**
+```
+⏪ Rolling back to <sha>
+✓ Rollback successful — app is healthy on <sha>
+```
+or:
+```
+❌ Rollback also failed — manual intervention required
+```
+
+### 9.4 Manual Emergency Rollback (SSH)
+
+Use this when the automated rollback also fails, or you need to roll back to a specific known-good commit:
+
+```bash
+ssh paylinkssh@$APP_VPS_HOST
+
+cd /home/paylinkssh/paylink-app/PayLink
+
+# 1. Find last known-good commit
+git log --oneline -20
+
+# 2. Stop the app
+pm2 stop paylink
+
+# 3. Reset to known-good commit
+git reset --hard <KNOWN_GOOD_SHA>
+
+# 4. Reinstall and rebuild
+pnpm install --frozen-lockfile=false --reporter=append-only
+pnpm build
+
+# 5. Restart
+APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+pm2 start "$APP_PATH/dist/index.cjs" \
+  --name paylink \
+  --cwd "$APP_PATH" \
+  --interpreter node \
+  --node-args="--require dotenv/config" \
+  -- dotenv_config_path=/etc/paylink/.env
+pm2 save --force
+
+# 6. Verify
+sleep 5
+curl http://127.0.0.1:8000/health
+curl https://mypaylink.app/health
+pm2 logs paylink --lines 30 --nostream
+```
+
+### 9.5 Nginx Manual Fix (When `sudo` Is Unavailable in CI)
+
+If the public routing check fails (`⚠️ nginx may need manual sudo fix`):
+
+```bash
+ssh root@$APP_VPS_HOST
+cp /home/paylinkssh/paylink-app/PayLink/scripts/nginx-mypaylink.conf \
+   /etc/nginx/sites-enabled/mypaylink.app.conf
+nginx -t && systemctl reload nginx
+curl https://mypaylink.app/health
+```
+
+### 9.6 SSH Secrets Required in GitHub
+
+The following repository secrets must be set for the deploy pipeline to function:
+
+| Secret | Description |
+|--------|-------------|
+| `APP_VPS_HOST` | VPS hostname or IP address |
+| `APP_VPS_USER` | SSH username (`paylinkssh`) |
+| `APP_VPS_SSH_KEY` | Private SSH key (PEM format) |
+| `APP_VPS_PORT` | SSH port (default 22) |
+
+If SSH connectivity fails, verify these secrets at:
+GitHub → Repository → Settings → Secrets and variables → Actions.
+
+### 9.7 Diagnosing a Failed Deploy
+
+```bash
+# On the VPS — check PM2 status and recent logs
+pm2 status
+pm2 logs paylink --lines 100 --nostream
+
+# Verify the env file is intact
+ls -la /etc/paylink/.env
+source /etc/paylink/.env && echo "DB: ${DATABASE_URL:0:20}..."
+
+# Verify the binary exists and runs
+node /home/paylinkssh/paylink-app/PayLink/dist/index.cjs --version 2>&1 || true
+
+# Check if port 8000 is bound
+ss -tlnp | grep 8000
+```
+
+---
+
+## 10. Cross-References
 
 - **Deployment runbook:** `DEPLOYMENT.md`
 - **Backup cron script:** `scripts/deploy-paylink.sh`

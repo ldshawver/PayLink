@@ -12,35 +12,99 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to VPS
+      # ── 1. Verify SSH connectivity before doing anything ──────────────────
+      - name: Verify SSH connectivity
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
           username: ${{ secrets.APP_VPS_USER }}
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
+          connect_timeout: 30s
+          command_timeout: 1m
+          script_stop: true
+          script: |
+            echo "SSH connectivity OK — host: $(hostname), user: $(whoami)"
+
+      # ── 2. Pre-flight: verify .env and required vars exist ────────────────
+      - name: Pre-flight environment check
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.APP_VPS_HOST }}
+          username: ${{ secrets.APP_VPS_USER }}
+          key: ${{ secrets.APP_VPS_SSH_KEY }}
+          port: ${{ secrets.APP_VPS_PORT }}
+          connect_timeout: 30s
+          command_timeout: 2m
+          script_stop: true
+          script: |
+            set -e
+            ENV_FILE="/etc/paylink/.env"
+
+            echo "--- Pre-flight: checking $ENV_FILE ---"
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "❌ FATAL: $ENV_FILE does not exist."
+              echo "   The production env file must be created before deployment."
+              echo "   Required vars: DATABASE_URL, SESSION_SECRET, APP_BASE_URL, PORT=8000, NODE_ENV=production"
+              exit 1
+            fi
+            echo "✓ $ENV_FILE exists"
+
+            # Source the env file and check required vars
+            set -a; source "$ENV_FILE"; set +a
+
+            MISSING=""
+            [ -z "$DATABASE_URL" ]   && MISSING="$MISSING DATABASE_URL"
+            [ -z "$SESSION_SECRET" ] && MISSING="$MISSING SESSION_SECRET"
+            [ -z "$APP_BASE_URL" ]   && MISSING="$MISSING APP_BASE_URL"
+
+            if [ -n "$MISSING" ]; then
+              echo "❌ FATAL: Missing required environment variables:$MISSING"
+              echo "   Edit $ENV_FILE and set all required variables before deploying."
+              exit 1
+            fi
+
+            echo "✓ DATABASE_URL   → set"
+            echo "✓ SESSION_SECRET → set"
+            echo "✓ APP_BASE_URL   → $APP_BASE_URL"
+            echo "✓ PORT           → ${PORT:-NOT SET (will use app default)}"
+            echo "✓ NODE_ENV       → ${NODE_ENV:-NOT SET}"
+            echo "Pre-flight passed."
+
+      # ── 3. Deploy ─────────────────────────────────────────────────────────
+      - name: Deploy to VPS
+        id: deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.APP_VPS_HOST }}
+          username: ${{ secrets.APP_VPS_USER }}
+          key: ${{ secrets.APP_VPS_SSH_KEY }}
+          port: ${{ secrets.APP_VPS_PORT }}
+          connect_timeout: 30s
           command_timeout: 30m
-          # Let the shell script decide which non-zero checks are fatal.
-          # appleboy's script_stop treats optional probes like "sudo -n true"
-          # as hard failures before the script can enter its fallback branch.
+          # script_stop: false so the shell script controls which failures are fatal
+          # (avoids optional probes like "sudo -n true" being treated as hard failures)
           script_stop: false
           script: |
             set -e
-            echo "Starting deployment..."
+            echo "Starting deployment — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
             cd /home/paylinkssh/paylink-app/PayLink
 
+            # ── Snapshot current commit for rollback ───────────────────────
+            PREV_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
+            echo "Previous commit: ${PREV_COMMIT:-none}"
+
             git fetch origin main
             git reset --hard origin/main
-            echo "✓ Repository updated"
+            NEW_COMMIT=$(git rev-parse HEAD)
+            echo "✓ Repository updated → $NEW_COMMIT"
 
-            # Take ownership of any root-owned build artifacts from prior sudo runs.
-            # This must happen before rm or pnpm, otherwise both will fail with EACCES.
+            # ── Fix ownership of any root-owned artifacts ──────────────────
             sudo chown -R paylinkssh:paylinkssh . 2>/dev/null || true
 
             rm -rf node_modules || {
-              echo "❌ Cannot remove node_modules (still root-owned). Fix with:"
-              echo "   ssh into VPS as root and run:"
+              echo "❌ Cannot remove node_modules (still root-owned). Fix:"
               echo "   sudo chown -R paylinkssh:paylinkssh /home/paylinkssh/paylink-app/PayLink"
               exit 1
             }
@@ -56,16 +120,12 @@ jobs:
             pnpm build
             echo "✓ Build completed"
 
-            # ── Nginx config update ──────────────────────────────────────────
-            # Deploy the canonical nginx config so mypaylink.app proxies to the
-            # Node app on port 8000.  Any CloudPanel-generated static-root config
-            # is replaced.  nginx -t validates before reload so a bad config can
-            # never take down a running server.
+            # ── Nginx config update ────────────────────────────────────────
             NGINX_CONF_SRC="/home/paylinkssh/paylink-app/PayLink/scripts/nginx-mypaylink.conf"
             NGINX_CONF_DST="/etc/nginx/sites-enabled/mypaylink.app.conf"
 
             if sudo -n true 2>/dev/null; then
-              if sudo cp "$NGINX_CONF_SRC" "$NGINX_CONF_DST" && sudo nginx -t; then
+              if sudo cp "$NGINX_CONF_SRC" "$NGINX_CONF_DST" && sudo nginx -t 2>/dev/null; then
                 sudo systemctl reload nginx
                 echo "✓ Nginx config deployed and reloaded"
               else
@@ -75,21 +135,10 @@ jobs:
               echo "⚠️  Passwordless sudo unavailable — skipping nginx deployment"
             fi
 
-            # ── Pre-flight: verify env loads and PORT is configured ────────
-            echo "--- Pre-flight env check ---"
-            node -e "
-              process.argv[2]='dotenv_config_path=/etc/paylink/.env';
-              require('dotenv/config');
-              const r={PORT:process.env.PORT||'NOT SET',NODE_ENV:process.env.NODE_ENV||'NOT SET',HAS_DB:!!process.env.DATABASE_URL,HAS_SECRET:!!process.env.SESSION_SECRET};
-              console.log(JSON.stringify(r));
-              if(!process.env.DATABASE_URL){process.stderr.write('ERROR: DATABASE_URL missing\n');process.exit(1);}
-              if(!process.env.SESSION_SECRET){process.stderr.write('ERROR: SESSION_SECRET missing\n');process.exit(1);}
-              if(!process.env.PORT){process.stderr.write('WARN: PORT not set, defaulting to 5000 — health check expects 8000\n');}
-            " 2>&1
-
+            # ── Restart app ────────────────────────────────────────────────
+            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
             pm2 delete paylink 2>/dev/null || true
 
-            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
             pm2 start "$APP_PATH/dist/index.cjs" \
               --name paylink \
               --cwd "$APP_PATH" \
@@ -100,29 +149,89 @@ jobs:
             pm2 save --force
             echo "✓ Application started with PM2"
 
+            # ── Health check with rollback on failure ──────────────────────
             sleep 5
-
-            for i in {1..30}; do
-              if curl -fs http://127.0.0.1:8000/health > /dev/null; then
-                echo "✓ Health check passed"
-                echo ""
-                echo "=== Verifying public routing ==="
-                HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 https://mypaylink.app/health 2>/dev/null || echo "ERR")
-                if [ "$HTTP_CODE" = "200" ]; then
-                  echo "✓ Public https://mypaylink.app/health → $HTTP_CODE (nginx routing OK)"
-                else
-                  echo "⚠️  Public https://mypaylink.app/health → $HTTP_CODE (nginx may need manual sudo fix — see replit.md)"
-                fi
-                echo "✓ Deployment successful"
-                exit 0
+            HEALTH_OK=0
+            for i in $(seq 1 30); do
+              if curl -fs http://127.0.0.1:8000/health > /dev/null 2>&1; then
+                HEALTH_OK=1
+                echo "✓ Health check passed (attempt $i)"
+                break
               fi
-
-              if [ $i -eq 30 ]; then
-                echo "❌ Health check failed after 30 attempts"
-                pm2 status
-                pm2 logs paylink --lines 80 --nostream
-                exit 1
-              fi
-
-              sleep 2
+              echo "  Waiting for health check... attempt $i/30"
+              sleep 3
             done
+
+            if [ "$HEALTH_OK" = "0" ]; then
+              echo "❌ Health check failed after 30 attempts — triggering rollback"
+              pm2 logs paylink --lines 80 --nostream || true
+
+              # ── Rollback to previous commit ──────────────────────────────
+              if [ -n "$PREV_COMMIT" ]; then
+                echo "⏪ Rolling back to $PREV_COMMIT"
+                git reset --hard "$PREV_COMMIT"
+                pnpm install --frozen-lockfile=false --reporter=append-only 2>/dev/null || true
+                pnpm build 2>/dev/null || true
+                pm2 delete paylink 2>/dev/null || true
+                pm2 start "$APP_PATH/dist/index.cjs" \
+                  --name paylink \
+                  --cwd "$APP_PATH" \
+                  --interpreter node \
+                  --node-args="--require dotenv/config" \
+                  -- dotenv_config_path=/etc/paylink/.env
+                pm2 save --force
+
+                sleep 5
+                if curl -fs http://127.0.0.1:8000/health > /dev/null 2>&1; then
+                  echo "✓ Rollback successful — app is healthy on $PREV_COMMIT"
+                else
+                  echo "❌ Rollback also failed — manual intervention required"
+                  pm2 logs paylink --lines 40 --nostream || true
+                fi
+              else
+                echo "⚠️  No previous commit recorded — cannot auto-rollback"
+              fi
+              exit 1
+            fi
+
+            # ── Verify public routing ──────────────────────────────────────
+            echo ""
+            echo "=== Verifying public routing ==="
+            HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 https://mypaylink.app/health 2>/dev/null || echo "ERR")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✓ Public https://mypaylink.app/health → $HTTP_CODE (nginx routing OK)"
+            else
+              echo "⚠️  Public https://mypaylink.app/health → $HTTP_CODE"
+              echo "   nginx may need manual sudo fix — see replit.md for instructions"
+            fi
+
+            echo ""
+            echo "✓ Deployment complete — commit $NEW_COMMIT"
+
+      # ── 4. Notify: success ────────────────────────────────────────────────
+      - name: Notify success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.sha.slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const msg = `✅ **PayLink deployed successfully**\n` +
+              `Commit: \`${sha}\` · [View run](${runUrl})\n` +
+              `Health: https://mypaylink.app/health`;
+            core.notice(msg);
+            console.log(msg);
+
+      # ── 5. Notify: failure ────────────────────────────────────────────────
+      - name: Notify failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.sha.slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const msg = `❌ **PayLink deploy FAILED** — rollback may have triggered\n` +
+              `Commit: \`${sha}\` · [View run](${runUrl})\n` +
+              `Check run logs for details. If rollback also failed, SSH to VPS immediately.`;
+            core.setFailed(msg);
+            console.log(msg);
