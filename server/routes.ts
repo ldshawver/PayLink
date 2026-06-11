@@ -15,7 +15,7 @@ import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -370,6 +370,40 @@ async function writeAuditLog(opts: {
   } catch (e) {
     console.error("[auditLog] Failed to write audit entry:", e);
   }
+}
+
+/**
+ * Dual-model direct-report check.
+ * Consults employee_manager_relations (primary/richer) and workers.manager_id (legacy flat).
+ * Returns true if either model confirms the relationship; logs a warning when they disagree.
+ */
+async function checkIsDirectReport(
+  resourceCompanyId: string,
+  workerId: string,
+  managerId: string
+): Promise<boolean> {
+  const emrResult = await db.execute(sql`
+    SELECT 1 FROM employee_manager_relations
+    WHERE company_id = ${resourceCompanyId}
+      AND employee_id = ${workerId}
+      AND manager_id = ${managerId}
+      AND is_active = TRUE
+    LIMIT 1
+  `);
+  const inEMR = (emrResult.rows ?? []).length > 0;
+
+  const flatResult = await db.execute(sql`
+    SELECT 1 FROM workers WHERE id = ${workerId} AND manager_id = ${managerId} LIMIT 1
+  `);
+  const inFlat = (flatResult.rows ?? []).length > 0;
+
+  if (inEMR !== inFlat) {
+    console.warn(
+      `[hierarchy] Dual-model drift — workerId=${workerId}, managerId=${managerId}, ` +
+      `companyId=${resourceCompanyId}: EMR=${inEMR}, workers.manager_id=${inFlat}`
+    );
+  }
+  return inEMR || inFlat;
 }
 
 async function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
@@ -6546,10 +6580,8 @@ export async function registerRoutes(
       // Hierarchy check: managers/supervisors can only modify direct reports (or self)
       if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
         if (existing.workerId !== actingUser.workerId) {
-          const subResult = await db.execute(
-            sql`SELECT id FROM workers WHERE id = ${existing.workerId} AND manager_id = ${actingUser.workerId}`
-          );
-          if (subResult.rows.length === 0) {
+          const isDirect = await checkIsDirectReport(existing.companyId!, existing.workerId, actingUser.workerId!);
+          if (!isDirect) {
             return res.status(403).json({ message: "Forbidden: entry belongs to a worker who is not your direct report" });
           }
         }
@@ -6688,10 +6720,8 @@ export async function registerRoutes(
       // Hierarchy check: pure managers/supervisors can only delete entries for direct reports (or self)
       if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
         if (existing.workerId !== actingUser.workerId) {
-          const subResult = await db.execute(
-            sql`SELECT id FROM workers WHERE id = ${existing.workerId} AND manager_id = ${actingUser.workerId}`
-          );
-          if (subResult.rows.length === 0) {
+          const isDirect = await checkIsDirectReport(existing.companyId!, existing.workerId, actingUser.workerId!);
+          if (!isDirect) {
             return res.status(403).json({ message: "Forbidden: entry belongs to a worker who is not your direct report" });
           }
         }
@@ -6732,10 +6762,8 @@ export async function registerRoutes(
       if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
         const targetWorkerId = request.worker_id;
         if (targetWorkerId !== actingUser.workerId) {
-          const subordinateResult = await db.execute(
-            sql`SELECT id FROM workers WHERE id = ${targetWorkerId} AND manager_id = ${actingUser.workerId}`
-          );
-          if (subordinateResult.rows.length === 0) {
+          const isDirect = await checkIsDirectReport(request.company_id!, targetWorkerId, actingUser.workerId!);
+          if (!isDirect) {
             return res.status(403).json({ message: "Forbidden: you can only comment on requests from your direct reports" });
           }
         }
@@ -6763,10 +6791,8 @@ export async function registerRoutes(
       }
       // Hierarchy check: pure managers/supervisors can only edit requests from their direct reports
       if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
-        const subResult = await db.execute(
-          sql`SELECT id FROM workers WHERE id = ${request.worker_id} AND manager_id = ${actingUser.workerId}`
-        );
-        if (subResult.rows.length === 0) {
+        const isDirect = await checkIsDirectReport(request.company_id!, request.worker_id, actingUser.workerId!);
+        if (!isDirect) {
           return res.status(403).json({ message: "Forbidden: worker is not your direct report" });
         }
       }
@@ -7818,9 +7844,13 @@ export async function registerRoutes(
   });
 
   // Departments
-  app.get("/api/departments", async (req, res) => {
+  app.get("/api/departments", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string | undefined)
+        : (user.companyId ?? undefined);
       const departments = await storage.getDepartments(companyId);
       res.json(departments);
     } catch (error) {
@@ -7867,9 +7897,13 @@ export async function registerRoutes(
   });
 
   // Branches
-  app.get("/api/branches", async (req, res) => {
+  app.get("/api/branches", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string | undefined)
+        : (user.companyId ?? undefined);
       const branches = await storage.getBranches(companyId);
       res.json(branches);
     } catch (error) {
@@ -7966,9 +8000,13 @@ export async function registerRoutes(
   });
 
   // Divisions
-  app.get("/api/divisions", async (req, res) => {
+  app.get("/api/divisions", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string | undefined)
+        : (user.companyId ?? undefined);
       const result = await storage.getDivisions(companyId);
       res.json(result);
     } catch (error) {
@@ -8014,9 +8052,13 @@ export async function registerRoutes(
   });
 
   // Positions
-  app.get("/api/positions", async (req, res) => {
+  app.get("/api/positions", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string | undefined)
+        : (user.companyId ?? undefined);
       const result = await storage.getPositions(companyId);
       res.json(result);
     } catch (error) {
@@ -8077,9 +8119,13 @@ export async function registerRoutes(
   });
 
   // Cost Centers
-  app.get("/api/cost-centers", async (req, res) => {
+  app.get("/api/cost-centers", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string | undefined)
+        : (user.companyId ?? undefined);
       const result = await storage.getCostCenters(companyId);
       res.json(result);
     } catch (error) {
@@ -8125,9 +8171,13 @@ export async function registerRoutes(
   });
 
   // Jobs
-  app.get("/api/jobs", async (req, res) => {
+  app.get("/api/jobs", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string | undefined)
+        : (user.companyId ?? undefined);
       const result = await storage.getJobs(companyId);
       res.json(result);
     } catch (error) {
@@ -8183,6 +8233,169 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to delete job" });
+    }
+  });
+
+  // ── Employee-Manager Relations CRUD ────────────────────────────────────────
+
+  app.get("/api/employee-manager-relations", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string)
+        : user.companyId;
+      if (!companyId) return res.status(400).json({ message: "Company context required" });
+      const employeeId = req.query.employeeId as string | undefined;
+      const relations = await storage.getEmployeeManagerRelations(companyId, employeeId);
+      res.json(relations);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch manager relations" });
+    }
+  });
+
+  app.post("/api/employee-manager-relations", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const data = insertEmployeeManagerRelationSchema.parse(req.body);
+      if (!isPlatformUser(user.role) && user.companyId && data.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+      const relation = await storage.createEmployeeManagerRelation(data);
+      await writeAuditLog({
+        actorUserId: req.session!.userId!,
+        targetResource: "employee_manager_relations",
+        changeType: "create",
+        afterValue: JSON.stringify({ employeeId: data.employeeId, managerId: data.managerId }),
+        companyId: data.companyId,
+      });
+      res.status(201).json(relation);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      console.error(error);
+      res.status(500).json({ message: "Failed to create manager relation" });
+    }
+  });
+
+  app.patch("/api/employee-manager-relations/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const relation = await storage.updateEmployeeManagerRelation(req.params.id, req.body);
+      if (!relation) return res.status(404).json({ message: "Relation not found" });
+      if (!isPlatformUser(user.role) && user.companyId && relation.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+      await writeAuditLog({
+        actorUserId: req.session!.userId!,
+        targetResource: "employee_manager_relations",
+        changeType: "update",
+        afterValue: JSON.stringify(req.body),
+        companyId: relation.companyId,
+      });
+      res.json(relation);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update manager relation" });
+    }
+  });
+
+  app.delete("/api/employee-manager-relations/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const existing = await db.execute(sql`SELECT * FROM employee_manager_relations WHERE id = ${req.params.id}`);
+      if ((existing.rows ?? []).length === 0) return res.status(404).json({ message: "Relation not found" });
+      const row = existing.rows[0] as any;
+      if (!isPlatformUser(user.role) && user.companyId && row.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+      await storage.deleteEmployeeManagerRelation(req.params.id);
+      await writeAuditLog({
+        actorUserId: req.session!.userId!,
+        targetResource: "employee_manager_relations",
+        changeType: "delete",
+        beforeValue: JSON.stringify({ employeeId: row.employee_id, managerId: row.manager_id }),
+        companyId: row.company_id,
+      });
+      res.json({ message: "Relation deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete manager relation" });
+    }
+  });
+
+  // GET /api/org-chart — nested org tree using employee_manager_relations as primary source of truth
+  app.get("/api/org-chart", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companyId = isPlatformUser(user.role)
+        ? (req.query.companyId as string)
+        : user.companyId;
+      if (!companyId) return res.status(400).json({ message: "Company context required" });
+      if (!isPlatformUser(user.role) && user.companyId && user.companyId !== companyId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+
+      const [workersAll, relations] = await Promise.all([
+        storage.getWorkers(companyId),
+        storage.getEmployeeManagerRelations(companyId),
+      ]);
+
+      const workerMap = new Map(workersAll.map(w => [w.id, w]));
+      const activeRelations = relations.filter(r => r.isActive);
+      const reportsByManager = new Map<string, string[]>();
+      const employeesInEMR = new Set<string>();
+
+      for (const rel of activeRelations) {
+        if (!reportsByManager.has(rel.managerId)) reportsByManager.set(rel.managerId, []);
+        reportsByManager.get(rel.managerId)!.push(rel.employeeId);
+        employeesInEMR.add(rel.employeeId);
+      }
+
+      // Warn about workers with workers.manager_id set but no active EMR row (drift detection)
+      for (const w of workersAll) {
+        if (w.managerId && !employeesInEMR.has(w.id)) {
+          console.warn(
+            `[org-chart] Drift: worker ${w.id} has workers.manager_id=${w.managerId} but no active employee_manager_relations row`
+          );
+        }
+      }
+
+      type OrgNode = {
+        workerId: string;
+        firstName: string;
+        lastName: string;
+        jobTitle: string | null;
+        department: string | null;
+        reports: OrgNode[];
+      };
+
+      const buildNode = (workerId: string): OrgNode => {
+        const w = workerMap.get(workerId);
+        return {
+          workerId,
+          firstName: w?.firstName ?? "",
+          lastName: w?.lastName ?? "",
+          jobTitle: w?.jobTitle ?? null,
+          department: w?.department ?? null,
+          reports: (reportsByManager.get(workerId) ?? []).map(buildNode),
+        };
+      };
+
+      const rootIds = workersAll
+        .filter(w => w.isActive && !employeesInEMR.has(w.id))
+        .map(w => w.id);
+
+      res.json(rootIds.map(buildNode));
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to build org chart" });
     }
   });
 
@@ -19989,10 +20202,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Hierarchy check: pure managers/supervisors can only review direct reports or self
       if (actingUserTOR && !isAdminRole(actingUserTOR.role) && isManagerRole(actingUserTOR.role) && actingUserTOR.workerId) {
         if (existingTOR.workerId !== actingUserTOR.workerId) {
-          const subTOR = await db.execute(
-            sql`SELECT id FROM workers WHERE id = ${existingTOR.workerId} AND manager_id = ${actingUserTOR.workerId} LIMIT 1`
-          );
-          if (subTOR.rows.length === 0) {
+          const isDirect = await checkIsDirectReport(existingTOR.companyId!, existingTOR.workerId, actingUserTOR.workerId!);
+          if (!isDirect) {
             return res.status(403).json({ message: "Forbidden: you can only review requests from your direct reports" });
           }
         }
