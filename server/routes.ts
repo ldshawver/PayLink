@@ -8285,17 +8285,22 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
-      const relation = await storage.updateEmployeeManagerRelation(req.params.id, req.body);
-      if (!relation) return res.status(404).json({ message: "Relation not found" });
-      if (!isPlatformUser(user.role) && user.companyId && relation.companyId !== user.companyId) {
+      // Fetch first for authorization — must happen BEFORE any write
+      const existing = await db.execute(sql`SELECT * FROM employee_manager_relations WHERE id = ${req.params.id} LIMIT 1`);
+      if ((existing.rows ?? []).length === 0) return res.status(404).json({ message: "Relation not found" });
+      const existingRow = existing.rows[0] as any;
+      if (!isPlatformUser(user.role) && user.companyId && existingRow.company_id !== user.companyId) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
+      const relation = await storage.updateEmployeeManagerRelation(req.params.id, req.body);
+      if (!relation) return res.status(404).json({ message: "Relation not found" });
       await writeAuditLog({
         actorUserId: req.session!.userId!,
         targetResource: "employee_manager_relations",
         changeType: "update",
+        beforeValue: JSON.stringify({ employeeId: existingRow.employee_id, managerId: existingRow.manager_id }),
         afterValue: JSON.stringify(req.body),
-        companyId: relation.companyId,
+        companyId: existingRow.company_id,
       });
       res.json(relation);
     } catch (error) {
