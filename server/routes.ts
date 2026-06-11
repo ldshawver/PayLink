@@ -1346,6 +1346,13 @@ export async function registerRoutes(
       if (user.isActive === false) {
         return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
       }
+      // INVARIANT: platform-scoped accounts must never have a companyId.
+      // A platform user with companyId set indicates a data integrity violation;
+      // block login to prevent that account from bypassing tenant isolation checks.
+      if (isPlatformUser(user.role) && user.companyId) {
+        console.error(`[SECURITY] Platform user ${user.id} (${user.role}) has companyId=${user.companyId} — login blocked pending data correction`);
+        return res.status(403).json({ message: "Account configuration error. Contact your platform administrator." });
+      }
       // MFA step-up: check mfa_enabled and mfa_enforced_at on the user
       const mfaCheck = await db.execute(sql`
         SELECT mfa_enabled, mfa_enforced_at, totp_secret FROM users WHERE id = ${user.id}
@@ -1967,10 +1974,32 @@ export async function registerRoutes(
         return res.json(worker);
       }
 
-      // Managers/admins are scoped to their own company
+      // Managers/admins: enforce role_permissions scope columns (view_own / view_department / view_company)
+      // via the authorization module in addition to the company-level tenant isolation check.
       const effectiveCompanyId = user?.companyId ?? null;
       if (effectiveCompanyId && worker.companyId !== effectiveCompanyId) {
         return res.status(403).json({ message: "Forbidden" });
+      }
+
+      // Secondary check — role_permissions scope columns. This enforces granular
+      // canViewOwn / canViewDepartment / canViewCompany flags from the RBAC matrix.
+      // On deny we return 403; on authorization-module error we fall through
+      // (company-level isolation above already applied).
+      try {
+        const { checkPermission: cpCheck } = await import("./auth/authorization.js");
+        const authResult = await cpCheck(
+          req.session.userId!,
+          "workers",
+          "view_company",
+          { ownerId: worker.id, departmentId: worker.department ?? undefined, companyId: worker.companyId ?? undefined }
+        );
+        if (!authResult.granted) {
+          // Scope columns deny access (e.g. view_company=false, view_department=false)
+          return res.status(403).json({ message: "Forbidden: insufficient RBAC scope" });
+        }
+      } catch (scopeErr) {
+        // Authorization module error — inline company-scope isolation above is still in effect
+        console.error("[RBAC] worker view scope check failed:", scopeErr);
       }
 
       return res.json(worker);
@@ -17818,6 +17847,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isPlatformUser(requestor?.role) && !effectiveCompanyId) {
         effectiveCompanyId = requestor?.companyId || null;
       }
+      // INVARIANT: platform-role users must never have a companyId.
+      // Enforce this at creation time regardless of who is creating the account.
+      if (isPlatformUser(desiredRole) && effectiveCompanyId) {
+        return res.status(400).json({ message: "Platform-scoped roles must not have a company assigned." });
+      }
       const decision = evaluateUserProvisioning({
         requestor: { role: requestor?.role, companyId: requestor?.companyId },
         desiredRole,
@@ -27574,32 +27608,32 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     const { handleProvisioningEvent, getProvisioningStatus } = await import("./provisioning/TenantProvisioningService");
     const { implementationTemplates } = await import("./provisioning/implementationTemplates");
 
-    app.get("/api/provisioning/templates", requireAuth, requireRole("admin"), async (_req, res) => {
+    app.get("/api/provisioning/templates", requireAuth, requirePlatformRole(), async (_req, res) => {
       res.json(implementationTemplates);
     });
 
-    app.get("/api/provisioning/tenants", requireAuth, requireRole("admin"), async (_req, res) => {
+    app.get("/api/provisioning/tenants", requireAuth, requirePlatformRole(), async (_req, res) => {
       try {
         const gates = await storage.getTenantCommercialGates();
         res.json(gates);
       } catch (e) { res.status(500).json({ message: "Failed to fetch provisioning tenants" }); }
     });
 
-    app.get("/api/provisioning/tenants/:companyId", requireAuth, requireRole("admin"), async (req, res) => {
+    app.get("/api/provisioning/tenants/:companyId", requireAuth, requirePlatformRole(), async (req, res) => {
       try {
         const status = await getProvisioningStatus(req.params.companyId);
         res.json(status);
       } catch (e) { res.status(500).json({ message: "Failed to fetch provisioning status" }); }
     });
 
-    app.get("/api/provisioning/tenants/:companyId/audit", requireAuth, requireRole("admin"), async (req, res) => {
+    app.get("/api/provisioning/tenants/:companyId/audit", requireAuth, requirePlatformRole(), async (req, res) => {
       try {
         const logs = await storage.getTenantProvisioningAuditLogs(req.params.companyId);
         res.json(logs);
       } catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
     });
 
-    app.post("/api/provisioning/event", requireAuth, requireRole("admin"), async (req, res) => {
+    app.post("/api/provisioning/event", requireAuth, requirePlatformRole(), async (req, res) => {
       try {
         const { companyId, event, payload } = req.body;
         if (!companyId || !event) return res.status(400).json({ message: "companyId and event are required" });
@@ -27608,7 +27642,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to handle provisioning event" }); }
     });
 
-    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requireRole("admin"), async (req, res) => {
+    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requirePlatformRole(), async (req, res) => {
       try {
         const { companyId } = req.params;
         const gate = await storage.getTenantCommercialGate(companyId);
@@ -27618,7 +27652,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to retry provisioning" }); }
     });
 
-    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requireRole("admin"), async (req, res) => {
+    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requirePlatformRole(), async (req, res) => {
       try {
         const { companyId } = req.params;
         const gate = await storage.upsertTenantCommercialGate(companyId, req.body);
@@ -27626,7 +27660,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to update commercial gates" }); }
     });
 
-    app.patch("/api/provisioning/projects/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    app.patch("/api/provisioning/projects/:id", requireAuth, requirePlatformRole(), async (req, res) => {
       try {
         const updated = await storage.updateTenantImplementationProject(req.params.id, req.body);
         res.json(updated);

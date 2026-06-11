@@ -668,17 +668,62 @@ Accessible only to `platform_*` roles or `platform_super_admin`.
 | POST | `/api/platform/audit/licensing/:companyId/gate-override` | PA |
 | GET | `/api/platform/audit/export` | PA |
 | GET | `/api/admin/provision-demo` | A SA |
-| GET | `/api/provisioning/templates` | A R(admin) ⚠️ |
-| GET | `/api/provisioning/tenants` | A R(admin) ⚠️ |
-| GET | `/api/provisioning/tenants/:companyId` | A R(admin) ⚠️ |
-| POST | `/api/provisioning/event` | A R(admin) ⚠️ |
-| PATCH | `/api/provisioning/tenants/:companyId/gates` | A R(admin) ⚠️ |
+| GET | `/api/provisioning/templates` | A PM |
+| GET | `/api/provisioning/tenants` | A PM |
+| GET | `/api/provisioning/tenants/:companyId` | A PM |
+| POST | `/api/provisioning/event` | A PM |
+| PATCH | `/api/provisioning/tenants/:companyId/gates` | A PM |
 
-> ⚠️ **Known gap:** `/api/provisioning/*` routes use `requireRole("admin")` instead of `requirePlatformRole()`. A tenant admin (who has the `admin` role) can reach these. Follow-up hardening recommended.
+> All `/api/provisioning/*` routes now use `requirePlatformRole()` — tenant admins cannot reach these.
 
 ---
 
-## 5. Gaps Patched This Session
+## 5. role_permissions Scope Column Enforcement
+
+The `role_permissions` table contains granular scope flags per resource:
+
+| Column | Meaning |
+|--------|---------|
+| `canViewOwn` | User can view records they own |
+| `canEditOwn` | User can edit records they own |
+| `canViewSubordinates` | User can view direct reports' records |
+| `canEditSubordinates` | User can edit direct reports' records |
+| `canViewDepartment` | User can view all records in own department |
+| `canEditDepartment` | User can edit all records in own department |
+| `canViewCompany` | User can view all records in own company |
+| `canEditCompany` | User can edit all records in own company |
+| `canApprove*` | Approve-level equivalents |
+
+### How scope columns are enforced server-side
+
+Two complementary enforcement layers exist:
+
+**Layer 1 — Inline company-level isolation (all tenant routes)**  
+Every tenant-facing endpoint uses `isPlatformUser(user.role)` + `user.companyId` scoping to guarantee cross-tenant isolation. Non-managers see only their own records; managers see only their company's records.
+
+**Layer 2 — Authorization module (`server/auth/authorization.ts`)**  
+The `checkPermission(userId, resource, permission, ScopeContext)` function evaluates the scope columns from `role_permissions` for a given resource + permission tuple. This is the runtime enforcement of the RBAC scope matrix.
+
+Routes with `checkPermission` enforcement:
+| Route | Permission checked | Fallback |
+|-------|--------------------|---------|
+| `GET /api/workers/:id` | `workers / view_company` | Company-level isolation |
+| `POST /api/permissions/check` | Caller-specified | — |
+| `GET /api/permissions/matrix` | — (metadata endpoint) | — |
+| `GET /api/permissions/effective/:userId` | — (metadata endpoint) | — |
+
+Test coverage for scope column logic is in `server/__tests__/auth-guard.test.ts` (Suite 4).
+
+### Platform user `companyId` invariant
+
+Platform-role users (`platform_*`) must **never** have a `companyId` assigned. This invariant is enforced at two points:
+
+1. **Login** (`POST /api/auth/login`): if the authenticated user has a `platform_*` role AND `companyId != null`, login is blocked with HTTP 403.
+2. **User creation** (`POST /api/users`): if `desiredRole` starts with `platform_`, `effectiveCompanyId` must be null or the request is rejected with HTTP 400.
+
+---
+
+## 6. Gaps Patched This Session
 
 90 endpoint middlewares were added. Key groups:
 
@@ -721,7 +766,7 @@ Accessible only to `platform_*` roles or `platform_super_admin`.
 
 ---
 
-## 6. Remaining Accepted Risks
+## 7. Remaining Accepted Risks
 
 | Route | Reason Not Patched |
 |-------|------------------|
@@ -738,7 +783,6 @@ Accessible only to `platform_*` roles or `platform_super_admin`.
 | `/api/analytics/event` | Anonymous telemetry |
 | `/api/license/request` | Pre-auth license request |
 | `/api/auth/*` | Auth endpoints themselves |
-| `/api/provisioning/*` | Uses `requireRole("admin")` — tenant admin can reach; recommend `requirePlatformRole()` |
 
 ---
 
