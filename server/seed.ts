@@ -130,8 +130,87 @@ async function seedTestAccounts() {
         console.log(`Test account created: ${u.username} / ${TEST_PASSWORD} [${u.role}]`);
       }
     }
+
+    // Ensure test_employee and test_contractor have worker records so
+    // worker-specific routes (paystubs, timesheets, etc.) work correctly.
+    await seedTestTenantWorkers(testCompanyId);
   } catch (e: any) {
     console.log("Could not seed test accounts:", e?.message || e);
+  }
+}
+
+async function seedTestTenantWorkers(testCompanyId: string) {
+  try {
+    // Find or create employee worker for test_employee
+    const empUser = await db.select().from(users).where(eq(users.username, "test_employee")).then(r => r[0]);
+    if (empUser && !empUser.workerId) {
+      const existingEmpWorker = await db.select({ id: workers.id })
+        .from(workers)
+        .where(and(eq(workers.companyId, testCompanyId), eq(workers.employeeNumber, "TEST-001")))
+        .limit(1);
+      let empWorkerId: string;
+      if (existingEmpWorker.length > 0) {
+        empWorkerId = existingEmpWorker[0].id;
+      } else {
+        const [w] = await db.insert(workers).values({
+          companyId: testCompanyId,
+          firstName: "Test",
+          lastName: "Employee",
+          workerType: "employee",
+          status: "active",
+          payRate: "25.00",
+          payType: "hourly",
+          department: "General",
+          jobTitle: "Test Employee",
+          employeeNumber: "TEST-001",
+          state: "TX",
+          country: "US",
+          email: "test.employee@dev.paylink.app",
+          isActive: true,
+          hireDate: "2024-01-01",
+        }).returning();
+        empWorkerId = w.id;
+      }
+      await db.update(users).set({ workerId: empWorkerId }).where(eq(users.username, "test_employee"));
+      console.log(`Test employee worker linked (workerId: ${empWorkerId})`);
+    }
+
+    // Find or create contractor worker for test_contractor
+    const conUser = await db.select().from(users).where(eq(users.username, "test_contractor")).then(r => r[0]);
+    if (conUser && !conUser.workerId) {
+      const existingConWorker = await db.select({ id: workers.id })
+        .from(workers)
+        .where(and(eq(workers.companyId, testCompanyId), eq(workers.employeeNumber, "TEST-002")))
+        .limit(1);
+      let conWorkerId: string;
+      if (existingConWorker.length > 0) {
+        conWorkerId = existingConWorker[0].id;
+      } else {
+        const [w] = await db.insert(workers).values({
+          companyId: testCompanyId,
+          firstName: "Test",
+          lastName: "Contractor",
+          workerType: "contractor",
+          status: "active",
+          payRate: "75.00",
+          payType: "hourly",
+          department: "General",
+          jobTitle: "Test Contractor",
+          employeeNumber: "TEST-002",
+          state: "TX",
+          country: "US",
+          email: "test.contractor@dev.paylink.app",
+          isActive: true,
+          hireDate: "2024-01-01",
+          contractorType: "hourly",
+        }).returning();
+        conWorkerId = w.id;
+      }
+      await db.update(users).set({ workerId: conWorkerId }).where(eq(users.username, "test_contractor"));
+      console.log(`Test contractor worker linked (workerId: ${conWorkerId})`);
+    }
+  } catch (e: any) {
+    console.log("Could not seed test tenant workers:", e?.message || e);
   }
 }
 
@@ -919,8 +998,12 @@ async function seedPlatformModules() {
 
 async function seedDemoHierarchy() {
   try {
-    const existingLocations = await db.select().from(locations);
-    if (existingLocations.length > 0) {
+    // Guard on company name so repeated seed runs don't create duplicate Demo Corps
+    const existingDemo = await db.select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.name, "Demo Corp"))
+      .limit(1);
+    if (existingDemo.length > 0) {
       console.log("Demo hierarchy already seeded, skipping");
       return;
     }
