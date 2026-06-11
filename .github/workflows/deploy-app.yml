@@ -194,15 +194,28 @@ jobs:
               exit 1
             fi
 
-            # ── Verify public routing ──────────────────────────────────────
+            # ── Final gate: public routing via nginx ───────────────────────
             echo ""
-            echo "=== Verifying public routing ==="
-            HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 https://mypaylink.app/health 2>/dev/null || echo "ERR")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✓ Public https://mypaylink.app/health → $HTTP_CODE (nginx routing OK)"
-            else
-              echo "⚠️  Public https://mypaylink.app/health → $HTTP_CODE"
-              echo "   nginx may need manual sudo fix — see replit.md for instructions"
+            echo "=== Final gate: public routing ==="
+            PUBLIC_OK=0
+            for j in $(seq 1 6); do
+              HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 https://mypaylink.app/health 2>/dev/null || echo "ERR")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✓ Public https://mypaylink.app/health → $HTTP_CODE (nginx routing OK)"
+                PUBLIC_OK=1
+                break
+              fi
+              echo "  Public health attempt $j/6 → $HTTP_CODE — retrying in 5s"
+              sleep 5
+            done
+
+            if [ "$PUBLIC_OK" = "0" ]; then
+              echo "❌ Public https://mypaylink.app/health did not return 200 after 6 attempts"
+              echo "   This means nginx is not routing traffic to the app."
+              echo "   Manual fix: SSH as root and run:"
+              echo "   sudo cp scripts/nginx-mypaylink.conf /etc/nginx/sites-enabled/mypaylink.app.conf"
+              echo "   sudo nginx -t && sudo systemctl reload nginx"
+              exit 1
             fi
 
             echo ""
