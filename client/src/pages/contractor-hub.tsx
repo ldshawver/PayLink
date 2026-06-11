@@ -93,6 +93,15 @@ interface Proposal {
   convertedToContractId?: string | null;
   rejectionReason?: string | null;
   lastSentEventNotes?: string;
+  isArchived?: boolean;
+  editableBy?: string;
+  responseRequiredBy?: string;
+  contractorEmail?: string;
+  companyName?: string;
+  counterofferTerms?: string;
+  counterofferNotes?: string;
+  archivedAt?: string;
+  archiveReason?: string;
 }
 
 interface ContractorBranding {
@@ -161,7 +170,7 @@ interface Invoice {
   status: string; companyId?: string; contractorId: string;
   invoiceDate: string; dueDate?: string; amount: string; taxAmount?: string;
   discountAmount?: string; amountPaid?: string; balanceDue?: string;
-  proposalId?: string; description?: string; paymentTerms?: string;
+  proposalId?: string; proposalReference?: string; description?: string; paymentTerms?: string;
   paidAt?: string; createdAt: string; reminderEnabled?: boolean;
   lastReminderSentAt?: string;
   voidedAt?: string; voidReason?: string; duplicateOfInvoiceId?: string;
@@ -171,6 +180,11 @@ interface Invoice {
   writtenApprovalAttached?: boolean; disputedAmount?: string;
   approvedAmount?: string; withheldAmount?: string;
   setoffAmount?: string; setoffReason?: string;
+  is1099Reportable?: boolean; jobId?: string; costCenterId?: string;
+  templateId?: string; brandingId?: string;
+  contractorName?: string; companyName?: string;
+  archivedToDocumentsAt?: string; archivedDocumentId?: string;
+  isArchived?: boolean;
 }
 
 interface Payment {
@@ -216,6 +230,7 @@ interface Contract {
   contractorId: string;
   contractorName?: string;
   companyId?: string;
+  companyName?: string;
   proposalId?: string;
   startDate?: string;
   endDate?: string;
@@ -236,6 +251,13 @@ interface Contract {
   voidReason?: string;
   createdAt: string;
   updatedAt?: string;
+  jobId?: string;
+  costCenterId?: string;
+  archivedToDocumentsAt?: string;
+  archivedDocumentId?: string;
+  archivedByUserId?: string;
+  archiveReason?: string;
+  isArchived?: boolean;
   signers?: Signer[];
 }
 
@@ -1166,7 +1188,7 @@ function ProposalDetailPanel({
       : ["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status)
   );
   const canSubmit = !isAdmin && ["draft", "revision_requested", "countered", "counteroffer_pending"].includes(proposal.status);
-  const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review"].includes(proposal.status);
+  const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered", "approved", "revision_requested", "under_review", "pending", "negotiation"].includes(proposal.status);
   const canNegotiate = isAdmin && proposal.status === "countered";
   const canMarkNegotiated = isAdmin && ["countered", "negotiated"].includes(proposal.status);
   const canConvertToContract = isAdmin && ["approved", "negotiated"].includes(proposal.status) && !proposal.convertedToContractId;
@@ -2431,6 +2453,18 @@ function ProposalBuilder({
     },
   });
 
+  const { data: allWorkers = [] } = useQuery<any[]>({
+    queryKey: ["/api/workers"],
+    queryFn: async () => {
+      const r = await fetch("/api/workers", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+    enabled: isAdmin && isNew,
+  });
+  const contractorWorkers = allWorkers.filter((w: any) =>
+    (w.workerType || w.worker_type) === "contractor"
+  );
+
   const current = { ...proposal, ...form };
 
   function handleBuilderTabChange(nextTab: string) {
@@ -2958,6 +2992,32 @@ function ProposalBuilder({
                   <Input value={form.title ?? current.title ?? ""} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                     placeholder="e.g. Kitchen Remodel — 123 Main St" disabled={!canEdit} data-testid="input-proposal-title" />
                 </div>
+                {isAdmin && isNew && (
+                  <div className="col-span-2">
+                    <Label>Contractor <span className="text-destructive">*</span></Label>
+                    <Select
+                      value={form.contractorId ?? ""}
+                      onValueChange={v => setForm(f => ({ ...f, contractorId: v }))}
+                      disabled={!canEdit}
+                    >
+                      <SelectTrigger data-testid="select-proposal-contractor">
+                        <SelectValue placeholder="Select contractor to create on behalf of…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {contractorWorkers.length === 0
+                          ? <SelectItem value="_none" disabled>No contractors found</SelectItem>
+                          : contractorWorkers.map((w: any) => {
+                              const name = w.fullName || w.full_name ||
+                                `${w.firstName || w.first_name || ""} ${w.lastName || w.last_name || ""}`.trim() ||
+                                w.id.slice(0, 8);
+                              return <SelectItem key={w.id} value={w.id}>{name}</SelectItem>;
+                            })
+                        }
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">Select the contractor this proposal will be created on behalf of.</p>
+                  </div>
+                )}
                 {isNew && (
                   <div className="col-span-2">
                     <Label>Client / Company</Label>
@@ -4869,7 +4929,7 @@ function CreateInvoiceFromContractDialog({
 
 // ─── Contracts Section ────────────────────────────────────────────────────────
 
-function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelectedId, initialStatusFilter, expiryWarningDays = 30 }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null; initialStatusFilter?: string | null; expiryWarningDays?: number }) {
+function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelectedId, initialStatusFilter, expiryWarningDays = 30, onCreateProposal }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null; initialStatusFilter?: string | null; expiryWarningDays?: number; onCreateProposal?: () => void }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "all");
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
@@ -4982,7 +5042,12 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
         <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
           <FileSignature className="h-10 w-10 mx-auto mb-3 opacity-30" />
           <p className="font-medium">{contracts.length === 0 ? "No contracts yet" : "No contracts match your filter"}</p>
-          <p className="text-xs mt-1">Contracts are created when proposals are approved and converted to contracts</p>
+          <p className="text-xs mt-1">{contracts.length === 0 ? "Contracts are generated when an approved proposal is converted. Go to Proposals to approve and convert one." : "Try adjusting your search or filter."}</p>
+          {isAdmin && contracts.length === 0 && onCreateProposal && (
+            <Button variant="outline" size="sm" className="mt-3" onClick={onCreateProposal} data-testid="btn-admin-contract-proposal">
+              <Plus className="h-4 w-4 mr-1" /> Create Proposal (converts to contract)
+            </Button>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
@@ -7894,18 +7959,42 @@ export default function ContractorHubPage() {
                 ) : filteredProposals.length === 0 ? (
                   <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
                     <FileText className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                    <p className="font-medium">{proposals.length === 0 ? "No proposals yet" : "No proposals match your filter"}</p>
-                    {!isAdmin && proposals.length === 0 && (
+                    <p className="font-medium">
+                      {proposals.length === 0
+                        ? proposalLifecycleGroup === 'archived' ? "No archived proposals"
+                          : proposalLifecycleGroup === 'all' ? "No proposals yet"
+                          : "No active proposals"
+                        : "No proposals match your filter"}
+                    </p>
+                    <p className="text-xs mt-1">
+                      {proposals.length === 0 && proposalLifecycleGroup === 'active'
+                        ? isAdmin
+                          ? "Active proposals (draft, submitted, under review) will appear here."
+                          : "Create a proposal to get started — your drafts and submitted proposals appear here."
+                        : proposals.length === 0 && proposalLifecycleGroup === 'archived'
+                          ? "Approved, rejected, and converted proposals are stored here."
+                          : null}
+                    </p>
+                    {!isAdmin && proposals.length === 0 && proposalLifecycleGroup !== 'archived' && (
                       <Button className="mt-3" onClick={openBuilderForNew} data-testid="btn-first-proposal">
                         <Plus className="h-4 w-4 mr-1" /> Create First Proposal
                       </Button>
+                    )}
+                    {isAdmin && proposals.length === 0 && proposalLifecycleGroup === 'active' && (
+                      <div className="mt-3 flex flex-col items-center gap-2">
+                        <p className="text-xs text-muted-foreground/70">Contractors submit proposals for review — or create one on their behalf.</p>
+                        <Button variant="outline" size="sm" onClick={openBuilderForNew} data-testid="btn-admin-first-proposal">
+                          <Plus className="h-4 w-4 mr-1" /> Create Proposal for Contractor
+                        </Button>
+                      </div>
                     )}
                   </div>
                 ) : (
                   <div className="space-y-4">
                     {/* Awaiting Review — pinned section for admins */}
                     {isAdmin && (() => {
-                      const awaitingInFilter = filteredProposals.filter(p => p.status === "submitted");
+                      const NEEDS_REVIEW_STATUSES = ["submitted", "sent", "viewed", "pending", "under_review", "negotiation"];
+                      const awaitingInFilter = filteredProposals.filter(p => NEEDS_REVIEW_STATUSES.includes(p.status));
                       if (awaitingInFilter.length === 0) return null;
                       return (
                         <div className="space-y-2" data-testid="section-awaiting-review">
@@ -7952,7 +8041,7 @@ export default function ContractorHubPage() {
                               </div>
                             </div>
                           ))}
-                          {filteredProposals.filter(p => p.status !== "submitted").length > 0 && (
+                          {filteredProposals.filter(p => !NEEDS_REVIEW_STATUSES.includes(p.status)).length > 0 && (
                             <div className="border-t pt-2 mt-2">
                               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All Proposals</span>
                             </div>
@@ -7961,9 +8050,9 @@ export default function ContractorHubPage() {
                       );
                     })()}
 
-                    {/* Main proposals list — submitted proposals shown above in Awaiting Review when no filter is applied */}
+                    {/* Main proposals list — proposals needing review are shown above in Awaiting Review section */}
                     <div className="space-y-2">
-                      {filteredProposals.filter(p => !(isAdmin && p.status === "submitted")).map(proposal => (
+                      {filteredProposals.filter(p => !(isAdmin && ["submitted", "sent", "viewed", "pending", "under_review", "negotiation"].includes(p.status))).map(proposal => (
                         <div
                           key={proposal.id}
                           className="border rounded-lg p-4 hover:bg-muted/30 transition-colors cursor-pointer group"
@@ -8069,7 +8158,7 @@ export default function ContractorHubPage() {
             </Dialog>
 
             {/* Contracts */}
-            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} initialStatusFilter={statusFilter !== "all" ? statusFilter : null} expiryWarningDays={hubExpiryWarningDays} />}
+            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} initialStatusFilter={statusFilter !== "all" ? statusFilter : null} expiryWarningDays={hubExpiryWarningDays} onCreateProposal={openBuilderForNew} />}
 
             {/* Invoices */}
             {section === "invoices" && (
@@ -8101,7 +8190,12 @@ export default function ContractorHubPage() {
                   <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
                     <Receipt className="h-10 w-10 mx-auto mb-3 opacity-30" />
                     <p className="font-medium">{invoices.length === 0 ? "No invoices yet" : "No invoices match your filter"}</p>
-                    <p className="text-xs mt-1">Invoices are created from approved proposals or manually</p>
+                    <p className="text-xs mt-1">{invoices.length === 0 ? "Invoices are created from approved proposals or added manually." : "Try adjusting your search or filter."}</p>
+                    {isAdmin && invoices.length === 0 && (
+                      <Button variant="outline" size="sm" className="mt-3" onClick={openBuilderForNew} data-testid="btn-admin-first-invoice">
+                        <Plus className="h-4 w-4 mr-1" /> Create Proposal (generates invoice)
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-2">

@@ -3165,6 +3165,7 @@ Thank you,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
     await run("workers.person_id", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS person_id VARCHAR REFERENCES persons(id)`);
+    await run("workers.email", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS email TEXT`);
     await run("users.first_name", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT`);
     await run("users.last_name", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT`);
 
@@ -3187,6 +3188,7 @@ Thank you,
     await run("users.totp_secret",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT`);
     await run("users.mfa_enabled",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT FALSE`);
     await run("users.mfa_enforced_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enforced_at TIMESTAMP`);
+    await run("users.email",           sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
 
     // Legal basis + purpose description on document retention policies
     await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);

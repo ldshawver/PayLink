@@ -134,6 +134,8 @@ async function seedTestAccounts() {
     // Ensure test_employee and test_contractor have worker records so
     // worker-specific routes (paystubs, timesheets, etc.) work correctly.
     await seedTestTenantWorkers(testCompanyId);
+    // Seed contractor hub demo data so the hub shows content on first load
+    await seedDevTestContractorHubData(testCompanyId);
   } catch (e: any) {
     console.log("Could not seed test accounts:", e?.message || e);
   }
@@ -211,6 +213,181 @@ async function seedTestTenantWorkers(testCompanyId: string) {
     }
   } catch (e: any) {
     console.log("Could not seed test tenant workers:", e?.message || e);
+  }
+}
+
+async function seedDevTestContractorHubData(testCompanyId: string) {
+  try {
+    // Look up the test_contractor user and their linked worker
+    const conUser = await db.select().from(users).where(eq(users.username, "test_contractor")).then(r => r[0]);
+    if (!conUser?.workerId) {
+      console.log("seedDevTestContractorHubData: test_contractor has no workerId yet, skipping");
+      return;
+    }
+    const conWorkerId = conUser.workerId;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    // Each record is inserted independently — idempotent by its unique number.
+    // This means we can safely re-run even if some records already exist
+    // (e.g. the draft was archived by a previous test, but submitted is missing).
+
+    // ── Draft proposal ──────────────────────────────────────────────────────
+    const existingDraft = await db.execute(
+      sql`SELECT id FROM contractor_proposals WHERE contractor_id = ${conWorkerId} AND proposal_number = 'CP-DEMO-0001' LIMIT 1`
+    );
+    if (!existingDraft.rows[0]) {
+      const draftResult = await db.execute(sql`
+        INSERT INTO contractor_proposals (
+          company_id, contractor_id, proposal_number, title, description,
+          issue_date, expiration_date, amount, status, currency,
+          scope_of_work, payment_terms, notes
+        ) VALUES (
+          ${testCompanyId}, ${conWorkerId}, ${'CP-DEMO-0001'},
+          ${'Website Redesign — Phase 1'}, ${'Redesign the company website to improve user experience and mobile responsiveness.'},
+          ${today}, ${thirtyDaysOut}, ${'4500.00'}, ${'draft'}, ${'USD'},
+          ${'Redesign home page, about page, and contact page. Deliver Figma mockups + implemented HTML/CSS.'},
+          ${'Net 30 from approval'}, ${'Please review and submit when ready.'}
+        )
+        RETURNING id
+      `);
+      const draftId = (draftResult.rows[0] as any)?.id;
+      if (draftId) {
+        await db.execute(sql`
+          INSERT INTO proposal_line_items (proposal_id, name, description, quantity, unit_price, line_total, sort_order, taxable, optional, selected)
+          VALUES
+            (${draftId}, ${'UI/UX Design & Mockups'}, ${'Figma mockups for all pages'}, ${'1'}, ${'1500.00'}, ${'1500.00'}, 1, false, false, true),
+            (${draftId}, ${'Frontend Implementation'}, ${'Responsive HTML/CSS/JS implementation'}, ${'20'}, ${'100.00'}, ${'2000.00'}, 2, false, false, true),
+            (${draftId}, ${'QA & Browser Testing'}, ${'Cross-browser and mobile testing'}, ${'10'}, ${'75.00'}, ${'750.00'}, 3, false, true, true),
+            (${draftId}, ${'Project Management'}, ${'Coordination and client communication'}, ${'5'}, ${'50.00'}, ${'250.00'}, 4, false, false, true)
+        `);
+        console.log(`seedDevTestContractorHubData: draft proposal seeded (id: ${draftId})`);
+      }
+    } else {
+      console.log(`seedDevTestContractorHubData: draft proposal already exists, skipping`);
+    }
+
+    // ── Submitted proposal ──────────────────────────────────────────────────
+    const existingSubmitted = await db.execute(
+      sql`SELECT id FROM contractor_proposals WHERE contractor_id = ${conWorkerId} AND proposal_number = 'CP-DEMO-0002' LIMIT 1`
+    );
+    if (!existingSubmitted.rows[0]) {
+      const submittedResult = await db.execute(sql`
+        INSERT INTO contractor_proposals (
+          company_id, contractor_id, proposal_number, title, description,
+          issue_date, expiration_date, amount, status, currency,
+          scope_of_work, payment_terms, submitted_at
+        ) VALUES (
+          ${testCompanyId}, ${conWorkerId}, ${'CP-DEMO-0002'},
+          ${'Monthly IT Support Retainer'}, ${'Ongoing IT support and maintenance for company systems.'},
+          ${today}, ${thirtyDaysOut}, ${'1200.00'}, ${'submitted'}, ${'USD'},
+          ${'8 hours/month remote support, patch management, and incident response.'},
+          ${'Monthly billing, due on 1st of each month'}, ${new Date().toISOString()}
+        )
+        RETURNING id
+      `);
+      const submittedId = (submittedResult.rows[0] as any)?.id;
+      if (submittedId) {
+        await db.execute(sql`
+          INSERT INTO proposal_line_items (proposal_id, name, description, quantity, unit_price, line_total, sort_order, taxable, optional, selected)
+          VALUES
+            (${submittedId}, ${'Monthly Support Hours'}, ${'8 hours/month remote support'}, ${'8'}, ${'125.00'}, ${'1000.00'}, 1, false, false, true),
+            (${submittedId}, ${'Patch Management'}, ${'OS and software updates'}, ${'1'}, ${'200.00'}, ${'200.00'}, 2, false, false, true)
+        `);
+        console.log(`seedDevTestContractorHubData: submitted proposal seeded (id: ${submittedId})`);
+      }
+    } else {
+      console.log(`seedDevTestContractorHubData: submitted proposal already exists, skipping`);
+    }
+
+    // ── Approved proposal ───────────────────────────────────────────────────
+    const existingApproved = await db.execute(
+      sql`SELECT id FROM contractor_proposals WHERE contractor_id = ${conWorkerId} AND proposal_number = 'CP-DEMO-0003' LIMIT 1`
+    );
+    if (!existingApproved.rows[0]) {
+      const approvedResult = await db.execute(sql`
+        INSERT INTO contractor_proposals (
+          company_id, contractor_id, proposal_number, title, description,
+          issue_date, expiration_date, amount, status, currency,
+          scope_of_work, payment_terms
+        ) VALUES (
+          ${testCompanyId}, ${conWorkerId}, ${'CP-DEMO-0003'},
+          ${'Logo & Brand Identity Package'}, ${'Custom logo design and brand guidelines.'},
+          ${today}, ${thirtyDaysOut}, ${'2000.00'}, ${'approved'}, ${'USD'},
+          ${'3 logo concepts, final files in SVG/PNG/PDF, brand color palette, typography guide.'},
+          ${'50% upfront, 50% on delivery'}
+        )
+        RETURNING id
+      `);
+      const approvedId = (approvedResult.rows[0] as any)?.id;
+      if (approvedId) {
+        await db.execute(sql`
+          INSERT INTO proposal_line_items (proposal_id, name, description, quantity, unit_price, line_total, sort_order, taxable, optional, selected)
+          VALUES
+            (${approvedId}, ${'Logo Design'}, ${'3 concepts + unlimited revisions'}, ${'1'}, ${'1500.00'}, ${'1500.00'}, 1, false, false, true),
+            (${approvedId}, ${'Brand Guidelines PDF'}, ${'Typography, colors, usage rules'}, ${'1'}, ${'500.00'}, ${'500.00'}, 2, false, false, true)
+        `);
+        console.log(`seedDevTestContractorHubData: approved proposal seeded (id: ${approvedId})`);
+      }
+    } else {
+      console.log(`seedDevTestContractorHubData: approved proposal already exists, skipping`);
+    }
+
+    // ── Active contractor contract ───────────────────────────────────────────
+    const existingContract = await db.execute(
+      sql`SELECT id FROM contractor_contracts WHERE contractor_id = ${conWorkerId} AND contract_number = 'CC-DEMO-0001' LIMIT 1`
+    );
+    if (!existingContract.rows[0]) {
+      const contractResult = await db.execute(sql`
+        INSERT INTO contractor_contracts (
+          company_id, contractor_id, contract_number, title, status,
+          contract_type, start_date, end_date,
+          total_value, currency
+        ) VALUES (
+          ${testCompanyId}, ${conWorkerId}, ${'CC-DEMO-0001'},
+          ${'Ongoing Web Development Services'}, ${'active'},
+          ${'service'}, ${today}, ${thirtyDaysOut},
+          ${'2550.00'}, ${'USD'}
+        )
+        RETURNING id
+      `);
+      const contractId = (contractResult.rows[0] as any)?.id;
+      if (contractId) {
+        console.log(`seedDevTestContractorHubData: active contract seeded (id: ${contractId})`);
+      }
+    } else {
+      console.log(`seedDevTestContractorHubData: active contract already exists, skipping`);
+    }
+
+    // ── Pending invoice ─────────────────────────────────────────────────────
+    const existingInvoice = await db.execute(
+      sql`SELECT id FROM contractor_invoices WHERE contractor_id = ${conWorkerId} AND invoice_number = 'INV-DEMO-0001' LIMIT 1`
+    );
+    if (!existingInvoice.rows[0]) {
+      const invoiceResult = await db.execute(sql`
+        INSERT INTO contractor_invoices (
+          company_id, contractor_id, invoice_number, title, status,
+          invoice_date, due_date, amount, description
+        ) VALUES (
+          ${testCompanyId}, ${conWorkerId}, ${'INV-DEMO-0001'},
+          ${'Web Development — June 2026'}, ${'pending'},
+          ${today}, ${thirtyDaysOut}, ${'850.00'},
+          ${'10 hours of web development work for June 2026.'}
+        )
+        RETURNING id
+      `);
+      const invoiceId = (invoiceResult.rows[0] as any)?.id;
+      if (invoiceId) {
+        console.log(`seedDevTestContractorHubData: pending invoice seeded (id: ${invoiceId})`);
+      }
+    } else {
+      console.log(`seedDevTestContractorHubData: pending invoice already exists, skipping`);
+    }
+
+    console.log("seedDevTestContractorHubData: contractor hub seed data check complete");
+  } catch (e: any) {
+    console.log("Could not seed contractor hub data:", e?.message || e);
   }
 }
 

@@ -11142,16 +11142,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  // POST /api/contractor-proposals — contractor creates a proposal
+  // POST /api/contractor-proposals — contractor or admin creates a proposal
   app.post("/api/contractor-proposals", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
-      const workerId = user?.workerId;
-      if (!workerId) return res.status(403).json({ message: "Must be linked to a worker account" });
-      const worker = await storage.getWorker(workerId);
-      if (!worker || worker.workerType !== "contractor") {
-        return res.status(403).json({ message: "Only contractors can create proposals" });
+      const userRole = user?.role || "";
+      const ADMIN_ROLES = new Set(["admin", "tenant_admin", "owner", "manager", "platform_admin", "platform_super_admin"]);
+      const isAdminUser = ADMIN_ROLES.has(userRole);
+
+      let workerId: string;
+      let effectiveCompanyId: string | null = null;
+      if (isAdminUser && req.body.contractorId) {
+        // Admin path: create a proposal on behalf of a contractor
+        const targetWorker = await storage.getWorker(req.body.contractorId);
+        if (!targetWorker) return res.status(404).json({ message: "Contractor not found" });
+        if (targetWorker.workerType !== "contractor") return res.status(400).json({ message: "Target worker is not a contractor" });
+        if (!(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
+        workerId = targetWorker.id;
+        // Derive company from validated context — do not trust client-supplied companyId
+        effectiveCompanyId = targetWorker.companyId ?? null;
+      } else {
+        const selfWorkerId = user?.workerId;
+        if (!selfWorkerId) return res.status(403).json({ message: "Must be linked to a worker account" });
+        const worker = await storage.getWorker(selfWorkerId);
+        if (!worker || worker.workerType !== "contractor") {
+          return res.status(403).json({ message: "Only contractors can create proposals" });
+        }
+        workerId = selfWorkerId;
+        effectiveCompanyId = worker.companyId ?? null;
       }
       const { companyId, title, description, issueDate, expirationDate, amount, taxAmount, discountAmount, lineItems, notes, terms, jobId, costCenterId, currency,
               scopeOfWork, assumptions, exclusions, allowances, materials, warrantyNotes, scheduleNotes,
@@ -11171,8 +11190,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           SELECT id FROM contractor_templates
           WHERE id = ${templateId}
             AND (is_global = TRUE
-                 OR company_id = ${worker.companyId}
-                 ${companyId ? sql`OR company_id = ${companyId}` : sql``})
+                 OR company_id = ${effectiveCompanyId})
           LIMIT 1
         `);
         if (!tplCheck.rows[0]) return res.status(400).json({ message: "Invalid template" });
@@ -11204,7 +11222,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           client_requirements, estimated_start_date, estimated_end_date, trade_category,
           client_name, client_email
         ) VALUES (
-          ${companyId || null}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null},
+          ${effectiveCompanyId}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null},
           ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null}, ${discountAmount || null},
           ${lineItems ? JSON.stringify(lineItems) : null}, ${notes || null}, ${terms || null},
           ${jobId || null}, ${costCenterId || null}, ${currency || "USD"}, 'draft',
@@ -12030,6 +12048,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const existing = await db.execute(sql`SELECT * FROM proposal_line_items WHERE id = ${req.params.id}`);
       if (!existing.rows.length) return res.status(404).json({ message: "Line item not found" });
       const row = existing.rows[0] as any;
+      // Guard: prevent deleting line items from locked/finalized proposals
+      if (row.proposal_id) {
+        const proposalRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${row.proposal_id}`);
+        const proposalStatus = (proposalRes.rows[0] as any)?.status;
+        if (proposalStatus && ['approved', 'sent', 'converted_to_contract', 'signed', 'fully_signed'].includes(proposalStatus)) {
+          return res.status(409).json({ message: "Proposal is locked — line items cannot be deleted after approval or sending" });
+        }
+      }
       await db.execute(sql`DELETE FROM proposal_line_items WHERE id = ${req.params.id}`);
       await recalcProposalTotals(row.proposal_id);
       res.json({ message: "Deleted" });
