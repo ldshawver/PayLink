@@ -1794,7 +1794,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/dashboard/stats", async (_req, res) => {
+  app.get("/api/dashboard/stats", requireAuth, async (_req, res) => {
     try {
       const stats = await storage.getDashboardStats();
       res.json(stats);
@@ -6840,7 +6840,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/schedules", requireActiveSubscription, async (req, res) => {
+  app.post("/api/schedules", requireAuth, requireActiveSubscription, async (req, res) => {
     try {
       const { workerId, companyId, date, startTime, endTime, department, jobId, positionId, costCenterId, note } = req.body;
       if (!workerId || !companyId || !date || !startTime || !endTime) {
@@ -6946,7 +6946,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/schedules/generate", async (req, res) => {
+  app.post("/api/schedules/generate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId, startDate, endDate } = req.body;
       if (!companyId || !startDate || !endDate) {
@@ -7953,7 +7953,7 @@ export async function registerRoutes(
   });
 
   // Enterprises
-  app.get("/api/enterprises", async (_req, res) => {
+  app.get("/api/enterprises", requireAuth, async (_req, res) => {
     try {
       const result = await storage.getEnterprises();
       res.json(result);
@@ -8421,7 +8421,7 @@ export async function registerRoutes(
   });
 
   // Accrual Accounts
-  app.get("/api/accrual-accounts", async (req, res) => {
+  app.get("/api/accrual-accounts", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const accounts = await storage.getAccrualAccounts(companyId);
@@ -8725,7 +8725,7 @@ export async function registerRoutes(
   });
 
   // Pay Periods
-  app.get("/api/pay-periods", async (req, res) => {
+  app.get("/api/pay-periods", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const periods = await storage.getPayPeriods(companyId);
@@ -8736,7 +8736,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/pay-periods", async (req, res) => {
+  app.post("/api/pay-periods", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const period = await storage.createPayPeriod(req.body);
       res.status(201).json(period);
@@ -8746,7 +8746,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/pay-periods/:id", async (req, res) => {
+  app.patch("/api/pay-periods/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const period = await storage.updatePayPeriod(req.params.id, req.body);
       if (!period) {
@@ -8760,7 +8760,7 @@ export async function registerRoutes(
   });
 
   // Taxes & Deductions
-  app.get("/api/taxes-deductions", async (req, res) => {
+  app.get("/api/taxes-deductions", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const taxesDeductions = await storage.getTaxesDeductions(companyId);
@@ -8771,7 +8771,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/taxes-deductions", async (req, res) => {
+  app.post("/api/taxes-deductions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const taxDeduction = await storage.createTaxDeduction(req.body);
       res.status(201).json(taxDeduction);
@@ -8781,7 +8781,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/taxes-deductions/:id", async (req, res) => {
+  app.patch("/api/taxes-deductions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const taxDeduction = await storage.updateTaxDeduction(req.params.id, req.body);
       if (!taxDeduction) {
@@ -8794,7 +8794,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/taxes-deductions/:id", async (req, res) => {
+  app.delete("/api/taxes-deductions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteTaxDeduction(req.params.id);
       res.json({ message: "Tax/deduction deleted" });
@@ -8858,7 +8858,7 @@ export async function registerRoutes(
   });
 
   // Policy Groups
-  app.get("/api/policy-groups", async (req, res) => {
+  app.get("/api/policy-groups", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const groups = await storage.getPolicyGroups(companyId);
@@ -8928,7 +8928,7 @@ export async function registerRoutes(
   });
 
   // Pay Codes
-  app.get("/api/pay-codes", async (req, res) => {
+  app.get("/api/pay-codes", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const codes = await storage.getPayCodes(companyId);
@@ -9003,7 +9003,7 @@ export async function registerRoutes(
   });
 
   // Holidays
-  app.get("/api/holidays", async (req, res) => {
+  app.get("/api/holidays", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const holidays = await storage.getHolidays(companyId);
@@ -9014,7 +9014,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/holidays", async (req, res) => {
+  app.post("/api/holidays", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const holiday = await storage.createHoliday(req.body);
       res.status(201).json(holiday);
@@ -9081,7 +9081,7 @@ export async function registerRoutes(
   });
 
   // Qualifications
-  app.get("/api/qualifications", async (req, res) => {
+  app.get("/api/qualifications", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const workerId = req.query.workerId as string | undefined;
@@ -9127,7 +9127,7 @@ export async function registerRoutes(
   });
 
   // Reviews
-  app.get("/api/reviews", async (req, res) => {
+  app.get("/api/reviews", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const workerId = req.query.workerId as string | undefined;
@@ -9172,7 +9172,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/kpi-groups", async (req, res) => {
+  app.get("/api/kpi-groups", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const groups = await storage.getKpiGroups(companyId);
@@ -9214,7 +9214,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/qualification-groups", async (req, res) => {
+  app.get("/api/qualification-groups", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const groups = await storage.getQualificationGroups(companyId);
@@ -9256,7 +9256,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/worker-languages", async (req, res) => {
+  app.get("/api/worker-languages", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const languages = await storage.getWorkerLanguages(companyId);
@@ -9267,7 +9267,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/worker-languages", async (req, res) => {
+  app.post("/api/worker-languages", requireAuth, async (req, res) => {
     try {
       const language = await storage.createWorkerLanguage(req.body);
       res.status(201).json(language);
@@ -9277,7 +9277,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/worker-languages/:id", async (req, res) => {
+  app.patch("/api/worker-languages/:id", requireAuth, async (req, res) => {
     try {
       const language = await storage.updateWorkerLanguage(req.params.id, req.body);
       if (!language) return res.status(404).json({ message: "Language not found" });
@@ -9288,7 +9288,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/worker-languages/:id", async (req, res) => {
+  app.delete("/api/worker-languages/:id", requireAuth, async (req, res) => {
     try {
       await storage.deleteWorkerLanguage(req.params.id);
       res.json({ message: "Language deleted" });
@@ -9298,7 +9298,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/worker-memberships", async (req, res) => {
+  app.get("/api/worker-memberships", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const memberships = await storage.getWorkerMemberships(companyId);
@@ -9309,7 +9309,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/worker-memberships", async (req, res) => {
+  app.post("/api/worker-memberships", requireAuth, async (req, res) => {
     try {
       const membership = await storage.createWorkerMembership(req.body);
       res.status(201).json(membership);
@@ -9319,7 +9319,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/worker-memberships/:id", async (req, res) => {
+  app.patch("/api/worker-memberships/:id", requireAuth, async (req, res) => {
     try {
       const membership = await storage.updateWorkerMembership(req.params.id, req.body);
       if (!membership) return res.status(404).json({ message: "Membership not found" });
@@ -9330,7 +9330,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/worker-memberships/:id", async (req, res) => {
+  app.delete("/api/worker-memberships/:id", requireAuth, async (req, res) => {
     try {
       await storage.deleteWorkerMembership(req.params.id);
       res.json({ message: "Membership deleted" });
@@ -15246,7 +15246,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/secondary-wage-groups", async (req, res) => {
+  app.get("/api/secondary-wage-groups", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const items = await storage.getSecondaryWageGroups(companyId);
@@ -15295,7 +15295,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/employee-wage-groups", async (req, res) => {
+  app.get("/api/employee-wage-groups", requireAuth, async (req, res) => {
     try {
       const workerId = req.query.workerId as string | undefined;
       const items = await storage.getEmployeeWageGroups(workerId);
@@ -15332,7 +15332,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/currencies", async (req, res) => {
+  app.get("/api/currencies", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const items = await storage.getCurrencies(companyId);
@@ -15412,7 +15412,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Recurring Schedules
-  app.get("/api/recurring-schedules", async (req, res) => {
+  app.get("/api/recurring-schedules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const schedules = await storage.getRecurringSchedules(companyId);
@@ -15423,7 +15423,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/recurring-schedules", async (req, res) => {
+  app.post("/api/recurring-schedules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { workerId } = req.body;
       // Validate worker exists — cross-company recurring schedules are explicitly allowed
@@ -15439,7 +15439,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/recurring-schedules/:id", async (req, res) => {
+  app.patch("/api/recurring-schedules/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       // Validate worker exists if workerId is being changed — cross-company is allowed
       if (req.body.workerId) {
@@ -15457,7 +15457,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/recurring-schedules/:id", async (req, res) => {
+  app.delete("/api/recurring-schedules/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteRecurringSchedule(req.params.id);
       res.json({ message: "Recurring schedule deleted" });
@@ -15467,7 +15467,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/remittance-sources", async (req, res) => {
+  app.get("/api/remittance-sources", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const sources = await storage.getRemittanceSources(companyId);
@@ -15478,7 +15478,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/remittance-sources", async (req, res) => {
+  app.post("/api/remittance-sources", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const source = await storage.createRemittanceSource(req.body);
       res.status(201).json(source);
@@ -15488,7 +15488,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/remittance-sources/:id", async (req, res) => {
+  app.patch("/api/remittance-sources/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const source = await storage.updateRemittanceSource(req.params.id, req.body);
       if (!source) return res.status(404).json({ message: "Not found" });
@@ -15499,7 +15499,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/remittance-sources/:id", async (req, res) => {
+  app.delete("/api/remittance-sources/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteRemittanceSource(req.params.id);
       res.json({ message: "Deleted" });
@@ -15509,7 +15509,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/remittance-agencies", async (req, res) => {
+  app.get("/api/remittance-agencies", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const agencies = await storage.getRemittanceAgencies(companyId);
@@ -15520,7 +15520,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/remittance-agencies", async (req, res) => {
+  app.post("/api/remittance-agencies", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const agency = await storage.createRemittanceAgency(req.body);
       res.status(201).json(agency);
@@ -15530,7 +15530,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/remittance-agencies/:id", async (req, res) => {
+  app.patch("/api/remittance-agencies/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const agency = await storage.updateRemittanceAgency(req.params.id, req.body);
       if (!agency) return res.status(404).json({ message: "Not found" });
@@ -15541,7 +15541,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/remittance-agencies/:id", async (req, res) => {
+  app.delete("/api/remittance-agencies/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteRemittanceAgency(req.params.id);
       res.json({ message: "Deleted" });
@@ -15551,7 +15551,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/remittance-agency-events", async (req, res) => {
+  app.get("/api/remittance-agency-events", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const agencyId = req.query.agencyId as string;
       if (!agencyId) return res.status(400).json({ message: "agencyId required" });
@@ -15563,7 +15563,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/remittance-agency-events", async (req, res) => {
+  app.post("/api/remittance-agency-events", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const event = await storage.createRemittanceAgencyEvent(req.body);
       res.status(201).json(event);
@@ -15573,7 +15573,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/remittance-agency-events/:id", async (req, res) => {
+  app.patch("/api/remittance-agency-events/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const event = await storage.updateRemittanceAgencyEvent(req.params.id, req.body);
       if (!event) return res.status(404).json({ message: "Not found" });
@@ -15584,7 +15584,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/remittance-agency-events/:id", async (req, res) => {
+  app.delete("/api/remittance-agency-events/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteRemittanceAgencyEvent(req.params.id);
       res.json({ message: "Deleted" });
@@ -15789,7 +15789,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/pay-stub-accounts", async (req, res) => {
+  app.get("/api/pay-stub-accounts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const accounts = await storage.getPayStubAccounts(companyId);
@@ -15800,7 +15800,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/pay-stub-accounts", async (req, res) => {
+  app.post("/api/pay-stub-accounts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const account = await storage.createPayStubAccount(req.body);
       res.status(201).json(account);
@@ -15810,7 +15810,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/pay-stub-accounts/:id", async (req, res) => {
+  app.patch("/api/pay-stub-accounts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const account = await storage.updatePayStubAccount(req.params.id, req.body);
       if (!account) return res.status(404).json({ message: "Not found" });
@@ -15821,7 +15821,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/pay-stub-accounts/:id", async (req, res) => {
+  app.delete("/api/pay-stub-accounts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deletePayStubAccount(req.params.id);
       res.json({ message: "Deleted" });
@@ -15873,7 +15873,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/pay-stub-amendments", async (req, res) => {
+  app.get("/api/pay-stub-amendments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const amendments = await storage.getPayStubAmendments(companyId);
@@ -15884,7 +15884,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/pay-stub-amendments", async (req, res) => {
+  app.post("/api/pay-stub-amendments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const body = { ...req.body };
       // Auto-fill companyId from the worker if not provided
@@ -15903,7 +15903,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/pay-stub-amendments/:id", async (req, res) => {
+  app.patch("/api/pay-stub-amendments/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const body = { ...req.body };
       // Auto-fill companyId from the worker if not provided
@@ -15920,7 +15920,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/pay-stub-amendments/:id", async (req, res) => {
+  app.delete("/api/pay-stub-amendments/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deletePayStubAmendment(req.params.id);
       res.json({ message: "Deleted" });
@@ -15930,7 +15930,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/pay-stub-transactions", async (req, res) => {
+  app.get("/api/pay-stub-transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const transactions = await storage.getPayStubTransactions(companyId);
@@ -15941,7 +15941,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/pay-stub-transactions", async (req, res) => {
+  app.post("/api/pay-stub-transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       if (req.body.payrollItemId) {
         const { payrollItems: piTable } = await import("../shared/schema.js");
@@ -15961,7 +15961,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/pay-stub-transactions/:id", async (req, res) => {
+  app.patch("/api/pay-stub-transactions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { payStubTransactions: pstTable, payrollItems: piTable } = await import("../shared/schema.js");
       const [existing] = await db.select().from(pstTable).where(eq(pstTable.id, req.params.id));
@@ -16181,7 +16181,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/pay-period-schedules", async (req, res) => {
+  app.get("/api/pay-period-schedules", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const schedules = await storage.getPayPeriodSchedules(companyId);
@@ -16276,7 +16276,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Employee Titles
-  app.get("/api/employee-titles", async (req, res) => {
+  app.get("/api/employee-titles", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const titles = await storage.getEmployeeTitles(companyId);
@@ -16287,7 +16287,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/employee-titles", async (req, res) => {
+  app.post("/api/employee-titles", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
@@ -16299,7 +16299,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/employee-titles/:id", async (req, res) => {
+  app.patch("/api/employee-titles/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
@@ -16312,7 +16312,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/employee-titles/:id", async (req, res) => {
+  app.delete("/api/employee-titles/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteEmployeeTitle(req.params.id);
       res.json({ message: "Deleted" });
@@ -16323,7 +16323,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Employee Groups
-  app.get("/api/employee-groups", async (req, res) => {
+  app.get("/api/employee-groups", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const groups = await storage.getEmployeeGroups(companyId);
@@ -16334,7 +16334,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/employee-groups", async (req, res) => {
+  app.post("/api/employee-groups", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const group = await storage.createEmployeeGroup(req.body);
       res.status(201).json(group);
@@ -16344,7 +16344,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/employee-groups/:id", async (req, res) => {
+  app.patch("/api/employee-groups/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const group = await storage.updateEmployeeGroup(req.params.id, req.body);
       if (!group) return res.status(404).json({ message: "Not found" });
@@ -16355,7 +16355,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/employee-groups/:id", async (req, res) => {
+  app.delete("/api/employee-groups/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteEmployeeGroup(req.params.id);
       res.json({ message: "Deleted" });
@@ -16365,7 +16365,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/employee-group-configs", async (req, res) => {
+  app.get("/api/employee-group-configs", requireAuth, async (req, res) => {
     try {
       const configs = await storage.getEmployeeGroupConfigs();
       res.json(configs);
@@ -16447,7 +16447,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // New Hire Defaults
-  app.get("/api/new-hire-defaults", async (req, res) => {
+  app.get("/api/new-hire-defaults", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const defaults = await storage.getNewHireDefaults(companyId);
@@ -16458,7 +16458,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/new-hire-defaults", async (req, res) => {
+  app.post("/api/new-hire-defaults", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const entry = await storage.createNewHireDefault(req.body);
       res.status(201).json(entry);
@@ -16468,7 +16468,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/new-hire-defaults/:id", async (req, res) => {
+  app.patch("/api/new-hire-defaults/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const entry = await storage.updateNewHireDefault(req.params.id, req.body);
       if (!entry) return res.status(404).json({ message: "Not found" });
@@ -16479,7 +16479,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/new-hire-defaults/:id", async (req, res) => {
+  app.delete("/api/new-hire-defaults/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteNewHireDefault(req.params.id);
       res.json({ message: "Deleted" });
@@ -16490,7 +16490,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Pay Formulas
-  app.get("/api/pay-formulas", async (_req, res) => {
+  app.get("/api/pay-formulas", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getPayFormulas();
       res.json(items);
@@ -16562,7 +16562,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Contributing Pay Codes
-  app.get("/api/contributing-pay-codes", async (_req, res) => {
+  app.get("/api/contributing-pay-codes", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getContributingPayCodes();
       res.json(items);
@@ -16572,7 +16572,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/contributing-pay-codes", async (req, res) => {
+  app.post("/api/contributing-pay-codes", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createContributingPayCode(req.body);
       res.status(201).json(item);
@@ -16582,7 +16582,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/contributing-pay-codes/:id", async (req, res) => {
+  app.patch("/api/contributing-pay-codes/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateContributingPayCode(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -16593,7 +16593,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/contributing-pay-codes/:id", async (req, res) => {
+  app.delete("/api/contributing-pay-codes/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteContributingPayCode(req.params.id);
       res.json({ message: "Deleted" });
@@ -16635,7 +16635,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Contributing Shifts
-  app.get("/api/contributing-shifts", async (_req, res) => {
+  app.get("/api/contributing-shifts", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getContributingShifts();
       res.json(items);
@@ -16645,7 +16645,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/contributing-shifts", async (req, res) => {
+  app.post("/api/contributing-shifts", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createContributingShift(req.body);
       res.status(201).json(item);
@@ -16655,7 +16655,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/contributing-shifts/:id", async (req, res) => {
+  app.patch("/api/contributing-shifts/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateContributingShift(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -16666,7 +16666,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/contributing-shifts/:id", async (req, res) => {
+  app.delete("/api/contributing-shifts/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteContributingShift(req.params.id);
       res.json({ message: "Deleted" });
@@ -16707,7 +16707,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Regular Time Policies
-  app.get("/api/regular-time-policies", async (_req, res) => {
+  app.get("/api/regular-time-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getRegularTimePolicies();
       res.json(items);
@@ -16773,7 +16773,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Overtime Policies
-  app.get("/api/overtime-policies", async (_req, res) => {
+  app.get("/api/overtime-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getOvertimePolicies();
       res.json(items);
@@ -16840,7 +16840,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Premium Policies
-  app.get("/api/premium-policies", async (_req, res) => {
+  app.get("/api/premium-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getPremiumPolicies();
       res.json(items);
@@ -16882,7 +16882,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Meal Policies
-  app.get("/api/meal-policies", async (_req, res) => {
+  app.get("/api/meal-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getMealPolicies();
       res.json(items);
@@ -16948,7 +16948,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Break Policies
-  app.get("/api/break-policies", async (_req, res) => {
+  app.get("/api/break-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getBreakPolicies();
       res.json(items);
@@ -17014,7 +17014,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Schedule Policies
-  app.get("/api/schedule-policies", async (_req, res) => {
+  app.get("/api/schedule-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getSchedulePolicies();
       res.json(items);
@@ -17056,7 +17056,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Exception Policies
-  app.get("/api/exception-policies", async (_req, res) => {
+  app.get("/api/exception-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getExceptionPolicies();
       res.json(items);
@@ -17098,7 +17098,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Accrual Policies
-  app.get("/api/accrual-policies", async (_req, res) => {
+  app.get("/api/accrual-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getAccrualPolicies();
       res.json(items);
@@ -17140,7 +17140,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Accrual Policy Milestones
-  app.get("/api/accrual-policy-milestones", async (req, res) => {
+  app.get("/api/accrual-policy-milestones", requireAuth, async (req, res) => {
     try {
       const accrualPolicyId = req.query.accrualPolicyId as string;
       if (!accrualPolicyId) return res.status(400).json({ message: "accrualPolicyId required" });
@@ -17152,7 +17152,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/accrual-policy-milestones", async (req, res) => {
+  app.post("/api/accrual-policy-milestones", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createAccrualPolicyMilestone(req.body);
       res.status(201).json(item);
@@ -17173,7 +17173,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Absence Policies
-  app.get("/api/absence-policies", async (_req, res) => {
+  app.get("/api/absence-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getAbsencePolicies();
       res.json(items);
@@ -17215,7 +17215,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Holiday Policies
-  app.get("/api/holiday-policies", async (_req, res) => {
+  app.get("/api/holiday-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getHolidayPolicies();
       res.json(items);
@@ -17257,7 +17257,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Rounding Policies
-  app.get("/api/rounding-policies", async (_req, res) => {
+  app.get("/api/rounding-policies", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getRoundingPolicies();
       res.json(items);
@@ -17477,7 +17477,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/legal-entities", async (_req, res) => {
+  app.get("/api/legal-entities", requireAuth, async (_req, res) => {
     try {
       const items = await storage.getLegalEntities();
       res.json(items);
@@ -19760,7 +19760,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Funding Accounts ──────────────────────────────────────────────────────
-  app.get("/api/funding-accounts", async (req, res) => {
+  app.get("/api/funding-accounts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       res.json(await storage.getFundingAccounts(companyId));
