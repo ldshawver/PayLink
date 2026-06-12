@@ -20,6 +20,7 @@ import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, ins
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
+import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
@@ -579,6 +580,54 @@ type DbExecResult<T> = { rows?: T[] | Record<string, unknown>[] } | T[] | Record
 function firstRow<T>(r: DbExecResult<T>): T | undefined {
   if (Array.isArray(r)) return r[0] as T | undefined;
   return r.rows?.[0] as T | undefined;
+}
+
+function normalizeDocumensoDisplayStatus(status: string | null | undefined): string {
+  const normalized = String(status || "draft").toLowerCase();
+  if (["pending", "sent_for_signature"].includes(normalized)) return "sent";
+  if (["completed", "signed", "rejected", "voided", "viewed", "draft"].includes(normalized)) return normalized;
+  return normalized;
+}
+
+function resolveTenantFilePath(fileUrl: string | null | undefined): string | null {
+  if (!fileUrl) return null;
+  if (/^https?:\/\//i.test(fileUrl)) return null;
+  const clean = fileUrl.split("?")[0].replace(/^\/+/, "");
+  const candidates = [
+    path.resolve(process.cwd(), clean),
+    path.resolve(process.cwd(), "public", clean),
+    path.resolve(process.cwd(), "uploads", clean.replace(/^uploads\//, "")),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  }
+  return null;
+}
+
+function extractDocumensoDocumentId(payload: any): string | null {
+  return String(
+    payload?.documentId ||
+    payload?.document_id ||
+    payload?.envelopeId ||
+    payload?.envelope_id ||
+    payload?.data?.id ||
+    payload?.data?.documentId ||
+    payload?.data?.envelopeId ||
+    payload?.document?.id ||
+    payload?.envelope?.id ||
+    ""
+  ) || null;
+}
+
+function mapDocumensoEventToAuditAction(status: string, eventType?: string): string {
+  const event = String(eventType || "").toLowerCase();
+  if (event.includes("view")) return "DOCUMENT_VIEWED";
+  if (event.includes("sign") && !event.includes("complete")) return "DOCUMENT_SIGNED";
+  if (event.includes("reject") || status === "rejected") return "DOCUMENT_REJECTED";
+  if (event.includes("void") || event.includes("delete") || status === "voided") return "DOCUMENT_VOIDED";
+  if (event.includes("complete") || status === "completed") return "DOCUMENT_COMPLETED";
+  if (event.includes("sent") || status === "sent") return "DOCUMENT_SENT_FOR_SIGNATURE";
+  return `DOCUMENSO_${(eventType || status || "event").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
 }
 
 interface ProposalRow {
@@ -1220,7 +1269,7 @@ export async function registerRoutes(
     console.error("[MIGRATION] Proposal soft-delete migration error:", migErr);
   }
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/api/webhooks/documenso", "/portal/", "/time-clock/"];
   // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
   // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
   // auth, analytics, and webhook paths listed in publicWritePaths.
@@ -1272,7 +1321,7 @@ export async function registerRoutes(
     // ── Documents & Signatures ──────────────────────────────────────────────
     "/api/documents", "/api/document-folders", "/api/document-versions",
     "/api/document-acls", "/api/document-retention", "/api/document-retention-policies",
-    "/api/dam-documents", "/api/signature-packages", "/api/system-documents",
+    "/api/dam-documents", "/api/signature-packages", "/api/signing-documents", "/api/system-documents",
     "/api/biz-documents", "/api/biz-document-items", "/api/biz-document-attachments",
     "/api/agreement-templates", "/api/onboarding-documents",
     "/api/onboarding-packets", "/api/onboarding-packet-steps",
@@ -1684,7 +1733,7 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
-      || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
+      || req.path === "/webhooks/product-events" || req.path === "/api/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
       || req.path === "/analytics/event"
@@ -11849,15 +11898,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Resolve provider — explicit body.provider, else first configured for the company.
       const companyConfig = await getCompanyESignConfig(companyId);
-      const supported = getSupportedProviders();
-      let provider: string | undefined = req.body?.provider;
+      const supported = Array.from(new Set(["documenso", ...getSupportedProviders()]));
+      let provider: string | undefined = req.body?.provider || process.env.DOCUMENSO_SIGNING_PROVIDER || "documenso";
       if (provider && !supported.includes(provider)) {
         return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
       }
       if (!provider) {
-        if (companyConfig?.docusign) provider = "docusign";
+        if (process.env.DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY) provider = "documenso";
+        else if (companyConfig?.docusign) provider = "docusign";
         else if (companyConfig?.acrobat_sign) provider = "acrobat_sign";
-        else provider = supported[0];
+        else provider = "documenso";
       }
       if (!provider) return res.status(400).json({ message: "No e-signature provider available" });
 
@@ -11911,17 +11961,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const message = (req.body?.message as string | undefined) || `Please review and sign the approved proposal "${proposal.title || proposal.proposal_number}".`;
       const returnUrl = `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`;
 
-      let adapter;
-      try {
-        adapter = getESignAdapter(provider);
-      } catch {
-        return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+      let adapter: ReturnType<typeof getESignAdapter> | null = null;
+      if (provider !== "documenso") {
+        try {
+          adapter = getESignAdapter(provider);
+        } catch {
+          return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+        }
       }
 
       const sigRequest = await storage.createDocumentSignatureRequest({
         documentId: docRow.id,
         companyId,
         provider,
+        signingProvider: provider,
+        signatureRequired: true,
+        signatureStatus: "draft",
         status: "draft",
         message,
         createdBy: userId,
@@ -11935,27 +11990,53 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         status: "pending",
       } as any);
 
-      let result: { providerEnvelopeId: string; status: string };
+      let result: { providerEnvelopeId: string; status: string; signingUrl?: string; auditUrl?: string };
       try {
-        result = await adapter.createPackage({
-          companyId,
-          documentUrl: `${baseUrl}${pdfRel.file_path}`,
-          documentName: pdfRel.file_name || "proposal.pdf",
-          subject,
-          message,
-          signers: [{ name: signerName, email: signerEmail, routingOrder: 1 }],
-          returnUrl,
-        }, companyConfig);
+        if (provider === "documenso") {
+          const filePath = resolveTenantFilePath(pdfRel.file_path);
+          if (!filePath) return res.status(500).json({ message: "Approval PDF unavailable on server storage" });
+          const documensoResult = await createDocumensoDocument({
+            title: docTitle,
+            pdfBuffer: await fs.promises.readFile(filePath),
+            recipients: [{ name: signerName, email: signerEmail, role: "SIGNER", routingOrder: 1 }],
+            metadata: { externalId: req.params.id, proposalId: req.params.id, documentId: docRow.id, companyId, signatureRequestId: sigRequest.id, kind: "contractor_proposal" },
+            subject,
+            message,
+            returnUrl,
+          });
+          result = {
+            providerEnvelopeId: documensoResult.documentId,
+            status: documensoResult.status,
+            signingUrl: documensoResult.signingLinks.find(l => l.signingUrl)?.signingUrl,
+            auditUrl: documensoResult.auditUrl,
+          };
+        } else {
+          result = await adapter!.createPackage({
+            companyId,
+            documentUrl: `${baseUrl}${pdfRel.file_path}`,
+            documentName: pdfRel.file_name || "proposal.pdf",
+            subject,
+            message,
+            signers: [{ name: signerName, email: signerEmail, routingOrder: 1 }],
+            returnUrl,
+          }, companyConfig);
+        }
       } catch (sendErr) {
         console.error("[Proposal request-signature] e-sign provider error:", sendErr);
-        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "error" } as any).catch(() => {});
+        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "draft", signatureStatus: "draft", documensoStatus: "error" } as any).catch(() => {});
         return res.status(502).json({ message: "Failed to send signature request to e-sign provider" });
       }
 
       await storage.updateDocumentSignatureRequest(sigRequest.id, {
         providerObjectId: result.providerEnvelopeId,
+        documensoDocumentId: provider === "documenso" ? result.providerEnvelopeId : undefined,
+        documensoStatus: provider === "documenso" ? result.status : undefined,
+        documensoSigningUrl: result.signingUrl,
+        documensoAuditUrl: result.auditUrl,
+        signatureStatus: "sent",
         status: "sent",
         sentAt: new Date(),
+        sentForSignatureAt: new Date(),
       } as any);
 
       const pkg = await storage.createSignaturePackage({
@@ -14215,131 +14296,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("Documenso not configured") || msg.includes("DOCUMENSO_API_KEY")) {
-        return res.status(503).json({ message: "Documenso is not configured. Set MyPayLink_DOCUMENSO_API_KEY in environment settings." });
+        return res.status(503).json({ message: "Documenso is not configured. Set DOCUMENSO_API_KEY in Replit Secrets." });
       }
       res.status(500).json({ message: "Failed to send for signature: " + msg });
-    }
-  });
-
-  // ── Documenso Webhook ─────────────────────────────────────────────────────
-  // Receives event callbacks from Documenso and updates related records.
-  // Signature verification uses HMAC-SHA256 via DOCUMENSO_WEBHOOK_SECRET.
-  app.post("/api/webhooks/documenso", async (req, res) => {
-    try {
-      const { verifyWebhookSignature, downloadCompletedDocument } = await import("./services/documenso.js");
-      const signature = (req.headers["x-documenso-signature"] as string) || (req.headers["x-webhook-signature"] as string) || "";
-      const secret = process.env.DOCUMENSO_WEBHOOK_SECRET || "";
-
-      // Handle both raw-buffer and already-parsed JSON body
-      let rawBodyBuf: Buffer;
-      let eventData: any;
-      if (Buffer.isBuffer(req.body)) {
-        rawBodyBuf = req.body;
-        try { eventData = JSON.parse(rawBodyBuf.toString("utf8")); } catch { return res.status(400).json({ message: "Invalid JSON" }); }
-      } else {
-        eventData = req.body || {};
-        rawBodyBuf = Buffer.from(JSON.stringify(eventData));
-      }
-
-      // Fail-closed: reject immediately if no secret is configured
-      if (!secret) {
-        console.error("[Documenso Webhook] DOCUMENSO_WEBHOOK_SECRET is not set — rejecting all webhook requests. Configure the secret to enable webhook processing.");
-        return res.status(503).json({ message: "Webhook endpoint not configured: secret missing" });
-      }
-
-      const isValid = verifyWebhookSignature(rawBodyBuf, signature, secret);
-
-      const eventType: string = eventData.event || eventData.type || "unknown";
-      const documensoDocumentId: string | null = String(eventData.data?.id || eventData.documentId || "").trim() || null;
-      const documensoEventId: string | null = String(eventData.webhookId || eventData.id || "").trim() || null;
-
-      // Deduplication: skip if already processed
-      if (documensoEventId) {
-        const dup = await db.execute(sql`SELECT id FROM documenso_webhook_events WHERE documenso_event_id = ${documensoEventId} LIMIT 1`);
-        if (dup.rows[0]) return res.status(200).json({ message: "Already processed" });
-      }
-
-      // Reject invalid signatures before storing (do not log untrusted payloads on auth failure)
-      if (!isValid) {
-        return res.status(401).json({ message: "Invalid webhook signature" });
-      }
-
-      // Store verified event
-      const eventRow = await db.execute(sql`
-        INSERT INTO documenso_webhook_events (event_type, documenso_document_id, documenso_event_id, payload, signature_valid, processed)
-        VALUES (${eventType}, ${documensoDocumentId}, ${documensoEventId}, ${JSON.stringify(eventData)}, true, false)
-        RETURNING id
-      `);
-      const eventId = (eventRow.rows[0] as any)?.id;
-
-      // Process asynchronously so we return 200 quickly
-      (async () => {
-        try {
-          if (!documensoDocumentId) {
-            await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW(), processing_error = 'no_document_id' WHERE id = ${eventId}`);
-            return;
-          }
-          const sigReqRes = await db.execute(sql`SELECT * FROM documenso_signature_requests WHERE documenso_document_id = ${documensoDocumentId} ORDER BY created_at DESC LIMIT 1`);
-          const sigReq = sigReqRes.rows[0] as any;
-          if (!sigReq) {
-            await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW(), processing_error = 'no_signature_request_found' WHERE id = ${eventId}`);
-            return;
-          }
-
-          if (eventType === "document.viewed") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'viewed', viewed_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-          } else if (eventType === "document.signed") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'partially_signed', signed_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-          } else if (eventType === "document.completed") {
-            // Download signed PDF and store in DAM
-            try {
-              const pdfBuf = await downloadCompletedDocument(documensoDocumentId);
-              if (pdfBuf) {
-                const fname = `documenso-signed-${sigReq.related_record_id}-${Date.now()}.pdf`;
-                const uploadDir = path.join(process.cwd(), "uploads");
-                if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-                fs.writeFileSync(path.join(uploadDir, fname), pdfBuf);
-
-                const damRes = await db.execute(sql`
-                  INSERT INTO dam_documents (company_id, document_type, title, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id)
-                  VALUES (${sigReq.company_id}, 'signed_contract',
-                    ${"SIGNED — " + (sigReq.document_type || "contract")},
-                    ${"/uploads/" + fname}, ${fname}, 'document', ${pdfBuf.length}, 'application/pdf',
-                    ${sigReq.document_type}, ${sigReq.related_record_id})
-                  RETURNING id
-                `).catch(() => ({ rows: [] }));
-                const damId = (damRes.rows[0] as any)?.id || null;
-
-                await db.execute(sql`UPDATE documenso_signature_requests SET status = 'completed', completed_at = NOW(), completed_pdf_file_id = ${damId}, updated_at = NOW() WHERE id = ${sigReq.id}`);
-
-                // Lock the contract
-                if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
-                  await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = NOW(), signed_pdf_path = ${"/uploads/" + fname}, updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
-                }
-              }
-            } catch (dlErr: any) {
-              console.error("[DocumensoWebhook] PDF download error:", dlErr.message);
-            }
-          } else if (eventType === "document.declined") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'declined', declined_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-            if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
-              await db.execute(sql`UPDATE contractor_contracts SET updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
-            }
-          } else if (eventType === "document.expired") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'expired', expired_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-          }
-
-          await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW() WHERE id = ${eventId}`);
-        } catch (procErr: any) {
-          console.error("[DocumensoWebhook] processing error:", procErr.message);
-          await db.execute(sql`UPDATE documenso_webhook_events SET processing_error = ${procErr.message} WHERE id = ${eventId}`).catch(() => {});
-        }
-      })();
-
-      res.status(200).json({ message: "OK" });
-    } catch (e: any) {
-      console.error("[DocumensoWebhook] handler error:", e.message);
-      res.status(500).json({ message: "Webhook error" });
     }
   });
 
@@ -23182,6 +23141,314 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const r = await storage.createDocumentFolder({ ...req.body, companyId: (req as any)._companyId });
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create folder") }); }
+  });
+
+  // ── Documenso Documents & Signatures ─────────────────────────────────────
+  app.get("/api/signing-documents", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const requestedCompanyId = queryStr(req.query.companyId) || user.companyId || null;
+      if (!requestedCompanyId) return res.status(400).json({ message: "companyId is required" });
+      if (!(await canAccessCompany(user, requestedCompanyId))) return res.status(403).json({ message: "Access denied" });
+      const adminView = isManagerRole(user.role);
+      const rows = await db.execute(sql`
+        SELECT
+          dsr.id,
+          dsr.document_id,
+          dsr.company_id,
+          dsr.provider,
+          dsr.provider_object_id,
+          dsr.documenso_document_id,
+          dsr.documenso_status,
+          dsr.documenso_signing_url,
+          dsr.documenso_completed_pdf_url,
+          dsr.documenso_audit_url,
+          COALESCE(dsr.signature_status, dsr.status, 'draft') AS signature_status,
+          dsr.sent_at,
+          dsr.sent_for_signature_at,
+          dsr.signed_at,
+          dsr.completed_at,
+          d.title AS document_name,
+          d.document_type,
+          d.category,
+          d.assigned_to_worker_id,
+          d.assigned_to_customer_id,
+          s.signer_name,
+          s.signer_email,
+          s.status AS signer_status,
+          sp.metadata
+        FROM document_signature_requests dsr
+        JOIN documents d ON d.id = dsr.document_id
+        LEFT JOIN document_signers s ON s.signature_request_id = dsr.id
+        LEFT JOIN signature_packages sp ON sp.signature_request_id = dsr.id
+        WHERE dsr.company_id = ${requestedCompanyId}
+          AND (${adminView} = TRUE OR d.assigned_to_worker_id IS NULL OR d.assigned_to_worker_id = ${user.workerId || null})
+        ORDER BY COALESCE(dsr.sent_for_signature_at, dsr.sent_at, dsr.created_at) DESC
+      `);
+      res.json((rows.rows || []).map((row: any) => ({
+        id: row.id,
+        documentId: row.document_id,
+        documentName: row.document_name,
+        type: row.document_type || row.category || "document",
+        relatedEntity: row.metadata ? (() => { try { const m = JSON.parse(row.metadata); return m.kind || m.entityType || m.proposalId || m.contractId || "Document"; } catch { return "Document"; } })() : "Document",
+        recipient: row.signer_name || row.signer_email || "Recipient",
+        recipientEmail: row.signer_email,
+        status: normalizeDocumensoDisplayStatus(row.signature_status || row.documenso_status),
+        sentDate: row.sent_for_signature_at || row.sent_at,
+        signedDate: row.signed_at || row.completed_at,
+        documensoDocumentId: row.documenso_document_id || row.provider_object_id,
+        signingUrl: row.documenso_signing_url,
+        completedPdfUrl: row.documenso_completed_pdf_url,
+        auditUrl: row.documenso_audit_url,
+        signerStatus: row.signer_status,
+      })));
+    } catch (e) {
+      console.error("[Documenso] list signing documents failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch signing documents") });
+    }
+  });
+
+  app.post("/api/documents/:id/send-for-signature", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const doc = await storage.getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      if (!(await canAccessCompany(user, doc.companyId))) return res.status(403).json({ message: "Access denied" });
+
+      const active = await db.execute(sql`
+        SELECT id, documenso_document_id, provider_object_id, signature_status, status
+        FROM document_signature_requests
+        WHERE document_id = ${req.params.id}
+          AND COALESCE(signature_status, status) IN ('sent', 'viewed', 'signed', 'pending', 'sent_for_signature')
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      const activeRow = firstRow<any>(active);
+      if (activeRow) {
+        return res.status(409).json({ message: "This document already has an active signing request", signatureRequestId: activeRow.id, documensoDocumentId: activeRow.documenso_document_id || activeRow.provider_object_id });
+      }
+
+      const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+      if (!recipients.length) return res.status(400).json({ message: "At least one recipient is required" });
+      for (const recipient of recipients) {
+        if (!recipient?.email || !recipient?.name) return res.status(400).json({ message: "Each recipient requires name and email" });
+      }
+
+      const filePath = resolveTenantFilePath((doc as any).fileUrl);
+      if (!filePath) return res.status(400).json({ message: "Document PDF is not available on server storage" });
+      const pdfBuffer = await fs.promises.readFile(filePath);
+      const subject = req.body?.subject || `Signature Requested: ${doc.title}`;
+      const message = req.body?.message || `Please review and sign ${doc.title}.`;
+      const returnUrl = `${getAppBaseUrl(req)}/app/contractor-hub?section=signatures`;
+
+      const sigRequest = await storage.createDocumentSignatureRequest({
+        documentId: doc.id,
+        companyId: doc.companyId,
+        provider: "documenso",
+        signingProvider: "documenso",
+        signatureRequired: true,
+        signatureStatus: "draft",
+        status: "draft",
+        message,
+        createdBy: userId,
+      } as any);
+      for (let i = 0; i < recipients.length; i++) {
+        await storage.createDocumentSigner({
+          signatureRequestId: sigRequest.id,
+          signerName: recipients[i].name,
+          signerEmail: recipients[i].email,
+          routingOrder: recipients[i].routingOrder || i + 1,
+          sortOrder: i,
+          status: "pending",
+        } as any);
+      }
+
+      let result;
+      try {
+        result = await createDocumensoDocument({
+          title: doc.title,
+          pdfBuffer,
+          recipients,
+          metadata: { externalId: doc.id, documentId: doc.id, companyId: doc.companyId, signatureRequestId: sigRequest.id },
+          subject,
+          message,
+          returnUrl,
+        });
+      } catch (sendErr: any) {
+        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "draft", signatureStatus: "draft", documensoStatus: "error" } as any).catch(() => {});
+        await storage.createDocumentAuditLog({ documentId: doc.id, signatureRequestId: sigRequest.id, companyId: doc.companyId, action: "DOCUMENT_SIGNATURE_SEND_FAILED", actorId: userId, actorName: user.username || "", ipAddress: req.ip || "", details: sendErr?.message || "Documenso send failed" }).catch(() => {});
+        return res.status(502).json({ message: "Failed to send document to Documenso. Local document remains draft." });
+      }
+
+      const signingUrl = result.signingLinks.find(l => !!l.signingUrl)?.signingUrl || null;
+      await storage.updateDocumentSignatureRequest(sigRequest.id, {
+        providerObjectId: result.documentId,
+        documensoDocumentId: result.documentId,
+        documensoStatus: result.status,
+        documensoSigningUrl: signingUrl,
+        documensoAuditUrl: result.auditUrl,
+        signatureStatus: "sent",
+        status: "sent",
+        sentAt: new Date(),
+        sentForSignatureAt: new Date(),
+      } as any);
+      await storage.updateDocument(doc.id, {
+        documensoDocumentId: result.documentId,
+        documensoStatus: result.status,
+        documensoSigningUrl: signingUrl,
+        documensoAuditUrl: result.auditUrl,
+        signatureRequired: true,
+        signatureStatus: "sent",
+        signingProvider: "documenso",
+        sentForSignatureAt: new Date(),
+      } as any);
+      await storage.createSignaturePackage({
+        companyId: doc.companyId,
+        signatureRequestId: sigRequest.id,
+        provider: "documenso",
+        providerEnvelopeId: result.documentId,
+        status: "sent",
+        documentIds: doc.id,
+        subject,
+        message,
+        metadata: JSON.stringify({ kind: (doc as any).documentType || "document", documentId: doc.id }),
+        sentAt: new Date(),
+        createdBy: userId,
+      } as any);
+      await storage.createDocumentAuditLog({ documentId: doc.id, signatureRequestId: sigRequest.id, companyId: doc.companyId, action: "DOCUMENT_SENT_FOR_SIGNATURE", actorId: userId, actorName: user.username || "", ipAddress: req.ip || "", details: JSON.stringify({ documensoDocumentId: result.documentId }) });
+      res.status(201).json({ signatureRequestId: sigRequest.id, documensoDocumentId: result.documentId, status: "sent", signingLinks: result.signingLinks });
+    } catch (e) {
+      console.error("[Documenso] send for signature failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to send for signature") });
+    }
+  });
+
+  app.post("/api/signing-documents/:id/resend", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const documensoId = (sig as any).documensoDocumentId || sig.providerObjectId;
+      if (!documensoId) return res.status(400).json({ message: "No Documenso document ID is stored" });
+      const result = await resendDocumensoDocument(documensoId);
+      await storage.updateDocumentSignatureRequest(sig.id, { status: "sent", signatureStatus: "sent", sentAt: new Date(), sentForSignatureAt: new Date(), documensoSigningUrl: result.signingLinks.find(l => l.signingUrl)?.signingUrl || (sig as any).documensoSigningUrl } as any);
+      await storage.createDocumentAuditLog({ documentId: sig.documentId, signatureRequestId: sig.id, companyId: sig.companyId, action: "DOCUMENT_SENT_FOR_SIGNATURE", actorId: user.id, actorName: user.username || "", ipAddress: req.ip || "", details: JSON.stringify({ resent: true, documensoDocumentId: documensoId }) });
+      res.json({ status: "sent", signingLinks: result.signingLinks });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to resend signature request") }); }
+  });
+
+  app.post("/api/signing-documents/:id/void", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const documensoId = (sig as any).documensoDocumentId || sig.providerObjectId;
+      if (documensoId) await voidDocumensoDocument(documensoId);
+      await storage.updateDocumentSignatureRequest(sig.id, { status: "voided", signatureStatus: "voided", documensoStatus: "voided" } as any);
+      await storage.updateDocument(sig.documentId, { signatureStatus: "voided", documensoStatus: "voided" } as any);
+      await storage.createDocumentAuditLog({ documentId: sig.documentId, signatureRequestId: sig.id, companyId: sig.companyId, action: "DOCUMENT_VOIDED", actorId: user.id, actorName: user.username || "", ipAddress: req.ip || "", details: req.body?.reason || "Voided from PayLink" });
+      res.json({ status: "voided" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to void signature request") }); }
+  });
+
+  app.get("/api/signing-documents/:id/download-signed", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const doc = await storage.getDocument(sig.documentId);
+      if (!isManagerRole(user.role) && doc?.assignedToWorkerId && doc.assignedToWorkerId !== user.workerId) return res.status(403).json({ message: "Access denied" });
+      const storedUrl = (sig as any).documensoCompletedPdfUrl || doc?.documensoCompletedPdfUrl;
+      const storedPath = resolveTenantFilePath(storedUrl);
+      const buffer = storedPath ? await fs.promises.readFile(storedPath) : await downloadCompletedDocumensoPdf((sig as any).documensoDocumentId || sig.providerObjectId || "");
+      if (!buffer) return res.status(404).json({ message: "Completed signed PDF is not available yet" });
+      await storage.createDocumentAuditLog({ documentId: sig.documentId, signatureRequestId: sig.id, companyId: sig.companyId, action: "SIGNED_PDF_DOWNLOADED", actorId: user.id, actorName: user.username || "", ipAddress: req.ip || "", details: "Signed PDF downloaded" });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${(doc?.title || "signed-document").replace(/[^a-z0-9._-]+/gi, "-")}-signed.pdf"`);
+      res.send(buffer);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download signed PDF") }); }
+  });
+
+  app.get("/api/signing-documents/:id/audit-trail", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const audit = await downloadDocumensoAuditTrail((sig as any).documensoDocumentId || sig.providerObjectId || "");
+      res.json(audit);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download audit trail") }); }
+  });
+
+  app.post("/api/webhooks/documenso", async (req, res) => {
+    const raw = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+    const signatureValid = verifyWebhookSecret(req.headers as any, raw);
+    if (!signatureValid) return res.status(401).json({ message: "Invalid Documenso webhook secret" });
+    const payload = req.body || {};
+    const eventType = String(payload?.event || payload?.type || payload?.eventType || "documenso.event");
+    const documensoDocumentId = extractDocumensoDocumentId(payload);
+    let webhookEventId: string | null = null;
+    try {
+      const inserted = await db.execute(sql`
+        INSERT INTO webhook_events (provider, event_type, provider_event_id, envelope_id, payload, status)
+        VALUES ('documenso', ${eventType}, ${payload?.id || payload?.eventId || null}, ${documensoDocumentId}, ${JSON.stringify(payload)}, 'received')
+        ON CONFLICT (provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING
+        RETURNING id
+      `);
+      webhookEventId = firstRow<any>(inserted)?.id || null;
+      if (!documensoDocumentId) throw new Error("Missing Documenso document id in webhook payload");
+      const sigRes = await db.execute(sql`
+        SELECT * FROM document_signature_requests
+        WHERE documenso_document_id = ${documensoDocumentId} OR provider_object_id = ${documensoDocumentId}
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      const sig = firstRow<any>(sigRes);
+      if (!sig) throw new Error(`No local signature request found for Documenso document ${documensoDocumentId}`);
+      const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
+      const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || sig.signature_status));
+      const completed = status === "completed";
+      let completedPdfUrl: string | null = null;
+      if (completed) {
+        const pdf = await downloadCompletedDocumensoPdf(documensoDocumentId).catch((err) => { console.warn("[Documenso] completed PDF download failed:", err); return null; });
+        if (pdf) {
+          const tenantDir = path.join(resolvedUploadDir, "signed", sig.company_id);
+          await fs.promises.mkdir(tenantDir, { recursive: true });
+          const fileName = `${sig.document_id}-${documensoDocumentId}-signed.pdf`.replace(/[^a-zA-Z0-9._-]/g, "-");
+          const abs = path.join(tenantDir, fileName);
+          await fs.promises.writeFile(abs, pdf);
+          completedPdfUrl = `/uploads/signed/${sig.company_id}/${fileName}`;
+        }
+      }
+      await db.execute(sql`
+        UPDATE document_signature_requests
+        SET signature_status = ${status}, status = ${status}, documenso_status = ${status},
+            signed_at = CASE WHEN ${completed} THEN COALESCE(signed_at, NOW()) ELSE signed_at END,
+            completed_at = CASE WHEN ${completed} THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+            documenso_completed_pdf_url = COALESCE(${completedPdfUrl}, documenso_completed_pdf_url),
+            updated_at = NOW()
+        WHERE id = ${sig.id}
+      `);
+      await db.execute(sql`
+        UPDATE documents
+        SET signature_status = ${status}, documenso_status = ${status},
+            signed_at = CASE WHEN ${completed} THEN COALESCE(signed_at, NOW()) ELSE signed_at END,
+            documenso_completed_pdf_url = COALESCE(${completedPdfUrl}, documenso_completed_pdf_url),
+            updated_at = NOW()
+        WHERE id = ${sig.document_id}
+      `);
+      await storage.createDocumentAuditLog({ documentId: sig.document_id, signatureRequestId: sig.id, companyId: sig.company_id, action: mapDocumensoEventToAuditAction(status, eventType), actorName: "Documenso", details: JSON.stringify({ documensoDocumentId, eventType, payload }) });
+      if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'processed', processed_at = NOW() WHERE id = ${webhookEventId}`);
+      res.json({ received: true, status });
+    } catch (e: any) {
+      console.error("[Documenso] webhook failed:", e);
+      if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'error', error = ${e?.message || String(e)}, processed_at = NOW() WHERE id = ${webhookEventId}`).catch(() => {});
+      res.status(500).json({ message: "Documenso webhook processing failed" });
+    }
   });
 
   app.get("/api/documents", requireAuth, enforceCompanyScope("query"), async (req, res) => {
