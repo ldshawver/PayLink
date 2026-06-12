@@ -32,34 +32,70 @@
 
 ## 3. Automated Nightly Backup
 
-Backups run automatically at **2 AM UTC daily** via cron (`scripts/backup-db.sh`).
+### 3.1 Backup script
 
-### Setup (one-time, on VPS as root)
+The canonical backup script is **`scripts/backup-db.sh`** in the repository root.
+
+| Property | Value |
+|----------|-------|
+| Script path (VPS) | `/home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh` |
+| Backup directory | `/var/backups/paylink/` |
+| File naming convention | `paylink_YYYY-MM-DD.sql.gz` (e.g. `paylink_2026-06-12.sql.gz`) |
+| Format | Plain-SQL, `gzip -9` compressed |
+| Retention | 30 days (older files pruned automatically by the script) |
+| Log file (default) | `~/paylink-backup.log` (user-writable; see §3.2 for `/var/log` option) |
+
+The script is idempotent and safe to run manually at any time:
 ```bash
-# Create backup directory and log file
-mkdir -p /var/backups/paylink
-touch /var/log/paylink-backup.log
-chown paylinkssh:paylinkssh /var/backups/paylink /var/log/paylink-backup.log
-chmod +x /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh
-
-# Install cron job for paylinkssh
-crontab -u paylinkssh -e
-# Add this line:
-# 0 2 * * * /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh >> /var/log/paylink-backup.log 2>&1
+bash /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh
 ```
 
-### Optional: failure alert email
-Add `BACKUP_ALERT_EMAIL=you@example.com` to `/etc/paylink/.env`. If `SMTP_USER`
-and `SMTP_PASS` are also set, the script will email you if pg_dump fails.
+### 3.2 Cron setup (first-time installation on the VPS)
 
-### Backup file convention
-```
-/var/backups/paylink/paylink_YYYY-MM-DD_HHMMSS.sql.gz
-```
-Backups older than 30 days are pruned automatically. The script logs to
-`/var/log/paylink-backup.log`.
+Run as the `paylinkssh` user (the same user that runs PM2).
 
-### Verification (Run Monthly)
+#### Step 1 — Create the backup directory
+
+```bash
+sudo mkdir -p /var/backups/paylink
+sudo chown paylinkssh:paylinkssh /var/backups/paylink
+```
+
+#### Step 2 — Add the crontab entry
+
+The log file must be writable by `paylinkssh`. Use the home-directory path (no extra setup needed):
+
+```bash
+crontab -e
+```
+
+Add this line — runs at 02:00 every night, logs to the user's home directory:
+
+```
+0 2 * * * /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh >> /home/paylinkssh/paylink-backup.log 2>&1
+```
+
+**Optional:** to log to `/var/log/paylink-backup.log` instead, a one-time root step is required first:
+
+```bash
+# As root
+sudo touch /var/log/paylink-backup.log
+sudo chown paylinkssh:paylinkssh /var/log/paylink-backup.log
+```
+
+Then the crontab line becomes:
+
+```
+0 2 * * * /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh >> /var/log/paylink-backup.log 2>&1
+```
+
+#### Step 3 — Verify the entry was saved
+
+```bash
+crontab -l | grep backup
+```
+
+### 3.3 Backup Verification (Run Monthly)
 
 ```bash
 # 1. List available backups
@@ -359,7 +395,7 @@ ss -tlnp | grep 8000
 ## 10. Cross-References
 
 - **Deployment runbook:** `DEPLOYMENT.md`
-- **Backup cron script:** `scripts/deploy-paylink.sh`
+- **Backup cron script:** `scripts/backup-db.sh` (nightly at 02:00, logs to `/var/log/paylink-backup.log`)
 - **CI/CD workflow:** `.github/workflows/deploy-app.yml`
 - **Security testing:** `tests/security.test.ts`
 - **Secrets in environment:** See `DEPLOYMENT.md` → Environment Variables section

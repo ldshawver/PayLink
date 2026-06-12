@@ -631,7 +631,7 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate,
   const approvedProposals = proposals.filter(p => p.status === "approved");
   const activeContracts = contracts.filter(c => c.status === "active");
   const overdueInvoices = invoices.filter(i => {
-    if (["paid", "void"].includes(i.status)) return false;
+    if (["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(i.status)) return false;
     return i.dueDate && new Date(i.dueDate) < new Date();
   });
   const nowMs = Date.now();
@@ -643,7 +643,7 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate,
     return daysLeft >= 0 && daysLeft <= expiryWarningDays;
   });
   const totalOutstanding = invoices
-    .filter(i => !["paid", "void"].includes(i.status))
+    .filter(i => !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(i.status))
     .reduce((s, i) => s + parseFloat(i.balanceDue ?? i.amount ?? "0"), 0);
   const totalEarned = invoices
     .filter(i => i.status === "paid")
@@ -790,7 +790,7 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate,
           </CardHeader>
           <CardContent className="space-y-2">
             {invoices.slice(0, 4).map(inv => {
-              const isOverdue = !["paid", "void"].includes(inv.status) && inv.dueDate && new Date(inv.dueDate) < new Date();
+              const isOverdue = !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(inv.status) && inv.dueDate && new Date(inv.dueDate) < new Date();
               return (
                 <div key={inv.id} className="flex items-center justify-between py-1">
                   <div className="flex-1 min-w-0">
@@ -4005,18 +4005,32 @@ function InvoiceDetailPanel({
                 <div><p className="text-muted-foreground text-xs">Balance Due</p><p className="font-semibold">{fmt(invoice.balanceDue ?? invoice.amount)}</p></div>
               </div>
 
-              {/* Traceability chain */}
+              {/* Traceability chain — clickable links to source documents */}
               {(invoice.proposalId || (invoice as any).contractId || (invoice as any).archivedToDocumentsAt) && (
                 <div className="flex flex-wrap gap-2">
                   {invoice.proposalId && (
-                    <span className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-3 py-1" data-testid="chip-invoice-source-proposal">
+                    <a href={`/app/contractor-hub?section=proposals&id=${invoice.proposalId}`}
+                      className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-3 py-1 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors" data-testid="link-invoice-source-proposal">
                       <FileText className="h-3 w-3" /> Source Proposal
-                    </span>
+                    </a>
+                  )}
+                  {invoice.proposalId && (
+                    <a href={`/api/contractor-proposals/${invoice.proposalId}/pdf`} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-3 py-1 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors" data-testid="link-invoice-proposal-pdf">
+                      <Download className="h-3 w-3" /> Proposal PDF
+                    </a>
                   )}
                   {(invoice as any).contractId && (
-                    <span className="inline-flex items-center gap-1.5 text-xs bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-3 py-1" data-testid="chip-invoice-source-contract">
+                    <a href={`/app/contractor-hub?section=contracts&id=${(invoice as any).contractId}`}
+                      className="inline-flex items-center gap-1.5 text-xs bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-3 py-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors" data-testid="link-invoice-source-contract">
                       <Briefcase className="h-3 w-3" /> Source Contract
-                    </span>
+                    </a>
+                  )}
+                  {(invoice as any).contractId && (
+                    <a href={`/api/contractor-contracts/${(invoice as any).contractId}/download`} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-3 py-1 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors" data-testid="link-invoice-contract-pdf">
+                      <Download className="h-3 w-3" /> Contract PDF
+                    </a>
                   )}
                   {(invoice as any).archivedToDocumentsAt && (
                     <span className="inline-flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 rounded-full px-3 py-1" data-testid="chip-invoice-archived">
@@ -4026,7 +4040,7 @@ function InvoiceDetailPanel({
                   {(invoice as any).archivedDocumentId && (
                     <a href={`/api/contractor-invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer"
                       className="inline-flex items-center gap-1.5 text-xs bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-full px-3 py-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" data-testid="link-view-pdf-invoice">
-                      <Download className="h-3 w-3" /> View Archived PDF
+                      <Download className="h-3 w-3" /> Invoice PDF
                     </a>
                   )}
                 </div>
@@ -4133,7 +4147,7 @@ function InvoiceDetailPanel({
                   </CardContent>
                 </Card>
               )}
-              {isAdmin && !["paid", "void"].includes(invoice.status) && !proposalBlocked && balance > 0 && (
+              {isAdmin && !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && !proposalBlocked && balance > 0 && (
                 <Card>
                   <CardHeader className="pb-2"><CardTitle className="text-sm">Record Payment</CardTitle></CardHeader>
                   <CardContent className="space-y-3">
@@ -4235,31 +4249,72 @@ function InvoiceDetailPanel({
             </TabsContent>
 
             <TabsContent value="linked" className="m-0 p-6">
-              {!invoice.proposalId ? (
+              {!invoice.proposalId && !(invoice as any).contractId ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <FileText className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No linked proposal</p>
+                  <p className="text-sm">No linked proposal or contract</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className={`flex items-center gap-3 p-4 rounded-lg border ${proposalStatus === "approved" ? "border-green-300 bg-green-50 dark:bg-green-950/20" : "border-orange-300 bg-orange-50 dark:bg-orange-950/20"}`}>
-                    {proposalStatus === "approved" ? <CheckCircle className="h-5 w-5 text-green-600" /> : <AlertTriangle className="h-5 w-5 text-orange-600" />}
-                    <div>
-                      <p className={`font-medium text-sm ${proposalStatus === "approved" ? "text-green-700" : "text-orange-700"}`}>
-                        Proposal {proposalStatus === "approved" ? "Approved" : `Status: ${proposalStatus}`}
-                      </p>
-                      <p className={`text-xs ${proposalStatus === "approved" ? "text-green-600" : "text-orange-600"}`}>
-                        {proposalStatus === "approved" ? "Payment is authorized for this invoice." : "Payment is blocked until the proposal is approved."}
-                      </p>
+                  {/* Proposal status banner */}
+                  {invoice.proposalId && (
+                    <div className={`flex items-center gap-3 p-4 rounded-lg border ${proposalStatus === "approved" ? "border-green-300 bg-green-50 dark:bg-green-950/20" : "border-orange-300 bg-orange-50 dark:bg-orange-950/20"}`}>
+                      {proposalStatus === "approved" ? <CheckCircle className="h-5 w-5 text-green-600" /> : <AlertTriangle className="h-5 w-5 text-orange-600" />}
+                      <div className="flex-1 min-w-0">
+                        <p className={`font-medium text-sm ${proposalStatus === "approved" ? "text-green-700" : "text-orange-700"}`}>
+                          Proposal {proposalStatus === "approved" ? "Approved" : `Status: ${proposalStatus}`}
+                        </p>
+                        <p className={`text-xs ${proposalStatus === "approved" ? "text-green-600" : "text-orange-600"}`}>
+                          {proposalStatus === "approved" ? "Payment is authorized for this invoice." : "Payment is blocked until the proposal is approved."}
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* Proposal document links */}
+                  {invoice.proposalId && (
+                    <div className="rounded-lg border p-4 space-y-3">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Approved Proposal</p>
+                      <div className="flex flex-wrap gap-2">
+                        <a href={`/app/contractor-hub?section=proposals&id=${invoice.proposalId}`}
+                          className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-md px-3 py-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors font-medium"
+                          data-testid="link-linked-tab-proposal">
+                          <FileText className="h-3.5 w-3.5" /> View Proposal
+                        </a>
+                        <a href={`/api/contractor-proposals/${invoice.proposalId}/pdf`} target="_blank" rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-md px-3 py-1.5 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors font-medium"
+                          data-testid="link-linked-tab-proposal-pdf">
+                          <Download className="h-3.5 w-3.5" /> Proposal PDF
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Contract document links */}
+                  {(invoice as any).contractId && (
+                    <div className="rounded-lg border p-4 space-y-3">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Signed Contract</p>
+                      <div className="flex flex-wrap gap-2">
+                        <a href={`/app/contractor-hub?section=contracts&id=${(invoice as any).contractId}`}
+                          className="inline-flex items-center gap-1.5 text-xs bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-md px-3 py-1.5 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors font-medium"
+                          data-testid="link-linked-tab-contract">
+                          <Briefcase className="h-3.5 w-3.5" /> View Contract
+                        </a>
+                        <a href={`/api/contractor-contracts/${(invoice as any).contractId}/download`} target="_blank" rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-md px-3 py-1.5 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors font-medium"
+                          data-testid="link-linked-tab-contract-pdf">
+                          <Download className="h-3.5 w-3.5" /> Contract PDF
+                        </a>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </TabsContent>
 
             {isAdmin && (
               <TabsContent value="reminders" className="m-0 p-6 space-y-4">
-                {!["paid", "void"].includes(invoice.status) && (
+                {!["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && (
                   <Button onClick={() => reminderMutation.mutate()} disabled={reminderMutation.isPending || !!proposalBlocked} className="w-full" variant="outline" data-testid="btn-send-reminder">
                     {reminderMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Bell className="h-4 w-4 mr-2" />}
                     Send Reminder Now
@@ -5324,7 +5379,7 @@ function DocumentsSection() {
   });
   const { data: invoices = [] } = useQuery<Invoice[]>({
     queryKey: ["/api/contractor-invoices", showArchived],
-    queryFn: async () => { const r = await fetch(`/api/contractor-invoices${showArchived ? "?showArchived=true" : ""}`, { credentials: "include" }); return r.ok ? r.json() : []; },
+    queryFn: async () => { const r = await fetch(`/api/contractor-invoices${showArchived ? "?showArchived=true&showVoided=true" : ""}`, { credentials: "include" }); return r.ok ? r.json() : []; },
     select: (d: any) => snakeToCamel(d),
   });
   const { data: payments = [] } = useQuery<Payment[]>({
@@ -7648,6 +7703,9 @@ export default function ContractorHubPage() {
   const [dupReason, setDupReason] = useState("");
   const [dupConfirmed, setDupConfirmed] = useState(false);
   const [dupPending, setDupPending] = useState(false);
+  const [restoreInvoiceTarget, setRestoreInvoiceTarget] = useState<Invoice | null>(null);
+  const [restoreInvoiceReason, setRestoreInvoiceReason] = useState("");
+  const [restoreInvoicePending, setRestoreInvoicePending] = useState(false);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [newProposal, setNewProposal] = useState(false);
@@ -7753,7 +7811,7 @@ export default function ContractorHubPage() {
     if (statusFilter === "all") {
       matchStatus = true;
     } else if (statusFilter === "overdue") {
-      matchStatus = !["paid", "void"].includes(i.status) && !!i.dueDate && new Date(i.dueDate) < new Date();
+      matchStatus = !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(i.status) && !!i.dueDate && new Date(i.dueDate) < new Date();
     } else {
       matchStatus = i.status === statusFilter;
     }
@@ -7768,7 +7826,7 @@ export default function ContractorHubPage() {
 
   // Badge counts for nav items
   const pendingProposals = proposals.filter(p => ["submitted", "sent", "viewed"].includes(p.status)).length;
-  const overdueInvoices = invoices.filter(i => !["paid", "void"].includes(i.status) && i.dueDate && new Date(i.dueDate) < new Date()).length;
+  const overdueInvoices = invoices.filter(i => !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(i.status) && i.dueDate && new Date(i.dueDate) < new Date()).length;
   const revisionNeeded = proposals.filter(p => p.status === "revision_requested").length;
   const { data: navNotifications = [] } = useQuery<ContractorNotification[]>({
     queryKey: ["/api/contractor-notifications"],
@@ -8203,7 +8261,7 @@ export default function ContractorHubPage() {
                       const proposalStatus = getProposalStatus(invoice.proposalId);
                       const isBlocked = !!invoice.proposalId && !!proposalStatus && proposalStatus !== "approved";
                       const balance = parseFloat(invoice.balanceDue ?? invoice.amount ?? "0");
-                      const isOverdue = !["paid", "void"].includes(invoice.status) && invoice.dueDate && new Date(invoice.dueDate) < new Date();
+                      const isOverdue = !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && invoice.dueDate && new Date(invoice.dueDate) < new Date();
                       return (
                         <div key={invoice.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors"
                           data-testid={`row-invoice-${invoice.id}`}>
@@ -8259,7 +8317,7 @@ export default function ContractorHubPage() {
                                   <Download className="h-3.5 w-3.5 text-muted-foreground" />
                                 </Button>
                               </a>
-                              {isAdmin && !["paid", "voided", "voided_duplicate", "rejected_duplicate"].includes(invoice.status) && (
+                              {isAdmin && !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && (
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
                                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Admin actions" data-testid={`btn-invoice-admin-actions-${invoice.id}`}>
@@ -8273,8 +8331,16 @@ export default function ContractorHubPage() {
                                     <DropdownMenuItem onSelect={() => { setDupInvoiceTarget(invoice); setDupOriginalId(""); setDupReason(""); setDupConfirmed(false); }} data-testid={`menu-mark-dup-invoice-${invoice.id}`}>
                                       <Copy className="h-3.5 w-3.5 mr-2 text-orange-500" /> Mark as Duplicate
                                     </DropdownMenuItem>
+                                    <DropdownMenuItem onSelect={async () => { if (confirm("Archive this invoice? It will be hidden from the active list but can be restored.")) { try { await apiRequest("POST", `/api/contractor-invoices/${invoice.id}/archive`, {}); queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] }); toast({ title: "Invoice archived" }); } catch { toast({ title: "Failed to archive", variant: "destructive" }); } } }} data-testid={`menu-archive-invoice-${invoice.id}`}>
+                                      <Archive className="h-3.5 w-3.5 mr-2 text-gray-500" /> Archive Invoice
+                                    </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
+                              )}
+                              {isAdmin && ["voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && (
+                                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={e => { e.stopPropagation(); setRestoreInvoiceTarget(invoice); setRestoreInvoiceReason(""); }} data-testid={`btn-restore-invoice-${invoice.id}`} title="Restore to draft">
+                                  <RotateCcw className="h-3.5 w-3.5 mr-1" /> Restore
+                                </Button>
                               )}
                               <ChevronRight className="h-4 w-4 text-muted-foreground mt-0.5 cursor-pointer" onClick={() => setSelectedInvoice(invoice)} />
                             </div>
@@ -8409,6 +8475,52 @@ export default function ContractorHubPage() {
                   >
                     {dupPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
                     Mark as Duplicate
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Restore Invoice Dialog */}
+            <Dialog open={!!restoreInvoiceTarget} onOpenChange={open => { if (!open) setRestoreInvoiceTarget(null); }}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Restore Invoice #{restoreInvoiceTarget?.invoiceNumber || restoreInvoiceTarget?.id?.slice(0, 8)}</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <p className="text-sm text-muted-foreground">
+                    Restoring will move this invoice back to <strong>Draft</strong> status, clear all void/rejection metadata, and log the action in the audit trail.
+                  </p>
+                  <div>
+                    <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                    <Textarea
+                      value={restoreInvoiceReason}
+                      onChange={e => setRestoreInvoiceReason(e.target.value)}
+                      placeholder="Explain why this invoice is being restored to draft..."
+                      rows={3}
+                      data-testid="textarea-restore-invoice-reason"
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setRestoreInvoiceTarget(null)} disabled={restoreInvoicePending}>Cancel</Button>
+                  <Button
+                    disabled={!restoreInvoiceReason.trim() || restoreInvoicePending}
+                    data-testid="btn-confirm-restore-invoice"
+                    onClick={async () => {
+                      if (!restoreInvoiceTarget) return;
+                      setRestoreInvoicePending(true);
+                      try {
+                        await apiRequest("POST", `/api/contractor-invoices/${restoreInvoiceTarget.id}/restore`, { reason: restoreInvoiceReason });
+                        queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+                        toast({ title: "Invoice restored", description: `Invoice #${restoreInvoiceTarget.invoiceNumber || restoreInvoiceTarget.id.slice(0, 8)} has been restored to draft.` });
+                        setRestoreInvoiceTarget(null);
+                      } catch (e: any) {
+                        toast({ title: "Failed to restore invoice", description: e?.message, variant: "destructive" });
+                      } finally { setRestoreInvoicePending(false); }
+                    }}
+                  >
+                    {restoreInvoicePending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RotateCcw className="h-4 w-4 mr-2" />}
+                    Restore to Draft
                   </Button>
                 </DialogFooter>
               </DialogContent>

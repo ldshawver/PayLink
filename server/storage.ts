@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, lte, isNull, or, inArray, ne } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, isNull, or, inArray, ne, notInArray } from "drizzle-orm";
 import { db } from "./db";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 import {
@@ -2998,7 +2998,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Contractor Invoices ───────────────────────────────────────────────
-  async getContractorInvoices(companyId?: string, contractorId?: string, status?: string, showArchived = false, showCompleted = true): Promise<ContractorInvoice[]> {
+  async getContractorInvoices(companyId?: string, contractorId?: string, status?: string, showArchived = false, showCompleted = true, showVoided = false): Promise<ContractorInvoice[]> {
+    const TERMINAL_STATUSES = ["voided", "voided_duplicate", "rejected_duplicate", "rejected"] as const;
     const conds: any[] = [];
     if (companyId) conds.push(eq(contractorInvoices.companyId, companyId));
     if (contractorId) conds.push(eq(contractorInvoices.contractorId, contractorId));
@@ -3006,6 +3007,9 @@ export class DatabaseStorage implements IStorage {
     if (!showArchived) conds.push(eq(contractorInvoices.isArchived, false));
     // archived_to_documents_at only tracks PDF storage — not completion status.
     if (!showCompleted) conds.push(ne(contractorInvoices.status, "paid"));
+    // Exclude voided/rejected terminal statuses from the active list unless explicitly requested.
+    // Never apply this filter when a specific status is requested (caller wants exactly that status).
+    if (!showVoided && !status) conds.push(notInArray(contractorInvoices.status, [...TERMINAL_STATUSES]));
     const q = conds.length > 0 ? db.select().from(contractorInvoices).where(and(...conds)) : db.select().from(contractorInvoices);
     return q.orderBy(desc(contractorInvoices.createdAt));
   }

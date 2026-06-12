@@ -164,18 +164,30 @@ export function registerFeedbackRoutes(
         const submitterEmail = (user as any).email ?? null;
         const browserInfo = buildBrowserInfo(req);
 
+        // Resolve company_id: prefer user.companyId, fall back to worker record lookup
+        // Link is users.worker_id → workers.id (workers table has no user_id column).
+        let resolvedCompanyId: string | null = user.companyId ?? null;
+        if (!resolvedCompanyId && (user as any).workerId) {
+          try {
+            const workerRes = await db.execute(sql`SELECT company_id FROM workers WHERE id = ${(user as any).workerId} LIMIT 1`);
+            const workerRow = firstRow<{ company_id: string | null }>(workerRes);
+            resolvedCompanyId = workerRow?.company_id ?? null;
+          } catch { /* best-effort */ }
+        }
+
+        // INSERT without screenshot_paths to stay safe against schema drift.
+        // A separate UPDATE adds it below — silently ignored if column doesn't exist yet.
         const inserted = await db.execute(sql`
           INSERT INTO feedback_tickets (
             company_id, submitter_user_id, submitter_name, submitter_email,
             type, severity, status, title, description, page_url, browser_info,
-            screenshot_path, screenshot_paths,
+            screenshot_path,
             error_code, steps_to_reproduce, expected_behavior, actual_behavior, console_errors
           ) VALUES (
-            ${user.companyId ?? null}, ${userId}, ${submitterName}, ${submitterEmail},
+            ${resolvedCompanyId}, ${userId}, ${submitterName}, ${submitterEmail},
             ${type}, ${sev}, 'new', ${title.trim()}, ${description.trim()},
             ${pageUrl ?? null}, ${browserInfo},
             ${screenshotPath},
-            ${screenshotPathsPg ? sql`${screenshotPathsPg}::text[]` : sql`NULL`},
             ${errorCode?.trim() || null}, ${stepsToReproduce?.trim() || null},
             ${expectedBehavior?.trim() || null}, ${actualBehavior?.trim() || null},
             ${consoleErrors?.trim() || null}
@@ -185,14 +197,27 @@ export function registerFeedbackRoutes(
         const ticket = firstRow<FeedbackTicketRow>(inserted);
         if (!ticket) return res.status(500).json({ message: "Failed to create ticket" });
 
+        // Backfill screenshot_paths if screenshots were uploaded (schema-drift safe).
+        if (screenshotPathsArr.length > 0 && screenshotPathsPg) {
+          await db.execute(sql`
+            UPDATE feedback_tickets
+            SET screenshot_paths = ${screenshotPathsPg}::text[]
+            WHERE id = ${ticket.id}
+          `).catch(() => { /* column may not exist in older deployments */ });
+        }
+
         // Notify company admins (in-app + email, best-effort).
         try {
-          if (user.companyId) {
+          if (resolvedCompanyId) {
             const admins = await db.execute(sql`
               SELECT u.id, u.email, u.username
               FROM users u
-              WHERE u.company_id = ${user.companyId}
-                AND u.role IN ('admin','manager','tenant_admin','tenant_owner','tenant_manager','system_admin')
+              WHERE u.company_id = ${resolvedCompanyId}
+                AND (
+                  u.role IN ('admin','manager','system_admin')
+                  OR u.role LIKE 'tenant_%'
+                  OR u.role LIKE 'platform_%'
+                )
               LIMIT 25
             `);
             const baseUrl = getAppBaseUrl(req);
@@ -262,8 +287,27 @@ export function registerFeedbackRoutes(
       if (platform) {
         if (filterCompanyId) conditions.push(sql`company_id = ${filterCompanyId}`);
       } else if (admin) {
-        if (!user.companyId) return res.json([]);
-        conditions.push(sql`company_id = ${user.companyId}`);
+        if (!user.companyId) {
+          // Admin has no company assigned — return empty rather than exposing all tickets.
+          return res.json([]);
+        }
+        // Include tickets explicitly tagged with this company AND tickets with no company
+        // tag that were submitted by users/workers who belong to this company (schema-drift
+        // recovery: older inserts may have stored company_id = NULL for worker submitters).
+        // Note: workers table has no user_id column; link is users.worker_id → workers.id.
+        conditions.push(sql`(
+          company_id = ${user.companyId}
+          OR (
+            company_id IS NULL
+            AND submitter_user_id IN (
+              SELECT id FROM users WHERE company_id = ${user.companyId}
+              UNION
+              SELECT id FROM users WHERE worker_id IN (
+                SELECT id FROM workers WHERE company_id = ${user.companyId}
+              )
+            )
+          )
+        )`);
       } else {
         conditions.push(sql`submitter_user_id = ${user.id}`);
       }

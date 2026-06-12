@@ -647,6 +647,33 @@ interface LineItemRow {
   lineTotal?: string | null;
 }
 
+// Helper: create App Doctor report + repair ticket for automated workflow failures
+async function createWorkflowException(opts: {
+  title: string; errorMessage: string; companyId?: string | null;
+  context?: Record<string, unknown>; route?: string;
+}): Promise<void> {
+  try {
+    const reportIns = await db.execute(sql`
+      INSERT INTO app_doctor_reports (company_id, source, severity, severity_class, status, title, error_message, route, context_json, issue_category, required_approver_role)
+      VALUES (${opts.companyId || null}, 'automation', 'high', 'major', 'open',
+        ${opts.title}, ${opts.errorMessage}, ${opts.route || null},
+        ${opts.context ? JSON.stringify(opts.context) : null},
+        'document_pdf', 'admin')
+      RETURNING id
+    `);
+    const reportId = (reportIns.rows[0] as any)?.id;
+    if (reportId) {
+      await db.execute(sql`
+        INSERT INTO app_doctor_repair_tickets (report_id, company_id, status, severity_class, required_approver_role, proposed_patch, test_plan, rollback_plan)
+        VALUES (${reportId}, ${opts.companyId || null}, 'pending_approval', 'major', 'admin',
+          ${"Manual repair required. See report context for entity IDs."},
+          ${"1. Verify entity exists in DB. 2. Re-run repair via POST /api/contractor-hub/repair-proposal-contracts. 3. Confirm document archived to DAM."},
+          ${"Entities remain intact — only automation linkage missing. No data was modified."})
+      `);
+    }
+  } catch (ex) { console.error("[createWorkflowException] Failed to create App Doctor entry:", ex); }
+}
+
 // Helper: generate a PDF for an approved contractor proposal and store in DMS
 async function generateProposalPdf(proposalId: string, proposal: ProposalRow, actorUserId: string): Promise<string | null> {
   try {
@@ -10158,15 +10185,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices", requireAuth, requireFeature("tenant.finance.contractor-hub"), async (req, res) => {
     try {
-      const { companyId, contractorId, status, showArchived, showCompleted } = req.query as Record<string, string>;
+      const { companyId, contractorId, status, showArchived, showCompleted, showVoided } = req.query as Record<string, string>;
       const showArchivedBool = showArchived === "true";
       const showCompletedBool = showCompleted === "true";
+      const showVoidedBool = showVoided === "true";
       const user = await storage.getUser(req.session.userId!);
       const isManager = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (isManager) {
-        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool, showCompletedBool));
+        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool, showCompletedBool, showVoidedBool));
       } else {
-        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool, showCompletedBool));
+        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool, showCompletedBool, false));
       }
     } catch (e) { res.status(500).json({ message: "Failed to fetch invoices" }); }
   });
@@ -10477,6 +10505,44 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
       res.json(updated);
     } catch (e: any) { res.status(500).json({ message: "Failed to mark duplicate: " + e.message }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/restore", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const RESTORABLE_STATUSES = ["voided", "voided_duplicate", "rejected_duplicate", "rejected"];
+      const isVoidedOrRejected = RESTORABLE_STATUSES.includes(inv.status || "");
+      const isArchivedOnly = !!(inv as any).isArchived && !isVoidedOrRejected;
+      if (!isVoidedOrRejected && !isArchivedOnly) {
+        return res.status(400).json({ message: "Only voided, rejected, or archived invoices can be restored" });
+      }
+      const reason = req.body?.reason;
+      if (!reason || !String(reason).trim()) {
+        return res.status(400).json({ message: "A reason is required to restore an invoice" });
+      }
+      // Tenant isolation
+      const user = await storage.getUser(req.session.userId!);
+      if (inv.companyId && user?.companyId && inv.companyId !== user.companyId && !user.role?.startsWith("platform_")) {
+        return res.status(403).json({ message: "Not authorized for this company" });
+      }
+      const previousStatus = inv.status;
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: "draft",
+        voidedAt: null,
+        voidedByUserId: null,
+        voidReason: null,
+        duplicateOfInvoiceId: null,
+        isArchived: false,
+      } as any);
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "invoice_restored",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus, newStatus: "draft",
+        notes: String(reason).trim(),
+      });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: "Failed to restore invoice: " + e.message }); }
   });
 
   app.post("/api/contractor-invoices/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
@@ -11052,7 +11118,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isPlatform = (user?.role || "").startsWith("platform_");
       const companyClause = isPlatform ? sql`` : sql`AND company_id = ${user?.companyId}`;
 
-      const results = { proposals: 0, contracts: 0, invoices: 0, errors: 0 };
+      const results = { proposals: 0, contracts: 0, invoices: 0, orphanContracts: 0, orphanInvoices: 0, errors: 0 };
+
+      // ── Repair: create missing draft contracts for approved proposals ─────────
+      const orphanProps = await db.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE status IN ('approved', 'converted_to_contract')
+          AND converted_to_contract_id IS NULL
+          AND deleted_at IS NULL
+          ${companyClause}
+        LIMIT 50
+      `);
+      for (const p of orphanProps.rows as any[]) {
+        try {
+          const contractNumber = `CON-${Date.now()}-${p.id.slice(0, 6)}`;
+          const cRes = await db.execute(sql`
+            INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+            VALUES (${p.company_id}, ${p.contractor_id}, ${p.id}, ${contractNumber},
+              ${p.title || "Service Contract"}, ${p.description || null}, ${p.scope_of_work || null},
+              ${p.payment_terms || null}, ${p.amount || 0}, ${p.currency || "USD"},
+              ${p.payment_type || "monetary"}, ${p.trade_offered || null}, ${p.trade_value || null},
+              ${p.issue_date || null}, 'service', 'draft', ${req.session.userId},
+              ${p.job_id || null}, ${p.cost_center_id || null})
+            RETURNING id
+          `);
+          const newContractId = (cRes.rows[0] as any)?.id;
+          if (newContractId) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${newContractId} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`);
+            results.orphanContracts++;
+          }
+        } catch { results.errors++; }
+      }
 
       // Backfill proposals in terminal states that haven't been archived
       const propRows = await db.execute(sql`
@@ -11136,9 +11232,123 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         } catch { results.errors++; }
       }
 
-      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
+      // ── Repair: create missing invoices for fully-signed contracts with a proposal link ─────────
+      // This handles cases where auto-invoice creation failed in the sign endpoint.
+      const contractCompanyClause = isPlatform ? sql`` : sql`AND c.company_id = ${user?.companyId}`;
+      const orphanContracts = await db.execute(sql`
+        SELECT c.*, p.amount AS proposal_amount, p.currency AS proposal_currency,
+               p.payment_type AS proposal_payment_type
+        FROM contractor_contracts c
+        JOIN contractor_proposals p ON p.id = c.proposal_id
+        WHERE c.status = 'fully_signed'
+          AND c.proposal_id IS NOT NULL
+          AND p.converted_to_invoice_id IS NULL
+          ${contractCompanyClause}
+        LIMIT 20
+      `);
+      for (const c of orphanContracts.rows as any[]) {
+        try {
+          const countRes = await db.execute(sql`SELECT COUNT(*) FROM contractor_invoices WHERE contractor_id = ${c.contractor_id} AND company_id = ${c.company_id}`);
+          const count = parseInt((countRes.rows[0] as any).count || "0");
+          const suffix = String(count + 1).padStart(4, "0");
+          const contractorSuffix = (c.contractor_id || "").slice(-4).toUpperCase();
+          const invNumber = `INV-${contractorSuffix}-${suffix}`;
+          const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
+          const invRes = await db.execute(sql`
+            INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_type, invoice_date, due_date, amount, status, proposal_id, contract_id)
+            VALUES (${c.company_id}, ${c.contractor_id}, ${invNumber}, 'standard', NOW(), ${dueDate.toISOString().slice(0, 10)},
+              ${c.total_value || c.proposal_amount || 0}, 'submitted', ${c.proposal_id}, ${c.id})
+            RETURNING id
+          `);
+          const invId = (invRes.rows[0] as any)?.id;
+          if (invId) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invId} WHERE id = ${c.proposal_id} AND converted_to_invoice_id IS NULL`);
+            const invRow = (await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invId}`)).rows[0] as any;
+            if (invRow) await generateInvoicePdf(invId, invRow, req.session.userId!).catch(() => {});
+            results.orphanInvoices++;
+          }
+        } catch { results.errors++; }
+      }
+
+      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived, ${results.orphanContracts} orphan contracts + ${results.orphanInvoices} orphan invoices created${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
     } catch (e: any) {
       res.status(500).json({ message: "Backfill failed: " + (e?.message || String(e)) });
+    }
+  });
+
+  // POST /api/contractor-hub/repair-proposal-contracts — dedicated repair path for existing approved proposals without contracts
+  app.post("/api/contractor-hub/repair-proposal-contracts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const companyClause = isPlatform ? sql`` : sql`AND company_id = ${user?.companyId}`;
+      const repaired: Array<{ proposalId: string; contractId: string; contractNumber: string }> = [];
+      const skipped: Array<{ proposalId: string; reason: string }> = [];
+
+      // 1. Find approved proposals with no contract link
+      const orphans = await db.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE status IN ('approved', 'converted_to_contract')
+          AND converted_to_contract_id IS NULL
+          AND deleted_at IS NULL
+          ${companyClause}
+        LIMIT 100
+      `);
+
+      for (const p of orphans.rows as any[]) {
+        // Double-check no contract exists for this proposal before creating
+        const existingContract = await db.execute(sql`SELECT id FROM contractor_contracts WHERE proposal_id = ${p.id} LIMIT 1`).catch(() => null);
+        if (existingContract?.rows[0]) {
+          // Link was missing but contract exists — just re-link
+          const contractId = (existingContract.rows[0] as any).id;
+          await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contractId} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`).catch(() => {});
+          repaired.push({ proposalId: p.id, contractId, contractNumber: "(existing, re-linked)" });
+          continue;
+        }
+        try {
+          const contractNumber = `CON-RPR-${Date.now()}-${p.id.slice(0, 6)}`;
+          const cRes = await db.execute(sql`
+            INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+            VALUES (${p.company_id}, ${p.contractor_id}, ${p.id}, ${contractNumber},
+              ${p.title || "Service Contract"}, ${p.description || null}, ${p.scope_of_work || null},
+              ${p.payment_terms || null}, ${p.amount || 0}, ${p.currency || "USD"},
+              ${p.payment_type || "monetary"}, ${p.trade_offered || null}, ${p.trade_value || null},
+              ${p.issue_date || null}, 'service', 'draft', ${req.session.userId},
+              ${p.job_id || null}, ${p.cost_center_id || null})
+            RETURNING *
+          `);
+          const newContract = cRes.rows[0] as any;
+          if (newContract?.id) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${newContract.id} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`);
+            // Archive proposal PDF if missing
+            if (!p.archived_document_id) {
+              generateProposalPdf(p.id, p, req.session.userId!).then(async pp => {
+                if (pp) {
+                  const d = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${p.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+                  const did = (d?.rows[0] as any)?.id;
+                  if (did) await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${did} WHERE id = ${p.id}`).catch(() => {});
+                }
+              }).catch(() => {});
+            }
+            repaired.push({ proposalId: p.id, contractId: newContract.id, contractNumber });
+          }
+        } catch (err: any) {
+          skipped.push({ proposalId: p.id, reason: err?.message || "unknown error" });
+        }
+      }
+
+      // 2. Write audit log entries for repairs
+      if (repaired.length > 0) {
+        await writeAuditLog({ actorUserId: req.session.userId!, action: "repair_proposal_contracts", entityType: "contractor_proposal", entityId: "batch", companyId: user?.companyId || null, details: `Repaired ${repaired.length} proposals`, req }).catch(() => {});
+      }
+
+      res.json({
+        message: `Repair complete: ${repaired.length} contracts created/linked, ${skipped.length} skipped`,
+        repaired,
+        skipped,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: "Repair failed: " + (e?.message || String(e)) });
     }
   });
 
@@ -11560,7 +11770,64 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const damDocId = (damRes?.rows[0] as any)?.id || null;
         await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
       }
-      res.json({ ...acceptedProposal, _pdfGenerated: !!pdfPath });
+
+      // ── Auto-create draft contract on proposal approval ──────────────────────
+      const freshPropRes = await db.execute(sql`SELECT converted_to_contract_id FROM contractor_proposals WHERE id = ${req.params.id}`).catch(() => null);
+      const alreadyHasContract = (freshPropRes?.rows[0] as any)?.converted_to_contract_id;
+      if (!alreadyHasContract) {
+        try {
+          const contractNumber = `CON-${Date.now()}`;
+          const autoContractRes = await db.execute(sql`
+            INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+            VALUES (
+              ${acceptedProposal.company_id}, ${acceptedProposal.contractor_id}, ${req.params.id},
+              ${contractNumber},
+              ${acceptedProposal.title || "Service Contract"},
+              ${acceptedProposal.description || null},
+              ${(acceptedProposal as any).scope_of_work || null},
+              ${(acceptedProposal as any).payment_terms || null},
+              ${(acceptedProposal as any).amount || 0},
+              ${(acceptedProposal as any).currency || "USD"},
+              ${(acceptedProposal as any).payment_type || "monetary"},
+              ${(acceptedProposal as any).trade_offered || null},
+              ${(acceptedProposal as any).trade_value || null},
+              ${(acceptedProposal as any).issue_date || null},
+              'service', 'draft', ${userId},
+              ${(acceptedProposal as any).job_id || null},
+              ${(acceptedProposal as any).cost_center_id || null}
+            )
+            RETURNING *
+          `);
+          const autoContract = autoContractRes.rows[0] as any;
+          if (autoContract?.id) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${autoContract.id} WHERE id = ${req.params.id}`).catch(() => {});
+            createContractorNotification({
+              workerId: acceptedProposal.contractor_id,
+              companyId: acceptedProposal.company_id,
+              notificationType: "proposal_converted_contract",
+              title: `Contract Ready for Signature: ${autoContract.title}`,
+              body: `Your proposal has been approved and a draft contract (${contractNumber}) is ready for review and signature.`,
+              entityType: "contract", entityId: autoContract.id,
+              actionUrl: `/app/contractor-hub?section=contracts&id=${autoContract.id}`,
+            }).catch(() => {});
+            console.log(`[Proposal accept] Auto-created contract ${contractNumber} for proposal ${req.params.id}`);
+          }
+        } catch (contractErr: unknown) {
+          console.error("[Proposal accept] Auto-contract creation failed:", contractErr);
+          createWorkflowException({
+            title: `Auto-contract creation failed for proposal ${req.params.id}`,
+            errorMessage: contractErr instanceof Error ? contractErr.message : String(contractErr),
+            companyId: acceptedProposal.company_id,
+            route: req.path,
+            context: { proposalId: req.params.id },
+          }).catch(() => {});
+        }
+      }
+
+      const returnedProp = firstRow<ProposalRow & { id: string }>(
+        await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`)
+      ) || acceptedProposal;
+      res.json({ ...returnedProp, _pdfGenerated: !!pdfPath });
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
 
@@ -13358,19 +13625,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Platform admins can sign any company's contract; tenant/owner roles must belong to the same company or have explicit tenant access.
       const isCompanyAdmin = isAdmin && (isPlatformAdmin || userCompanyMatches || hasExplicitCompanyAccess.rows.length > 0);
 
-      const registeredSignerRes = await db.execute(sql`
-        SELECT id FROM contract_signers
-        WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
-        UNION ALL
-        SELECT id FROM contract_signers
-        WHERE contract_id = ${req.params.id}
-          AND status = 'pending'
-          AND email IS NOT NULL
-          AND lower(email) = ${currentUserEmail}
-          AND ${currentUserEmail} IS NOT NULL
-          AND (${currentUserCompanyId} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id})
-        LIMIT 1
-      `);
+      const registeredSignerRes = await db.execute(
+        currentUserEmail
+          ? sql`
+            SELECT id FROM contract_signers
+            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+            UNION ALL
+            SELECT id FROM contract_signers
+            WHERE contract_id = ${req.params.id}
+              AND status = 'pending'
+              AND email IS NOT NULL
+              AND lower(email) = ${currentUserEmail}
+              AND (${currentUserCompanyId || null} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id})
+            LIMIT 1`
+          : sql`
+            SELECT id FROM contract_signers
+            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+            LIMIT 1`
+      );
       const registeredSigner = registeredSignerRes.rows[0] as any;
 
       if (!isContractor && !isCompanyAdmin && !registeredSigner) {
@@ -13411,7 +13683,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const newStatus = pendingCount === 0 ? "fully_signed" : "partially_signed";
       const contractBeforeSign = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contractData = contractBeforeSign.rows[0] as any;
-      await db.execute(sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = ${newStatus === "fully_signed" ? new Date() : null}, updated_at = NOW() WHERE id = ${req.params.id}`);
+      await db.execute(
+        newStatus === "fully_signed"
+          ? sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`
+          : sql`UPDATE contractor_contracts SET status = ${newStatus}, updated_at = NOW() WHERE id = ${req.params.id}`
+      );
 
       // Auto-snapshot on signing
       await autoSnapshotContract(req.params.id, req.session.userId!, `signed by ${name || "user"} — status: ${newStatus}`);
@@ -13458,6 +13734,102 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
           }
         } catch (archiveErr) { console.warn("[Contract fully-signed] Archive to documents failed:", archiveErr); }
+      }
+
+      // ── Auto-create invoice after all required parties have signed ────────────
+      if (newStatus === "fully_signed" && contractData?.proposal_id) {
+        try {
+          const propCheck = await db.execute(sql`
+            SELECT id, converted_to_invoice_id, company_id, contractor_id, amount,
+                   description, title, proposal_number, expiration_date, line_items,
+                   notes, job_id, cost_center_id, branding_id, currency,
+                   archived_document_id AS prop_dam_id
+            FROM contractor_proposals WHERE id = ${contractData.proposal_id}
+          `);
+          const prop = propCheck.rows[0] as any;
+          if (prop && !prop.converted_to_invoice_id) {
+            const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${prop.contractor_id}`);
+            const invCount = Number((cntRes.rows[0] as any)?.c ?? 0);
+            const autoInvoiceNumber = `INV-${String(prop.contractor_id ?? "").slice(-4).toUpperCase()}-${String(invCount + 1).padStart(4, "0")}`;
+            const today = new Date().toISOString().split("T")[0];
+            let invTemplateId: string | null = null;
+            try {
+              const stdRes = await db.execute(sql`SELECT id FROM contractor_templates WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice' LIMIT 1`);
+              invTemplateId = (stdRes.rows[0] as any)?.id || null;
+            } catch { /* ok */ }
+
+            const autoInvRes = await db.execute(sql`
+              INSERT INTO contractor_invoices (
+                company_id, contractor_id, invoice_number, invoice_date, due_date,
+                amount, description, proposal_id, contract_id, proposal_reference,
+                line_items, notes, status, is_1099_reportable,
+                job_id, cost_center_id, branding_id, template_id
+              ) VALUES (
+                ${contractData.company_id}, ${prop.contractor_id}, ${autoInvoiceNumber},
+                ${today}, ${prop.expiration_date || null},
+                ${prop.amount || 0}, ${prop.description || prop.title || null},
+                ${prop.id}, ${req.params.id}, ${prop.proposal_number || null},
+                ${prop.line_items || null}, ${prop.notes || null},
+                'submitted', TRUE,
+                ${prop.job_id || null}, ${prop.cost_center_id || null},
+                ${prop.branding_id || null}, ${invTemplateId || null}
+              ) RETURNING *
+            `);
+            const autoInvoice = autoInvRes.rows[0] as any;
+
+            if (autoInvoice?.id) {
+              await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${autoInvoice.id}, updated_at = NOW() WHERE id = ${prop.id}`).catch(() => {});
+
+              // Archive invoice PDF to DAM
+              try {
+                const invPdfPath = await generateInvoicePdf(autoInvoice.id, autoInvoice, req.session.userId!);
+                if (invPdfPath) {
+                  const invDamRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${autoInvoice.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+                  const invDamId = (invDamRes?.rows[0] as any)?.id || null;
+                  if (invDamId) {
+                    await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = NOW(), archived_document_id = ${invDamId} WHERE id = ${autoInvoice.id}`).catch(() => {});
+                    // Update DAM record to also store cross-references
+                    await db.execute(sql`UPDATE dam_documents SET proposal_id = ${prop.id}, contract_id = ${req.params.id}, invoice_id = ${autoInvoice.id}, source_record_type = 'invoice', source_record_id = ${autoInvoice.id} WHERE id = ${invDamId}`).catch(() => {});
+                  }
+                }
+              } catch (invPdfErr) {
+                console.warn("[Contract fully-signed] Invoice PDF archive failed:", invPdfErr);
+                createWorkflowException({ title: `Invoice PDF archive failed for contract ${req.params.id}`, errorMessage: invPdfErr instanceof Error ? invPdfErr.message : String(invPdfErr), companyId: contractData?.company_id, route: req.path, context: { contractId: req.params.id, invoiceId: autoInvoice.id } }).catch(() => {});
+              }
+
+              // Back-fill proposal PDF to DAM if missing
+              if (!prop.prop_dam_id) {
+                generateProposalPdf(prop.id, prop, req.session.userId!).then(async pp => {
+                  if (pp) {
+                    const d = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${prop.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+                    const did = (d?.rows[0] as any)?.id;
+                    if (did) await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${did} WHERE id = ${prop.id}`).catch(() => {});
+                  }
+                }).catch(() => {});
+              }
+
+              createContractorNotification({
+                workerId: prop.contractor_id,
+                companyId: contractData.company_id,
+                notificationType: "invoice_auto_created",
+                title: `Invoice ${autoInvoiceNumber} Generated`,
+                body: "Your contract is fully signed. An invoice has been automatically created.",
+                entityType: "invoice", entityId: autoInvoice.id,
+                actionUrl: `/app/contractor-hub?section=invoices&id=${autoInvoice.id}`,
+              }).catch(() => {});
+              console.log(`[Contract fully-signed] Auto-created invoice ${autoInvoiceNumber} for contract ${req.params.id}`);
+            }
+          }
+        } catch (invErr: unknown) {
+          console.error("[Contract fully-signed] Auto-invoice creation failed:", invErr);
+          createWorkflowException({
+            title: `Auto-invoice creation failed for contract ${req.params.id}`,
+            errorMessage: invErr instanceof Error ? invErr.message : String(invErr),
+            companyId: contractData?.company_id,
+            route: req.path,
+            context: { contractId: req.params.id, proposalId: contractData?.proposal_id },
+          }).catch(() => {});
+        }
       }
 
       res.json({ signer, contractStatus: newStatus });
