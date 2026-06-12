@@ -34,7 +34,7 @@ jobs:
           username: ${{ secrets.APP_VPS_USER }}
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
-          connect_timeout: 30s
+          timeout: 30s
           command_timeout: 2m
           script_stop: true
           script: |
