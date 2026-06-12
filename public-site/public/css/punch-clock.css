@@ -1197,3 +1197,42 @@
   color: inherit;
   transition: color 0.6s;
 }
+
+/* ── Option A: #features peek into the first viewport ─────────────────────────
+   punch-hero is 125vh; punch-sticky locks 100vh to the screen.
+   The 25vh overhang is the gap between where the hero ends and the fold.
+   Pulling #features up by (25vh + 80px) positions its top edge 80px above
+   the viewport bottom, creating a visible content peek before any scrolling.
+   
+   svh fallback for mobile browsers where address-bar changes viewport size.  */
+#features {
+  position: relative;
+  z-index: 10;
+  margin-top: calc(-25vh - 80px);
+  background: var(--dark-bg);
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -24px 64px rgba(0, 0, 0, 0.65);
+}
+@supports (height: 1svh) {
+  #features {
+    margin-top: calc(-25svh - 80px);
+  }
+}
+
+.features-peek-bar {
+  padding: 18px 24px 0;
+  text-align: center;
+}
+
+.features-peek-eyebrow {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--teal);
+  background: rgba(13, 148, 136, 0.12);
+  border: 1px solid rgba(13, 148, 136, 0.28);
+  border-radius: 100px;
+  padding: 5px 16px;
+}
