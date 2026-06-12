@@ -221,30 +221,53 @@ jobs:
             echo ""
             echo "✓ Deployment complete — commit $NEW_COMMIT"
 
-      # ── 4. Notify: success ────────────────────────────────────────────────
+      # ── 4. Notify: success (email) ───────────────────────────────────────
       - name: Notify success
         if: success()
-        uses: actions/github-script@v7
+        uses: dawidd6/action-send-mail@v3
         with:
-          script: |
-            const sha = context.sha.slice(0, 7);
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const msg = `✅ **PayLink deployed successfully**\n` +
-              `Commit: \`${sha}\` · [View run](${runUrl})\n` +
-              `Health: https://mypaylink.app/health`;
-            core.notice(msg);
-            console.log(msg);
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || 587 }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "✅ PayLink deployed — ${{ github.sha && github.sha != '' && format('{0}', github.sha) || 'unknown' }}"
+          to: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
+          from: ${{ secrets.SMTP_FROM || secrets.SMTP_USER }}
+          html_body: |
+            <p><strong>✅ PayLink deployed successfully</strong></p>
+            <table style="font-family:monospace;font-size:14px;border-collapse:collapse">
+              <tr><td style="padding:4px 12px 4px 0"><strong>Commit</strong></td><td>${{ github.sha }}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Branch</strong></td><td>${{ github.ref_name }}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Triggered by</strong></td><td>${{ github.actor }}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Run</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run →</a></td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Health</strong></td><td><a href="https://mypaylink.app/health">https://mypaylink.app/health</a></td></tr>
+            </table>
+        continue-on-error: true
 
-      # ── 5. Notify: failure ────────────────────────────────────────────────
+      # ── 5. Notify: failure (email) ───────────────────────────────────────
       - name: Notify failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: dawidd6/action-send-mail@v3
         with:
-          script: |
-            const sha = context.sha.slice(0, 7);
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const msg = `❌ **PayLink deploy FAILED** — rollback may have triggered\n` +
-              `Commit: \`${sha}\` · [View run](${runUrl})\n` +
-              `Check run logs for details. If rollback also failed, SSH to VPS immediately.`;
-            core.setFailed(msg);
-            console.log(msg);
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || 587 }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "❌ PayLink deploy FAILED — action required"
+          to: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
+          from: ${{ secrets.SMTP_FROM || secrets.SMTP_USER }}
+          html_body: |
+            <p><strong>❌ PayLink deploy FAILED</strong> — rollback may have triggered automatically.</p>
+            <table style="font-family:monospace;font-size:14px;border-collapse:collapse">
+              <tr><td style="padding:4px 12px 4px 0"><strong>Commit</strong></td><td>${{ github.sha }}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Branch</strong></td><td>${{ github.ref_name }}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Triggered by</strong></td><td>${{ github.actor }}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0"><strong>Run</strong></td><td><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run →</a></td></tr>
+            </table>
+            <p><strong>Next steps:</strong></p>
+            <ol>
+              <li>Open the <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run logs</a> and look for the rollback outcome.</li>
+              <li>Check <a href="https://mypaylink.app/health">https://mypaylink.app/health</a> — if it returns 200, the auto-rollback worked.</li>
+              <li>If health is still down, SSH to the VPS immediately and follow the manual rollback steps in DISASTER_RECOVERY.md §9.4.</li>
+            </ol>
+        continue-on-error: true

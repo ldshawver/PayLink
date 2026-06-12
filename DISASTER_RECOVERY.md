@@ -30,17 +30,49 @@
 
 ---
 
-## 3. Backup Verification (Run Monthly)
+## 3. Automated Nightly Backup
+
+Backups run automatically at **2 AM UTC daily** via cron (`scripts/backup-db.sh`).
+
+### Setup (one-time, on VPS as root)
+```bash
+# Create backup directory and log file
+mkdir -p /var/backups/paylink
+touch /var/log/paylink-backup.log
+chown paylinkssh:paylinkssh /var/backups/paylink /var/log/paylink-backup.log
+chmod +x /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh
+
+# Install cron job for paylinkssh
+crontab -u paylinkssh -e
+# Add this line:
+# 0 2 * * * /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh >> /var/log/paylink-backup.log 2>&1
+```
+
+### Optional: failure alert email
+Add `BACKUP_ALERT_EMAIL=you@example.com` to `/etc/paylink/.env`. If `SMTP_USER`
+and `SMTP_PASS` are also set, the script will email you if pg_dump fails.
+
+### Backup file convention
+```
+/var/backups/paylink/paylink_YYYY-MM-DD_HHMMSS.sql.gz
+```
+Backups older than 30 days are pruned automatically. The script logs to
+`/var/log/paylink-backup.log`.
+
+### Verification (Run Monthly)
 
 ```bash
 # 1. List available backups
 ls -lh /var/backups/paylink/
 
-# 2. Verify a backup file is readable and non-zero
-BACKUP_FILE="/var/backups/paylink/paylink_YYYY-MM-DD.sql.gz"
+# 2. Verify the most recent backup is readable and non-corrupt
+BACKUP_FILE=$(ls -t /var/backups/paylink/paylink_*.sql.gz | head -1)
 gunzip -t "$BACKUP_FILE" && echo "Backup integrity OK" || echo "BACKUP CORRUPTED"
 
-# 3. Restore to a test database to verify data integrity
+# 3. Check last backup log entry
+tail -5 /var/log/paylink-backup.log
+
+# 4. Restore to a test database to verify data integrity
 createdb paylink_verify
 gunzip -c "$BACKUP_FILE" | psql paylink_verify
 psql paylink_verify -c "SELECT COUNT(*) FROM companies; SELECT COUNT(*) FROM workers; SELECT COUNT(*) FROM payroll_items;"
@@ -195,10 +227,10 @@ Every push to `main` (and any manual `workflow_dispatch`) triggers `.github/work
 | **SSH connectivity check** | Opens SSH connection, confirms host is reachable | Fails fast — no code touched |
 | **Pre-flight env check** | Verifies `/etc/paylink/.env` exists; checks `DATABASE_URL`, `SESSION_SECRET`, `APP_BASE_URL` | Fails fast — no code touched |
 | **Deploy** | `git reset --hard origin/main` → install deps → build → nginx config → PM2 restart | Proceeds to health check |
-| **Health check** | Polls `http://127.0.0.1:8000/health` up to 30× (3 s apart) | Triggers auto-rollback on failure |
+| **Internal health check** | Polls `http://127.0.0.1:8000/health` up to 30× (3 s apart) | Triggers auto-rollback on failure |
 | **Auto-rollback** | Resets to previous commit, rebuilds, restarts PM2, re-polls `/health` | Logs outcome; exits 1 (fails CI) |
-| **Public routing check** | Polls `https://mypaylink.app/health` | Warning only — nginx sudo may be unavailable |
-| **Notification** | GitHub Actions `core.notice` (success) or `core.setFailed` (failure) | Visible in Actions summary and PR checks |
+| **Public routing gate** | Polls `https://mypaylink.app/health` up to 6× (5 s apart) — **hard fail** | Non-200 exits 1 and fails the workflow |
+| **Email notification** | Sends HTML email (success or failure) via SMTP to `DEPLOY_NOTIFY_EMAIL` | `continue-on-error: true` — email failure never blocks the deploy result |
 
 ### 9.2 Monitoring Checklist (After Every Deploy)
 
@@ -277,9 +309,11 @@ nginx -t && systemctl reload nginx
 curl https://mypaylink.app/health
 ```
 
-### 9.6 SSH Secrets Required in GitHub
+### 9.6 Required GitHub Secrets
 
-The following repository secrets must be set for the deploy pipeline to function:
+Set all of these at: **GitHub → Repository → Settings → Secrets and variables → Actions**
+
+#### SSH / Deploy (required)
 
 | Secret | Description |
 |--------|-------------|
@@ -288,8 +322,19 @@ The following repository secrets must be set for the deploy pipeline to function
 | `APP_VPS_SSH_KEY` | Private SSH key (PEM format) |
 | `APP_VPS_PORT` | SSH port (default 22) |
 
-If SSH connectivity fails, verify these secrets at:
-GitHub → Repository → Settings → Secrets and variables → Actions.
+#### Email notifications (required for deploy alerts)
+
+| Secret | Description | Example |
+|--------|-------------|---------|
+| `SMTP_HOST` | SMTP server hostname | `smtp.gmail.com` |
+| `SMTP_PORT` | SMTP port | `587` |
+| `SMTP_USER` | SMTP login username | `alerts@yourdomain.com` |
+| `SMTP_PASS` | SMTP password or app password | (your password) |
+| `SMTP_FROM` | From address (optional — defaults to SMTP_USER) | `PayLink Alerts <alerts@yourdomain.com>` |
+| `DEPLOY_NOTIFY_EMAIL` | Recipient for deploy success/failure emails | `you@yourdomain.com` |
+
+> **Gmail tip:** Generate an [App Password](https://myaccount.google.com/apppasswords) — do not use your main account password.
+> Email steps use `continue-on-error: true` so a misconfigured SMTP secret never blocks deploys.
 
 ### 9.7 Diagnosing a Failed Deploy
 
