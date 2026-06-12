@@ -1594,7 +1594,7 @@ export async function registerRoutes(
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
-      || req.path === "/demo/provision"
+      || req.path === "/demo/provision" || req.path === "/demo/login"
       || req.path === "/trial/signup"
       || req.path === "/analytics/event"
       || req.path === "/license/request"
