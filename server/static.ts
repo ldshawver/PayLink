@@ -41,7 +41,7 @@ export function serveStatic(app: Express) {
     );
   }
 
-  function sendAppShell(req: Request, res: Response) {
+  function sendAppShell(req: Pick<Request, "path">, res: Response) {
     const appShell = path.resolve(distPath, "app.html");
     const shellPath = fs.existsSync(appShell) ? appShell : path.resolve(distPath, "index.html");
     const headers: Record<string, string> = {

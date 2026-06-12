@@ -444,6 +444,14 @@ export async function provisionDemoTenant(
   `);
   const payrollRunId = rowId(runRes);
 
+  // ── 10b. Pay Periods (one closed + one current open) ─────────────────────
+  await tx.execute(sql`
+    INSERT INTO pay_periods (company_id, frequency, start_date, end_date, pay_date, status)
+    VALUES
+      (${companyId}, 'biweekly', ${periodStart}, ${periodEnd}, ${payDate}, 'closed'),
+      (${companyId}, 'biweekly', '2025-05-19', '2025-06-01', '2025-06-06', 'open')
+  `);
+
   let checkNum = 1001;
   for (const item of payrollItemData) {
     const isSalary = item.payType === 'salary';

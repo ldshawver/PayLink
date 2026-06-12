@@ -342,6 +342,7 @@ export const users = pgTable("users", {
   lastName: text("last_name"),
   isActive: boolean("is_active").default(true),
   /** AES-256-GCM encrypted TOTP secret (base32). Null = MFA not enrolled. */
+  email: text("email"),
   totpSecret: text("totp_secret"),
   /** True once the user has enrolled and confirmed their TOTP code. */
   mfaEnabled: boolean("mfa_enabled").default(false),
@@ -1235,7 +1236,7 @@ export type InsertReview = z.infer<typeof insertReviewSchema>;
 export type RecurringSchedule = typeof recurringSchedules.$inferSelect;
 export type InsertRecurringSchedule = z.infer<typeof insertRecurringScheduleSchema>;
 export type RemittanceSource = typeof remittanceSources.$inferSelect;
-export type InsertRemittanceSource = z.infer<typeof insertRemittanceSourceSchema>;
+export type InsertRemittanceSource = typeof remittanceSources.$inferInsert;
 export type RemittanceAgency = typeof remittanceAgencies.$inferSelect;
 export type InsertRemittanceAgency = z.infer<typeof insertRemittanceAgencySchema>;
 export type RemittanceAgencyEvent = typeof remittanceAgencyEvents.$inferSelect;
@@ -4076,6 +4077,7 @@ export const workerAgreements = pgTable("worker_agreements", {
   signedAt: timestamp("signed_at"),
   signedByName: text("signed_by_name"),
   signedByWorkerId: varchar("signed_by_worker_id"),
+  signatureData: text("signature_data"),
   voidedAt: timestamp("voided_at"),
   voidReason: text("void_reason"),
   mergeData: text("merge_data"),
@@ -4105,6 +4107,7 @@ export const workerOnboarding = pgTable("worker_onboarding", {
   approvedBy: varchar("approved_by"),
   completionPercent: integer("completion_percent").default(0),
   currentStepKey: text("current_step_key"),
+  agreementTemplateId: varchar("agreement_template_id"),
   managerNotes: text("manager_notes"),
   managerData: text("manager_data"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -4135,6 +4138,7 @@ export const onboardingSteps = pgTable("onboarding_steps", {
   submittedAt: timestamp("submitted_at"),
   reviewedAt: timestamp("reviewed_at"),
   reviewedBy: varchar("reviewed_by"),
+  completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

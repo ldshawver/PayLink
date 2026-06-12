@@ -200,7 +200,10 @@ export async function sendViaTwilio(to: string, body: string): Promise<void> {
   if (!creds) throw new Error("Twilio not configured");
   const twilio = (await import("twilio")).default;
   const client = twilio(creds.accountSid, creds.authToken);
-  const msgParams: Record<string, string> = { body, to: normalizePhone(to) };
+  const msgParams: { body: string; to: string; from?: string; messagingServiceSid?: string } = {
+    body,
+    to: normalizePhone(to),
+  };
   if (creds.messagingServiceSid) {
     msgParams.messagingServiceSid = creds.messagingServiceSid;
   } else {

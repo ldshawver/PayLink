@@ -354,7 +354,7 @@ export interface IStorage {
 
   getRemittanceSources(companyId?: string): Promise<RemittanceSource[]>;
   createRemittanceSource(data: InsertRemittanceSource): Promise<RemittanceSource>;
-  updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined>;
+  updateRemittanceSource(id: string, data: Partial<InsertRemittanceSource>): Promise<RemittanceSource | undefined>;
   deleteRemittanceSource(id: string): Promise<void>;
 
   getRemittanceAgencies(companyId?: string): Promise<RemittanceAgency[]>;
@@ -1867,7 +1867,7 @@ export class DatabaseStorage implements IStorage {
     const [r] = await db.insert(remittanceSources).values(data).returning();
     return r;
   }
-  async updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined> {
+  async updateRemittanceSource(id: string, data: Partial<InsertRemittanceSource>): Promise<RemittanceSource | undefined> {
     const [r] = await db.update(remittanceSources).set(data).where(eq(remittanceSources.id, id)).returning();
     return r;
   }
@@ -4004,7 +4004,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(workers)
       .where(and(
         eq(workers.companyId, companyId),
-        eq(workers.departmentId, departmentId),
+        eq(workers.department, departmentId),
         eq(workers.isActive, true)
       ))
       .orderBy(workers.lastName, workers.firstName);

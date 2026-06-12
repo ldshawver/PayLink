@@ -126,7 +126,7 @@ export interface PdfLike {
   setFont: (family: string, style?: string) => void;
   rect: (x: number, y: number, w: number, h: number, style?: string) => void;
   line: (x1: number, y1: number, x2: number, y2: number) => void;
-  text: (text: string | string[], x: number, y: number, opts?: { align?: string }) => void;
+  text: (text: string | string[], x: number, y: number, opts?: { align?: "left" | "center" | "right" | "justify" }, transform?: unknown) => void;
 }
 
 /**
