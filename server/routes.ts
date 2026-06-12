@@ -10999,7 +10999,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         } else {
           // Resolve the enterprise_id of the user's company; include all companies sharing that enterprise
           const entRes = await db.execute(sql`SELECT enterprise_id FROM companies WHERE id = ${filterCompanyId} LIMIT 1`);
-          const enterpriseId = (entRes.rows[0] as any)?.enterprise_id as string | null | undefined;
+          const enterpriseId = ((entRes.rows ?? (entRes as any))[0] as any)?.enterprise_id as string | null | undefined;
           if (enterpriseId) {
             companyFilter = sql`AND cp.company_id IN (SELECT id FROM companies WHERE enterprise_id = ${enterpriseId})`;
           } else {
