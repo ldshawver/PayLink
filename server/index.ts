@@ -1492,9 +1492,30 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    const documensoDocumentColumns = [
+      "documenso_document_id TEXT",
+      "documenso_template_id TEXT",
+      "documenso_status TEXT",
+      "documenso_signing_url TEXT",
+      "documenso_completed_pdf_url TEXT",
+      "documenso_audit_url TEXT",
+      "sent_for_signature_at TIMESTAMP",
+      "signed_at TIMESTAMP",
+      "signing_provider TEXT DEFAULT 'documenso'",
+      "signature_required BOOLEAN DEFAULT FALSE",
+      "signature_status TEXT DEFAULT 'draft'",
+    ];
+    for (const definition of documensoDocumentColumns) {
+      const [column] = definition.split(" ");
+      await run(`documents.${column}`, sql.raw(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS ${definition}`));
+      await run(`document_signature_requests.${column}`, sql.raw(`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS ${definition}`));
+    }
     await run("document_signature_requests.provider", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider TEXT`);
     await run("document_signature_requests.provider_object_id", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider_object_id TEXT`);
     await run("document_signers.routing_order", sql`ALTER TABLE document_signers ADD COLUMN IF NOT EXISTS routing_order INTEGER DEFAULT 1`);
+    await run("documents.documenso_document_id index", sql`CREATE INDEX IF NOT EXISTS idx_documents_documenso_document_id ON documents(documenso_document_id)`);
+    await run("document_signature_requests.documenso_document_id index", sql`CREATE INDEX IF NOT EXISTS idx_document_signature_requests_documenso_document_id ON document_signature_requests(documenso_document_id)`);
+    await run("document_signature_requests.company_status index", sql`CREATE INDEX IF NOT EXISTS idx_document_signature_requests_company_status ON document_signature_requests(company_id, signature_status)`);
 
     // Set starting check number sequences for known companies (only if still at default 1 or null)
     try {

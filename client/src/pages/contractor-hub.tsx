@@ -68,7 +68,7 @@ class ProposalErrorBoundary extends Component<
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "onboarding" | "payments" | "messages" | "branding" | "settings" | "trade";
+type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "signatures" | "onboarding" | "payments" | "messages" | "branding" | "settings" | "trade";
 
 interface Proposal {
   id: string; proposalNumber: string; title: string; description: string;
@@ -107,6 +107,23 @@ interface Proposal {
 interface ContractorBranding {
   id?: string; companyName?: string; tagline?: string; logoUrl?: string;
   accentColor?: string; contactEmail?: string; contactPhone?: string; website?: string;
+}
+
+interface SigningDocument {
+  id: string;
+  documentId: string;
+  documentName: string;
+  type: string;
+  relatedEntity?: string;
+  recipient?: string;
+  recipientEmail?: string;
+  status: string;
+  sentDate?: string;
+  signedDate?: string;
+  signingUrl?: string;
+  completedPdfUrl?: string;
+  auditUrl?: string;
+  documensoDocumentId?: string;
 }
 
 interface ProposalVersion {
@@ -5354,6 +5371,133 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
   );
 }
 
+function SignatureStatusBadge({ status }: { status: string }) {
+  const normalized = (status || "draft").toLowerCase();
+  const variant =
+    normalized === "completed" || normalized === "signed" ? "default" :
+    normalized === "rejected" || normalized === "voided" ? "destructive" :
+    normalized === "sent" || normalized === "viewed" ? "secondary" : "outline";
+  return <Badge variant={variant as any} className="capitalize">{normalized}</Badge>;
+}
+
+function SignaturesSection() {
+  const { toast } = useToast();
+  const { data: docs = [], isLoading } = useQuery<SigningDocument[]>({
+    queryKey: ["/api/signing-documents"],
+    queryFn: async () => {
+      const r = await fetch("/api/signing-documents", { credentials: "include", cache: "no-store" });
+      if (!r.ok) throw new Error("Failed to load signing documents");
+      return r.json();
+    },
+  });
+
+  const resendMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/signing-documents/${id}/resend`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/signing-documents"] });
+      toast({ title: "Signature request resent" });
+    },
+    onError: (error: any) => toast({ title: "Could not resend", description: error?.message || "Try again later", variant: "destructive" }),
+  });
+
+  const voidMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("POST", `/api/signing-documents/${id}/void`, { reason: "Cancelled from Contractor Hub" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/signing-documents"] });
+      toast({ title: "Signature request voided" });
+    },
+    onError: (error: any) => toast({ title: "Could not void", description: error?.message || "Try again later", variant: "destructive" }),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-16 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileCheck className="h-4 w-4" /> Documents & Signatures
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Documenso-backed agreement, approval, onboarding, invoice signoff, change order, SOW, and compliance acknowledgment tracking.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Document Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Related Entity</TableHead>
+                  <TableHead>Recipient</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Sent Date</TableHead>
+                  <TableHead>Signed Date</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {docs.map(doc => (
+                  <TableRow key={doc.id}>
+                    <TableCell className="font-medium min-w-[180px]">{doc.documentName}</TableCell>
+                    <TableCell className="capitalize">{doc.type?.replace(/_/g, " ")}</TableCell>
+                    <TableCell>{doc.relatedEntity || "Document"}</TableCell>
+                    <TableCell>
+                      <div>
+                        <p className="text-sm">{doc.recipient || "Recipient"}</p>
+                        {doc.recipientEmail && <p className="text-xs text-muted-foreground">{doc.recipientEmail}</p>}
+                      </div>
+                    </TableCell>
+                    <TableCell><SignatureStatusBadge status={doc.status} /></TableCell>
+                    <TableCell>{fmtDate(doc.sentDate)}</TableCell>
+                    <TableCell>{fmtDate(doc.signedDate)}</TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        {doc.signingUrl && (
+                          <Button size="sm" variant="ghost" onClick={() => window.open(doc.signingUrl, "_blank")} data-testid={`btn-view-signing-${doc.id}`} title="View">
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => resendMutation.mutate(doc.id)} disabled={resendMutation.isPending || ["completed", "voided", "rejected"].includes(doc.status)} data-testid={`btn-resend-signing-${doc.id}`} title="Resend">
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => window.open(`/api/signing-documents/${doc.id}/download-signed`, "_blank")} disabled={doc.status !== "completed"} data-testid={`btn-download-signed-${doc.id}`} title="Download Signed PDF">
+                          <Download className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => window.open(`/api/signing-documents/${doc.id}/audit-trail`, "_blank")} data-testid={`btn-download-audit-${doc.id}`} title="Download Audit Trail">
+                          <ShieldCheck className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => voidMutation.mutate(doc.id)} disabled={voidMutation.isPending || ["completed", "voided"].includes(doc.status)} data-testid={`btn-void-signing-${doc.id}`} title="Void/Cancel">
+                          <Ban className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {docs.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                      No Documenso signing requests yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function DocumentsSection() {
   const { toast } = useToast();
   const [folder, setFolder] = useState("all");
@@ -7640,6 +7784,7 @@ const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: s
   { id: "contracts", label: "Contracts", icon: FileSignature },
   { id: "invoices", label: "Invoices", icon: Receipt },
   { id: "documents", label: "Working Documents", icon: FolderOpen },
+  { id: "signatures", label: "Documents & Signatures", icon: FileCheck },
   { id: "onboarding", label: "Onboarding", icon: UserPlus },
   { id: "payments", label: "Payments", icon: CreditCard },
   { id: "messages", label: "Messages", icon: MessageSquare },
@@ -7654,7 +7799,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","onboarding","payments","messages","branding","settings","trade"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","signatures","onboarding","payments","messages","branding","settings","trade"];
       return (s && valid.includes(s)) ? s : "dashboard";
     } catch { return "dashboard"; }
   })();
@@ -7665,7 +7810,7 @@ export default function ContractorHubPage() {
   // same-pathname query-param changes (e.g. sidebar going from ?section=proposals to ?section=contracts)
   // never change the wouter location value so the effect would never re-fire.
   useEffect(() => {
-    const VALID_SECTIONS: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","onboarding","payments","messages","branding","settings","trade"];
+    const VALID_SECTIONS: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","signatures","onboarding","payments","messages","branding","settings","trade"];
     const syncSection = () => {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -7907,6 +8052,7 @@ export default function ContractorHubPage() {
               {section === "contracts" && `${contracts.length} contract${contracts.length !== 1 ? "s" : ""}`}
               {section === "invoices" && `${invoices.length} invoice${invoices.length !== 1 ? "s" : ""} · ${overdueInvoices} overdue`}
               {section === "documents" && "Active working documents — drafts, pending review, and supporting files"}
+              {section === "signatures" && "Legally trackable Documenso signing requests and completed PDFs"}
               {section === "onboarding" && (isAdmin ? "Manage contractor and employee onboarding packets" : "Your onboarding status and required steps")}
               {section === "payments" && "Payment history and remittance"}
               {section === "messages" && "Activity notifications and workflow events"}
@@ -8528,6 +8674,9 @@ export default function ContractorHubPage() {
 
             {/* Working Documents */}
             {section === "documents" && <DocumentsSection />}
+
+            {/* Documents & Signatures */}
+            {section === "signatures" && <SignaturesSection />}
 
             {/* Onboarding */}
             {section === "onboarding" && <OnboardingSection isAdmin={isAdmin} />}
