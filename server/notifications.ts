@@ -1,6 +1,9 @@
 import nodemailer from "nodemailer";
 import { storage } from "./storage";
 import { decryptSecret } from "./cryptoUtils";
+import { db } from "./db";
+import { sql } from "drizzle-orm";
+import { buildTwilioMessageParams } from "./twilio-sms-webhooks";
 
 /**
  * Normalize a phone number to E.164 format (+1XXXXXXXXXX) for Twilio.
@@ -113,6 +116,8 @@ async function getTwilioCredentials(): Promise<{
   authToken: string;
   fromNumber: string | null;
   messagingServiceSid: string | null;
+  useMessagingService: boolean;
+  statusCallbackUrl: string;
 } | null> {
   try {
     const dbCfg = await storage.getSmsConfig();
@@ -120,12 +125,15 @@ async function getTwilioCredentials(): Promise<{
       const authToken = dbCfg.hasAuthToken && dbCfg.authTokenHash
         ? (decryptSecret(dbCfg.authTokenHash) ?? process.env.TWILIO_AUTH_TOKEN ?? "")
         : (process.env.TWILIO_AUTH_TOKEN ?? "");
-      if (authToken && (dbCfg.fromNumber || dbCfg.messagingServiceSid)) {
+      const useMessagingService = dbCfg.useMessagingService === true;
+      if (authToken && (useMessagingService ? dbCfg.messagingServiceSid : dbCfg.fromNumber)) {
         return {
           accountSid: dbCfg.accountSid,
           authToken,
           fromNumber: dbCfg.fromNumber ?? null,
           messagingServiceSid: dbCfg.messagingServiceSid ?? null,
+          useMessagingService,
+          statusCallbackUrl: dbCfg.statusCallbackUrl || "https://mypaylink.app/api/twilio/sms/status",
         };
       }
     }
@@ -136,9 +144,9 @@ async function getTwilioCredentials(): Promise<{
   // Env var fallback
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER ?? null;
+  const fromNumber = process.env.TWILIO_DEFAULT_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER || null;
   if (!accountSid || !authToken || !fromNumber) return null;
-  return { accountSid, authToken, fromNumber, messagingServiceSid: null };
+  return { accountSid, authToken, fromNumber, messagingServiceSid: null, useMessagingService: false, statusCallbackUrl: "https://mypaylink.app/api/twilio/sms/status" };
 }
 
 export async function sendViaTwilio(to: string, body: string): Promise<void> {
@@ -198,18 +206,17 @@ export async function sendViaTwilio(to: string, body: string): Promise<void> {
   }
   const creds = await getTwilioCredentials();
   if (!creds) throw new Error("Twilio not configured");
+  const normalizedTo = normalizePhone(to);
+  const consent = await db.execute(sql`SELECT sms_opted_out FROM sms_consent WHERE phone_number = ${normalizedTo} AND tenant_id IS NULL LIMIT 1`);
+  if (consent.rows[0]?.sms_opted_out === true) {
+    await db.execute(sql`INSERT INTO sms_messages (provider, direction, to_number, body, status, source, raw_payload) VALUES ('twilio', 'outbound', ${normalizedTo}, ${body}, 'blocked_opt_out', 'send_guard', ${JSON.stringify({ reason: "recipient opted out" })}::jsonb)`);
+    throw new Error("SMS blocked: recipient opted out.");
+  }
   const twilio = (await import("twilio")).default;
   const client = twilio(creds.accountSid, creds.authToken);
-  const msgParams: { body: string; to: string; from?: string; messagingServiceSid?: string } = {
-    body,
-    to: normalizePhone(to),
-  };
-  if (creds.messagingServiceSid) {
-    msgParams.messagingServiceSid = creds.messagingServiceSid;
-  } else {
-    msgParams.from = normalizePhone(creds.fromNumber!);
-  }
-  await client.messages.create(msgParams);
+  const msgParams = buildTwilioMessageParams(creds, normalizedTo, body);
+  const message = await client.messages.create(msgParams);
+  await db.execute(sql`INSERT INTO sms_messages (provider, direction, from_number, to_number, body, message_sid, status, source, raw_payload) VALUES ('twilio', 'outbound', ${msgParams.from ?? creds.messagingServiceSid}, ${normalizedTo}, ${body}, ${message.sid ?? null}, ${message.status ?? 'queued'}, 'application', ${JSON.stringify(message)}::jsonb) ON CONFLICT (message_sid) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`);
 }
 
 function formatShiftList(shifts: ScheduleNotificationPayload["shifts"]): string {

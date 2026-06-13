@@ -7,6 +7,7 @@ import { calcAllTaxes, payPeriodTypeFromSchedule, TAX_ENGINE_VERSION, type TaxEn
 import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
+import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
 import os from "os";
 import { execSync } from "child_process";
@@ -33,6 +34,31 @@ import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+
+async function getTwilioAuthTokenForWebhook(): Promise<string> {
+  const cfg = await storage.getSmsConfig().catch(() => undefined);
+  if (cfg?.hasAuthToken && cfg.authTokenHash) return decryptSecret(cfg.authTokenHash) || process.env.TWILIO_AUTH_TOKEN || "";
+  return process.env.TWILIO_AUTH_TOKEN || "";
+}
+
+async function upsertSmsConsent(phone: string, optedOut: boolean): Promise<void> {
+  await db.execute(sql`INSERT INTO sms_consent (phone_number, sms_opted_out, opt_in_at, opt_out_at, opt_in_source, opt_out_source, updated_at)
+    VALUES (${phone}, ${optedOut}, ${optedOut ? null : new Date()}, ${optedOut ? new Date() : null}, ${optedOut ? null : "twilio_keyword"}, ${optedOut ? "twilio_keyword" : null}, NOW())
+    ON CONFLICT (phone_number) WHERE tenant_id IS NULL DO UPDATE SET sms_opted_out = EXCLUDED.sms_opted_out, opt_in_at = COALESCE(EXCLUDED.opt_in_at, sms_consent.opt_in_at), opt_out_at = COALESCE(EXCLUDED.opt_out_at, sms_consent.opt_out_at), opt_in_source = COALESCE(EXCLUDED.opt_in_source, sms_consent.opt_in_source), opt_out_source = COALESCE(EXCLUDED.opt_out_source, sms_consent.opt_out_source), updated_at = NOW()`);
+}
+
+async function insertInboundSms(payload: Record<string, string>, source: "twilio_inbound" | "twilio_fallback"): Promise<void> {
+  const from = payload.From ? normalizePhone(payload.From) : null;
+  const to = payload.To ? normalizePhone(payload.To) : null;
+  await db.execute(sql`INSERT INTO sms_messages (provider, direction, from_number, to_number, body, message_sid, status, error_code, error_message, raw_payload, source)
+    VALUES ('twilio', 'inbound', ${from}, ${to}, ${payload.Body || ""}, ${payload.MessageSid || null}, ${payload.SmsStatus || payload.MessageStatus || 'received'}, ${payload.ErrorCode || null}, ${payload.ErrorMessage || payload.ErrorUrl || null}, ${JSON.stringify(payload)}::jsonb, ${source})
+    ON CONFLICT (message_sid) DO UPDATE SET status = EXCLUDED.status, error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message, raw_payload = EXCLUDED.raw_payload, updated_at = NOW()`);
+}
+
+async function updateSmsStatus(payload: Record<string, string>): Promise<void> {
+  await db.execute(sql`UPDATE sms_messages SET status = ${payload.MessageStatus || payload.SmsStatus || null}, error_code = ${payload.ErrorCode || null}, error_message = ${payload.ErrorMessage || null}, raw_payload = ${JSON.stringify(payload)}::jsonb, updated_at = NOW() WHERE message_sid = ${payload.MessageSid || null}`);
+}
 
 function safeErrorMessage(error: unknown, fallback: string): string {
   if (isProduction) return fallback;
@@ -1598,6 +1624,7 @@ export async function registerRoutes(
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
       const isProduction = process.env.NODE_ENV === "production";
+
       res.clearCookie("connect.sid", {
         path: "/",
         domain: isProduction ? ".mypaylink.app" : undefined,
@@ -11416,7 +11443,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // 2. Write audit log entries for repairs
       if (repaired.length > 0) {
-        await writeAuditLog({ actorUserId: req.session.userId!, action: "repair_proposal_contracts", entityType: "contractor_proposal", entityId: "batch", companyId: user?.companyId || null, details: `Repaired ${repaired.length} proposals`, req }).catch(() => {});
+        await writeAuditLog({ actorUserId: req.session.userId!, targetResource: "contractor_proposal:batch", changeType: "repair_proposal_contracts", companyId: user?.companyId || null, note: `Repaired ${repaired.length} proposals` }).catch(() => {});
       }
 
       res.json({
@@ -11445,7 +11472,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const targetWorker = await storage.getWorker(req.body.contractorId);
         if (!targetWorker) return res.status(404).json({ message: "Contractor not found" });
         if (targetWorker.workerType !== "contractor") return res.status(400).json({ message: "Target worker is not a contractor" });
-        if (!(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
+        if (!user || !(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
         workerId = targetWorker.id;
         // Derive company from validated context — do not trust client-supplied companyId
         effectiveCompanyId = targetWorker.companyId ?? null;
@@ -26894,6 +26921,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     },
   );
 
+  registerTwilioSmsWebhookRoutes(app, {
+    getAuthToken: getTwilioAuthTokenForWebhook,
+    saveInboundSms: insertInboundSms,
+    updateSmsConsent: upsertSmsConsent,
+    updateSmsStatus,
+    getSupportContact: () => process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || "support@mypaylink.app",
+    notifyFallback: (payload) => console.warn("[Twilio SMS] Primary webhook fallback invoked", { errorCode: payload.ErrorCode, errorUrl: payload.ErrorUrl }),
+  });
+
   // -- SMS --
   app.get("/api/admin/sms-config",
     requireRole(...CHANNEL_CONFIG_ROLES),
@@ -26911,6 +26947,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           hasAuthToken: config.hasAuthToken,
           fromNumber: config.fromNumber,
           messagingServiceSid: config.messagingServiceSid,
+          useMessagingService: config.useMessagingService === true,
+          webhookUrl: config.webhookUrl || TWILIO_SMS_URLS.inbound,
+          webhookFallbackUrl: config.webhookFallbackUrl || TWILIO_SMS_URLS.fallback,
+          statusCallbackUrl: config.statusCallbackUrl || TWILIO_SMS_URLS.status,
           isConfigured: config.isConfigured,
           lastTestedAt: config.lastTestedAt,
           lastTestResult: config.lastTestResult,
@@ -26933,9 +26973,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           return res.status(403).json({ message: "You do not have permission to edit channel configuration." });
         }
 
-        const { provider, accountSid, authToken, fromNumber, messagingServiceSid } = req.body as {
+        const { provider, accountSid, authToken, fromNumber, messagingServiceSid, useMessagingService } = req.body as {
           provider?: string; accountSid?: string; authToken?: string;
-          fromNumber?: string; messagingServiceSid?: string;
+          fromNumber?: string; messagingServiceSid?: string; useMessagingService?: boolean;
         };
 
         if (authToken?.trim() && !isEncryptionAvailable()) {
@@ -26948,13 +26988,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const hasStoredAuthToken = existingSms?.hasAuthToken ?? false;
         const willHaveAuthToken = !!(authToken?.trim()) || hasStoredAuthToken;
 
+        const normalizedUseMessagingService = useMessagingService === true;
         const base = {
           provider: provider || "twilio",
           accountSid: accountSid || null,
           fromNumber: fromNumber || null,
-          messagingServiceSid: messagingServiceSid || null,
+          messagingServiceSid: messagingServiceSid?.trim() || null,
+          useMessagingService: normalizedUseMessagingService,
+          webhookUrl: TWILIO_SMS_URLS.inbound,
+          webhookFallbackUrl: TWILIO_SMS_URLS.fallback,
+          statusCallbackUrl: TWILIO_SMS_URLS.status,
           updatedBy: user?.username ?? "admin",
-          isConfigured: !!(accountSid && willHaveAuthToken && (fromNumber || messagingServiceSid)),
+          isConfigured: !!(accountSid && willHaveAuthToken && (normalizedUseMessagingService ? messagingServiceSid?.trim() : fromNumber)),
         };
 
         const withSecret = authToken && authToken.trim()
@@ -26978,6 +27023,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           hasAuthToken: config.hasAuthToken,
           fromNumber: config.fromNumber,
           messagingServiceSid: config.messagingServiceSid,
+          useMessagingService: config.useMessagingService === true,
+          webhookUrl: config.webhookUrl || TWILIO_SMS_URLS.inbound,
+          webhookFallbackUrl: config.webhookFallbackUrl || TWILIO_SMS_URLS.fallback,
+          statusCallbackUrl: config.statusCallbackUrl || TWILIO_SMS_URLS.status,
           isConfigured: config.isConfigured,
           updatedAt: config.updatedAt,
           updatedBy: config.updatedBy,
@@ -27007,10 +27056,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const authToken = config?.hasAuthToken && config.authTokenHash
           ? (decryptSecret(config.authTokenHash) ?? process.env.TWILIO_AUTH_TOKEN ?? "")
           : (process.env.TWILIO_AUTH_TOKEN ?? "");
-        const fromNumber = config?.messagingServiceSid
+        const useMessagingService = config?.useMessagingService === true;
+        const fromNumber = useMessagingService
           ? null
-          : (config?.fromNumber || process.env.TWILIO_PHONE_NUMBER);
-        const messagingServiceSid = config?.messagingServiceSid || null;
+          : (config?.fromNumber || process.env.TWILIO_DEFAULT_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER);
+        const messagingServiceSid = useMessagingService ? (config?.messagingServiceSid || null) : null;
 
         if (!accountSid || !authToken || (!fromNumber && !messagingServiceSid)) {
           return res.status(400).json({ sent: false, message: "SMS (Twilio) is not configured" });
@@ -27029,7 +27079,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const msgParams: TwilioCreateParams = {
           body: "PayLink test message — SMS notifications are working correctly!",
           to: normalizePhone(toPhone),
-          ...(messagingServiceSid
+          statusCallback: TWILIO_SMS_URLS.status,
+          ...(useMessagingService && messagingServiceSid
             ? { messagingServiceSid }
             : { from: normalizePhone(fromNumber!) }),
         };

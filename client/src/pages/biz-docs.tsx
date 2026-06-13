@@ -539,7 +539,7 @@ function CreateEditModal({ open, onClose, editDoc }: { open: boolean; onClose: (
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Document Type</Label>
-                <Select value={form.documentType} onValueChange={v => setForm(p => ({ ...p, documentType: v }))}>
+                <Select value={form.documentType} onValueChange={v => setForm(p => ({ ...p, documentType: v as DocType }))}>
                   <SelectTrigger data-testid="select-doc-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="invoice">Invoice</SelectItem>

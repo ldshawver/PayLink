@@ -126,7 +126,7 @@ export default function MfaSettingsPage() {
   });
 
   const enrollMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/auth/mfa/enroll"),
+    mutationFn: async () => (await apiRequest("POST", "/api/auth/mfa/enroll")).json() as Promise<EnrollData>,
     onSuccess: (data: EnrollData) => {
       setEnrollData(data);
     },

@@ -161,7 +161,7 @@ function AssignCompanyDialog({ tenantId, open, onClose }: { tenantId: string; op
   const { toast } = useToast();
   const { data: allCompanies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: tenant } = useQuery<TenantDetail>({ queryKey: ["/api/tenants", tenantId] });
-  const assignedIds = new Set((tenant?.companies ?? []).map(c => c.id));
+  const assignedIds = new Set((tenant?.companies ?? []).map((c: { id: string }) => c.id));
   const available = allCompanies.filter(c => !assignedIds.has(c.id));
   const [companyId, setCompanyId] = useState("");
   const [isPrimary, setIsPrimary] = useState(false);
@@ -323,7 +323,7 @@ function TenantDetailPanel({
 
   const { data: tenant, isLoading } = useQuery<TenantDetail>({
     queryKey: ["/api/tenants", tenantId],
-    queryFn: () => apiRequest("GET", `/api/tenants/${tenantId}`),
+    queryFn: async () => (await apiRequest("GET", `/api/tenants/${tenantId}`)).json() as Promise<TenantDetail>,
   });
 
   const removeCompany = useMutation({
