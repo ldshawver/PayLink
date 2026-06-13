@@ -14298,6 +14298,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (msg.includes("Documenso not configured") || msg.includes("DOCUMENSO_API_KEY")) {
         return res.status(503).json({ message: "Documenso is not configured. Set DOCUMENSO_API_KEY in Replit Secrets." });
       }
+      if (msg.includes("401") || msg.toLowerCase().includes("not authenticated") || msg.toLowerCase().includes("unauthorized")) {
+        return res.status(503).json({ message: "Documenso rejected the configured API token. Please verify DOCUMENSO_API_KEY in Replit Secrets and try again." });
+      }
       res.status(500).json({ message: "Failed to send for signature: " + msg });
     }
   });
