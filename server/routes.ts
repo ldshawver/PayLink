@@ -16,7 +16,7 @@ import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -30,6 +30,7 @@ import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
+import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -7159,6 +7160,33 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Schedule generation error:", error);
       res.status(500).json({ message: safeErrorMessage(error, "Failed to generate schedules") });
+    }
+  });
+
+
+  app.post("/api/schedules/copy-week", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId } = req.body || {};
+      if (!companyId) return res.status(400).json({ message: "companyId, sourceWeekStart, and targetWeekStart are required" });
+      const actor = await storage.getUser(req.session.userId!);
+      const hasCompanyAccess = actor && companyId
+        ? await canAccessCompany({ id: actor.id, companyId: actor.companyId, role: actor.role }, companyId)
+        : false;
+      if (!isPlatformUser(actor?.role) && !hasCompanyAccess) {
+        return res.status(403).json({ message: "Forbidden: cannot access company" });
+      }
+
+      const result = await copyPublishedScheduleWeek(req.body, { userId: req.session.userId!, ipAddress: req.ip }, {
+        getSchedulesByDateRange: (copyCompanyId, startDate, endDate) => storage.getSchedulesByDateRange(copyCompanyId, startDate, endDate) as any,
+        createSchedule: (data) => storage.createSchedule(data as any) as any,
+        deleteSchedule: (id) => storage.deleteSchedule(id),
+        writeAuditLog: (entry) => db.insert(scheduleAuditLogs).values(entry as any).then(() => undefined),
+      });
+
+      res.status(201).json(result);
+    } catch (error: any) {
+      console.error("Schedule copy-week error:", error);
+      res.status(error?.status || 500).json({ message: safeErrorMessage(error, "Failed to copy schedule week") });
     }
   });
 
