@@ -9,7 +9,7 @@ export type TenantGate = {
   policyDetail?: string;
 };
 
-type AuthUser = {
+export type AuthUser = {
   id: string;
   username: string;
   role: string;

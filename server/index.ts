@@ -222,7 +222,12 @@ app.use(
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({
+  extended: false,
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 
 app.use("/uploads", express.static(uploadsDir));
 app.use("/docs", express.static(path.join(process.cwd(), "docs")));
@@ -2888,12 +2893,54 @@ Thank you,
       auth_token_hash TEXT,
       from_number TEXT,
       messaging_service_sid TEXT,
+      use_messaging_service BOOLEAN DEFAULT FALSE,
+      webhook_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/inbound',
+      webhook_fallback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/fallback',
+      status_callback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/status',
       is_configured BOOLEAN DEFAULT FALSE,
       last_tested_at TIMESTAMP,
       last_test_result TEXT,
       updated_at TIMESTAMP DEFAULT NOW(),
       updated_by TEXT
     )`);
+
+    await run("sms_config.use_messaging_service", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS use_messaging_service BOOLEAN DEFAULT FALSE`);
+    await run("sms_config.webhook_url", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS webhook_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/inbound'`);
+    await run("sms_config.webhook_fallback_url", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS webhook_fallback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/fallback'`);
+    await run("sms_config.status_callback_url", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS status_callback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/status'`);
+    await run("sms_messages table", sql`CREATE TABLE IF NOT EXISTS sms_messages (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id VARCHAR,
+      user_id VARCHAR,
+      contact_id VARCHAR,
+      provider TEXT DEFAULT 'twilio',
+      direction TEXT NOT NULL,
+      from_number TEXT,
+      to_number TEXT,
+      body TEXT,
+      message_sid TEXT UNIQUE,
+      status TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      raw_payload JSONB,
+      source TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("sms_consent table", sql`CREATE TABLE IF NOT EXISTS sms_consent (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id VARCHAR,
+      phone_number TEXT NOT NULL,
+      sms_opted_out BOOLEAN DEFAULT FALSE,
+      opt_in_at TIMESTAMP,
+      opt_out_at TIMESTAMP,
+      opt_in_source TEXT,
+      opt_out_source TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (tenant_id, phone_number)
+    )`);
+    await run("sms_consent.global_unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS sms_consent_global_phone_unique ON sms_consent (phone_number) WHERE tenant_id IS NULL`);
 
     await run("roles.capabilities", sql`ALTER TABLE roles ADD COLUMN IF NOT EXISTS capabilities TEXT`);
     await run("role_permissions.can_configure", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_configure BOOLEAN DEFAULT FALSE`);

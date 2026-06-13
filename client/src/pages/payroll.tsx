@@ -850,7 +850,7 @@ function PayrollRunCard({
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editItem, setEditItem] = useState<PayrollItem | null>(null);
-  const [editForm, setEditForm] = useState({ regularHours: "", overtimeHours: "", doubleTimeHours: "", payRate: "", regularPay: "", overtimePay: "", doubleTimePay: "", grossPay: "", deductions: "", netPay: "", checkNumber: "", paymentMethod: "", paymentPlatform: "" });
+  const [editForm, setEditForm] = useState({ regularHours: "", overtimeHours: "", doubleTimeHours: "", payRate: "", regularPay: "", overtimePay: "", doubleTimePay: "", grossPay: "", deductions: "", netPay: "", checkNumber: "", paymentMethod: "", paymentPlatform: "", manualOverrideNote: "" });
 
   const editItemMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
@@ -928,6 +928,7 @@ function PayrollRunCard({
       checkNumber: item.checkNumber || "",
       paymentMethod: item.paymentMethod || "",
       paymentPlatform: item.paymentPlatform || "",
+      manualOverrideNote: (item as any).manualOverrideNote || "",
     });
   };
 
@@ -5956,7 +5957,7 @@ function AddressNudgePad({
 
 function CheckPreview({ templateType, config, company }: {
   templateType: string;
-  config: Record<string, boolean>;
+  config: Record<string, boolean | number>;
   company?: Company;
 }) {
   const coName = company?.name || "Company Name";

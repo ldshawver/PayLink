@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { Link } from "wouter";
 import {
   MessageSquare,
@@ -30,6 +31,10 @@ interface SmsConfig {
   hasAuthToken?: boolean;
   fromNumber?: string | null;
   messagingServiceSid?: string | null;
+  useMessagingService?: boolean;
+  webhookUrl?: string | null;
+  webhookFallbackUrl?: string | null;
+  statusCallbackUrl?: string | null;
   isConfigured?: boolean;
   lastTestedAt?: string | null;
   lastTestResult?: string | null;
@@ -55,6 +60,7 @@ export default function SmsSettingsPage() {
     authToken: "",
     fromNumber: "",
     messagingServiceSid: "",
+    useMessagingService: false,
   });
 
   const [formInitialized, setFormInitialized] = useState(false);
@@ -67,6 +73,7 @@ export default function SmsSettingsPage() {
         authToken: "",
         fromNumber: config.fromNumber ?? "",
         messagingServiceSid: config.messagingServiceSid ?? "",
+        useMessagingService: config.useMessagingService === true,
       });
       setFormInitialized(true);
     }
@@ -219,22 +226,46 @@ export default function SmsSettingsPage() {
                 disabled={!canEdit}
                 data-testid="input-sms-from-number"
               />
-              <p className="text-xs text-muted-foreground">Your Twilio phone number in E.164 format (+1XXXXXXXXXX)</p>
+              <p className="text-xs text-muted-foreground">Required when Use Messaging Service is OFF. Use your verified Twilio toll-free number in E.164 format (+1XXXXXXXXXX).</p>
+            </div>
+
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="sms-use-messaging-service">Use Messaging Service</Label>
+                <p className="text-xs text-muted-foreground">Default OFF for MyPayLink. When OFF, Messaging Service SID is ignored and SMS sends from the verified toll-free number.</p>
+              </div>
+              <Switch
+                id="sms-use-messaging-service"
+                checked={form.useMessagingService}
+                onCheckedChange={checked => setForm(f => ({ ...f, useMessagingService: checked }))}
+                disabled={!canEdit}
+                data-testid="switch-use-messaging-service"
+              />
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="sms-messaging-sid">
                 Messaging Service SID{" "}
-                <span className="text-muted-foreground text-xs">(optional — overrides From Number)</span>
+                <span className="text-muted-foreground text-xs">(optional; required only when toggle is ON)</span>
               </Label>
               <Input
                 id="sms-messaging-sid"
                 placeholder="MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 value={form.messagingServiceSid}
                 onChange={e => setForm(f => ({ ...f, messagingServiceSid: e.target.value }))}
-                disabled={!canEdit}
+                disabled={!canEdit || !form.useMessagingService}
                 data-testid="input-sms-messaging-sid"
               />
+            </div>
+
+            <div className="rounded-md border bg-muted/30 p-3 space-y-2 text-sm">
+              <p className="font-medium">Twilio Console webhook settings</p>
+              <p className="text-xs text-muted-foreground">Phone Numbers → Manage → Active Numbers → your verified toll-free number → Messaging. Do not attach the number to a new Messaging Service for this task.</p>
+              <div className="space-y-1 font-mono text-xs break-all">
+                <div data-testid="text-sms-webhook-primary">Primary webhook (POST): {config?.webhookUrl || "https://mypaylink.app/api/twilio/sms/inbound"}</div>
+                <div data-testid="text-sms-webhook-fallback">Fallback webhook (POST): {config?.webhookFallbackUrl || "https://mypaylink.app/api/twilio/sms/fallback"}</div>
+                <div data-testid="text-sms-status-callback">Status callback (POST): {config?.statusCallbackUrl || "https://mypaylink.app/api/twilio/sms/status"}</div>
+              </div>
             </div>
 
             <div className="flex items-center justify-between pt-2">
