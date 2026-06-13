@@ -4467,7 +4467,10 @@ function ContractDetailPanel({
   });
 
   const sendViaDocumensoMutation = useMutation({
-    mutationFn: () => fetch(`/api/contractor-contracts/${contract.id}/send-for-signature`, { method: "POST", credentials: "include" }).then(async r => { if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.message || "Failed"); } return r.json(); }),
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/contractor-contracts/${contract.id}/send-for-signature`, {});
+      return response.json();
+    },
     onSuccess: () => { refetch(); toast({ title: "Sent via Documenso", description: "Signing request sent. Signers will receive an email with the signing link." }); onRefresh(); },
     onError: (e: any) => toast({ title: "Documenso send failed", description: e?.message || "Unable to send for signature", variant: "destructive" }),
   });

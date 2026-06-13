@@ -17,7 +17,7 @@ function getBaseUrl(): string {
 }
 
 function getApiKey(): string {
-  const key = process.env.DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY;
+  const key = (process.env.DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY || "").trim();
   if (!key || key === "REPLIT_SECRET_ONLY") {
     throw new Error("Documenso is not configured. Add DOCUMENSO_API_KEY to Replit Secrets and rotate the token shared in chat.");
   }
