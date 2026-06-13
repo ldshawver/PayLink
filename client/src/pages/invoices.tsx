@@ -883,7 +883,7 @@ function RecurringBillingTab({ companyId, customers }: { companyId: string; cust
     saveMutation.mutate(form);
   };
 
-  const getCustomerName = (id: string) => customers.find(c => c.id === id)?.name || id;
+  const getCustomerName = (id: string) => customers.find(c => c.id === id)?.customerName || id;
 
   const freqLabel = (p: RecurProfile) => {
     const opt = FREQ_OPTIONS.find(o => o.value === p.frequency);
@@ -993,7 +993,7 @@ function RecurringBillingTab({ companyId, customers }: { companyId: string; cust
                   <Select value={form.customerId || ""} onValueChange={v => setForm({ ...form, customerId: v })}>
                     <SelectTrigger data-testid="select-recurring-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
                     <SelectContent>
-                      {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.customerName}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1646,7 +1646,7 @@ export default function InvoicesPage() {
               </SelectTrigger>
               <SelectContent>
                 {allCompanies.map(c => (
-                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  <SelectItem key={c.id} value={c.id}>{(c as any).customerName ?? c.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

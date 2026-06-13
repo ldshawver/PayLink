@@ -151,6 +151,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
   const [requestListingId, setRequestListingId] = useState<string | null>(null);
   const [requestNote, setRequestNote] = useState("");
   const { toast } = useToast();
+  const timeFormat = useTimeFormat();
 
   const { data: marketplaceListings = [], refetch: refetchListings } = useQuery<any[]>({
     queryKey: ["/api/marketplace/listings"],
@@ -1029,7 +1030,7 @@ export default function SchedulePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
       setAddRecurringOpen(false);
-      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "", positionId: "", costCenterId: "", note: "" });
+      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", department: "", jobId: "", positionId: "", costCenterId: "", note: "" });
       toast({ title: "Recurring schedule added" });
     },
     onError: (error: Error) => {
@@ -2815,7 +2816,7 @@ export default function SchedulePage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={addScheduleOpen} onOpenChange={(v) => { setAddScheduleOpen(v); if (!v) setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", note: "" }); }}>
+      <Dialog open={addScheduleOpen} onOpenChange={(v) => { setAddScheduleOpen(v); if (!v) setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", positionId: "", costCenterId: "", note: "" }); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Scheduled Shift</DialogTitle>
