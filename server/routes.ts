@@ -32,6 +32,7 @@ import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contracto
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
+import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, canSignContract } from "./contract-signing-flow";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -13746,20 +13747,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isContractor = workerId && contract.contractor_id === workerId;
       const hasExplicitCompanyAccess = await db.execute(sql`
         SELECT 1
-        FROM user_company_access uca
-        LEFT JOIN roles r ON r.id = uca.role_id
-        WHERE uca.user_id = ${req.session.userId}
-          AND uca.company_id = ${contract.company_id}
-          AND uca.is_active = TRUE
-          AND (
-            r.name IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','tenant_manager')
-            OR r.name IS NULL
-          )
+        FROM company_user_access cua
+        WHERE cua.user_id = ${req.session.userId}
+          AND cua.company_id = ${contract.company_id}
+          AND cua.is_active = TRUE
+          AND cua.role IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','tenant_manager')
         LIMIT 1
       `);
       const userCompanyMatches = user?.companyId === contract.company_id || currentUserCompanyId === contract.company_id;
-      // Platform admins can sign any company's contract; tenant/owner roles must belong to the same company or have explicit tenant access.
-      const isCompanyAdmin = isAdmin && (isPlatformAdmin || userCompanyMatches || hasExplicitCompanyAccess.rows.length > 0);
+      const hasCompanyRoleAccess = hasExplicitCompanyAccess.rows.length > 0;
 
       const registeredSignerRes = await db.execute(
         currentUserEmail
@@ -13781,9 +13777,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       );
       const registeredSigner = registeredSignerRes.rows[0] as any;
 
-      if (!isContractor && !isCompanyAdmin && !registeredSigner) {
+      if (!canSignContract({
+        isContractor: !!isContractor,
+        isAdmin,
+        isPlatformAdmin,
+        userCompanyMatches,
+        hasExplicitCompanyAccess: hasCompanyRoleAccess,
+        hasRegisteredSigner: !!registeredSigner,
+      })) {
         return res.status(403).json({ message: "Not authorized to sign this contract" });
       }
+      const isCompanyAdmin = isAdmin && (isPlatformAdmin || userCompanyMatches || hasCompanyRoleAccess);
 
       let signer;
       if (registeredSigner) {
@@ -14315,12 +14319,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for signing" });
 
       const { sendDocumentForSignature } = await import("./services/documenso.js");
+      const returnUrl = buildContractDocumensoReturnUrl(getAppBaseUrl(req), contractId);
       const docResult = await sendDocumentForSignature({
         title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
         pdfBuffer,
         recipients,
+        metadata: { externalId: contractId, contractId, companyId: contract.company_id },
         subject: `Please sign: ${contract.title}`,
         message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+        returnUrl,
       });
 
       // Persist the Documenso request
@@ -23465,7 +23472,66 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         WHERE documenso_document_id = ${documensoDocumentId} OR provider_object_id = ${documensoDocumentId}
         ORDER BY created_at DESC LIMIT 1
       `);
-      const sig = firstRow<any>(sigRes);
+      let sig = firstRow<any>(sigRes);
+      if (!sig) {
+        const contractSigRes = await db.execute(sql`
+          SELECT * FROM documenso_signature_requests
+          WHERE documenso_document_id = ${documensoDocumentId}
+            AND document_type IN ('contract', 'contractor_hub_contract')
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        const contractSig = firstRow<any>(contractSigRes);
+        if (contractSig) {
+          const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
+          const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || contractSig.status));
+          const completed = status === "completed";
+          await db.execute(sql`
+            UPDATE documenso_signature_requests
+            SET status = ${status},
+                signed_at = CASE WHEN ${completed} THEN COALESCE(signed_at, NOW()) ELSE signed_at END,
+                completed_at = CASE WHEN ${completed} THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+                updated_at = NOW(),
+                raw_response = COALESCE(raw_response, ${JSON.stringify(payload)})
+            WHERE id = ${contractSig.id}
+          `);
+          if (completed) {
+            const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractSig.related_record_id}`);
+            const contract = firstRow<any>(contractRes);
+            if (contract) {
+              const wasAlreadyFullySigned = contract.status === "fully_signed";
+              if (!wasAlreadyFullySigned) {
+                await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id}`);
+                await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status = 'pending'`).catch(() => {});
+              }
+              if (!wasAlreadyFullySigned && contract.proposal_id) {
+                const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contract.proposal_id}`);
+                const prop = firstRow<any>(propRes);
+                if (prop && !prop.converted_to_invoice_id) {
+                  await autoCreateProposalBackedInvoice(contract, prop, {
+                    countInvoicesForContractor: async (contractorId: string) => {
+                      const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}`);
+                      return Number((cntRes.rows[0] as any)?.c ?? 0);
+                    },
+                    createInvoice: async (values: Record<string, unknown>) => {
+                      const invRes = await db.execute(sql`
+                        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
+                        VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
+                        RETURNING id
+                      `);
+                      return firstRow<any>(invRes);
+                    },
+                    markProposalConverted: async (proposalId: string, invoiceId: string) => {
+                      await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW() WHERE id = ${proposalId} AND company_id = ${contract.company_id}`);
+                    },
+                  });
+                }
+              }
+            }
+          }
+          if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'processed', processed_at = NOW() WHERE id = ${webhookEventId}`);
+          return res.json({ received: true, status, documentType: contractSig.document_type });
+        }
+      }
       if (!sig) throw new Error(`No local signature request found for Documenso document ${documensoDocumentId}`);
       const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
       const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || sig.signature_status));
