@@ -33,6 +33,7 @@ import {
   UserCheck
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { canShowContractSignatureActions, getDocumensoDisabledReason } from "@/lib/contractSignatureActions";
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 class ProposalErrorBoundary extends Component<
@@ -4419,8 +4420,8 @@ function InvoiceDetailPanel({
 // ─── Contract Detail Panel ─────────────────────────────────────────────────────
 
 function ContractDetailPanel({
-  contract: initialContract, onClose, isAdmin, onRefresh
-}: { contract: Contract; onClose: () => void; isAdmin: boolean; onRefresh: () => void }) {
+  contract: initialContract, onClose, isAdmin, currentUserRole, onRefresh
+}: { contract: Contract; onClose: () => void; isAdmin: boolean; currentUserRole?: string | null; onRefresh: () => void }) {
   const { toast } = useToast();
   const [tab, setTab] = useState("overview");
   const [signOpen, setSignOpen] = useState(false);
@@ -4494,9 +4495,16 @@ function ContractDetailPanel({
   });
 
   const canSend = isAdmin && contract.status === "draft";
+  const canShowSignatureActions = canShowContractSignatureActions(currentUserRole, contract.status);
+  const canSendViaDocumenso = canShowSignatureActions;
+  const documensoDisabledReason = getDocumensoDisabledReason({
+    role: currentUserRole,
+    signerCount: signers.length,
+    isPending: sendViaDocumensoMutation.isPending,
+  });
   const canActivate = isAdmin && ["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status);
   const canVoid = isAdmin && !["void", "terminated"].includes(contract.status);
-  const canSign = ["sent", "partially_signed"].includes(contract.status);
+  const canSign = canShowSignatureActions;
   const canCreateInvoice = ["active", "fully_signed"].includes(contract.status);
 
   return (
@@ -4515,7 +4523,7 @@ function ContractDetailPanel({
             <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
               {canSign && (
                 <Button size="sm" className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => setSignOpen(true)} data-testid="btn-sign-contract">
-                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign
+                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign Internally
                 </Button>
               )}
               {canSend && (
@@ -4538,9 +4546,17 @@ function ContractDetailPanel({
                   <XCircle className="h-3.5 w-3.5 mr-1" /> Void
                 </Button>
               )}
-              {isAdmin && signers.length > 0 && !["void","terminated","completed","fully_signed"].includes(contract.status) && (
-                <Button size="sm" variant="outline" className="border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400" onClick={() => sendViaDocumensoMutation.mutate()} disabled={sendViaDocumensoMutation.isPending} data-testid="btn-send-via-documenso" title="Send for e-signature via Documenso">
-                  <PenLine className="h-3.5 w-3.5 mr-1" /> {sendViaDocumensoMutation.isPending ? "Sending…" : "Sign via Documenso"}
+              {canSendViaDocumenso && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400"
+                  onClick={() => sendViaDocumensoMutation.mutate()}
+                  disabled={sendViaDocumensoMutation.isPending || !!documensoDisabledReason}
+                  data-testid="btn-send-via-documenso"
+                  title={documensoDisabledReason || "Email this contract for signature via Documenso"}
+                >
+                  <PenLine className="h-3.5 w-3.5 mr-1" /> {sendViaDocumensoMutation.isPending ? "Sending…" : "Send via Documenso"}
                 </Button>
               )}
               <a href={`/api/contractor-contracts/${contract.id}/download`} target="_blank" rel="noreferrer" data-testid="btn-download-contract">
@@ -5004,7 +5020,7 @@ function CreateInvoiceFromContractDialog({
 
 // ─── Contracts Section ────────────────────────────────────────────────────────
 
-function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelectedId, initialStatusFilter, expiryWarningDays = 30, onCreateProposal }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null; initialStatusFilter?: string | null; expiryWarningDays?: number; onCreateProposal?: () => void }) {
+function ContractsSection({ isAdmin, currentUserRole, reminderEntityIds = new Set(), initialSelectedId, initialStatusFilter, expiryWarningDays = 30, onCreateProposal }: { isAdmin: boolean; currentUserRole?: string | null; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null; initialStatusFilter?: string | null; expiryWarningDays?: number; onCreateProposal?: () => void }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "all");
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
@@ -5170,6 +5186,7 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
           contract={selectedContract}
           onClose={() => setSelectedContract(null)}
           isAdmin={isAdmin}
+          currentUserRole={currentUserRole}
           onRefresh={() => { refetch(); setSelectedContract(null); }}
         />
       )}
@@ -8365,7 +8382,7 @@ export default function ContractorHubPage() {
             </Dialog>
 
             {/* Contracts */}
-            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} initialStatusFilter={statusFilter !== "all" ? statusFilter : null} expiryWarningDays={hubExpiryWarningDays} onCreateProposal={openBuilderForNew} />}
+            {section === "contracts" && <ContractsSection isAdmin={isAdmin} currentUserRole={user?.role} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} initialStatusFilter={statusFilter !== "all" ? statusFilter : null} expiryWarningDays={hubExpiryWarningDays} onCreateProposal={openBuilderForNew} />}
 
             {/* Invoices */}
             {section === "invoices" && (

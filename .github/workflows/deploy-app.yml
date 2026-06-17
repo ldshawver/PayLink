@@ -36,10 +36,15 @@ jobs:
           command_timeout: 2m
           script_stop: true
           script: |
-            set -e
+            bash <<'PAYLINK_PREFLIGHT'
+            set -euxo pipefail
+
             ENV_FILE="/etc/paylink/.env"
 
             echo "--- Pre-flight: checking $ENV_FILE ---"
+            echo "Host: $(hostname)"
+            echo "User: $(whoami)"
+            echo "Env file exists: $(test -f "$ENV_FILE" && echo yes || echo no)"
 
             if [ ! -f "$ENV_FILE" ]; then
               echo "FATAL: $ENV_FILE does not exist."
@@ -48,24 +53,30 @@ jobs:
 
             echo "--- Checking required vars without sourcing unsafe env file ---"
 
-            DATABASE_URL_VALUE=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
-            SESSION_SECRET_VALUE=$(grep -E '^SESSION_SECRET=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
-            APP_BASE_URL_VALUE=$(grep -E '^APP_BASE_URL=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
+            echo "DATABASE_URL matches:"
+            grep -n '^DATABASE_URL=' "$ENV_FILE" | sed 's/=.*$/=<redacted>/' || true
+
+            echo "SESSION_SECRET matches:"
+            grep -n '^SESSION_SECRET=' "$ENV_FILE" | sed 's/=.*$/=<redacted>/' || true
+
+            echo "APP_BASE_URL matches:"
+            grep -n '^APP_BASE_URL=' "$ENV_FILE" | sed 's/=.*$/=<redacted>/' || true
 
             MISSING=""
-            [ -z "$DATABASE_URL_VALUE" ] && MISSING="$MISSING DATABASE_URL"
-            [ -z "$SESSION_SECRET_VALUE" ] && MISSING="$MISSING SESSION_SECRET"
-            [ -z "$APP_BASE_URL_VALUE" ] && MISSING="$MISSING APP_BASE_URL"
+            if ! grep -q '^DATABASE_URL=.' "$ENV_FILE"; then MISSING="$MISSING DATABASE_URL"; fi
+            if ! grep -q '^SESSION_SECRET=.' "$ENV_FILE"; then MISSING="$MISSING SESSION_SECRET"; fi
+            if ! grep -q '^APP_BASE_URL=.' "$ENV_FILE"; then MISSING="$MISSING APP_BASE_URL"; fi
 
             if [ -n "$MISSING" ]; then
               echo "FATAL: Missing required environment variables:$MISSING"
               echo ""
               echo "Detected keys:"
-              grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" | cut -d= -f1 | sort
+              grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" | cut -d= -f1 | sort || true
               exit 1
             fi
 
             echo "Pre-flight passed."
+            PAYLINK_PREFLIGHT
 
       - name: Deploy to VPS
         id: deploy
