@@ -13734,7 +13734,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contract = contractRes.rows[0] as any;
       if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (!["sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
+      if (!["draft", "pending", "awaiting_signatures", "sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
 
       // Authorization: caller must be either:
       // (a) the contractor on this contract, or
@@ -14305,7 +14305,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractId = req.params.id;
       const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      if (["void", "terminated", "completed"].includes(contract.status)) {
+      if (!["draft", "pending", "awaiting_signatures"].includes(contract.status)) {
         return res.status(400).json({ message: `Cannot send a contract in '${contract.status}' status for signature` });
       }
       const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} ORDER BY "order" ASC`);
