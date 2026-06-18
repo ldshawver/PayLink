@@ -21,7 +21,7 @@ import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, ins
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
-import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus } from "./services/documenso";
+import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
@@ -32,9 +32,13 @@ import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contracto
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
-import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, canSignContract } from "./contract-signing-flow";
+import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+function hashSigningToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
 
 
 async function getTwilioAuthTokenForWebhook(): Promise<string> {
@@ -1625,6 +1629,10 @@ export async function registerRoutes(
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
       const isProduction = process.env.NODE_ENV === "production";
+
+function hashSigningToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
 
       res.clearCookie("connect.sid", {
         path: "/",
@@ -13649,6 +13657,135 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     superseded:       [],
   };
 
+  app.get("/api/contractor-hub/contracts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const workerRes = await db.execute(sql`SELECT worker_id, company_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (workerRes.rows[0] as any)?.worker_id || null;
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || (user?.role || "").startsWith("tenant_") || isPlatform;
+      const isContractor = workerId && workerId === contract.contractor_id;
+      if (!isContractor && !(isAdmin && (isPlatform || await canAccessCompany(user!, contract.company_id)))) return res.status(403).json({ message: "Access denied" });
+      res.json(contract);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
+  });
+
+  app.get("/api/contractor-hub/contracts/:id/sign", requireAuth, async (req, res) => {
+    try {
+      const signers = await db.execute(sql`SELECT id, name, email, role, signer_role, signer_type, status, signed_at, signing_order FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY COALESCE(signing_order, "order", 1) ASC`);
+      res.json({ contractId: req.params.id, signers: signers.rows });
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch signing details" }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/signers", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      const { name, email, role, signerRole, signerType, workerId, userId, isRequired = true } = req.body;
+      if (!name && !email) return res.status(400).json({ message: "Signer name or email is required" });
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+      const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id}`);
+      const order = Number((count.rows[0] as any)?.count || 0) + 1;
+      const result = await db.execute(sql`
+        INSERT INTO contract_signers (contract_id, company_id, contractor_id, worker_id, user_id, name, email, role, signer_role, signer_type, is_required, status, "order", signing_order, signing_token_hash, signing_token_expires_at)
+        VALUES (${req.params.id}, ${contract.company_id}, ${contract.contractor_id}, ${workerId || null}, ${userId || null}, ${name || email}, ${email || null}, ${role || signerRole || "contractor"}, ${signerRole || role || "contractor"}, ${signerType || (workerId ? "contractor" : userId ? "user" : "external")}, ${!!isRequired}, 'pending', ${order}, ${order}, ${hashSigningToken(token)}, ${expires})
+        RETURNING *
+      `);
+      res.status(201).json({ ...result.rows[0], signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
+    } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/delegate-signer", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const workerRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (workerRes.rows[0] as any)?.worker_id || null;
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || isPlatform;
+      if (!(workerId === contract.contractor_id) && !(isAdmin && (isPlatform || await canAccessCompany(user!, contract.company_id)))) return res.status(403).json({ message: "Access denied" });
+      const { name, email, replacesSignerId } = req.body;
+      if (!email) return res.status(400).json({ message: "Delegate email is required" });
+      if (replacesSignerId) await db.execute(sql`UPDATE contract_signers SET status = 'replaced', updated_at = NOW() WHERE id = ${replacesSignerId} AND contract_id = ${req.params.id}`).catch(() => {});
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+      const result = await db.execute(sql`
+        INSERT INTO contract_signers (contract_id, company_id, contractor_id, name, email, role, signer_role, signer_type, is_delegated, delegated_by_user_id, replaces_signer_id, status, signing_token_hash, signing_token_expires_at)
+        VALUES (${req.params.id}, ${contract.company_id}, ${contract.contractor_id}, ${name || email}, ${email}, 'contractor', 'contractor', 'delegate', TRUE, ${req.session.userId}, ${replacesSignerId || null}, 'pending', ${hashSigningToken(token)}, ${expires})
+        RETURNING *
+      `);
+      res.status(201).json({ ...result.rows[0], signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
+    } catch (e: any) { res.status(500).json({ message: "Failed to delegate signer: " + e.message }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/send-signing-email", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      const signerRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} AND status = 'pending' ORDER BY COALESCE(signing_order, "order", 1) ASC LIMIT 1`);
+      const signer = signerRes.rows[0] as any;
+      if (!signer?.id) return res.status(400).json({ message: "No pending signer exists for this contract" });
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+      if (signer?.id) await db.execute(sql`UPDATE contract_signers SET signing_token_hash = ${hashSigningToken(token)}, signing_token_expires_at = ${expires}, status = 'sent', updated_at = NOW() WHERE id = ${signer.id}`);
+      const signingUrl = buildContractSigningUrl(getAppBaseUrl(req), token);
+      if (signer?.email) {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        await sendGenericNotificationEmail({ recipientName: signer.name || "Signer", email: signer.email, title: `Contract ready for signature - ${contract.title || req.params.id}`, body: `${contract.title || "A contract"} is ready for signature. This secure link expires in 14 days. If the button does not work, copy and paste this URL into your browser: ${signingUrl}`, actionUrl: signingUrl }).catch(() => ({ sent: false }));
+      }
+      res.json({ success: true, signingUrl });
+    } catch (e: any) { res.status(500).json({ message: "Failed to send signing email: " + e.message }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/documenso/create", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const config = validateDocumensoConfig();
+    if (!config.ok) return res.status(400).json({ message: config.message });
+    return res.status(202).json({ message: "Documenso is configured. Use POST /api/contractor-contracts/:id/send-for-signature to create and send the signing envelope.", contractId: req.params.id, baseUrl: config.baseUrl });
+  });
+
+  app.get("/api/signing/contracts/:token", async (req, res) => {
+    try {
+      const tokenHash = hashSigningToken(req.params.token);
+      const result = await db.execute(sql`
+        SELECT cs.id AS signer_id, cs.name AS signer_name, cs.email, cs.status AS signer_status,
+               cs.signing_token_expires_at, cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status
+        FROM contract_signers cs
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        WHERE cs.signing_token_hash = ${tokenHash}
+        LIMIT 1
+      `);
+      const row = result.rows[0] as any;
+      if (!row) return res.status(404).json({ message: "Signing link not found" });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      res.json({ contractId: row.contract_id, title: row.title, signerName: row.signer_name, signerEmail: row.email, status: row.signer_status, canSign: true });
+    } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
+  });
+
+  app.post("/api/signing/contracts/:token/complete", async (req, res) => {
+    try {
+      const tokenHash = hashSigningToken(req.params.token);
+      const result = await db.execute(sql`SELECT * FROM contract_signers WHERE signing_token_hash = ${tokenHash} LIMIT 1`);
+      const signer = result.rows[0] as any;
+      if (!signer) return res.status(404).json({ message: "Signing link not found" });
+      if (signer.signing_token_expires_at && new Date(signer.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${req.body?.signatureData || null}, ip_address = ${req.ip || null}, updated_at = NOW() WHERE id = ${signer.id}`);
+      const pending = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${signer.contract_id} AND status IN ('pending','sent','viewed')`);
+      const pendingCount = Number((pending.rows[0] as any)?.count || 0);
+      await db.execute(pendingCount === 0
+        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${signer.contract_id}`
+        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
+      );
+      res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
+    } catch (e: any) { res.status(500).json({ message: "Failed to complete signature" }); }
+  });
+
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
@@ -14537,6 +14674,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to submit override request: " + e.message }); }
   });
 
+  app.get("/api/document-hub/assets", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = (req.query.companyId as string) || user?.companyId || null;
+      const search = typeof req.query.search === "string" ? `%${req.query.search}%` : null;
+      const result = await db.execute(sql`SELECT * FROM dam_documents WHERE (${cid ? sql`company_id = ${cid}` : sql`TRUE`}) ${search ? sql`AND (title ILIKE ${search} OR file_name ILIKE ${search} OR document_type ILIKE ${search})` : sql``} ORDER BY created_at DESC`);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch document assets" }); }
+  });
+  app.post("/api/document-hub/assets", requireAuth, documentUpload.single("file"), async (_req: any, res) => {
+    return res.status(307).setHeader("Location", "/api/dam-documents").json({ message: "Use /api/dam-documents for upload-compatible Document Hub assets." });
+  });
+
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -14722,6 +14872,59 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
+  });
+
+  app.get("/api/document-hub/assets/:id", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+    const workerId = (wRes.rows[0] as any)?.worker_id;
+    const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+    const isPlatform = (user?.role || "").startsWith("platform_");
+    const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+    if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
+    const doc = result.rows[0] as any;
+    if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
+    if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    res.json(doc);
+  });
+  app.get("/api/document-hub/assets/:id/download", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download" }));
+  app.get("/api/document-hub/assets/:id/print", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download for inline print rendering" }));
+  app.patch("/api/document-hub/assets/:id/metadata", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    await db.execute(sql`INSERT INTO document_asset_metadata (document_asset_id, metadata_key, metadata_value, metadata_type, is_editable_by_user) VALUES (${req.params.id}, ${req.body?.metadataKey || "metadata"}, ${req.body?.metadataValue || null}, ${req.body?.metadataType || "text"}, TRUE)`);
+    await db.execute(sql`INSERT INTO document_asset_audit_logs (document_asset_id, actor_user_id, action, after_json, ip_address, user_agent) VALUES (${req.params.id}, ${req.session.userId || null}, 'metadata.updated', ${JSON.stringify(req.body || {})}, ${req.ip || null}, ${req.headers["user-agent"] || null})`).catch(() => {});
+    res.json({ success: true });
+  });
+  app.post("/api/document-hub/assets/:id/versions", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    await db.execute(sql`INSERT INTO document_asset_versions (document_asset_id, version_number, storage_key, file_name, file_mime_type, file_size, created_by_user_id, change_summary) VALUES (${req.params.id}, ${req.body?.versionNumber || 1}, ${req.body?.storageKey || null}, ${req.body?.fileName || null}, ${req.body?.fileMimeType || null}, ${req.body?.fileSize || null}, ${req.session.userId || null}, ${req.body?.changeSummary || null})`);
+    res.status(201).json({ success: true });
+  });
+  app.post("/api/document-hub/assets/:id/archive", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, archived_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
+    res.json({ success: true });
+  });
+  app.get("/api/document-hub/assets/:id/audit", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    const logs = await db.execute(sql`SELECT * FROM dam_document_access_logs WHERE document_id = ${req.params.id} ORDER BY created_at DESC`);
+    res.json(logs.rows);
   });
 
   // ── Contractor Templates ──────────────────────────────────────────────────

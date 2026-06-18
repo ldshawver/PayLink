@@ -2597,6 +2597,21 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("contract_signers.company_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS company_id VARCHAR`);
+    await run("contract_signers.contractor_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS contractor_id VARCHAR`);
+    await run("contract_signers.signer_role", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signer_role TEXT`);
+    await run("contract_signers.is_required", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS is_required BOOLEAN NOT NULL DEFAULT TRUE`);
+    await run("contract_signers.is_delegated", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS is_delegated BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("contract_signers.delegated_by_user_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS delegated_by_user_id VARCHAR`);
+    await run("contract_signers.replaces_signer_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS replaces_signer_id VARCHAR`);
+    await run("contract_signers.signing_order", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_order INTEGER`);
+    await run("contract_signers.documenso_recipient_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id TEXT`);
+    await run("contract_signers.signing_token_hash", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_token_hash TEXT`);
+    await run("contract_signers.signing_token_expires_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_token_expires_at TIMESTAMP`);
+    await run("contract_signers.updated_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await run("contract_signers token index", sql`CREATE INDEX IF NOT EXISTS idx_contract_signers_token_hash ON contract_signers(signing_token_hash)`);
+    await run("contract_signers contract index", sql`CREATE INDEX IF NOT EXISTS idx_contract_signers_contract_id ON contract_signers(contract_id)`);
+
     // ── contract_versions table ───────────────────────────────────────────────
     await run("contract_versions table", sql`CREATE TABLE IF NOT EXISTS contract_versions (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2633,6 +2648,58 @@ Thank you,
       uploaded_by_user_id VARCHAR,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("document_asset_metadata table", sql`CREATE TABLE IF NOT EXISTS document_asset_metadata (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      metadata_key TEXT NOT NULL,
+      metadata_value TEXT,
+      metadata_type TEXT,
+      is_editable_by_user BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("document_asset_permissions table", sql`CREATE TABLE IF NOT EXISTS document_asset_permissions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      company_id VARCHAR,
+      user_id VARCHAR,
+      role TEXT,
+      permission_view BOOLEAN NOT NULL DEFAULT TRUE,
+      permission_download BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_print BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_edit_metadata BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_delete BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_share BOOLEAN NOT NULL DEFAULT FALSE,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("document_asset_versions table", sql`CREATE TABLE IF NOT EXISTS document_asset_versions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      version_number INTEGER NOT NULL DEFAULT 1,
+      storage_key TEXT,
+      file_name TEXT,
+      file_mime_type TEXT,
+      file_size INTEGER,
+      created_by_user_id VARCHAR,
+      change_summary TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("document_asset_audit_logs table", sql`CREATE TABLE IF NOT EXISTS document_asset_audit_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      company_id VARCHAR,
+      actor_user_id VARCHAR,
+      actor_email TEXT,
+      action TEXT NOT NULL,
+      before_json JSONB,
+      after_json JSONB,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
     )`);
 
     // ── dam_document_access_logs table ────────────────────────────────────────
