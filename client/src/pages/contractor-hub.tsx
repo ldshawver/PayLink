@@ -233,7 +233,7 @@ interface Signer {
   workerId?: string;
   userId?: string;
   order?: number;
-  status: "draft" | "unsent" | "pending" | "sent" | "viewed" | "signed" | "declined" | "revoked" | "replaced";
+  status: "draft" | "unsent" | "pending" | "sent" | "viewed" | "signed" | "canceled" | "failed" | "declined" | "revoked" | "replaced";
   signedAt?: string;
   sentAt?: string;
   lastSentAt?: string;
@@ -4479,6 +4479,12 @@ function ContractDetailPanel({
     : null;
   const isExpiringSoon = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
   const hasUnsignedSigners = signers.some(s => s.status === "pending");
+  const canManageSigners = isAdmin || currentUserRole === "contractor";
+  const isActiveUnsignedSigner = (signer: Signer) => ["draft", "unsent", "pending", "sent", "viewed", "failed"].includes(signer.status);
+  const hasDuplicateSignerEmail = (email: string, excludeId?: string) => {
+    const normalized = email.trim().toLowerCase();
+    return !!normalized && signers.some(s => s.id !== excludeId && ["draft", "unsent", "pending", "sent", "viewed"].includes(s.status) && (s.email || "").trim().toLowerCase() === normalized);
+  };
 
   const signMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/sign`, { name: signerName, role: isAdmin ? "company_rep" : "contractor" }),
@@ -4550,9 +4556,15 @@ function ContractDetailPanel({
   });
 
   const addSignerMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/add-signer`, { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers`, { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
     onSuccess: () => { refetch(); setAddSignerOpen(false); setNewSignerName(""); setNewSignerEmail(""); toast({ title: "Signer added" }); },
     onError: (e: any) => toast({ title: e?.message || "Failed to add signer", variant: "destructive" }),
+  });
+
+  const resendSignerMutation = useMutation({
+    mutationFn: (signerId: string) => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers/${signerId}/resend`, {}),
+    onSuccess: () => { refetch(); toast({ title: "Signer request resent" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to resend signer request", variant: "destructive" }),
   });
 
   const canSend = isAdmin && contract.status === "draft";
@@ -4810,7 +4822,7 @@ function ContractDetailPanel({
                   <h3 className="text-sm font-semibold">Signers</h3>
                   <p className="text-xs text-muted-foreground">{signers.filter(s => s.status === "signed").length} of {signers.length} signed</p>
                 </div>
-                {isAdmin && !["void","fully_signed","terminated"].includes(contract.status) && (
+                {canManageSigners && !["void","fully_signed","terminated","completed"].includes(contract.status) && (
                   <Button size="sm" variant="outline" onClick={() => setAddSignerOpen(true)} data-testid="btn-add-signer">
                     <Plus className="h-3.5 w-3.5 mr-1" /> Add Signer
                   </Button>
@@ -4821,7 +4833,7 @@ function ContractDetailPanel({
                 <div className="text-center py-8 text-muted-foreground border border-dashed rounded-lg">
                   <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
                   <p className="text-sm">No signers registered yet</p>
-                  {isAdmin && <p className="text-xs mt-1">Add signers or send the contract for signing</p>}
+                  {canManageSigners && <p className="text-xs mt-1">Add signers or send the contract for signing</p>}
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -4839,22 +4851,28 @@ function ContractDetailPanel({
                         <p className="text-sm font-medium">{signer.name}</p>
                         {signer.email && <p className="text-xs text-muted-foreground">{signer.email}</p>}
                         <p className="text-xs text-muted-foreground capitalize">{signer.role?.replace(/_/g, " ") || "Reviewer"}</p>
+                        {signer.lastSentAt && <p className="text-xs text-muted-foreground">Last sent {fmtDate(signer.lastSentAt)}</p>}
+                        {hasDuplicateSignerEmail(signer.email || "", signer.id) && isActiveUnsignedSigner(signer) && (
+                          <p className="text-xs text-red-600" data-testid={`text-duplicate-signer-${signer.id}`}>Duplicate pending signer email</p>
+                        )}
                       </div>
                       <div className="text-right shrink-0">
                         <span className={cn(
                           "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
                           signer.status === "signed" ? "bg-green-100 text-green-700" :
-                          signer.status === "declined" ? "bg-red-100 text-red-700" :
+                          ["declined","failed"].includes(signer.status) ? "bg-red-100 text-red-700" :
+                          signer.status === "canceled" ? "bg-slate-100 text-slate-700" :
                           "bg-yellow-100 text-yellow-700"
                         )}>
-                          {signer.status === "signed" ? "Signed" : signer.status === "declined" ? "Declined" : "Pending"}
+                          {signer.status === "signed" ? "Signed" : signer.status === "declined" ? "Declined" : signer.status === "canceled" ? "Canceled" : signer.status === "failed" ? "Failed" : signer.status === "sent" ? "Sent" : signer.status === "viewed" ? "Viewed" : "Pending"}
                         </span>
                         {signer.signedAt && <p className="text-xs text-muted-foreground mt-1">{fmtDate(signer.signedAt)}</p>}
-                        {isAdmin && !["fully_signed","completed","void","terminated"].includes(contract.status) && (
+                        {signer.status === "signed" && <p className="text-xs text-muted-foreground mt-1" data-testid={`text-signer-locked-${signer.id}`}>Signed — cannot edit</p>}
+                        {canManageSigners && isActiveUnsignedSigner(signer) && !["fully_signed","completed","void","terminated"].includes(contract.status) && (
                           <div className="flex gap-1 mt-2 justify-end">
-                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingSigner(signer)} data-testid={`btn-edit-signer-${signer.id}`}>Edit</Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingSigner(signer)} data-testid={`btn-edit-signer-${signer.id}`}>Edit/Reassign</Button>
                             <Button size="sm" variant="ghost" className="h-7 px-2 text-red-600" onClick={() => deleteSignerMutation.mutate(signer.id)} data-testid={`btn-delete-signer-${signer.id}`}>Delete/remove</Button>
-                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingSigner({ ...signer, status: "replaced" as any })} data-testid={`btn-replace-signer-${signer.id}`}>Replace</Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resendSignerMutation.mutate(signer.id)} data-testid={`btn-resend-signer-${signer.id}`}>Resend</Button>
                           </div>
                         )}
                       </div>
@@ -4956,6 +4974,7 @@ function ContractDetailPanel({
               <div className="space-y-1.5">
                 <Label>Email</Label>
                 <Input type="email" value={newSignerEmail} onChange={e => setNewSignerEmail(e.target.value)} placeholder="john@example.com" data-testid="input-new-signer-email" />
+                {hasDuplicateSignerEmail(newSignerEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
               </div>
               <div className="space-y-1.5">
                 <Label>Role</Label>
@@ -4972,7 +4991,7 @@ function ContractDetailPanel({
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setAddSignerOpen(false)}>Cancel</Button>
-              <Button onClick={() => addSignerMutation.mutate()} disabled={addSignerMutation.isPending || !newSignerName.trim()} data-testid="btn-confirm-add-signer">
+              <Button onClick={() => addSignerMutation.mutate()} disabled={addSignerMutation.isPending || !newSignerName.trim() || hasDuplicateSignerEmail(newSignerEmail)} data-testid="btn-confirm-add-signer">
                 {addSignerMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
                 Add Signer
               </Button>
@@ -4983,17 +5002,19 @@ function ContractDetailPanel({
 
         <Dialog open={!!editingSigner} onOpenChange={v => !v && setEditingSigner(null)}>
           <DialogContent data-testid="dialog-edit-signer">
-            <DialogHeader><DialogTitle>{editingSigner?.status === "replaced" ? "Replace signer" : "Edit signer"}</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Reassign pending signer</DialogTitle></DialogHeader>
             {editingSigner && <div className="space-y-3 py-2">
+              <p className="text-xs text-muted-foreground">This only changes the unsigned signer request and does not create a duplicate signer row.</p>
               <Input value={editingSigner.name || ""} onChange={e => setEditingSigner({ ...editingSigner, name: e.target.value })} data-testid="input-edit-signer-name" />
               <Input type="email" value={editingSigner.email || ""} onChange={e => setEditingSigner({ ...editingSigner, email: e.target.value })} data-testid="input-edit-signer-email" />
+              {hasDuplicateSignerEmail(editingSigner.email || "", editingSigner.id) && <p className="text-xs text-red-600" data-testid="text-edit-signer-duplicate">This signer is already assigned to this contract.</p>}
               <Select value={editingSigner.role || "contractor"} onValueChange={v => setEditingSigner({ ...editingSigner, role: v })}><SelectTrigger data-testid="select-edit-signer-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="contractor">Contractor</SelectItem><SelectItem value="company_rep">Company Representative</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem><SelectItem value="witness">Witness</SelectItem></SelectContent></Select>
               <Input type="number" value={editingSigner.order || 1} onChange={e => setEditingSigner({ ...editingSigner, order: Number(e.target.value) })} data-testid="input-edit-signer-order" />
               <Select value={editingSigner.isRequired === false ? "optional" : "required"} onValueChange={v => setEditingSigner({ ...editingSigner, isRequired: v === "required" })}><SelectTrigger data-testid="select-edit-signer-required"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="required">Required</SelectItem><SelectItem value="optional">Optional</SelectItem></SelectContent></Select>
             </div>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingSigner(null)}>Cancel</Button>
-              {editingSigner?.status === "replaced" ? <Button onClick={() => replaceSignerMutation.mutate(editingSigner)} data-testid="btn-confirm-replace-signer">Replace signer</Button> : <Button onClick={() => editingSigner && updateSignerMutation.mutate(editingSigner)} data-testid="btn-confirm-edit-signer">Save signer</Button>}
+              <Button disabled={!editingSigner || hasDuplicateSignerEmail(editingSigner.email || "", editingSigner.id)} onClick={() => editingSigner && updateSignerMutation.mutate(editingSigner)} data-testid="btn-confirm-edit-signer">Save reassignment</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
