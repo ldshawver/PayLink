@@ -109,7 +109,7 @@ app.get("/ready", async (_req, res) => {
 });
 
 const appShellExactRoutes = new Set(["/login", "/clock-in", "/time-clock", "/signing-complete"]);
-const appShellPrefixes = ["/app", "/platform"];
+const appShellPrefixes = ["/app", "/platform", "/sign"];
 
 app.use((req, res, next) => {
   if (!isProduction || (req.method !== "GET" && req.method !== "HEAD")) return next();

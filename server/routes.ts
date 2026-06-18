@@ -13623,6 +13623,79 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return contract;
   }
 
+  const CONTRACT_ACTIVE_SIGNER_STATUSES = ["pending", "sent", "viewed", "unsent", "draft"];
+  const CONTRACT_UNSIGNED_SIGNER_STATUSES = [...CONTRACT_ACTIVE_SIGNER_STATUSES, "failed"];
+
+  function normalizeSignerEmail(email: unknown): string | null {
+    const normalized = String(email || "").trim().toLowerCase();
+    return normalized || null;
+  }
+
+  async function assertContractSignerManageAccess(contractId: string, sessionUserId: string): Promise<any | null> {
+    const user = await storage.getUser(sessionUserId);
+    const userRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${sessionUserId} LIMIT 1`);
+    const workerId = (userRes.rows[0] as any)?.worker_id || (user as any)?.workerId || null;
+    const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
+    const contract = contractRes.rows[0] as any;
+    if (!contract) return null;
+    const isPlatform = (user?.role || "").startsWith("platform_");
+    const isCompanyManager = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || (user?.role || "").startsWith("tenant_");
+    const isContractorOwner = !!workerId && workerId === contract.contractor_id;
+    if (isContractorOwner) return contract;
+    if ((isPlatform || isCompanyManager) && user && (isPlatform || await canAccessCompany(user, contract.company_id))) return contract;
+    return null;
+  }
+
+  async function validateContractSignerCompanyScope(contract: any, workerId?: string | null, userId?: string | null) {
+    if (userId) {
+      const signerUserRes = await db.execute(sql`SELECT company_id FROM users WHERE id = ${userId} LIMIT 1`);
+      const signerCompanyId = (signerUserRes.rows[0] as any)?.company_id;
+      if (signerCompanyId && signerCompanyId !== contract.company_id) return "Signer user does not belong to this company";
+    }
+    if (workerId) {
+      const signerWorkerRes = await db.execute(sql`SELECT company_id FROM workers WHERE id = ${workerId} LIMIT 1`);
+      const signerCompanyId = (signerWorkerRes.rows[0] as any)?.company_id;
+      if (signerCompanyId && signerCompanyId !== contract.company_id) return "Signer worker does not belong to this company";
+    }
+    return null;
+  }
+
+  async function hasDuplicateActiveContractSigner(contractId: string, normalizedEmail: string, excludeSignerId?: string | null) {
+    const duplicate = await db.execute(sql`
+      SELECT id FROM contract_signers
+      WHERE contract_id = ${contractId}
+        AND lower(trim(email)) = ${normalizedEmail}
+        AND status IN ('pending','sent','viewed','unsent','draft')
+        AND (${excludeSignerId || null}::text IS NULL OR id <> ${excludeSignerId || null})
+      LIMIT 1
+    `);
+    return !!duplicate.rows[0];
+  }
+
+  async function refreshContractSigningStatus(contractId: string) {
+    const pending = await db.execute(sql`
+      SELECT COUNT(*) FROM contract_signers
+      WHERE contract_id = ${contractId}
+        AND COALESCE(is_required, TRUE) = TRUE
+        AND status IN ('pending','sent','viewed','unsent','draft')
+    `);
+    const signed = await db.execute(sql`
+      SELECT COUNT(*) FROM contract_signers
+      WHERE contract_id = ${contractId}
+        AND COALESCE(is_required, TRUE) = TRUE
+        AND status = 'signed'
+    `);
+    const pendingCount = Number((pending.rows[0] as any)?.count || 0);
+    const signedCount = Number((signed.rows[0] as any)?.count || 0);
+    if (signedCount > 0) {
+      await db.execute(pendingCount === 0
+        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`
+        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${contractId}`
+      ).catch(() => {});
+    }
+    return pendingCount === 0 && signedCount > 0 ? "fully_signed" : pendingCount > 0 && signedCount > 0 ? "partially_signed" : null;
+  }
+
   // Auto-snapshot the current contract state into contract_versions before a mutation.
   // Returns the version number created.
   async function autoSnapshotContract(contractId: string, sessionUserId: string | null, reason: string): Promise<number> {
@@ -13684,23 +13757,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch signing details" }); }
   });
 
-  app.post("/api/contractor-hub/contracts/:id/signers", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
-      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      const { name, email, role, signerRole, signerType, workerId, userId, isRequired = true } = req.body;
-      if (!name && !email) return res.status(400).json({ message: "Signer name or email is required" });
-      const token = crypto.randomBytes(32).toString("base64url");
-      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
-      const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id}`);
-      const order = Number((count.rows[0] as any)?.count || 0) + 1;
-      const result = await db.execute(sql`
-        INSERT INTO contract_signers (contract_id, company_id, contractor_id, worker_id, user_id, name, email, role, signer_role, signer_type, is_required, status, "order", signing_order, signing_token_hash, signing_token_expires_at)
-        VALUES (${req.params.id}, ${contract.company_id}, ${contract.contractor_id}, ${workerId || null}, ${userId || null}, ${name || email}, ${email || null}, ${role || signerRole || "contractor"}, ${signerRole || role || "contractor"}, ${signerType || (workerId ? "contractor" : userId ? "user" : "external")}, ${!!isRequired}, 'pending', ${order}, ${order}, ${hashSigningToken(token)}, ${expires})
-        RETURNING *
-      `);
-      res.status(201).json({ ...result.rows[0], signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
-    } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
+  app.post("/api/contractor-hub/contracts/:id/signers", requireAuth, async (req, res) => {
+    return addContractSigner(req, res, req.params.id);
   });
 
   app.post("/api/contractor-hub/contracts/:id/delegate-signer", requireAuth, async (req, res) => {
@@ -13780,7 +13838,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!signer) return res.status(404).json({ message: "Signing link not found" });
       if (signer.signing_token_expires_at && new Date(signer.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
       await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${req.body?.signatureData || null}, ip_address = ${req.ip || null}, updated_at = NOW() WHERE id = ${signer.id}`);
-      const pending = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${signer.contract_id} AND status IN ('pending','sent','viewed')`);
+      const pending = await db.execute(sql`
+        SELECT COUNT(*) FROM contract_signers
+        WHERE contract_id = ${signer.contract_id}
+          AND COALESCE(is_required, TRUE) = TRUE
+          AND status IN ('pending','sent','viewed','unsent','draft')
+      `);
       const pendingCount = Number((pending.rows[0] as any)?.count || 0);
       await db.execute(pendingCount === 0
         ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${signer.contract_id}`
@@ -13862,6 +13925,81 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to send contract: " + e.message }); }
   });
 
+  app.get("/api/contractor-contracts/:id/signing-status", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT worker_id, email, company_id FROM users WHERE id = ${req.session.userId}`);
+      const currentUserRow = wRes.rows[0] as any;
+      const workerId = currentUserRow?.worker_id || null;
+      const currentUserCompanyId = currentUserRow?.company_id || null;
+      const currentUserEmail = typeof currentUserRow?.email === "string" ? currentUserRow.email.trim().toLowerCase() : null;
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract signing page not found." });
+      const isPlatformAdmin = (user?.role || "").startsWith("platform_");
+      const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
+        (user?.role || "").startsWith("tenant_") || isPlatformAdmin;
+      const isContractor = workerId && contract.contractor_id === workerId;
+      const hasExplicitCompanyAccess = await db.execute(sql`
+        SELECT 1 FROM company_user_access cua
+        WHERE cua.user_id = ${req.session.userId}
+          AND cua.company_id = ${contract.company_id}
+          AND cua.is_active = TRUE
+          AND cua.role IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','tenant_manager')
+        LIMIT 1
+      `);
+      const userCompanyMatches = user?.companyId === contract.company_id || currentUserCompanyId === contract.company_id;
+      const registeredSignerRes = await db.execute(
+        currentUserEmail
+          ? sql`
+            SELECT * FROM contract_signers
+            WHERE contract_id = ${req.params.id}
+              AND (
+                worker_id = ${workerId || null}
+                OR user_id = ${req.session.userId}
+                OR (email IS NOT NULL AND lower(trim(email)) = ${currentUserEmail} AND (${currentUserCompanyId || null} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id}))
+              )
+              AND status IN ('pending','sent','viewed','unsent','draft','signed')
+            ORDER BY CASE WHEN status = 'signed' THEN 2 ELSE 1 END, COALESCE(signing_order, "order", 1) ASC
+            LIMIT 1`
+          : sql`
+            SELECT * FROM contract_signers
+            WHERE contract_id = ${req.params.id}
+              AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId})
+              AND status IN ('pending','sent','viewed','unsent','draft','signed')
+            ORDER BY CASE WHEN status = 'signed' THEN 2 ELSE 1 END, COALESCE(signing_order, "order", 1) ASC
+            LIMIT 1`
+      );
+      const registeredSigner = registeredSignerRes.rows[0] as any;
+      if (!canSignContract({
+        isContractor: !!isContractor,
+        isAdmin,
+        isPlatformAdmin,
+        userCompanyMatches,
+        hasExplicitCompanyAccess: hasExplicitCompanyAccess.rows.length > 0,
+        hasRegisteredSigner: !!registeredSigner,
+      })) {
+        return res.status(403).json({ message: "You do not have access to this contract signing page." });
+      }
+      const pending = await db.execute(sql`
+        SELECT COUNT(*) FROM contract_signers
+        WHERE contract_id = ${req.params.id}
+          AND COALESCE(is_required, TRUE) = TRUE
+          AND status IN ('pending','sent','viewed','unsent','draft')
+      `);
+      res.json({
+        contractId: contract.id,
+        title: contract.title,
+        contractStatus: contract.status,
+        signerName: registeredSigner?.name || user?.username || null,
+        signerEmail: registeredSigner?.email || currentUserEmail,
+        signerStatus: registeredSigner?.status || null,
+        alreadySigned: registeredSigner?.status === "signed" || ["fully_signed", "completed", "active"].includes(contract.status),
+        pendingSignerCount: Number((pending.rows[0] as any)?.count || 0),
+      });
+    } catch (e: any) { res.status(500).json({ message: "Failed to load contract signing page" }); }
+  });
+
   app.post("/api/contractor-contracts/:id/sign", requireAuth, async (req, res) => {
     try {
       const { name, signatureData, role } = req.body;
@@ -13902,18 +14040,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         currentUserEmail
           ? sql`
             SELECT id FROM contract_signers
-            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status IN ('pending','sent','viewed','unsent','draft')
             UNION ALL
             SELECT id FROM contract_signers
             WHERE contract_id = ${req.params.id}
-              AND status = 'pending'
+              AND status IN ('pending','sent','viewed','unsent','draft')
               AND email IS NOT NULL
-              AND lower(email) = ${currentUserEmail}
+              AND lower(trim(email)) = ${currentUserEmail}
               AND (${currentUserCompanyId || null} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id})
             LIMIT 1`
           : sql`
             SELECT id FROM contract_signers
-            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status IN ('pending','sent','viewed','unsent','draft')
             LIMIT 1`
       );
       const registeredSigner = registeredSignerRes.rows[0] as any;
@@ -13959,7 +14097,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       // Check if all registered pending signers have now signed
-      const pendingSigners = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id} AND status = 'pending'`);
+      const pendingSigners = await db.execute(sql`
+        SELECT COUNT(*) FROM contract_signers
+        WHERE contract_id = ${req.params.id}
+          AND COALESCE(is_required, TRUE) = TRUE
+          AND status IN ('pending','sent','viewed','unsent','draft')
+      `);
       const pendingCount = parseInt((pendingSigners.rows[0] as any).count);
       const newStatus = pendingCount === 0 ? "fully_signed" : "partially_signed";
       const contractBeforeSign = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
@@ -14210,52 +14353,53 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Contract: Add Signer ─────────────────────────────────────────────────
-  app.post("/api/contractor-contracts/:id/add-signer", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  async function addContractSigner(req: Request, res: Response, contractId: string) {
     try {
-      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      const contract = await assertContractSignerManageAccess(contractId, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (["void", "fully_signed", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to a contract in " + contract.status + " status" });
-      const { name, email, role, workerId, userId } = req.body;
+      const { name, email, role, workerId, userId, isRequired = true } = req.body;
       if (!name) return res.status(400).json({ message: "Signer name is required" });
+      const normalizedEmail = normalizeSignerEmail(email);
+      if (normalizedEmail && await hasDuplicateActiveContractSigner(contractId, normalizedEmail)) return res.status(409).json({ message: "This signer is already assigned to this contract." });
       // Validate that userId/workerId belongs to the same company as the contract (prevent cross-company notification leak)
-      if (userId) {
-        const signerUserRes = await db.execute(sql`SELECT company_id FROM users WHERE id = ${userId} LIMIT 1`);
-        const signerCompanyId = (signerUserRes.rows[0] as any)?.company_id;
-        if (signerCompanyId && signerCompanyId !== contract.company_id) {
-          return res.status(403).json({ message: "Signer user does not belong to this company" });
-        }
-      }
-      if (workerId) {
-        const signerWorkerRes = await db.execute(sql`SELECT w.company_id FROM workers w WHERE w.id = ${workerId} LIMIT 1`);
-        const signerCompanyId = (signerWorkerRes.rows[0] as any)?.company_id;
-        if (signerCompanyId && signerCompanyId !== contract.company_id) {
-          return res.status(403).json({ message: "Signer worker does not belong to this company" });
-        }
-      }
+      const scopeError = await validateContractSignerCompanyScope(contract, workerId, userId);
+      if (scopeError) return res.status(403).json({ message: scopeError });
       // Validate role: must be one of the accepted signer roles
       const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
       const signerRole = validRoles.includes(role) ? role : "contractor";
-      const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id}`);
+      const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${contractId}`);
       const order = parseInt((count.rows[0] as any).count) + 1;
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
       const result = await db.execute(sql`
-        INSERT INTO contract_signers (contract_id, worker_id, user_id, name, email, role, status, "order")
-        VALUES (${req.params.id}, ${workerId || null}, ${userId || null}, ${name}, ${email || null}, ${signerRole}, 'pending', ${order})
+        INSERT INTO contract_signers (contract_id, company_id, contractor_id, worker_id, user_id, name, email, role, signer_role, signer_type, is_required, status, "order", signing_order, signing_token_hash, signing_token_expires_at)
+        VALUES (${contractId}, ${contract.company_id}, ${contract.contractor_id}, ${workerId || null}, ${userId || null}, ${name}, ${normalizedEmail}, ${signerRole}, ${signerRole}, ${workerId ? "contractor" : userId ? "user" : "external"}, ${!!isRequired}, 'pending', ${order}, ${order}, ${hashSigningToken(token)}, ${expires})
         RETURNING *
       `);
       // Create in-app notification for the signer (if they have a worker record)
       if (workerId || userId) {
-        createContractorNotification({ workerId: workerId || null, userId: userId || null, companyId: contract.company_id, notificationType: "signature_requested", title: `Signature Requested: ${contract.title}`, body: `You have been added as a signer on contract "${contract.title}". Please review and sign.`, entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
+        createContractorNotification({ workerId: workerId || null, userId: userId || null, companyId: contract.company_id, notificationType: "signature_requested", title: `Signature Requested: ${contract.title}`, body: `You have been added as a signer on contract "${contract.title}". Please review and sign.`, entityType: "contract", entityId: contractId, actionUrl: `/app/contractor-hub?section=contracts&id=${contractId}` }).catch(() => {});
       }
       // Send signature request notification to the signer if email is provided
       if (email) {
         try {
           const { sendContractEventEmail } = await import("./notifications.js");
           const baseUrl = process.env.APP_BASE_URL || "";
-          sendContractEventEmail({ event: "signature_requested", recipientName: name, email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: "You have been requested to sign this contract.", actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+          sendContractEventEmail({ event: "signature_requested", recipientName: name, email: normalizedEmail || email, contractTitle: contract.title, entityId: contractId, entityType: "contract", note: "You have been requested to sign this contract.", actionUrl: buildContractSigningUrl(getAppBaseUrl(req), token) }).catch(() => {});
         } catch (notifErr) { console.error("[Contract] Notify add-signer failed:", notifErr); }
       }
-      res.status(201).json(result.rows[0]);
+      await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: (result.rows[0] as any).id, actionType: "signer_added", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ contractId, email: normalizedEmail }) }).catch(() => {});
+      res.status(201).json({ ...result.rows[0], signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
     } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
+  }
+
+  app.post("/api/contractor-contracts/:id/add-signer", requireAuth, async (req, res) => {
+    return addContractSigner(req, res, req.params.id);
+  });
+
+  app.post("/api/contractor-contracts/:contractId/signers", requireAuth, async (req, res) => {
+    return addContractSigner(req, res, req.params.contractId);
   });
 
   // ── Contract: PDF helper ──────────────────────────────────────────────────
@@ -14535,29 +14679,71 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     res.json({ success: true, sentCount: pending.rows.length });
   });
 
-  app.patch("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    const contract = await assertContractCompanyAccess(req.params.contractId, req.session.userId!);
+  app.patch("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, async (req, res) => {
+    const contract = await assertContractSignerManageAccess(req.params.contractId, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
     if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot edit signers after completion/void/termination" });
     const signer = (await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`)).rows[0] as any;
     if (!signer) return res.status(404).json({ message: "Signer not found" });
     if (signer.status === "signed") return res.status(400).json({ message: "Signed signers cannot be edited" });
+    if (!CONTRACT_UNSIGNED_SIGNER_STATUSES.includes(signer.status || "pending")) return res.status(400).json({ message: "Only pending or unsigned signers can be reassigned" });
     const body = req.body || {};
-    const updated = await db.execute(sql`UPDATE contract_signers SET name = COALESCE(${body.name || null}, name), email = COALESCE(${body.email || null}, email), role = COALESCE(${body.role || null}, role), signer_role = COALESCE(${body.signerRole || body.role || null}, signer_role), signing_order = COALESCE(${body.order || null}, signing_order), is_required = COALESCE(${body.isRequired ?? null}, is_required), updated_at = NOW() WHERE id = ${req.params.signerId} RETURNING *`);
-    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_updated", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
+    const normalizedEmail = body.email !== undefined ? normalizeSignerEmail(body.email) : normalizeSignerEmail(signer.email);
+    if (normalizedEmail && await hasDuplicateActiveContractSigner(req.params.contractId, normalizedEmail, req.params.signerId)) return res.status(409).json({ message: "This signer is already assigned to this contract." });
+    const scopeError = await validateContractSignerCompanyScope(contract, body.workerId ?? body.worker_id ?? signer.worker_id, body.userId ?? body.user_id ?? signer.user_id);
+    if (scopeError) return res.status(403).json({ message: scopeError });
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+    const updated = await db.execute(sql`
+      UPDATE contract_signers SET
+        name = COALESCE(${body.name || null}, name),
+        email = COALESCE(${normalizedEmail}, email),
+        role = COALESCE(${body.role || null}, role),
+        signer_role = COALESCE(${body.signerRole || body.role || null}, signer_role),
+        user_id = COALESCE(${body.userId || body.user_id || null}, user_id),
+        worker_id = COALESCE(${body.workerId || body.worker_id || null}, worker_id),
+        signing_order = COALESCE(${body.order || null}, signing_order),
+        "order" = COALESCE(${body.order || null}, "order"),
+        is_required = COALESCE(${body.isRequired ?? body.is_required ?? null}, is_required),
+        status = CASE WHEN status IN ('sent','viewed','failed') THEN 'sent' ELSE status END,
+        signing_token_hash = ${hashSigningToken(token)},
+        signing_token_expires_at = ${expires},
+        last_sent_at = CASE WHEN status IN ('sent','viewed','failed') THEN NOW() ELSE last_sent_at END,
+        updated_at = NOW()
+      WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}
+      RETURNING *
+    `);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_reassigned", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ contractId: req.params.contractId, previousEmail: normalizeSignerEmail(signer.email), newEmail: normalizedEmail }) }).catch(() => {});
     res.json(updated.rows[0]);
   });
 
-  app.delete("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    const contract = await assertContractCompanyAccess(req.params.contractId, req.session.userId!);
+  app.delete("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, async (req, res) => {
+    const contract = await assertContractSignerManageAccess(req.params.contractId, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
     if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot delete signers after completion/void/termination" });
     const signer = (await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`)).rows[0] as any;
     if (!signer) return res.status(404).json({ message: "Signer not found" });
-    if (["pending", "draft", "unsent"].includes(signer.status)) await db.execute(sql`DELETE FROM contract_signers WHERE id = ${req.params.signerId}`);
-    else await db.execute(sql`UPDATE contract_signers SET status = 'revoked', updated_at = NOW() WHERE id = ${req.params.signerId}`);
-    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_deleted_or_revoked", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
-    res.json({ success: true, mode: ["pending", "draft", "unsent"].includes(signer.status) ? "deleted" : "revoked" });
+    if (signer.status === "signed") return res.status(400).json({ message: "Signed signers cannot be deleted" });
+    if (!CONTRACT_UNSIGNED_SIGNER_STATUSES.includes(signer.status || "pending")) return res.status(400).json({ message: "Only pending or unsigned signers can be removed" });
+    await db.execute(sql`UPDATE contract_signers SET status = 'canceled', signing_token_hash = NULL, signing_token_expires_at = NULL, updated_at = NOW() WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_removed", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ contractId: req.params.contractId, previousStatus: signer.status }) }).catch(() => {});
+    const contractStatus = await refreshContractSigningStatus(req.params.contractId);
+    res.json({ success: true, mode: "canceled", contractStatus });
+  });
+
+  app.post("/api/contractor-contracts/:contractId/signers/:signerId/resend", requireAuth, async (req, res) => {
+    const contract = await assertContractSignerManageAccess(req.params.contractId, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot re-send signing requests for this contract status" });
+    const signer = (await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`)).rows[0] as any;
+    if (!signer) return res.status(404).json({ message: "Signer not found" });
+    if (signer.status === "signed") return res.status(400).json({ message: "Signed signers cannot be resent" });
+    if (!CONTRACT_UNSIGNED_SIGNER_STATUSES.includes(signer.status || "pending")) return res.status(400).json({ message: "Only pending or unsigned signers can be resent" });
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+    await db.execute(sql`UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(), signing_token_hash = ${hashSigningToken(token)}, signing_token_expires_at = ${expires}, updated_at = NOW() WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_request_resent", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ contractId: req.params.contractId }) }).catch(() => {});
+    res.json({ success: true, signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
   });
 
   app.post("/api/contractor-contracts/:contractId/signers/:signerId/replace", requireAuth, requireRole("admin", "manager"), async (req, res) => {
@@ -14606,9 +14792,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!["draft", "pending", "awaiting_signatures", "sent", "partially_signed"].includes(contract.status)) {
         return res.status(400).json({ message: `Cannot send a contract in '${contract.status}' status for signature` });
       }
-      const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} ORDER BY "order" ASC`);
+      const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent','draft','failed') ORDER BY "order" ASC`);
       const signers = signersRes.rows as any[];
-      const recipients = signers.filter(s => s.email).map((s, i) => ({ name: s.name as string, email: s.email as string, role: "SIGNER" as const, routingOrder: i + 1 }));
+      const seenEmails = new Set<string>();
+      const recipients = signers.filter(s => {
+        const email = normalizeSignerEmail(s.email);
+        if (!email || seenEmails.has(email)) return false;
+        seenEmails.add(email);
+        return true;
+      }).map((s, i) => ({ name: s.name as string, email: normalizeSignerEmail(s.email) || s.email as string, role: "SIGNER" as const, routingOrder: i + 1 }));
       if (recipients.length === 0) {
         return res.status(400).json({ message: "Add at least one signer with an email address before sending for signature." });
       }
@@ -23865,7 +24057,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
               const wasAlreadyFullySigned = contract.status === "fully_signed";
               if (!wasAlreadyFullySigned) {
                 await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id}`);
-                await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status = 'pending'`).catch(() => {});
+                await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status IN ('pending','sent','viewed')`).catch(() => {});
               }
               if (!wasAlreadyFullySigned && contract.proposal_id) {
                 const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contract.proposal_id}`);
