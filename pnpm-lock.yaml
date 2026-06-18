@@ -143,12 +143,18 @@ importers:
       '@types/bcrypt':
         specifier: ^6.0.0
         version: 6.0.0
+      '@types/express-serve-static-core':
+        specifier: ^5.1.1
+        version: 5.1.1
       '@types/multer':
         specifier: ^2.0.0
         version: 2.1.0
       '@types/nodemailer':
         specifier: ^7.0.11
         version: 7.0.11
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
       bcrypt:
         specifier: ^6.0.0
         version: 6.0.0
@@ -209,6 +215,9 @@ importers:
       multer:
         specifier: ^2.1.1
         version: 2.1.1
+      nanoid:
+        specifier: ^5.1.11
+        version: 5.1.11
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -262,7 +271,7 @@ importers:
         version: 2.6.1
       tailwindcss-animate:
         specifier: ^1.0.7
-        version: 1.0.7(tailwindcss@3.4.19(tsx@4.22.3))
+        version: 1.0.7(tailwindcss@3.4.19(tsx@4.22.4))
       tw-animate-css:
         specifier: ^1.2.5
         version: 1.4.0
@@ -274,7 +283,7 @@ importers:
         version: 1.1.2(@types/react-dom@18.3.7(@types/react@18.3.29))(@types/react@18.3.29)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       vite-plugin-pwa:
         specifier: ^1.2.0
-        version: 1.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3))(workbox-build@7.4.1(@types/babel__core@7.20.5))(workbox-window@7.4.1)
+        version: 1.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4))(workbox-build@7.4.1(@types/babel__core@7.20.5))(workbox-window@7.4.1)
       workbox-cacheable-response:
         specifier: ^7.4.1
         version: 7.4.1
@@ -317,10 +326,10 @@ importers:
         version: 0.0.3
       '@tailwindcss/typography':
         specifier: ^0.5.15
-        version: 0.5.19(tailwindcss@3.4.19(tsx@4.22.3))
+        version: 0.5.19(tailwindcss@3.4.19(tsx@4.22.4))
       '@tailwindcss/vite':
         specifier: ^4.1.18
-        version: 4.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3))
+        version: 4.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4))
       '@types/connect-pg-simple':
         specifier: ^7.0.3
         version: 7.0.3
@@ -350,7 +359,7 @@ importers:
         version: 8.18.1
       '@vitejs/plugin-react':
         specifier: ^4.7.0
-        version: 4.7.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3))
+        version: 4.7.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4))
       autoprefixer:
         specifier: ^10.4.20
         version: 10.5.0(postcss@8.5.15)
@@ -365,16 +374,16 @@ importers:
         version: 8.5.15
       tailwindcss:
         specifier: ^3.4.17
-        version: 3.4.19(tsx@4.22.3)
+        version: 3.4.19(tsx@4.22.4)
       tsx:
-        specifier: ^4.20.5
-        version: 4.22.3
+        specifier: ^4.22.4
+        version: 4.22.4
       typescript:
         specifier: 5.6.3
         version: 5.6.3
       vite:
         specifier: ^7.3.0
-        version: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3)
+        version: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4)
     optionalDependencies:
       bufferutil:
         specifier: ^4.0.8
@@ -4133,6 +4142,11 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
+  nanoid@5.1.11:
+    resolution: {integrity: sha512-v+KEsUv2ps74PaSKv0gHTxTCgMXOIfBEbaqa6w6ISIGC7ZsvHN4N9oJ8d4cmf0n5oTzQz2SLmThbQWhjd/8eKg==}
+    engines: {node: ^18 || >=20}
+    hasBin: true
+
   native-run@2.0.3:
     resolution: {integrity: sha512-U1PllBuzW5d1gfan+88L+Hky2eZx+9gv3Pf6rNBxKbORxi7boHzqiA6QFGSnqMem4j0A9tZ08NMIs5+0m/VS1Q==}
     engines: {node: '>=16.0.0'}
@@ -4927,8 +4941,8 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
-  tsx@4.22.3:
-    resolution: {integrity: sha512-mdoNxBC/cSQObGGVQ5Bpn5i+yv7j68gk3Nfm3wFjcJg3Z0Mix9jzAFfP12prmm5eVGmDKtp0yyArrs0Q+8gZHg==}
+  tsx@4.22.4:
+    resolution: {integrity: sha512-X8EX+XV4QR5xCsrgxaED954zTDfY8KqlDtskKEL0cHhyS/P8b4IFOvGDQpsC9Q1XnLq915wEfwwY/zzskCtmhg==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -7403,17 +7417,17 @@ snapshots:
       '@tailwindcss/oxide-win32-arm64-msvc': 4.3.0
       '@tailwindcss/oxide-win32-x64-msvc': 4.3.0
 
-  '@tailwindcss/typography@0.5.19(tailwindcss@3.4.19(tsx@4.22.3))':
+  '@tailwindcss/typography@0.5.19(tailwindcss@3.4.19(tsx@4.22.4))':
     dependencies:
       postcss-selector-parser: 6.0.10
-      tailwindcss: 3.4.19(tsx@4.22.3)
+      tailwindcss: 3.4.19(tsx@4.22.4)
 
-  '@tailwindcss/vite@4.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3))':
+  '@tailwindcss/vite@4.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4))':
     dependencies:
       '@tailwindcss/node': 4.3.0
       '@tailwindcss/oxide': 4.3.0
       tailwindcss: 4.3.0
-      vite: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3)
+      vite: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4)
 
   '@tanstack/query-core@5.100.11': {}
 
@@ -7592,7 +7606,7 @@ snapshots:
     dependencies:
       '@types/node': 20.19.27
 
-  '@vitejs/plugin-react@4.7.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3))':
+  '@vitejs/plugin-react@4.7.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4))':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.29.0)
@@ -7600,7 +7614,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-beta.27
       '@types/babel__core': 7.20.5
       react-refresh: 0.17.0
-      vite: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3)
+      vite: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4)
     transitivePeerDependencies:
       - supports-color
 
@@ -8058,7 +8072,7 @@ snapshots:
       '@drizzle-team/brocli': 0.10.2
       '@esbuild-kit/esm-loader': 2.6.5
       esbuild: 0.25.12
-      tsx: 4.22.3
+      tsx: 4.22.4
 
   drizzle-orm@0.39.3(@types/pg@8.20.0)(pg@8.21.0):
     optionalDependencies:
@@ -9003,6 +9017,8 @@ snapshots:
 
   nanoid@3.3.12: {}
 
+  nanoid@5.1.11: {}
+
   native-run@2.0.3:
     dependencies:
       '@ionic/utils-fs': 3.1.7
@@ -9197,13 +9213,13 @@ snapshots:
       camelcase-css: 2.0.1
       postcss: 8.5.15
 
-  postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.15)(tsx@4.22.3):
+  postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.15)(tsx@4.22.4):
     dependencies:
       lilconfig: 3.1.3
     optionalDependencies:
       jiti: 1.21.7
       postcss: 8.5.15
-      tsx: 4.22.3
+      tsx: 4.22.4
 
   postcss-nested@6.2.0(postcss@8.5.15):
     dependencies:
@@ -9770,11 +9786,11 @@ snapshots:
 
   tailwind-merge@2.6.1: {}
 
-  tailwindcss-animate@1.0.7(tailwindcss@3.4.19(tsx@4.22.3)):
+  tailwindcss-animate@1.0.7(tailwindcss@3.4.19(tsx@4.22.4)):
     dependencies:
-      tailwindcss: 3.4.19(tsx@4.22.3)
+      tailwindcss: 3.4.19(tsx@4.22.4)
 
-  tailwindcss@3.4.19(tsx@4.22.3):
+  tailwindcss@3.4.19(tsx@4.22.4):
     dependencies:
       '@alloc/quick-lru': 5.2.0
       arg: 5.0.2
@@ -9793,7 +9809,7 @@ snapshots:
       postcss: 8.5.15
       postcss-import: 15.1.0(postcss@8.5.15)
       postcss-js: 4.1.0(postcss@8.5.15)
-      postcss-load-config: 6.0.1(jiti@1.21.7)(postcss@8.5.15)(tsx@4.22.3)
+      postcss-load-config: 6.0.1(jiti@1.21.7)(postcss@8.5.15)(tsx@4.22.4)
       postcss-nested: 6.2.0(postcss@8.5.15)
       postcss-selector-parser: 6.1.2
       resolve: 1.22.12
@@ -9872,7 +9888,7 @@ snapshots:
 
   tslib@2.8.1: {}
 
-  tsx@4.22.3:
+  tsx@4.22.4:
     dependencies:
       esbuild: 0.28.0
     optionalDependencies:
@@ -10041,18 +10057,18 @@ snapshots:
       d3-time: 3.1.0
       d3-timer: 3.0.1
 
-  vite-plugin-pwa@1.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3))(workbox-build@7.4.1(@types/babel__core@7.20.5))(workbox-window@7.4.1):
+  vite-plugin-pwa@1.3.0(vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4))(workbox-build@7.4.1(@types/babel__core@7.20.5))(workbox-window@7.4.1):
     dependencies:
       debug: 4.4.3
       pretty-bytes: 6.1.1
       tinyglobby: 0.2.16
-      vite: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3)
+      vite: 7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4)
       workbox-build: 7.4.1(@types/babel__core@7.20.5)
       workbox-window: 7.4.1
     transitivePeerDependencies:
       - supports-color
 
-  vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.3):
+  vite@7.3.3(@types/node@20.19.27)(jiti@1.21.7)(lightningcss@1.32.0)(terser@5.47.1)(tsx@4.22.4):
     dependencies:
       esbuild: 0.27.7
       fdir: 6.5.0(picomatch@4.0.4)
@@ -10066,7 +10082,7 @@ snapshots:
       jiti: 1.21.7
       lightningcss: 1.32.0
       terser: 5.47.1
-      tsx: 4.22.3
+      tsx: 4.22.4
 
   webidl-conversions@4.0.2: {}
 

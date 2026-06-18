@@ -15,6 +15,12 @@ with `EAI_AGAIN getaddrinfo package-firewall.replit.local`. Jobs that run
 `npm ci` (build/test/typecheck) fail at install; jobs without it (e.g.
 `repo-audit`) still pass.
 
+**How to apply:** If a GitHub push to `main` is rejected with GH013 / "required
+status checks", check the Actions logs for the firewall host before assuming the
+code is broken. Deploy (`deploy-app.yml`) uses pnpm, not `npm ci`, so it is not
+affected — this is a CI-only break. The durable fix is regenerating the lockfile
+against the public npm registry (sensitive: touches package-lock.json).
+
 **Why it can deadlock:** when the branch ruleset requires those checks AND the
 fix lives in the lockfile, a *direct* push to `main` can never satisfy the checks.
 Escape routes: (a) repo owner relaxes/bypasses the ruleset, or (b) land the

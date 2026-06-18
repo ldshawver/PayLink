@@ -222,7 +222,12 @@ app.use(
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({
+  extended: false,
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 
 app.use("/uploads", express.static(uploadsDir));
 app.use("/docs", express.static(path.join(process.cwd(), "docs")));
@@ -1492,9 +1497,30 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    const documensoDocumentColumns = [
+      "documenso_document_id TEXT",
+      "documenso_template_id TEXT",
+      "documenso_status TEXT",
+      "documenso_signing_url TEXT",
+      "documenso_completed_pdf_url TEXT",
+      "documenso_audit_url TEXT",
+      "sent_for_signature_at TIMESTAMP",
+      "signed_at TIMESTAMP",
+      "signing_provider TEXT DEFAULT 'documenso'",
+      "signature_required BOOLEAN DEFAULT FALSE",
+      "signature_status TEXT DEFAULT 'draft'",
+    ];
+    for (const definition of documensoDocumentColumns) {
+      const [column] = definition.split(" ");
+      await run(`documents.${column}`, sql.raw(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS ${definition}`));
+      await run(`document_signature_requests.${column}`, sql.raw(`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS ${definition}`));
+    }
     await run("document_signature_requests.provider", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider TEXT`);
     await run("document_signature_requests.provider_object_id", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider_object_id TEXT`);
     await run("document_signers.routing_order", sql`ALTER TABLE document_signers ADD COLUMN IF NOT EXISTS routing_order INTEGER DEFAULT 1`);
+    await run("documents.documenso_document_id index", sql`CREATE INDEX IF NOT EXISTS idx_documents_documenso_document_id ON documents(documenso_document_id)`);
+    await run("document_signature_requests.documenso_document_id index", sql`CREATE INDEX IF NOT EXISTS idx_document_signature_requests_documenso_document_id ON document_signature_requests(documenso_document_id)`);
+    await run("document_signature_requests.company_status index", sql`CREATE INDEX IF NOT EXISTS idx_document_signature_requests_company_status ON document_signature_requests(company_id, signature_status)`);
 
     // Set starting check number sequences for known companies (only if still at default 1 or null)
     try {
@@ -2571,6 +2597,21 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("contract_signers.company_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS company_id VARCHAR`);
+    await run("contract_signers.contractor_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS contractor_id VARCHAR`);
+    await run("contract_signers.signer_role", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signer_role TEXT`);
+    await run("contract_signers.is_required", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS is_required BOOLEAN NOT NULL DEFAULT TRUE`);
+    await run("contract_signers.is_delegated", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS is_delegated BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("contract_signers.delegated_by_user_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS delegated_by_user_id VARCHAR`);
+    await run("contract_signers.replaces_signer_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS replaces_signer_id VARCHAR`);
+    await run("contract_signers.signing_order", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_order INTEGER`);
+    await run("contract_signers.documenso_recipient_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id TEXT`);
+    await run("contract_signers.signing_token_hash", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_token_hash TEXT`);
+    await run("contract_signers.signing_token_expires_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_token_expires_at TIMESTAMP`);
+    await run("contract_signers.updated_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
+    await run("contract_signers token index", sql`CREATE INDEX IF NOT EXISTS idx_contract_signers_token_hash ON contract_signers(signing_token_hash)`);
+    await run("contract_signers contract index", sql`CREATE INDEX IF NOT EXISTS idx_contract_signers_contract_id ON contract_signers(contract_id)`);
+
     // ── contract_versions table ───────────────────────────────────────────────
     await run("contract_versions table", sql`CREATE TABLE IF NOT EXISTS contract_versions (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2607,6 +2648,58 @@ Thank you,
       uploaded_by_user_id VARCHAR,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("document_asset_metadata table", sql`CREATE TABLE IF NOT EXISTS document_asset_metadata (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      metadata_key TEXT NOT NULL,
+      metadata_value TEXT,
+      metadata_type TEXT,
+      is_editable_by_user BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("document_asset_permissions table", sql`CREATE TABLE IF NOT EXISTS document_asset_permissions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      company_id VARCHAR,
+      user_id VARCHAR,
+      role TEXT,
+      permission_view BOOLEAN NOT NULL DEFAULT TRUE,
+      permission_download BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_print BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_edit_metadata BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_delete BOOLEAN NOT NULL DEFAULT FALSE,
+      permission_share BOOLEAN NOT NULL DEFAULT FALSE,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("document_asset_versions table", sql`CREATE TABLE IF NOT EXISTS document_asset_versions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      version_number INTEGER NOT NULL DEFAULT 1,
+      storage_key TEXT,
+      file_name TEXT,
+      file_mime_type TEXT,
+      file_size INTEGER,
+      created_by_user_id VARCHAR,
+      change_summary TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("document_asset_audit_logs table", sql`CREATE TABLE IF NOT EXISTS document_asset_audit_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_asset_id VARCHAR NOT NULL,
+      company_id VARCHAR,
+      actor_user_id VARCHAR,
+      actor_email TEXT,
+      action TEXT NOT NULL,
+      before_json JSONB,
+      after_json JSONB,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
     )`);
 
     // ── dam_document_access_logs table ────────────────────────────────────────
@@ -2867,12 +2960,54 @@ Thank you,
       auth_token_hash TEXT,
       from_number TEXT,
       messaging_service_sid TEXT,
+      use_messaging_service BOOLEAN DEFAULT FALSE,
+      webhook_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/inbound',
+      webhook_fallback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/fallback',
+      status_callback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/status',
       is_configured BOOLEAN DEFAULT FALSE,
       last_tested_at TIMESTAMP,
       last_test_result TEXT,
       updated_at TIMESTAMP DEFAULT NOW(),
       updated_by TEXT
     )`);
+
+    await run("sms_config.use_messaging_service", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS use_messaging_service BOOLEAN DEFAULT FALSE`);
+    await run("sms_config.webhook_url", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS webhook_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/inbound'`);
+    await run("sms_config.webhook_fallback_url", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS webhook_fallback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/fallback'`);
+    await run("sms_config.status_callback_url", sql`ALTER TABLE sms_config ADD COLUMN IF NOT EXISTS status_callback_url TEXT DEFAULT 'https://mypaylink.app/api/twilio/sms/status'`);
+    await run("sms_messages table", sql`CREATE TABLE IF NOT EXISTS sms_messages (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id VARCHAR,
+      user_id VARCHAR,
+      contact_id VARCHAR,
+      provider TEXT DEFAULT 'twilio',
+      direction TEXT NOT NULL,
+      from_number TEXT,
+      to_number TEXT,
+      body TEXT,
+      message_sid TEXT UNIQUE,
+      status TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      raw_payload JSONB,
+      source TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("sms_consent table", sql`CREATE TABLE IF NOT EXISTS sms_consent (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id VARCHAR,
+      phone_number TEXT NOT NULL,
+      sms_opted_out BOOLEAN DEFAULT FALSE,
+      opt_in_at TIMESTAMP,
+      opt_out_at TIMESTAMP,
+      opt_in_source TEXT,
+      opt_out_source TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (tenant_id, phone_number)
+    )`);
+    await run("sms_consent.global_unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS sms_consent_global_phone_unique ON sms_consent (phone_number) WHERE tenant_id IS NULL`);
 
     await run("roles.capabilities", sql`ALTER TABLE roles ADD COLUMN IF NOT EXISTS capabilities TEXT`);
     await run("role_permissions.can_configure", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_configure BOOLEAN DEFAULT FALSE`);

@@ -7,6 +7,7 @@ import { calcAllTaxes, payPeriodTypeFromSchedule, TAX_ENGINE_VERSION, type TaxEn
 import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
+import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
 import os from "os";
 import { execSync } from "child_process";
@@ -16,10 +17,11 @@ import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
+import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
@@ -29,8 +31,39 @@ import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
+import { copyPublishedScheduleWeek } from "./schedule-copy-week";
+import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+function hashSigningToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+
+async function getTwilioAuthTokenForWebhook(): Promise<string> {
+  const cfg = await storage.getSmsConfig().catch(() => undefined);
+  if (cfg?.hasAuthToken && cfg.authTokenHash) return decryptSecret(cfg.authTokenHash) || process.env.TWILIO_AUTH_TOKEN || "";
+  return process.env.TWILIO_AUTH_TOKEN || "";
+}
+
+async function upsertSmsConsent(phone: string, optedOut: boolean): Promise<void> {
+  await db.execute(sql`INSERT INTO sms_consent (phone_number, sms_opted_out, opt_in_at, opt_out_at, opt_in_source, opt_out_source, updated_at)
+    VALUES (${phone}, ${optedOut}, ${optedOut ? null : new Date()}, ${optedOut ? new Date() : null}, ${optedOut ? null : "twilio_keyword"}, ${optedOut ? "twilio_keyword" : null}, NOW())
+    ON CONFLICT (phone_number) WHERE tenant_id IS NULL DO UPDATE SET sms_opted_out = EXCLUDED.sms_opted_out, opt_in_at = COALESCE(EXCLUDED.opt_in_at, sms_consent.opt_in_at), opt_out_at = COALESCE(EXCLUDED.opt_out_at, sms_consent.opt_out_at), opt_in_source = COALESCE(EXCLUDED.opt_in_source, sms_consent.opt_in_source), opt_out_source = COALESCE(EXCLUDED.opt_out_source, sms_consent.opt_out_source), updated_at = NOW()`);
+}
+
+async function insertInboundSms(payload: Record<string, string>, source: "twilio_inbound" | "twilio_fallback"): Promise<void> {
+  const from = payload.From ? normalizePhone(payload.From) : null;
+  const to = payload.To ? normalizePhone(payload.To) : null;
+  await db.execute(sql`INSERT INTO sms_messages (provider, direction, from_number, to_number, body, message_sid, status, error_code, error_message, raw_payload, source)
+    VALUES ('twilio', 'inbound', ${from}, ${to}, ${payload.Body || ""}, ${payload.MessageSid || null}, ${payload.SmsStatus || payload.MessageStatus || 'received'}, ${payload.ErrorCode || null}, ${payload.ErrorMessage || payload.ErrorUrl || null}, ${JSON.stringify(payload)}::jsonb, ${source})
+    ON CONFLICT (message_sid) DO UPDATE SET status = EXCLUDED.status, error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message, raw_payload = EXCLUDED.raw_payload, updated_at = NOW()`);
+}
+
+async function updateSmsStatus(payload: Record<string, string>): Promise<void> {
+  await db.execute(sql`UPDATE sms_messages SET status = ${payload.MessageStatus || payload.SmsStatus || null}, error_code = ${payload.ErrorCode || null}, error_message = ${payload.ErrorMessage || null}, raw_payload = ${JSON.stringify(payload)}::jsonb, updated_at = NOW() WHERE message_sid = ${payload.MessageSid || null}`);
+}
 
 function safeErrorMessage(error: unknown, fallback: string): string {
   if (isProduction) return fallback;
@@ -581,6 +614,54 @@ function firstRow<T>(r: DbExecResult<T>): T | undefined {
   return r.rows?.[0] as T | undefined;
 }
 
+function normalizeDocumensoDisplayStatus(status: string | null | undefined): string {
+  const normalized = String(status || "draft").toLowerCase();
+  if (["pending", "sent_for_signature"].includes(normalized)) return "sent";
+  if (["completed", "signed", "rejected", "voided", "viewed", "draft"].includes(normalized)) return normalized;
+  return normalized;
+}
+
+function resolveTenantFilePath(fileUrl: string | null | undefined): string | null {
+  if (!fileUrl) return null;
+  if (/^https?:\/\//i.test(fileUrl)) return null;
+  const clean = fileUrl.split("?")[0].replace(/^\/+/, "");
+  const candidates = [
+    path.resolve(process.cwd(), clean),
+    path.resolve(process.cwd(), "public", clean),
+    path.resolve(process.cwd(), "uploads", clean.replace(/^uploads\//, "")),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  }
+  return null;
+}
+
+function extractDocumensoDocumentId(payload: any): string | null {
+  return String(
+    payload?.documentId ||
+    payload?.document_id ||
+    payload?.envelopeId ||
+    payload?.envelope_id ||
+    payload?.data?.id ||
+    payload?.data?.documentId ||
+    payload?.data?.envelopeId ||
+    payload?.document?.id ||
+    payload?.envelope?.id ||
+    ""
+  ) || null;
+}
+
+function mapDocumensoEventToAuditAction(status: string, eventType?: string): string {
+  const event = String(eventType || "").toLowerCase();
+  if (event.includes("view")) return "DOCUMENT_VIEWED";
+  if (event.includes("sign") && !event.includes("complete")) return "DOCUMENT_SIGNED";
+  if (event.includes("reject") || status === "rejected") return "DOCUMENT_REJECTED";
+  if (event.includes("void") || event.includes("delete") || status === "voided") return "DOCUMENT_VOIDED";
+  if (event.includes("complete") || status === "completed") return "DOCUMENT_COMPLETED";
+  if (event.includes("sent") || status === "sent") return "DOCUMENT_SENT_FOR_SIGNATURE";
+  return `DOCUMENSO_${(eventType || status || "event").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
 interface ProposalRow {
   company_id?: string | null;
   contractor_id?: string | null;
@@ -645,6 +726,33 @@ interface LineItemRow {
   description?: string | null;
   unitPrice?: string | null;
   lineTotal?: string | null;
+}
+
+// Helper: create App Doctor report + repair ticket for automated workflow failures
+async function createWorkflowException(opts: {
+  title: string; errorMessage: string; companyId?: string | null;
+  context?: Record<string, unknown>; route?: string;
+}): Promise<void> {
+  try {
+    const reportIns = await db.execute(sql`
+      INSERT INTO app_doctor_reports (company_id, source, severity, severity_class, status, title, error_message, route, context_json, issue_category, required_approver_role)
+      VALUES (${opts.companyId || null}, 'automation', 'high', 'major', 'open',
+        ${opts.title}, ${opts.errorMessage}, ${opts.route || null},
+        ${opts.context ? JSON.stringify(opts.context) : null},
+        'document_pdf', 'admin')
+      RETURNING id
+    `);
+    const reportId = (reportIns.rows[0] as any)?.id;
+    if (reportId) {
+      await db.execute(sql`
+        INSERT INTO app_doctor_repair_tickets (report_id, company_id, status, severity_class, required_approver_role, proposed_patch, test_plan, rollback_plan)
+        VALUES (${reportId}, ${opts.companyId || null}, 'pending_approval', 'major', 'admin',
+          ${"Manual repair required. See report context for entity IDs."},
+          ${"1. Verify entity exists in DB. 2. Re-run repair via POST /api/contractor-hub/repair-proposal-contracts. 3. Confirm document archived to DAM."},
+          ${"Entities remain intact — only automation linkage missing. No data was modified."})
+      `);
+    }
+  } catch (ex) { console.error("[createWorkflowException] Failed to create App Doctor entry:", ex); }
 }
 
 // Helper: generate a PDF for an approved contractor proposal and store in DMS
@@ -1193,7 +1301,7 @@ export async function registerRoutes(
     console.error("[MIGRATION] Proposal soft-delete migration error:", migErr);
   }
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/api/webhooks/documenso", "/portal/", "/time-clock/"];
   // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
   // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
   // auth, analytics, and webhook paths listed in publicWritePaths.
@@ -1245,7 +1353,7 @@ export async function registerRoutes(
     // ── Documents & Signatures ──────────────────────────────────────────────
     "/api/documents", "/api/document-folders", "/api/document-versions",
     "/api/document-acls", "/api/document-retention", "/api/document-retention-policies",
-    "/api/dam-documents", "/api/signature-packages", "/api/system-documents",
+    "/api/dam-documents", "/api/signature-packages", "/api/signing-documents", "/api/system-documents",
     "/api/biz-documents", "/api/biz-document-items", "/api/biz-document-attachments",
     "/api/agreement-templates", "/api/onboarding-documents",
     "/api/onboarding-packets", "/api/onboarding-packet-steps",
@@ -1521,6 +1629,11 @@ export async function registerRoutes(
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
       const isProduction = process.env.NODE_ENV === "production";
+
+function hashSigningToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
       res.clearCookie("connect.sid", {
         path: "/",
         domain: isProduction ? ".mypaylink.app" : undefined,
@@ -1657,7 +1770,7 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
-      || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
+      || req.path === "/webhooks/product-events" || req.path === "/api/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
       || req.path === "/analytics/event"
@@ -7086,6 +7199,33 @@ export async function registerRoutes(
     }
   });
 
+
+  app.post("/api/schedules/copy-week", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId } = req.body || {};
+      if (!companyId) return res.status(400).json({ message: "companyId, sourceWeekStart, and targetWeekStart are required" });
+      const actor = await storage.getUser(req.session.userId!);
+      const hasCompanyAccess = actor && companyId
+        ? await canAccessCompany({ id: actor.id, companyId: actor.companyId, role: actor.role }, companyId)
+        : false;
+      if (!isPlatformUser(actor?.role) && !hasCompanyAccess) {
+        return res.status(403).json({ message: "Forbidden: cannot access company" });
+      }
+
+      const result = await copyPublishedScheduleWeek(req.body, { userId: req.session.userId!, ipAddress: req.ip }, {
+        getSchedulesByDateRange: (copyCompanyId, startDate, endDate) => storage.getSchedulesByDateRange(copyCompanyId, startDate, endDate) as any,
+        createSchedule: (data) => storage.createSchedule(data as any) as any,
+        deleteSchedule: (id) => storage.deleteSchedule(id),
+        writeAuditLog: (entry) => db.insert(scheduleAuditLogs).values(entry as any).then(() => undefined),
+      });
+
+      res.status(201).json(result);
+    } catch (error: any) {
+      console.error("Schedule copy-week error:", error);
+      res.status(error?.status || 500).json({ message: safeErrorMessage(error, "Failed to copy schedule week") });
+    }
+  });
+
   // Publish schedules endpoint — marks drafts as published and sends email + SMS notifications
   app.post("/api/schedules/publish", requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -10158,15 +10298,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices", requireAuth, requireFeature("tenant.finance.contractor-hub"), async (req, res) => {
     try {
-      const { companyId, contractorId, status, showArchived, showCompleted } = req.query as Record<string, string>;
+      const { companyId, contractorId, status, showArchived, showCompleted, showVoided } = req.query as Record<string, string>;
       const showArchivedBool = showArchived === "true";
       const showCompletedBool = showCompleted === "true";
+      const showVoidedBool = showVoided === "true";
       const user = await storage.getUser(req.session.userId!);
       const isManager = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (isManager) {
-        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool, showCompletedBool));
+        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool, showCompletedBool, showVoidedBool));
       } else {
-        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool, showCompletedBool));
+        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool, showCompletedBool, false));
       }
     } catch (e) { res.status(500).json({ message: "Failed to fetch invoices" }); }
   });
@@ -10477,6 +10618,44 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
       res.json(updated);
     } catch (e: any) { res.status(500).json({ message: "Failed to mark duplicate: " + e.message }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/restore", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const RESTORABLE_STATUSES = ["voided", "voided_duplicate", "rejected_duplicate", "rejected"];
+      const isVoidedOrRejected = RESTORABLE_STATUSES.includes(inv.status || "");
+      const isArchivedOnly = !!(inv as any).isArchived && !isVoidedOrRejected;
+      if (!isVoidedOrRejected && !isArchivedOnly) {
+        return res.status(400).json({ message: "Only voided, rejected, or archived invoices can be restored" });
+      }
+      const reason = req.body?.reason;
+      if (!reason || !String(reason).trim()) {
+        return res.status(400).json({ message: "A reason is required to restore an invoice" });
+      }
+      // Tenant isolation
+      const user = await storage.getUser(req.session.userId!);
+      if (inv.companyId && user?.companyId && inv.companyId !== user.companyId && !user.role?.startsWith("platform_")) {
+        return res.status(403).json({ message: "Not authorized for this company" });
+      }
+      const previousStatus = inv.status;
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: "draft",
+        voidedAt: null,
+        voidedByUserId: null,
+        voidReason: null,
+        duplicateOfInvoiceId: null,
+        isArchived: false,
+      } as any);
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "invoice_restored",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus, newStatus: "draft",
+        notes: String(reason).trim(),
+      });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: "Failed to restore invoice: " + e.message }); }
   });
 
   app.post("/api/contractor-invoices/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
@@ -11052,7 +11231,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isPlatform = (user?.role || "").startsWith("platform_");
       const companyClause = isPlatform ? sql`` : sql`AND company_id = ${user?.companyId}`;
 
-      const results = { proposals: 0, contracts: 0, invoices: 0, errors: 0 };
+      const results = { proposals: 0, contracts: 0, invoices: 0, orphanContracts: 0, orphanInvoices: 0, errors: 0 };
+
+      // ── Repair: create missing draft contracts for approved proposals ─────────
+      const orphanProps = await db.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE status IN ('approved', 'converted_to_contract')
+          AND converted_to_contract_id IS NULL
+          AND deleted_at IS NULL
+          ${companyClause}
+        LIMIT 50
+      `);
+      for (const p of orphanProps.rows as any[]) {
+        try {
+          const contractNumber = `CON-${Date.now()}-${p.id.slice(0, 6)}`;
+          const cRes = await db.execute(sql`
+            INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+            VALUES (${p.company_id}, ${p.contractor_id}, ${p.id}, ${contractNumber},
+              ${p.title || "Service Contract"}, ${p.description || null}, ${p.scope_of_work || null},
+              ${p.payment_terms || null}, ${p.amount || 0}, ${p.currency || "USD"},
+              ${p.payment_type || "monetary"}, ${p.trade_offered || null}, ${p.trade_value || null},
+              ${p.issue_date || null}, 'service', 'draft', ${req.session.userId},
+              ${p.job_id || null}, ${p.cost_center_id || null})
+            RETURNING id
+          `);
+          const newContractId = (cRes.rows[0] as any)?.id;
+          if (newContractId) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${newContractId} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`);
+            results.orphanContracts++;
+          }
+        } catch { results.errors++; }
+      }
 
       // Backfill proposals in terminal states that haven't been archived
       const propRows = await db.execute(sql`
@@ -11136,9 +11345,123 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         } catch { results.errors++; }
       }
 
-      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
+      // ── Repair: create missing invoices for fully-signed contracts with a proposal link ─────────
+      // This handles cases where auto-invoice creation failed in the sign endpoint.
+      const contractCompanyClause = isPlatform ? sql`` : sql`AND c.company_id = ${user?.companyId}`;
+      const orphanContracts = await db.execute(sql`
+        SELECT c.*, p.amount AS proposal_amount, p.currency AS proposal_currency,
+               p.payment_type AS proposal_payment_type
+        FROM contractor_contracts c
+        JOIN contractor_proposals p ON p.id = c.proposal_id
+        WHERE c.status = 'fully_signed'
+          AND c.proposal_id IS NOT NULL
+          AND p.converted_to_invoice_id IS NULL
+          ${contractCompanyClause}
+        LIMIT 20
+      `);
+      for (const c of orphanContracts.rows as any[]) {
+        try {
+          const countRes = await db.execute(sql`SELECT COUNT(*) FROM contractor_invoices WHERE contractor_id = ${c.contractor_id} AND company_id = ${c.company_id}`);
+          const count = parseInt((countRes.rows[0] as any).count || "0");
+          const suffix = String(count + 1).padStart(4, "0");
+          const contractorSuffix = (c.contractor_id || "").slice(-4).toUpperCase();
+          const invNumber = `INV-${contractorSuffix}-${suffix}`;
+          const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
+          const invRes = await db.execute(sql`
+            INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_type, invoice_date, due_date, amount, status, proposal_id, contract_id)
+            VALUES (${c.company_id}, ${c.contractor_id}, ${invNumber}, 'standard', NOW(), ${dueDate.toISOString().slice(0, 10)},
+              ${c.total_value || c.proposal_amount || 0}, 'submitted', ${c.proposal_id}, ${c.id})
+            RETURNING id
+          `);
+          const invId = (invRes.rows[0] as any)?.id;
+          if (invId) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invId} WHERE id = ${c.proposal_id} AND converted_to_invoice_id IS NULL`);
+            const invRow = (await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invId}`)).rows[0] as any;
+            if (invRow) await generateInvoicePdf(invId, invRow, req.session.userId!).catch(() => {});
+            results.orphanInvoices++;
+          }
+        } catch { results.errors++; }
+      }
+
+      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived, ${results.orphanContracts} orphan contracts + ${results.orphanInvoices} orphan invoices created${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
     } catch (e: any) {
       res.status(500).json({ message: "Backfill failed: " + (e?.message || String(e)) });
+    }
+  });
+
+  // POST /api/contractor-hub/repair-proposal-contracts — dedicated repair path for existing approved proposals without contracts
+  app.post("/api/contractor-hub/repair-proposal-contracts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const companyClause = isPlatform ? sql`` : sql`AND company_id = ${user?.companyId}`;
+      const repaired: Array<{ proposalId: string; contractId: string; contractNumber: string }> = [];
+      const skipped: Array<{ proposalId: string; reason: string }> = [];
+
+      // 1. Find approved proposals with no contract link
+      const orphans = await db.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE status IN ('approved', 'converted_to_contract')
+          AND converted_to_contract_id IS NULL
+          AND deleted_at IS NULL
+          ${companyClause}
+        LIMIT 100
+      `);
+
+      for (const p of orphans.rows as any[]) {
+        // Double-check no contract exists for this proposal before creating
+        const existingContract = await db.execute(sql`SELECT id FROM contractor_contracts WHERE proposal_id = ${p.id} LIMIT 1`).catch(() => null);
+        if (existingContract?.rows[0]) {
+          // Link was missing but contract exists — just re-link
+          const contractId = (existingContract.rows[0] as any).id;
+          await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contractId} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`).catch(() => {});
+          repaired.push({ proposalId: p.id, contractId, contractNumber: "(existing, re-linked)" });
+          continue;
+        }
+        try {
+          const contractNumber = `CON-RPR-${Date.now()}-${p.id.slice(0, 6)}`;
+          const cRes = await db.execute(sql`
+            INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+            VALUES (${p.company_id}, ${p.contractor_id}, ${p.id}, ${contractNumber},
+              ${p.title || "Service Contract"}, ${p.description || null}, ${p.scope_of_work || null},
+              ${p.payment_terms || null}, ${p.amount || 0}, ${p.currency || "USD"},
+              ${p.payment_type || "monetary"}, ${p.trade_offered || null}, ${p.trade_value || null},
+              ${p.issue_date || null}, 'service', 'draft', ${req.session.userId},
+              ${p.job_id || null}, ${p.cost_center_id || null})
+            RETURNING *
+          `);
+          const newContract = cRes.rows[0] as any;
+          if (newContract?.id) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${newContract.id} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`);
+            // Archive proposal PDF if missing
+            if (!p.archived_document_id) {
+              generateProposalPdf(p.id, p, req.session.userId!).then(async pp => {
+                if (pp) {
+                  const d = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${p.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+                  const did = (d?.rows[0] as any)?.id;
+                  if (did) await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${did} WHERE id = ${p.id}`).catch(() => {});
+                }
+              }).catch(() => {});
+            }
+            repaired.push({ proposalId: p.id, contractId: newContract.id, contractNumber });
+          }
+        } catch (err: any) {
+          skipped.push({ proposalId: p.id, reason: err?.message || "unknown error" });
+        }
+      }
+
+      // 2. Write audit log entries for repairs
+      if (repaired.length > 0) {
+        await writeAuditLog({ actorUserId: req.session.userId!, targetResource: "contractor_proposal:batch", changeType: "repair_proposal_contracts", companyId: user?.companyId || null, note: `Repaired ${repaired.length} proposals` }).catch(() => {});
+      }
+
+      res.json({
+        message: `Repair complete: ${repaired.length} contracts created/linked, ${skipped.length} skipped`,
+        repaired,
+        skipped,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: "Repair failed: " + (e?.message || String(e)) });
     }
   });
 
@@ -11158,7 +11481,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const targetWorker = await storage.getWorker(req.body.contractorId);
         if (!targetWorker) return res.status(404).json({ message: "Contractor not found" });
         if (targetWorker.workerType !== "contractor") return res.status(400).json({ message: "Target worker is not a contractor" });
-        if (!(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
+        if (!user || !(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
         workerId = targetWorker.id;
         // Derive company from validated context — do not trust client-supplied companyId
         effectiveCompanyId = targetWorker.companyId ?? null;
@@ -11560,7 +11883,64 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const damDocId = (damRes?.rows[0] as any)?.id || null;
         await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
       }
-      res.json({ ...acceptedProposal, _pdfGenerated: !!pdfPath });
+
+      // ── Auto-create draft contract on proposal approval ──────────────────────
+      const freshPropRes = await db.execute(sql`SELECT converted_to_contract_id FROM contractor_proposals WHERE id = ${req.params.id}`).catch(() => null);
+      const alreadyHasContract = (freshPropRes?.rows[0] as any)?.converted_to_contract_id;
+      if (!alreadyHasContract) {
+        try {
+          const contractNumber = `CON-${Date.now()}`;
+          const autoContractRes = await db.execute(sql`
+            INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+            VALUES (
+              ${acceptedProposal.company_id}, ${acceptedProposal.contractor_id}, ${req.params.id},
+              ${contractNumber},
+              ${acceptedProposal.title || "Service Contract"},
+              ${acceptedProposal.description || null},
+              ${(acceptedProposal as any).scope_of_work || null},
+              ${(acceptedProposal as any).payment_terms || null},
+              ${(acceptedProposal as any).amount || 0},
+              ${(acceptedProposal as any).currency || "USD"},
+              ${(acceptedProposal as any).payment_type || "monetary"},
+              ${(acceptedProposal as any).trade_offered || null},
+              ${(acceptedProposal as any).trade_value || null},
+              ${(acceptedProposal as any).issue_date || null},
+              'service', 'draft', ${userId},
+              ${(acceptedProposal as any).job_id || null},
+              ${(acceptedProposal as any).cost_center_id || null}
+            )
+            RETURNING *
+          `);
+          const autoContract = autoContractRes.rows[0] as any;
+          if (autoContract?.id) {
+            await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${autoContract.id} WHERE id = ${req.params.id}`).catch(() => {});
+            createContractorNotification({
+              workerId: acceptedProposal.contractor_id,
+              companyId: acceptedProposal.company_id,
+              notificationType: "proposal_converted_contract",
+              title: `Contract Ready for Signature: ${autoContract.title}`,
+              body: `Your proposal has been approved and a draft contract (${contractNumber}) is ready for review and signature.`,
+              entityType: "contract", entityId: autoContract.id,
+              actionUrl: `/app/contractor-hub?section=contracts&id=${autoContract.id}`,
+            }).catch(() => {});
+            console.log(`[Proposal accept] Auto-created contract ${contractNumber} for proposal ${req.params.id}`);
+          }
+        } catch (contractErr: unknown) {
+          console.error("[Proposal accept] Auto-contract creation failed:", contractErr);
+          createWorkflowException({
+            title: `Auto-contract creation failed for proposal ${req.params.id}`,
+            errorMessage: contractErr instanceof Error ? contractErr.message : String(contractErr),
+            companyId: acceptedProposal.company_id,
+            route: req.path,
+            context: { proposalId: req.params.id },
+          }).catch(() => {});
+        }
+      }
+
+      const returnedProp = firstRow<ProposalRow & { id: string }>(
+        await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`)
+      ) || acceptedProposal;
+      res.json({ ...returnedProp, _pdfGenerated: !!pdfPath });
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
 
@@ -11582,15 +11962,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Resolve provider — explicit body.provider, else first configured for the company.
       const companyConfig = await getCompanyESignConfig(companyId);
-      const supported = getSupportedProviders();
-      let provider: string | undefined = req.body?.provider;
+      const supported = Array.from(new Set(["documenso", ...getSupportedProviders()]));
+      let provider: string | undefined = req.body?.provider || process.env.DOCUMENSO_SIGNING_PROVIDER || "documenso";
       if (provider && !supported.includes(provider)) {
         return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
       }
       if (!provider) {
-        if (companyConfig?.docusign) provider = "docusign";
+        if (process.env.DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY) provider = "documenso";
+        else if (companyConfig?.docusign) provider = "docusign";
         else if (companyConfig?.acrobat_sign) provider = "acrobat_sign";
-        else provider = supported[0];
+        else provider = "documenso";
       }
       if (!provider) return res.status(400).json({ message: "No e-signature provider available" });
 
@@ -11644,17 +12025,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const message = (req.body?.message as string | undefined) || `Please review and sign the approved proposal "${proposal.title || proposal.proposal_number}".`;
       const returnUrl = `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`;
 
-      let adapter;
-      try {
-        adapter = getESignAdapter(provider);
-      } catch {
-        return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+      let adapter: ReturnType<typeof getESignAdapter> | null = null;
+      if (provider !== "documenso") {
+        try {
+          adapter = getESignAdapter(provider);
+        } catch {
+          return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+        }
       }
 
       const sigRequest = await storage.createDocumentSignatureRequest({
         documentId: docRow.id,
         companyId,
         provider,
+        signingProvider: provider,
+        signatureRequired: true,
+        signatureStatus: "draft",
         status: "draft",
         message,
         createdBy: userId,
@@ -11668,27 +12054,53 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         status: "pending",
       } as any);
 
-      let result: { providerEnvelopeId: string; status: string };
+      let result: { providerEnvelopeId: string; status: string; signingUrl?: string; auditUrl?: string };
       try {
-        result = await adapter.createPackage({
-          companyId,
-          documentUrl: `${baseUrl}${pdfRel.file_path}`,
-          documentName: pdfRel.file_name || "proposal.pdf",
-          subject,
-          message,
-          signers: [{ name: signerName, email: signerEmail, routingOrder: 1 }],
-          returnUrl,
-        }, companyConfig);
+        if (provider === "documenso") {
+          const filePath = resolveTenantFilePath(pdfRel.file_path);
+          if (!filePath) return res.status(500).json({ message: "Approval PDF unavailable on server storage" });
+          const documensoResult = await createDocumensoDocument({
+            title: docTitle,
+            pdfBuffer: await fs.promises.readFile(filePath),
+            recipients: [{ name: signerName, email: signerEmail, role: "SIGNER", routingOrder: 1 }],
+            metadata: { externalId: req.params.id, proposalId: req.params.id, documentId: docRow.id, companyId, signatureRequestId: sigRequest.id, kind: "contractor_proposal" },
+            subject,
+            message,
+            returnUrl,
+          });
+          result = {
+            providerEnvelopeId: documensoResult.documentId,
+            status: documensoResult.status,
+            signingUrl: documensoResult.signingLinks.find(l => l.signingUrl)?.signingUrl,
+            auditUrl: documensoResult.auditUrl,
+          };
+        } else {
+          result = await adapter!.createPackage({
+            companyId,
+            documentUrl: `${baseUrl}${pdfRel.file_path}`,
+            documentName: pdfRel.file_name || "proposal.pdf",
+            subject,
+            message,
+            signers: [{ name: signerName, email: signerEmail, routingOrder: 1 }],
+            returnUrl,
+          }, companyConfig);
+        }
       } catch (sendErr) {
         console.error("[Proposal request-signature] e-sign provider error:", sendErr);
-        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "error" } as any).catch(() => {});
+        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "draft", signatureStatus: "draft", documensoStatus: "error" } as any).catch(() => {});
         return res.status(502).json({ message: "Failed to send signature request to e-sign provider" });
       }
 
       await storage.updateDocumentSignatureRequest(sigRequest.id, {
         providerObjectId: result.providerEnvelopeId,
+        documensoDocumentId: provider === "documenso" ? result.providerEnvelopeId : undefined,
+        documensoStatus: provider === "documenso" ? result.status : undefined,
+        documensoSigningUrl: result.signingUrl,
+        documensoAuditUrl: result.auditUrl,
+        signatureStatus: "sent",
         status: "sent",
         sentAt: new Date(),
+        sentForSignatureAt: new Date(),
       } as any);
 
       const pkg = await storage.createSignaturePackage({
@@ -13245,6 +13657,135 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     superseded:       [],
   };
 
+  app.get("/api/contractor-hub/contracts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const workerRes = await db.execute(sql`SELECT worker_id, company_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (workerRes.rows[0] as any)?.worker_id || null;
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || (user?.role || "").startsWith("tenant_") || isPlatform;
+      const isContractor = workerId && workerId === contract.contractor_id;
+      if (!isContractor && !(isAdmin && (isPlatform || await canAccessCompany(user!, contract.company_id)))) return res.status(403).json({ message: "Access denied" });
+      res.json(contract);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
+  });
+
+  app.get("/api/contractor-hub/contracts/:id/sign", requireAuth, async (req, res) => {
+    try {
+      const signers = await db.execute(sql`SELECT id, name, email, role, signer_role, signer_type, status, signed_at, signing_order FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY COALESCE(signing_order, "order", 1) ASC`);
+      res.json({ contractId: req.params.id, signers: signers.rows });
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch signing details" }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/signers", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      const { name, email, role, signerRole, signerType, workerId, userId, isRequired = true } = req.body;
+      if (!name && !email) return res.status(400).json({ message: "Signer name or email is required" });
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+      const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id}`);
+      const order = Number((count.rows[0] as any)?.count || 0) + 1;
+      const result = await db.execute(sql`
+        INSERT INTO contract_signers (contract_id, company_id, contractor_id, worker_id, user_id, name, email, role, signer_role, signer_type, is_required, status, "order", signing_order, signing_token_hash, signing_token_expires_at)
+        VALUES (${req.params.id}, ${contract.company_id}, ${contract.contractor_id}, ${workerId || null}, ${userId || null}, ${name || email}, ${email || null}, ${role || signerRole || "contractor"}, ${signerRole || role || "contractor"}, ${signerType || (workerId ? "contractor" : userId ? "user" : "external")}, ${!!isRequired}, 'pending', ${order}, ${order}, ${hashSigningToken(token)}, ${expires})
+        RETURNING *
+      `);
+      res.status(201).json({ ...result.rows[0], signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
+    } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/delegate-signer", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const workerRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (workerRes.rows[0] as any)?.worker_id || null;
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || isPlatform;
+      if (!(workerId === contract.contractor_id) && !(isAdmin && (isPlatform || await canAccessCompany(user!, contract.company_id)))) return res.status(403).json({ message: "Access denied" });
+      const { name, email, replacesSignerId } = req.body;
+      if (!email) return res.status(400).json({ message: "Delegate email is required" });
+      if (replacesSignerId) await db.execute(sql`UPDATE contract_signers SET status = 'replaced', updated_at = NOW() WHERE id = ${replacesSignerId} AND contract_id = ${req.params.id}`).catch(() => {});
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+      const result = await db.execute(sql`
+        INSERT INTO contract_signers (contract_id, company_id, contractor_id, name, email, role, signer_role, signer_type, is_delegated, delegated_by_user_id, replaces_signer_id, status, signing_token_hash, signing_token_expires_at)
+        VALUES (${req.params.id}, ${contract.company_id}, ${contract.contractor_id}, ${name || email}, ${email}, 'contractor', 'contractor', 'delegate', TRUE, ${req.session.userId}, ${replacesSignerId || null}, 'pending', ${hashSigningToken(token)}, ${expires})
+        RETURNING *
+      `);
+      res.status(201).json({ ...result.rows[0], signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
+    } catch (e: any) { res.status(500).json({ message: "Failed to delegate signer: " + e.message }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/send-signing-email", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      const signerRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} AND status = 'pending' ORDER BY COALESCE(signing_order, "order", 1) ASC LIMIT 1`);
+      const signer = signerRes.rows[0] as any;
+      if (!signer?.id) return res.status(400).json({ message: "No pending signer exists for this contract" });
+      const token = crypto.randomBytes(32).toString("base64url");
+      const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
+      if (signer?.id) await db.execute(sql`UPDATE contract_signers SET signing_token_hash = ${hashSigningToken(token)}, signing_token_expires_at = ${expires}, status = 'sent', updated_at = NOW() WHERE id = ${signer.id}`);
+      const signingUrl = buildContractSigningUrl(getAppBaseUrl(req), token);
+      if (signer?.email) {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        await sendGenericNotificationEmail({ recipientName: signer.name || "Signer", email: signer.email, title: `Contract ready for signature - ${contract.title || req.params.id}`, body: `${contract.title || "A contract"} is ready for signature. This secure link expires in 14 days. If the button does not work, copy and paste this URL into your browser: ${signingUrl}`, actionUrl: signingUrl }).catch(() => ({ sent: false }));
+      }
+      res.json({ success: true, signingUrl });
+    } catch (e: any) { res.status(500).json({ message: "Failed to send signing email: " + e.message }); }
+  });
+
+  app.post("/api/contractor-hub/contracts/:id/documenso/create", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const config = validateDocumensoConfig();
+    if (!config.ok) return res.status(400).json({ message: config.message });
+    return res.status(202).json({ message: "Documenso is configured. Use POST /api/contractor-contracts/:id/send-for-signature to create and send the signing envelope.", contractId: req.params.id, baseUrl: config.baseUrl });
+  });
+
+  app.get("/api/signing/contracts/:token", async (req, res) => {
+    try {
+      const tokenHash = hashSigningToken(req.params.token);
+      const result = await db.execute(sql`
+        SELECT cs.id AS signer_id, cs.name AS signer_name, cs.email, cs.status AS signer_status,
+               cs.signing_token_expires_at, cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status
+        FROM contract_signers cs
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        WHERE cs.signing_token_hash = ${tokenHash}
+        LIMIT 1
+      `);
+      const row = result.rows[0] as any;
+      if (!row) return res.status(404).json({ message: "Signing link not found" });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      res.json({ contractId: row.contract_id, title: row.title, signerName: row.signer_name, signerEmail: row.email, status: row.signer_status, canSign: true });
+    } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
+  });
+
+  app.post("/api/signing/contracts/:token/complete", async (req, res) => {
+    try {
+      const tokenHash = hashSigningToken(req.params.token);
+      const result = await db.execute(sql`SELECT * FROM contract_signers WHERE signing_token_hash = ${tokenHash} LIMIT 1`);
+      const signer = result.rows[0] as any;
+      if (!signer) return res.status(404).json({ message: "Signing link not found" });
+      if (signer.signing_token_expires_at && new Date(signer.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${req.body?.signatureData || null}, ip_address = ${req.ip || null}, updated_at = NOW() WHERE id = ${signer.id}`);
+      const pending = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${signer.contract_id} AND status IN ('pending','sent','viewed')`);
+      const pendingCount = Number((pending.rows[0] as any)?.count || 0);
+      await db.execute(pendingCount === 0
+        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${signer.contract_id}`
+        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
+      );
+      res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
+    } catch (e: any) { res.status(500).json({ message: "Failed to complete signature" }); }
+  });
+
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
@@ -13330,7 +13871,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contract = contractRes.rows[0] as any;
       if (!contract) return res.status(404).json({ message: "Contract not found" });
-      if (!["sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
+      if (!["draft", "pending", "awaiting_signatures", "sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
 
       // Authorization: caller must be either:
       // (a) the contractor on this contract, or
@@ -13343,39 +13884,47 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isContractor = workerId && contract.contractor_id === workerId;
       const hasExplicitCompanyAccess = await db.execute(sql`
         SELECT 1
-        FROM user_company_access uca
-        LEFT JOIN roles r ON r.id = uca.role_id
-        WHERE uca.user_id = ${req.session.userId}
-          AND uca.company_id = ${contract.company_id}
-          AND uca.is_active = TRUE
-          AND (
-            r.name IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','tenant_manager')
-            OR r.name IS NULL
-          )
+        FROM company_user_access cua
+        WHERE cua.user_id = ${req.session.userId}
+          AND cua.company_id = ${contract.company_id}
+          AND cua.is_active = TRUE
+          AND cua.role IN ('admin','owner','manager','tenant_owner','tenant_admin','tenant_finance_admin','tenant_manager')
         LIMIT 1
       `);
       const userCompanyMatches = user?.companyId === contract.company_id || currentUserCompanyId === contract.company_id;
-      // Platform admins can sign any company's contract; tenant/owner roles must belong to the same company or have explicit tenant access.
-      const isCompanyAdmin = isAdmin && (isPlatformAdmin || userCompanyMatches || hasExplicitCompanyAccess.rows.length > 0);
+      const hasCompanyRoleAccess = hasExplicitCompanyAccess.rows.length > 0;
 
-      const registeredSignerRes = await db.execute(sql`
-        SELECT id FROM contract_signers
-        WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
-        UNION ALL
-        SELECT id FROM contract_signers
-        WHERE contract_id = ${req.params.id}
-          AND status = 'pending'
-          AND email IS NOT NULL
-          AND lower(email) = ${currentUserEmail}
-          AND ${currentUserEmail} IS NOT NULL
-          AND (${currentUserCompanyId} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id})
-        LIMIT 1
-      `);
+      const registeredSignerRes = await db.execute(
+        currentUserEmail
+          ? sql`
+            SELECT id FROM contract_signers
+            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+            UNION ALL
+            SELECT id FROM contract_signers
+            WHERE contract_id = ${req.params.id}
+              AND status = 'pending'
+              AND email IS NOT NULL
+              AND lower(email) = ${currentUserEmail}
+              AND (${currentUserCompanyId || null} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id})
+            LIMIT 1`
+          : sql`
+            SELECT id FROM contract_signers
+            WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+            LIMIT 1`
+      );
       const registeredSigner = registeredSignerRes.rows[0] as any;
 
-      if (!isContractor && !isCompanyAdmin && !registeredSigner) {
+      if (!canSignContract({
+        isContractor: !!isContractor,
+        isAdmin,
+        isPlatformAdmin,
+        userCompanyMatches,
+        hasExplicitCompanyAccess: hasCompanyRoleAccess,
+        hasRegisteredSigner: !!registeredSigner,
+      })) {
         return res.status(403).json({ message: "Not authorized to sign this contract" });
       }
+      const isCompanyAdmin = isAdmin && (isPlatformAdmin || userCompanyMatches || hasCompanyRoleAccess);
 
       let signer;
       if (registeredSigner) {
@@ -13411,7 +13960,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const newStatus = pendingCount === 0 ? "fully_signed" : "partially_signed";
       const contractBeforeSign = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contractData = contractBeforeSign.rows[0] as any;
-      await db.execute(sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = ${newStatus === "fully_signed" ? new Date() : null}, updated_at = NOW() WHERE id = ${req.params.id}`);
+      await db.execute(
+        newStatus === "fully_signed"
+          ? sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`
+          : sql`UPDATE contractor_contracts SET status = ${newStatus}, updated_at = NOW() WHERE id = ${req.params.id}`
+      );
 
       // Auto-snapshot on signing
       await autoSnapshotContract(req.params.id, req.session.userId!, `signed by ${name || "user"} — status: ${newStatus}`);
@@ -13458,6 +14011,102 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = ${damDocId} WHERE id = ${req.params.id}`).catch(() => {});
           }
         } catch (archiveErr) { console.warn("[Contract fully-signed] Archive to documents failed:", archiveErr); }
+      }
+
+      // ── Auto-create invoice after all required parties have signed ────────────
+      if (newStatus === "fully_signed" && contractData?.proposal_id) {
+        try {
+          const propCheck = await db.execute(sql`
+            SELECT id, converted_to_invoice_id, company_id, contractor_id, amount,
+                   description, title, proposal_number, expiration_date, line_items,
+                   notes, job_id, cost_center_id, branding_id, currency,
+                   archived_document_id AS prop_dam_id
+            FROM contractor_proposals WHERE id = ${contractData.proposal_id}
+          `);
+          const prop = propCheck.rows[0] as any;
+          if (prop && !prop.converted_to_invoice_id) {
+            const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${prop.contractor_id}`);
+            const invCount = Number((cntRes.rows[0] as any)?.c ?? 0);
+            const autoInvoiceNumber = `INV-${String(prop.contractor_id ?? "").slice(-4).toUpperCase()}-${String(invCount + 1).padStart(4, "0")}`;
+            const today = new Date().toISOString().split("T")[0];
+            let invTemplateId: string | null = null;
+            try {
+              const stdRes = await db.execute(sql`SELECT id FROM contractor_templates WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice' LIMIT 1`);
+              invTemplateId = (stdRes.rows[0] as any)?.id || null;
+            } catch { /* ok */ }
+
+            const autoInvRes = await db.execute(sql`
+              INSERT INTO contractor_invoices (
+                company_id, contractor_id, invoice_number, invoice_date, due_date,
+                amount, description, proposal_id, contract_id, proposal_reference,
+                line_items, notes, status, is_1099_reportable,
+                job_id, cost_center_id, branding_id, template_id
+              ) VALUES (
+                ${contractData.company_id}, ${prop.contractor_id}, ${autoInvoiceNumber},
+                ${today}, ${prop.expiration_date || null},
+                ${prop.amount || 0}, ${prop.description || prop.title || null},
+                ${prop.id}, ${req.params.id}, ${prop.proposal_number || null},
+                ${prop.line_items || null}, ${prop.notes || null},
+                'submitted', TRUE,
+                ${prop.job_id || null}, ${prop.cost_center_id || null},
+                ${prop.branding_id || null}, ${invTemplateId || null}
+              ) RETURNING *
+            `);
+            const autoInvoice = autoInvRes.rows[0] as any;
+
+            if (autoInvoice?.id) {
+              await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${autoInvoice.id}, updated_at = NOW() WHERE id = ${prop.id}`).catch(() => {});
+
+              // Archive invoice PDF to DAM
+              try {
+                const invPdfPath = await generateInvoicePdf(autoInvoice.id, autoInvoice, req.session.userId!);
+                if (invPdfPath) {
+                  const invDamRes = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${autoInvoice.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+                  const invDamId = (invDamRes?.rows[0] as any)?.id || null;
+                  if (invDamId) {
+                    await db.execute(sql`UPDATE contractor_invoices SET archived_to_documents_at = NOW(), archived_document_id = ${invDamId} WHERE id = ${autoInvoice.id}`).catch(() => {});
+                    // Update DAM record to also store cross-references
+                    await db.execute(sql`UPDATE dam_documents SET proposal_id = ${prop.id}, contract_id = ${req.params.id}, invoice_id = ${autoInvoice.id}, source_record_type = 'invoice', source_record_id = ${autoInvoice.id} WHERE id = ${invDamId}`).catch(() => {});
+                  }
+                }
+              } catch (invPdfErr) {
+                console.warn("[Contract fully-signed] Invoice PDF archive failed:", invPdfErr);
+                createWorkflowException({ title: `Invoice PDF archive failed for contract ${req.params.id}`, errorMessage: invPdfErr instanceof Error ? invPdfErr.message : String(invPdfErr), companyId: contractData?.company_id, route: req.path, context: { contractId: req.params.id, invoiceId: autoInvoice.id } }).catch(() => {});
+              }
+
+              // Back-fill proposal PDF to DAM if missing
+              if (!prop.prop_dam_id) {
+                generateProposalPdf(prop.id, prop, req.session.userId!).then(async pp => {
+                  if (pp) {
+                    const d = await db.execute(sql`SELECT id FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${prop.id} ORDER BY created_at DESC LIMIT 1`).catch(() => null);
+                    const did = (d?.rows[0] as any)?.id;
+                    if (did) await db.execute(sql`UPDATE contractor_proposals SET archived_to_documents_at = NOW(), archived_document_id = ${did} WHERE id = ${prop.id}`).catch(() => {});
+                  }
+                }).catch(() => {});
+              }
+
+              createContractorNotification({
+                workerId: prop.contractor_id,
+                companyId: contractData.company_id,
+                notificationType: "invoice_auto_created",
+                title: `Invoice ${autoInvoiceNumber} Generated`,
+                body: "Your contract is fully signed. An invoice has been automatically created.",
+                entityType: "invoice", entityId: autoInvoice.id,
+                actionUrl: `/app/contractor-hub?section=invoices&id=${autoInvoice.id}`,
+              }).catch(() => {});
+              console.log(`[Contract fully-signed] Auto-created invoice ${autoInvoiceNumber} for contract ${req.params.id}`);
+            }
+          }
+        } catch (invErr: unknown) {
+          console.error("[Contract fully-signed] Auto-invoice creation failed:", invErr);
+          createWorkflowException({
+            title: `Auto-invoice creation failed for contract ${req.params.id}`,
+            errorMessage: invErr instanceof Error ? invErr.message : String(invErr),
+            companyId: contractData?.company_id,
+            route: req.path,
+            context: { contractId: req.params.id, proposalId: contractData?.proposal_id },
+          }).catch(() => {});
+        }
       }
 
       res.json({ signer, contractStatus: newStatus });
@@ -13793,7 +14442,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractId = req.params.id;
       const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      if (["void", "terminated", "completed"].includes(contract.status)) {
+      if (!["draft", "pending", "awaiting_signatures"].includes(contract.status)) {
         return res.status(400).json({ message: `Cannot send a contract in '${contract.status}' status for signature` });
       }
       const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} ORDER BY "order" ASC`);
@@ -13807,12 +14456,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for signing" });
 
       const { sendDocumentForSignature } = await import("./services/documenso.js");
+      const returnUrl = buildContractDocumensoReturnUrl(getAppBaseUrl(req), contractId);
       const docResult = await sendDocumentForSignature({
         title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
         pdfBuffer,
         recipients,
+        metadata: { externalId: contractId, contractId, companyId: contract.company_id },
         subject: `Please sign: ${contract.title}`,
         message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+        returnUrl,
       });
 
       // Persist the Documenso request
@@ -13843,131 +14495,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("Documenso not configured") || msg.includes("DOCUMENSO_API_KEY")) {
-        return res.status(503).json({ message: "Documenso is not configured. Set MyPayLink_DOCUMENSO_API_KEY in environment settings." });
+        return res.status(503).json({ message: "Documenso is not configured. Set DOCUMENSO_API_KEY in Replit Secrets." });
+      }
+      if (msg.includes("401") || msg.toLowerCase().includes("not authenticated") || msg.toLowerCase().includes("unauthorized")) {
+        return res.status(503).json({ message: "Documenso rejected the configured API token. Please verify DOCUMENSO_API_KEY in Replit Secrets and try again." });
       }
       res.status(500).json({ message: "Failed to send for signature: " + msg });
-    }
-  });
-
-  // ── Documenso Webhook ─────────────────────────────────────────────────────
-  // Receives event callbacks from Documenso and updates related records.
-  // Signature verification uses HMAC-SHA256 via DOCUMENSO_WEBHOOK_SECRET.
-  app.post("/api/webhooks/documenso", async (req, res) => {
-    try {
-      const { verifyWebhookSignature, downloadCompletedDocument } = await import("./services/documenso.js");
-      const signature = (req.headers["x-documenso-signature"] as string) || (req.headers["x-webhook-signature"] as string) || "";
-      const secret = process.env.DOCUMENSO_WEBHOOK_SECRET || "";
-
-      // Handle both raw-buffer and already-parsed JSON body
-      let rawBodyBuf: Buffer;
-      let eventData: any;
-      if (Buffer.isBuffer(req.body)) {
-        rawBodyBuf = req.body;
-        try { eventData = JSON.parse(rawBodyBuf.toString("utf8")); } catch { return res.status(400).json({ message: "Invalid JSON" }); }
-      } else {
-        eventData = req.body || {};
-        rawBodyBuf = Buffer.from(JSON.stringify(eventData));
-      }
-
-      // Fail-closed: reject immediately if no secret is configured
-      if (!secret) {
-        console.error("[Documenso Webhook] DOCUMENSO_WEBHOOK_SECRET is not set — rejecting all webhook requests. Configure the secret to enable webhook processing.");
-        return res.status(503).json({ message: "Webhook endpoint not configured: secret missing" });
-      }
-
-      const isValid = verifyWebhookSignature(rawBodyBuf, signature, secret);
-
-      const eventType: string = eventData.event || eventData.type || "unknown";
-      const documensoDocumentId: string | null = String(eventData.data?.id || eventData.documentId || "").trim() || null;
-      const documensoEventId: string | null = String(eventData.webhookId || eventData.id || "").trim() || null;
-
-      // Deduplication: skip if already processed
-      if (documensoEventId) {
-        const dup = await db.execute(sql`SELECT id FROM documenso_webhook_events WHERE documenso_event_id = ${documensoEventId} LIMIT 1`);
-        if (dup.rows[0]) return res.status(200).json({ message: "Already processed" });
-      }
-
-      // Reject invalid signatures before storing (do not log untrusted payloads on auth failure)
-      if (!isValid) {
-        return res.status(401).json({ message: "Invalid webhook signature" });
-      }
-
-      // Store verified event
-      const eventRow = await db.execute(sql`
-        INSERT INTO documenso_webhook_events (event_type, documenso_document_id, documenso_event_id, payload, signature_valid, processed)
-        VALUES (${eventType}, ${documensoDocumentId}, ${documensoEventId}, ${JSON.stringify(eventData)}, true, false)
-        RETURNING id
-      `);
-      const eventId = (eventRow.rows[0] as any)?.id;
-
-      // Process asynchronously so we return 200 quickly
-      (async () => {
-        try {
-          if (!documensoDocumentId) {
-            await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW(), processing_error = 'no_document_id' WHERE id = ${eventId}`);
-            return;
-          }
-          const sigReqRes = await db.execute(sql`SELECT * FROM documenso_signature_requests WHERE documenso_document_id = ${documensoDocumentId} ORDER BY created_at DESC LIMIT 1`);
-          const sigReq = sigReqRes.rows[0] as any;
-          if (!sigReq) {
-            await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW(), processing_error = 'no_signature_request_found' WHERE id = ${eventId}`);
-            return;
-          }
-
-          if (eventType === "document.viewed") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'viewed', viewed_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-          } else if (eventType === "document.signed") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'partially_signed', signed_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-          } else if (eventType === "document.completed") {
-            // Download signed PDF and store in DAM
-            try {
-              const pdfBuf = await downloadCompletedDocument(documensoDocumentId);
-              if (pdfBuf) {
-                const fname = `documenso-signed-${sigReq.related_record_id}-${Date.now()}.pdf`;
-                const uploadDir = path.join(process.cwd(), "uploads");
-                if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-                fs.writeFileSync(path.join(uploadDir, fname), pdfBuf);
-
-                const damRes = await db.execute(sql`
-                  INSERT INTO dam_documents (company_id, document_type, title, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id)
-                  VALUES (${sigReq.company_id}, 'signed_contract',
-                    ${"SIGNED — " + (sigReq.document_type || "contract")},
-                    ${"/uploads/" + fname}, ${fname}, 'document', ${pdfBuf.length}, 'application/pdf',
-                    ${sigReq.document_type}, ${sigReq.related_record_id})
-                  RETURNING id
-                `).catch(() => ({ rows: [] }));
-                const damId = (damRes.rows[0] as any)?.id || null;
-
-                await db.execute(sql`UPDATE documenso_signature_requests SET status = 'completed', completed_at = NOW(), completed_pdf_file_id = ${damId}, updated_at = NOW() WHERE id = ${sigReq.id}`);
-
-                // Lock the contract
-                if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
-                  await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = NOW(), signed_pdf_path = ${"/uploads/" + fname}, updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
-                }
-              }
-            } catch (dlErr: any) {
-              console.error("[DocumensoWebhook] PDF download error:", dlErr.message);
-            }
-          } else if (eventType === "document.declined") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'declined', declined_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-            if (["contract", "contractor_hub_contract"].includes(sigReq.document_type)) {
-              await db.execute(sql`UPDATE contractor_contracts SET updated_at = NOW() WHERE id = ${sigReq.related_record_id}`).catch(() => {});
-            }
-          } else if (eventType === "document.expired") {
-            await db.execute(sql`UPDATE documenso_signature_requests SET status = 'expired', expired_at = NOW(), updated_at = NOW() WHERE id = ${sigReq.id}`);
-          }
-
-          await db.execute(sql`UPDATE documenso_webhook_events SET processed = true, processed_at = NOW() WHERE id = ${eventId}`);
-        } catch (procErr: any) {
-          console.error("[DocumensoWebhook] processing error:", procErr.message);
-          await db.execute(sql`UPDATE documenso_webhook_events SET processing_error = ${procErr.message} WHERE id = ${eventId}`).catch(() => {});
-        }
-      })();
-
-      res.status(200).json({ message: "OK" });
-    } catch (e: any) {
-      console.error("[DocumensoWebhook] handler error:", e.message);
-      res.status(500).json({ message: "Webhook error" });
     }
   });
 
@@ -14139,6 +14672,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } catch (notifErr) { console.error("[Invoice] Notify override failed:", notifErr); }
       res.json({ message: "Override request submitted" });
     } catch (e: any) { res.status(500).json({ message: "Failed to submit override request: " + e.message }); }
+  });
+
+  app.get("/api/document-hub/assets", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = (req.query.companyId as string) || user?.companyId || null;
+      const search = typeof req.query.search === "string" ? `%${req.query.search}%` : null;
+      const result = await db.execute(sql`SELECT * FROM dam_documents WHERE (${cid ? sql`company_id = ${cid}` : sql`TRUE`}) ${search ? sql`AND (title ILIKE ${search} OR file_name ILIKE ${search} OR document_type ILIKE ${search})` : sql``} ORDER BY created_at DESC`);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch document assets" }); }
+  });
+  app.post("/api/document-hub/assets", requireAuth, documentUpload.single("file"), async (_req: any, res) => {
+    return res.status(307).setHeader("Location", "/api/dam-documents").json({ message: "Use /api/dam-documents for upload-compatible Document Hub assets." });
   });
 
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
@@ -14326,6 +14872,59 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
+  });
+
+  app.get("/api/document-hub/assets/:id", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+    const workerId = (wRes.rows[0] as any)?.worker_id;
+    const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+    const isPlatform = (user?.role || "").startsWith("platform_");
+    const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+    if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
+    const doc = result.rows[0] as any;
+    if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
+    if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    res.json(doc);
+  });
+  app.get("/api/document-hub/assets/:id/download", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download" }));
+  app.get("/api/document-hub/assets/:id/print", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download for inline print rendering" }));
+  app.patch("/api/document-hub/assets/:id/metadata", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    await db.execute(sql`INSERT INTO document_asset_metadata (document_asset_id, metadata_key, metadata_value, metadata_type, is_editable_by_user) VALUES (${req.params.id}, ${req.body?.metadataKey || "metadata"}, ${req.body?.metadataValue || null}, ${req.body?.metadataType || "text"}, TRUE)`);
+    await db.execute(sql`INSERT INTO document_asset_audit_logs (document_asset_id, actor_user_id, action, after_json, ip_address, user_agent) VALUES (${req.params.id}, ${req.session.userId || null}, 'metadata.updated', ${JSON.stringify(req.body || {})}, ${req.ip || null}, ${req.headers["user-agent"] || null})`).catch(() => {});
+    res.json({ success: true });
+  });
+  app.post("/api/document-hub/assets/:id/versions", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    await db.execute(sql`INSERT INTO document_asset_versions (document_asset_id, version_number, storage_key, file_name, file_mime_type, file_size, created_by_user_id, change_summary) VALUES (${req.params.id}, ${req.body?.versionNumber || 1}, ${req.body?.storageKey || null}, ${req.body?.fileName || null}, ${req.body?.fileMimeType || null}, ${req.body?.fileSize || null}, ${req.session.userId || null}, ${req.body?.changeSummary || null})`);
+    res.status(201).json({ success: true });
+  });
+  app.post("/api/document-hub/assets/:id/archive", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, archived_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
+    res.json({ success: true });
+  });
+  app.get("/api/document-hub/assets/:id/audit", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const doc = docRes.rows[0] as any;
+    if (!doc) return res.status(404).json({ message: "Document not found" });
+    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    const logs = await db.execute(sql`SELECT * FROM dam_document_access_logs WHERE document_id = ${req.params.id} ORDER BY created_at DESC`);
+    res.json(logs.rows);
   });
 
   // ── Contractor Templates ──────────────────────────────────────────────────
@@ -22812,6 +23411,373 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create folder") }); }
   });
 
+  // ── Documenso Documents & Signatures ─────────────────────────────────────
+  app.get("/api/signing-documents", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const requestedCompanyId = queryStr(req.query.companyId) || user.companyId || null;
+      if (!requestedCompanyId) return res.status(400).json({ message: "companyId is required" });
+      if (!(await canAccessCompany(user, requestedCompanyId))) return res.status(403).json({ message: "Access denied" });
+      const adminView = isManagerRole(user.role);
+      const rows = await db.execute(sql`
+        SELECT
+          dsr.id,
+          dsr.document_id,
+          dsr.company_id,
+          dsr.provider,
+          dsr.provider_object_id,
+          dsr.documenso_document_id,
+          dsr.documenso_status,
+          dsr.documenso_signing_url,
+          dsr.documenso_completed_pdf_url,
+          dsr.documenso_audit_url,
+          COALESCE(dsr.signature_status, dsr.status, 'draft') AS signature_status,
+          dsr.sent_at,
+          dsr.sent_for_signature_at,
+          dsr.signed_at,
+          dsr.completed_at,
+          d.title AS document_name,
+          d.document_type,
+          d.category,
+          d.assigned_to_worker_id,
+          d.assigned_to_customer_id,
+          s.signer_name,
+          s.signer_email,
+          s.status AS signer_status,
+          sp.metadata
+        FROM document_signature_requests dsr
+        JOIN documents d ON d.id = dsr.document_id
+        LEFT JOIN document_signers s ON s.signature_request_id = dsr.id
+        LEFT JOIN signature_packages sp ON sp.signature_request_id = dsr.id
+        WHERE dsr.company_id = ${requestedCompanyId}
+          AND (${adminView} = TRUE OR d.assigned_to_worker_id IS NULL OR d.assigned_to_worker_id = ${user.workerId || null})
+        ORDER BY COALESCE(dsr.sent_for_signature_at, dsr.sent_at, dsr.created_at) DESC
+      `);
+      res.json((rows.rows || []).map((row: any) => ({
+        id: row.id,
+        documentId: row.document_id,
+        documentName: row.document_name,
+        type: row.document_type || row.category || "document",
+        relatedEntity: row.metadata ? (() => { try { const m = JSON.parse(row.metadata); return m.kind || m.entityType || m.proposalId || m.contractId || "Document"; } catch { return "Document"; } })() : "Document",
+        recipient: row.signer_name || row.signer_email || "Recipient",
+        recipientEmail: row.signer_email,
+        status: normalizeDocumensoDisplayStatus(row.signature_status || row.documenso_status),
+        sentDate: row.sent_for_signature_at || row.sent_at,
+        signedDate: row.signed_at || row.completed_at,
+        documensoDocumentId: row.documenso_document_id || row.provider_object_id,
+        signingUrl: row.documenso_signing_url,
+        completedPdfUrl: row.documenso_completed_pdf_url,
+        auditUrl: row.documenso_audit_url,
+        signerStatus: row.signer_status,
+      })));
+    } catch (e) {
+      console.error("[Documenso] list signing documents failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch signing documents") });
+    }
+  });
+
+  app.post("/api/documents/:id/send-for-signature", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const doc = await storage.getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      if (!(await canAccessCompany(user, doc.companyId))) return res.status(403).json({ message: "Access denied" });
+
+      const active = await db.execute(sql`
+        SELECT id, documenso_document_id, provider_object_id, signature_status, status
+        FROM document_signature_requests
+        WHERE document_id = ${req.params.id}
+          AND COALESCE(signature_status, status) IN ('sent', 'viewed', 'signed', 'pending', 'sent_for_signature')
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      const activeRow = firstRow<any>(active);
+      if (activeRow) {
+        return res.status(409).json({ message: "This document already has an active signing request", signatureRequestId: activeRow.id, documensoDocumentId: activeRow.documenso_document_id || activeRow.provider_object_id });
+      }
+
+      const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+      if (!recipients.length) return res.status(400).json({ message: "At least one recipient is required" });
+      for (const recipient of recipients) {
+        if (!recipient?.email || !recipient?.name) return res.status(400).json({ message: "Each recipient requires name and email" });
+      }
+
+      const filePath = resolveTenantFilePath((doc as any).fileUrl);
+      if (!filePath) return res.status(400).json({ message: "Document PDF is not available on server storage" });
+      const pdfBuffer = await fs.promises.readFile(filePath);
+      const subject = req.body?.subject || `Signature Requested: ${doc.title}`;
+      const message = req.body?.message || `Please review and sign ${doc.title}.`;
+      const returnUrl = `${getAppBaseUrl(req)}/app/contractor-hub?section=signatures`;
+
+      const sigRequest = await storage.createDocumentSignatureRequest({
+        documentId: doc.id,
+        companyId: doc.companyId,
+        provider: "documenso",
+        signingProvider: "documenso",
+        signatureRequired: true,
+        signatureStatus: "draft",
+        status: "draft",
+        message,
+        createdBy: userId,
+      } as any);
+      for (let i = 0; i < recipients.length; i++) {
+        await storage.createDocumentSigner({
+          signatureRequestId: sigRequest.id,
+          signerName: recipients[i].name,
+          signerEmail: recipients[i].email,
+          routingOrder: recipients[i].routingOrder || i + 1,
+          sortOrder: i,
+          status: "pending",
+        } as any);
+      }
+
+      let result;
+      try {
+        result = await createDocumensoDocument({
+          title: doc.title,
+          pdfBuffer,
+          recipients,
+          metadata: { externalId: doc.id, documentId: doc.id, companyId: doc.companyId, signatureRequestId: sigRequest.id },
+          subject,
+          message,
+          returnUrl,
+        });
+      } catch (sendErr: any) {
+        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "draft", signatureStatus: "draft", documensoStatus: "error" } as any).catch(() => {});
+        await storage.createDocumentAuditLog({ documentId: doc.id, signatureRequestId: sigRequest.id, companyId: doc.companyId, action: "DOCUMENT_SIGNATURE_SEND_FAILED", actorId: userId, actorName: user.username || "", ipAddress: req.ip || "", details: sendErr?.message || "Documenso send failed" }).catch(() => {});
+        return res.status(502).json({ message: "Failed to send document to Documenso. Local document remains draft." });
+      }
+
+      const signingUrl = result.signingLinks.find(l => !!l.signingUrl)?.signingUrl || null;
+      await storage.updateDocumentSignatureRequest(sigRequest.id, {
+        providerObjectId: result.documentId,
+        documensoDocumentId: result.documentId,
+        documensoStatus: result.status,
+        documensoSigningUrl: signingUrl,
+        documensoAuditUrl: result.auditUrl,
+        signatureStatus: "sent",
+        status: "sent",
+        sentAt: new Date(),
+        sentForSignatureAt: new Date(),
+      } as any);
+      await storage.updateDocument(doc.id, {
+        documensoDocumentId: result.documentId,
+        documensoStatus: result.status,
+        documensoSigningUrl: signingUrl,
+        documensoAuditUrl: result.auditUrl,
+        signatureRequired: true,
+        signatureStatus: "sent",
+        signingProvider: "documenso",
+        sentForSignatureAt: new Date(),
+      } as any);
+      await storage.createSignaturePackage({
+        companyId: doc.companyId,
+        signatureRequestId: sigRequest.id,
+        provider: "documenso",
+        providerEnvelopeId: result.documentId,
+        status: "sent",
+        documentIds: doc.id,
+        subject,
+        message,
+        metadata: JSON.stringify({ kind: (doc as any).documentType || "document", documentId: doc.id }),
+        sentAt: new Date(),
+        createdBy: userId,
+      } as any);
+      await storage.createDocumentAuditLog({ documentId: doc.id, signatureRequestId: sigRequest.id, companyId: doc.companyId, action: "DOCUMENT_SENT_FOR_SIGNATURE", actorId: userId, actorName: user.username || "", ipAddress: req.ip || "", details: JSON.stringify({ documensoDocumentId: result.documentId }) });
+      res.status(201).json({ signatureRequestId: sigRequest.id, documensoDocumentId: result.documentId, status: "sent", signingLinks: result.signingLinks });
+    } catch (e) {
+      console.error("[Documenso] send for signature failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to send for signature") });
+    }
+  });
+
+  app.post("/api/signing-documents/:id/resend", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const documensoId = (sig as any).documensoDocumentId || sig.providerObjectId;
+      if (!documensoId) return res.status(400).json({ message: "No Documenso document ID is stored" });
+      const result = await resendDocumensoDocument(documensoId);
+      await storage.updateDocumentSignatureRequest(sig.id, { status: "sent", signatureStatus: "sent", sentAt: new Date(), sentForSignatureAt: new Date(), documensoSigningUrl: result.signingLinks.find(l => l.signingUrl)?.signingUrl || (sig as any).documensoSigningUrl } as any);
+      await storage.createDocumentAuditLog({ documentId: sig.documentId, signatureRequestId: sig.id, companyId: sig.companyId, action: "DOCUMENT_SENT_FOR_SIGNATURE", actorId: user.id, actorName: user.username || "", ipAddress: req.ip || "", details: JSON.stringify({ resent: true, documensoDocumentId: documensoId }) });
+      res.json({ status: "sent", signingLinks: result.signingLinks });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to resend signature request") }); }
+  });
+
+  app.post("/api/signing-documents/:id/void", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const documensoId = (sig as any).documensoDocumentId || sig.providerObjectId;
+      if (documensoId) await voidDocumensoDocument(documensoId);
+      await storage.updateDocumentSignatureRequest(sig.id, { status: "voided", signatureStatus: "voided", documensoStatus: "voided" } as any);
+      await storage.updateDocument(sig.documentId, { signatureStatus: "voided", documensoStatus: "voided" } as any);
+      await storage.createDocumentAuditLog({ documentId: sig.documentId, signatureRequestId: sig.id, companyId: sig.companyId, action: "DOCUMENT_VOIDED", actorId: user.id, actorName: user.username || "", ipAddress: req.ip || "", details: req.body?.reason || "Voided from PayLink" });
+      res.json({ status: "voided" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to void signature request") }); }
+  });
+
+  app.get("/api/signing-documents/:id/download-signed", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const doc = await storage.getDocument(sig.documentId);
+      if (!isManagerRole(user.role) && doc?.assignedToWorkerId && doc.assignedToWorkerId !== user.workerId) return res.status(403).json({ message: "Access denied" });
+      const storedUrl = (sig as any).documensoCompletedPdfUrl || doc?.documensoCompletedPdfUrl;
+      const storedPath = resolveTenantFilePath(storedUrl);
+      const buffer = storedPath ? await fs.promises.readFile(storedPath) : await downloadCompletedDocumensoPdf((sig as any).documensoDocumentId || sig.providerObjectId || "");
+      if (!buffer) return res.status(404).json({ message: "Completed signed PDF is not available yet" });
+      await storage.createDocumentAuditLog({ documentId: sig.documentId, signatureRequestId: sig.id, companyId: sig.companyId, action: "SIGNED_PDF_DOWNLOADED", actorId: user.id, actorName: user.username || "", ipAddress: req.ip || "", details: "Signed PDF downloaded" });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${(doc?.title || "signed-document").replace(/[^a-z0-9._-]+/gi, "-")}-signed.pdf"`);
+      res.send(buffer);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download signed PDF") }); }
+  });
+
+  app.get("/api/signing-documents/:id/audit-trail", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId);
+      const sig = await storage.getDocumentSignatureRequest(req.params.id);
+      if (!sig) return res.status(404).json({ message: "Signature request not found" });
+      if (!user || !(await canAccessCompany(user, sig.companyId))) return res.status(403).json({ message: "Access denied" });
+      const audit = await downloadDocumensoAuditTrail((sig as any).documensoDocumentId || sig.providerObjectId || "");
+      res.json(audit);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download audit trail") }); }
+  });
+
+  app.post("/api/webhooks/documenso", async (req, res) => {
+    const raw = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+    const signatureValid = verifyWebhookSecret(req.headers as any, raw);
+    if (!signatureValid) return res.status(401).json({ message: "Invalid Documenso webhook secret" });
+    const payload = req.body || {};
+    const eventType = String(payload?.event || payload?.type || payload?.eventType || "documenso.event");
+    const documensoDocumentId = extractDocumensoDocumentId(payload);
+    let webhookEventId: string | null = null;
+    try {
+      const inserted = await db.execute(sql`
+        INSERT INTO webhook_events (provider, event_type, provider_event_id, envelope_id, payload, status)
+        VALUES ('documenso', ${eventType}, ${payload?.id || payload?.eventId || null}, ${documensoDocumentId}, ${JSON.stringify(payload)}, 'received')
+        ON CONFLICT (provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING
+        RETURNING id
+      `);
+      webhookEventId = firstRow<any>(inserted)?.id || null;
+      if (!documensoDocumentId) throw new Error("Missing Documenso document id in webhook payload");
+      const sigRes = await db.execute(sql`
+        SELECT * FROM document_signature_requests
+        WHERE documenso_document_id = ${documensoDocumentId} OR provider_object_id = ${documensoDocumentId}
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      let sig = firstRow<any>(sigRes);
+      if (!sig) {
+        const contractSigRes = await db.execute(sql`
+          SELECT * FROM documenso_signature_requests
+          WHERE documenso_document_id = ${documensoDocumentId}
+            AND document_type IN ('contract', 'contractor_hub_contract')
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        const contractSig = firstRow<any>(contractSigRes);
+        if (contractSig) {
+          const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
+          const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || contractSig.status));
+          const completed = status === "completed";
+          await db.execute(sql`
+            UPDATE documenso_signature_requests
+            SET status = ${status},
+                signed_at = CASE WHEN ${completed} THEN COALESCE(signed_at, NOW()) ELSE signed_at END,
+                completed_at = CASE WHEN ${completed} THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+                updated_at = NOW(),
+                raw_response = COALESCE(raw_response, ${JSON.stringify(payload)})
+            WHERE id = ${contractSig.id}
+          `);
+          if (completed) {
+            const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractSig.related_record_id}`);
+            const contract = firstRow<any>(contractRes);
+            if (contract) {
+              const wasAlreadyFullySigned = contract.status === "fully_signed";
+              if (!wasAlreadyFullySigned) {
+                await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id}`);
+                await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status = 'pending'`).catch(() => {});
+              }
+              if (!wasAlreadyFullySigned && contract.proposal_id) {
+                const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contract.proposal_id}`);
+                const prop = firstRow<any>(propRes);
+                if (prop && !prop.converted_to_invoice_id) {
+                  await autoCreateProposalBackedInvoice(contract, prop, {
+                    countInvoicesForContractor: async (contractorId: string) => {
+                      const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}`);
+                      return Number((cntRes.rows[0] as any)?.c ?? 0);
+                    },
+                    createInvoice: async (values: Record<string, unknown>) => {
+                      const invRes = await db.execute(sql`
+                        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
+                        VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
+                        RETURNING id
+                      `);
+                      return firstRow<any>(invRes);
+                    },
+                    markProposalConverted: async (proposalId: string, invoiceId: string) => {
+                      await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW() WHERE id = ${proposalId} AND company_id = ${contract.company_id}`);
+                    },
+                  });
+                }
+              }
+            }
+          }
+          if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'processed', processed_at = NOW() WHERE id = ${webhookEventId}`);
+          return res.json({ received: true, status, documentType: contractSig.document_type });
+        }
+      }
+      if (!sig) throw new Error(`No local signature request found for Documenso document ${documensoDocumentId}`);
+      const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
+      const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || sig.signature_status));
+      const completed = status === "completed";
+      let completedPdfUrl: string | null = null;
+      if (completed) {
+        const pdf = await downloadCompletedDocumensoPdf(documensoDocumentId).catch((err) => { console.warn("[Documenso] completed PDF download failed:", err); return null; });
+        if (pdf) {
+          const tenantDir = path.join(resolvedUploadDir, "signed", sig.company_id);
+          await fs.promises.mkdir(tenantDir, { recursive: true });
+          const fileName = `${sig.document_id}-${documensoDocumentId}-signed.pdf`.replace(/[^a-zA-Z0-9._-]/g, "-");
+          const abs = path.join(tenantDir, fileName);
+          await fs.promises.writeFile(abs, pdf);
+          completedPdfUrl = `/uploads/signed/${sig.company_id}/${fileName}`;
+        }
+      }
+      await db.execute(sql`
+        UPDATE document_signature_requests
+        SET signature_status = ${status}, status = ${status}, documenso_status = ${status},
+            signed_at = CASE WHEN ${completed} THEN COALESCE(signed_at, NOW()) ELSE signed_at END,
+            completed_at = CASE WHEN ${completed} THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+            documenso_completed_pdf_url = COALESCE(${completedPdfUrl}, documenso_completed_pdf_url),
+            updated_at = NOW()
+        WHERE id = ${sig.id}
+      `);
+      await db.execute(sql`
+        UPDATE documents
+        SET signature_status = ${status}, documenso_status = ${status},
+            signed_at = CASE WHEN ${completed} THEN COALESCE(signed_at, NOW()) ELSE signed_at END,
+            documenso_completed_pdf_url = COALESCE(${completedPdfUrl}, documenso_completed_pdf_url),
+            updated_at = NOW()
+        WHERE id = ${sig.document_id}
+      `);
+      await storage.createDocumentAuditLog({ documentId: sig.document_id, signatureRequestId: sig.id, companyId: sig.company_id, action: mapDocumensoEventToAuditAction(status, eventType), actorName: "Documenso", details: JSON.stringify({ documensoDocumentId, eventType, payload }) });
+      if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'processed', processed_at = NOW() WHERE id = ${webhookEventId}`);
+      res.json({ received: true, status });
+    } catch (e: any) {
+      console.error("[Documenso] webhook failed:", e);
+      if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'error', error = ${e?.message || String(e)}, processed_at = NOW() WHERE id = ${webhookEventId}`).catch(() => {});
+      res.status(500).json({ message: "Documenso webhook processing failed" });
+    }
+  });
+
   app.get("/api/documents", requireAuth, enforceCompanyScope("query"), async (req, res) => {
     try {
       const companyId = (req as any)._companyId;
@@ -26224,6 +27190,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     },
   );
 
+  registerTwilioSmsWebhookRoutes(app, {
+    getAuthToken: getTwilioAuthTokenForWebhook,
+    saveInboundSms: insertInboundSms,
+    updateSmsConsent: upsertSmsConsent,
+    updateSmsStatus,
+    getSupportContact: () => process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || "support@mypaylink.app",
+    notifyFallback: (payload) => console.warn("[Twilio SMS] Primary webhook fallback invoked", { errorCode: payload.ErrorCode, errorUrl: payload.ErrorUrl }),
+  });
+
   // -- SMS --
   app.get("/api/admin/sms-config",
     requireRole(...CHANNEL_CONFIG_ROLES),
@@ -26241,6 +27216,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           hasAuthToken: config.hasAuthToken,
           fromNumber: config.fromNumber,
           messagingServiceSid: config.messagingServiceSid,
+          useMessagingService: config.useMessagingService === true,
+          webhookUrl: config.webhookUrl || TWILIO_SMS_URLS.inbound,
+          webhookFallbackUrl: config.webhookFallbackUrl || TWILIO_SMS_URLS.fallback,
+          statusCallbackUrl: config.statusCallbackUrl || TWILIO_SMS_URLS.status,
           isConfigured: config.isConfigured,
           lastTestedAt: config.lastTestedAt,
           lastTestResult: config.lastTestResult,
@@ -26263,9 +27242,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           return res.status(403).json({ message: "You do not have permission to edit channel configuration." });
         }
 
-        const { provider, accountSid, authToken, fromNumber, messagingServiceSid } = req.body as {
+        const { provider, accountSid, authToken, fromNumber, messagingServiceSid, useMessagingService } = req.body as {
           provider?: string; accountSid?: string; authToken?: string;
-          fromNumber?: string; messagingServiceSid?: string;
+          fromNumber?: string; messagingServiceSid?: string; useMessagingService?: boolean;
         };
 
         if (authToken?.trim() && !isEncryptionAvailable()) {
@@ -26278,13 +27257,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const hasStoredAuthToken = existingSms?.hasAuthToken ?? false;
         const willHaveAuthToken = !!(authToken?.trim()) || hasStoredAuthToken;
 
+        const normalizedUseMessagingService = useMessagingService === true;
         const base = {
           provider: provider || "twilio",
           accountSid: accountSid || null,
           fromNumber: fromNumber || null,
-          messagingServiceSid: messagingServiceSid || null,
+          messagingServiceSid: messagingServiceSid?.trim() || null,
+          useMessagingService: normalizedUseMessagingService,
+          webhookUrl: TWILIO_SMS_URLS.inbound,
+          webhookFallbackUrl: TWILIO_SMS_URLS.fallback,
+          statusCallbackUrl: TWILIO_SMS_URLS.status,
           updatedBy: user?.username ?? "admin",
-          isConfigured: !!(accountSid && willHaveAuthToken && (fromNumber || messagingServiceSid)),
+          isConfigured: !!(accountSid && willHaveAuthToken && (normalizedUseMessagingService ? messagingServiceSid?.trim() : fromNumber)),
         };
 
         const withSecret = authToken && authToken.trim()
@@ -26308,6 +27292,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           hasAuthToken: config.hasAuthToken,
           fromNumber: config.fromNumber,
           messagingServiceSid: config.messagingServiceSid,
+          useMessagingService: config.useMessagingService === true,
+          webhookUrl: config.webhookUrl || TWILIO_SMS_URLS.inbound,
+          webhookFallbackUrl: config.webhookFallbackUrl || TWILIO_SMS_URLS.fallback,
+          statusCallbackUrl: config.statusCallbackUrl || TWILIO_SMS_URLS.status,
           isConfigured: config.isConfigured,
           updatedAt: config.updatedAt,
           updatedBy: config.updatedBy,
@@ -26337,10 +27325,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const authToken = config?.hasAuthToken && config.authTokenHash
           ? (decryptSecret(config.authTokenHash) ?? process.env.TWILIO_AUTH_TOKEN ?? "")
           : (process.env.TWILIO_AUTH_TOKEN ?? "");
-        const fromNumber = config?.messagingServiceSid
+        const useMessagingService = config?.useMessagingService === true;
+        const fromNumber = useMessagingService
           ? null
-          : (config?.fromNumber || process.env.TWILIO_PHONE_NUMBER);
-        const messagingServiceSid = config?.messagingServiceSid || null;
+          : (config?.fromNumber || process.env.TWILIO_DEFAULT_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER);
+        const messagingServiceSid = useMessagingService ? (config?.messagingServiceSid || null) : null;
 
         if (!accountSid || !authToken || (!fromNumber && !messagingServiceSid)) {
           return res.status(400).json({ sent: false, message: "SMS (Twilio) is not configured" });
@@ -26359,7 +27348,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const msgParams: TwilioCreateParams = {
           body: "PayLink test message — SMS notifications are working correctly!",
           to: normalizePhone(toPhone),
-          ...(messagingServiceSid
+          statusCallback: TWILIO_SMS_URLS.status,
+          ...(useMessagingService && messagingServiceSid
             ? { messagingServiceSid }
             : { from: normalizePhone(fromNumber!) }),
         };

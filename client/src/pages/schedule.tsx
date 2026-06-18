@@ -69,6 +69,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
+  Copy,
 } from "lucide-react";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -151,6 +152,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
   const [requestListingId, setRequestListingId] = useState<string | null>(null);
   const [requestNote, setRequestNote] = useState("");
   const { toast } = useToast();
+  const timeFormat = useTimeFormat();
 
   const { data: marketplaceListings = [], refetch: refetchListings } = useQuery<any[]>({
     queryKey: ["/api/marketplace/listings"],
@@ -752,6 +754,14 @@ export default function SchedulePage() {
     endDate: "",
   });
   const [publishResult, setPublishResult] = useState<{ published: number; notified: number } | null>(null);
+  const [copyWeekOpen, setCopyWeekOpen] = useState(false);
+  const [copyWeekForm, setCopyWeekForm] = useState({
+    companyId: "",
+    sourceWeekStart: "",
+    targetWeekStart: "",
+    departmentId: "",
+    mode: "merge" as "merge" | "replace",
+  });
 
   const getLaborWeekRange = () => {
     const now = new Date();
@@ -1029,7 +1039,7 @@ export default function SchedulePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
       setAddRecurringOpen(false);
-      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "", positionId: "", costCenterId: "", note: "" });
+      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", department: "", jobId: "", positionId: "", costCenterId: "", note: "" });
       toast({ title: "Recurring schedule added" });
     },
     onError: (error: Error) => {
@@ -1069,6 +1079,29 @@ export default function SchedulePage() {
     },
     onError: (error: Error) => {
       toast({ title: "Error generating schedules", description: error.message, variant: "destructive" });
+    },
+  });
+
+
+  const copyWeekMutation = useMutation({
+    mutationFn: async (data: typeof copyWeekForm) => {
+      const res = await apiRequest("POST", "/api/schedules/copy-week", {
+        ...data,
+        departmentId: data.departmentId || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      setCopyWeekOpen(false);
+      const target = new Date(`${data.targetWeekStart}T00:00:00`);
+      toast({
+        title: "Week copied as draft",
+        description: `Copied ${data.copiedCount} shifts to draft schedule for week of ${target.toLocaleDateString()}.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error copying week", description: error.message, variant: "destructive" });
     },
   });
 
@@ -1582,6 +1615,72 @@ export default function SchedulePage() {
                         </DialogFooter>
                       </div>
                     )}
+                  </DialogContent>
+                </Dialog>
+              )}
+
+              {isAdminOrManager && (
+                <Dialog open={copyWeekOpen} onOpenChange={setCopyWeekOpen}>
+                  <DialogTrigger asChild>
+                    <Button
+                      variant="outline"
+                      data-testid="button-copy-published-week"
+                      onClick={() => {
+                        const first = viewMode === "week" ? (dateStrings[0] || "") : formatDate(getWeekDates(viewDates[0] || new Date())[0]);
+                        const target = new Date(`${first}T00:00:00`);
+                        target.setDate(target.getDate() + 7);
+                        setCopyWeekForm({
+                          companyId: selectedCompany === "all" ? (companies[0]?.id || "") : selectedCompany,
+                          sourceWeekStart: first,
+                          targetWeekStart: formatDate(target),
+                          departmentId: "",
+                          mode: "merge",
+                        });
+                      }}
+                    >
+                      <Copy className="h-4 w-4 mr-1" />
+                      Copy Published Week
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader><DialogTitle>Copy Published Week</DialogTitle></DialogHeader>
+                    <div className="space-y-4">
+                      <p className="text-sm text-muted-foreground">Copy published shifts into a future week as draft shifts. Notifications are not sent until you publish.</p>
+                      <div>
+                        <Label>Company</Label>
+                        <Select value={copyWeekForm.companyId} onValueChange={(v) => setCopyWeekForm(f => ({ ...f, companyId: v }))}>
+                          <SelectTrigger data-testid="select-copy-week-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                          <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div><Label>Source week start</Label><Input type="date" value={copyWeekForm.sourceWeekStart} onChange={(e) => setCopyWeekForm(f => ({ ...f, sourceWeekStart: e.target.value }))} data-testid="input-copy-source-week" /></div>
+                        <div><Label>Target week start</Label><Input type="date" value={copyWeekForm.targetWeekStart} onChange={(e) => setCopyWeekForm(f => ({ ...f, targetWeekStart: e.target.value }))} data-testid="input-copy-target-week" /></div>
+                      </div>
+                      <div>
+                        <Label>Department (optional)</Label>
+                        <Select value={copyWeekForm.departmentId || "all"} onValueChange={(v) => setCopyWeekForm(f => ({ ...f, departmentId: v === "all" ? "" : v }))}>
+                          <SelectTrigger data-testid="select-copy-week-department"><SelectValue placeholder="All departments" /></SelectTrigger>
+                          <SelectContent><SelectItem value="all">All departments</SelectItem>{departments.map(d => <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>)}</SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>Copy mode</Label>
+                        <Select value={copyWeekForm.mode} onValueChange={(v: "merge" | "replace") => setCopyWeekForm(f => ({ ...f, mode: v }))}>
+                          <SelectTrigger data-testid="select-copy-week-mode"><SelectValue /></SelectTrigger>
+                          <SelectContent><SelectItem value="merge">Merge — add draft shifts</SelectItem><SelectItem value="replace">Replace existing draft shifts only</SelectItem></SelectContent>
+                        </Select>
+                      </div>
+                      {(() => {
+                        const targetEndDate = copyWeekForm.targetWeekStart ? new Date(`${copyWeekForm.targetWeekStart}T00:00:00`) : null;
+                        targetEndDate?.setDate(targetEndDate.getDate() + 6);
+                        const targetEnd = targetEndDate ? formatDate(targetEndDate) : "";
+                        const targetShifts = schedules.filter(s => s.companyId === copyWeekForm.companyId && s.date >= copyWeekForm.targetWeekStart && s.date <= targetEnd);
+                        if (targetShifts.length === 0) return null;
+                        return <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 p-3 flex gap-2 text-xs text-amber-800 dark:text-amber-200" data-testid="copy-week-target-warning"><AlertTriangle className="h-4 w-4 shrink-0" />Target week already has {targetShifts.length} shift(s). Merge appends drafts; replace removes draft/unpublished shifts only.</div>;
+                      })()}
+                      <DialogFooter><Button variant="outline" onClick={() => setCopyWeekOpen(false)}>Cancel</Button><Button onClick={() => copyWeekMutation.mutate(copyWeekForm)} disabled={copyWeekMutation.isPending || !copyWeekForm.companyId || !copyWeekForm.sourceWeekStart || !copyWeekForm.targetWeekStart} data-testid="button-confirm-copy-week">{copyWeekMutation.isPending ? "Copying..." : "Copy as Draft"}</Button></DialogFooter>
+                    </div>
                   </DialogContent>
                 </Dialog>
               )}
@@ -2815,7 +2914,7 @@ export default function SchedulePage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={addScheduleOpen} onOpenChange={(v) => { setAddScheduleOpen(v); if (!v) setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", note: "" }); }}>
+      <Dialog open={addScheduleOpen} onOpenChange={(v) => { setAddScheduleOpen(v); if (!v) setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", positionId: "", costCenterId: "", note: "" }); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Scheduled Shift</DialogTitle>

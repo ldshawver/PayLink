@@ -1,0 +1,82 @@
+name: Payroll period diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Payroll period start date"
+        required: true
+        default: "2026-05-31"
+      end:
+        description: "Payroll period end date"
+        required: true
+        default: "2026-06-06"
+      payDate:
+        description: "Payroll pay date"
+        required: true
+        default: "2026-06-10"
+      companyId:
+        description: "Optional company id scope"
+        required: false
+        default: ""
+      names:
+        description: "Comma-separated worker names"
+        required: true
+        default: "Phil,Marek,Jamie"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    name: Run read-only payroll diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PGPASSWORD: ${{ secrets.PGPASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Confirm database secret is present without printing it
+        run: test -n "$DATABASE_URL" && echo "DATABASE_URL present"
+
+      - name: Run read-only payroll diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            "--start=${{ inputs.start }}"
+            "--end=${{ inputs.end }}"
+            "--payDate=${{ inputs.payDate }}"
+            "--names=${{ inputs.names }}"
+          )
+          if [ -n "${{ inputs.companyId }}" ]; then
+            args+=("--companyId=${{ inputs.companyId }}")
+          fi
+          npx tsx scripts/diagnose-payroll-period.ts "${args[@]}" | tee payroll-diagnostic-report.json
+          {
+            echo "## Payroll diagnostic report"
+            echo
+            echo '```json'
+            cat payroll-diagnostic-report.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: payroll-diagnostic-report
+          path: payroll-diagnostic-report.json
+          if-no-files-found: error

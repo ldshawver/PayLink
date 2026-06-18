@@ -108,9 +108,9 @@ function ContactInfoTab({ worker }: { worker: Worker | null }) {
     zip: worker?.zip || "",
     country: worker?.country || "US",
     emergencyContactName: worker?.emergencyContactName || "",
-    emergencyContactRelationship: worker?.emergencyContactRelationship || "",
+    emergencyContactRelationship: (worker as any)?.emergencyContactRelationship || "",
     emergencyContactPhone: worker?.emergencyContactPhone || "",
-    emergencyContactEmail: worker?.emergencyContactEmail || "",
+    emergencyContactEmail: (worker as any)?.emergencyContactEmail || "",
   });
 
   const mutation = useMutation({

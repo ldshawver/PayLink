@@ -194,6 +194,7 @@ const MAIN_NAV: NavGroup[] = [
           { title: "Contracts",           url: "/app/contractor-hub?section=contracts",        icon: FileSignature },
           { title: "Invoices",            url: "/app/contractor-hub?section=invoices",         icon: Receipt },
           { title: "Working Documents",   url: "/app/contractor-hub?section=documents",        icon: FolderOpen },
+          { title: "Documents & Signatures", url: "/app/contractor-hub?section=signatures",       icon: FileSignature },
           { title: "Payments",            url: "/app/contractor-hub?section=payments",         icon: CreditCard },
           { title: "Messages",            url: "/app/contractor-hub?section=messages",         icon: MessageSquare },
           { title: "Profile & Branding",  url: "/app/contractor-hub?section=branding",         icon: Palette },

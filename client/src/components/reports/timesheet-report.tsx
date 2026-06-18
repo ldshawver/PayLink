@@ -6,13 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { TimeEntry, Worker, Company } from "@shared/schema";
+
+type ReportTimeEntry = TimeEntry & { regularHours?: string | number | null; overtimeHours?: string | number | null; doubleTimeHours?: string | number | null };
 import {
   ReportShell, ReportHeader, ReportSection, ReportTable, ReportTotalsGrid, ReportFooter,
   exportReportCSV, useReportUser,
 } from "@/components/report-template";
 
 interface TimesheetReportProps {
-  entries: TimeEntry[];
+  entries: ReportTimeEntry[];
   workers: Worker[];
   company: Company | undefined;
   dateFrom: string;
@@ -23,21 +25,22 @@ export function TimesheetReport({ entries, workers, company, dateFrom, dateTo }:
   const generatedBy = useReportUser();
   const getWorker = (id: string) => workers.find(w => w.id === id);
   const fmtH = (n: number) => n.toFixed(2) + " hrs";
-  const fmt12 = (iso: string | null | undefined) => {
+  const fmt12 = (iso: string | Date | null | undefined) => {
     if (!iso) return "—";
-    try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }); } catch { return iso; }
+    try { return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }); } catch { return String(iso); }
   };
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || "All dates";
+  const fmtDate = (value: string | Date | null | undefined): string => value instanceof Date ? value.toISOString().slice(0, 10) : (value ? String(value) : "—");
 
   const sorted = [...entries].sort((a, b) => {
     const wa = getWorker(a.workerId);
     const wb = getWorker(b.workerId);
     const na = wa ? `${wa.lastName} ${wa.firstName}` : a.workerId;
     const nb = wb ? `${wb.lastName} ${wb.firstName}` : b.workerId;
-    return na.localeCompare(nb) || (a.date || "").localeCompare(b.date || "");
+    return na.localeCompare(nb) || String(a.date || "").localeCompare(String(b.date || ""));
   });
 
-  const rows = sorted.map(e => {
+  const rows: string[][] = sorted.map(e => {
     const w = getWorker(e.workerId);
     const name = w ? `${w.lastName}, ${w.firstName}` : e.workerId;
     const reg = Number(e.regularHours || 0);
@@ -46,14 +49,14 @@ export function TimesheetReport({ entries, workers, company, dateFrom, dateTo }:
     const total = reg + ot + dt;
     return [
       name,
-      e.date || "—",
+      fmtDate(e.date),
       fmt12(e.clockIn),
       fmt12(e.clockOut),
       fmtH(reg),
       ot > 0 ? fmtH(ot) : "—",
       dt > 0 ? fmtH(dt) : "—",
       fmtH(total),
-      e.status || "—",
+      String(e.status || "—"),
     ];
   });
 
@@ -77,13 +80,13 @@ export function TimesheetReport({ entries, workers, company, dateFrom, dateTo }:
 
   const handleCSV = () => {
     const headers = ["Employee", "Date", "Clock In", "Clock Out", "Regular Hrs", "OT Hrs", "DT Hrs", "Total Hrs", "Status"];
-    const csvRows = sorted.map(e => {
+    const csvRows: string[][] = sorted.map(e => {
       const w = getWorker(e.workerId);
       const name = w ? `${w.firstName} ${w.lastName}` : e.workerId;
       const reg = Number(e.regularHours || 0);
       const ot = Number(e.overtimeHours || 0);
       const dt = Number(e.doubleTimeHours || 0);
-      return [name, e.date || "", fmt12(e.clockIn), fmt12(e.clockOut), reg.toFixed(2), ot.toFixed(2), dt.toFixed(2), (reg + ot + dt).toFixed(2), e.status || ""];
+      return [name, fmtDate(e.date), fmt12(e.clockIn), fmt12(e.clockOut), reg.toFixed(2), ot.toFixed(2), dt.toFixed(2), (reg + ot + dt).toFixed(2), String(e.status || "")];
     });
     exportReportCSV(`timesheet-${dateFrom}-${dateTo}.csv`, headers, csvRows);
   };
