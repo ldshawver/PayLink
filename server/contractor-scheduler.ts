@@ -130,6 +130,58 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
           }
         }
 
+
+
+        // ── Configured contract signing reminders ─────────────────────────
+        const configuredSigningReminders = await db.execute(sql`
+          SELECT cr.*, cc.title AS contract_title, cc.contract_number, cc.status AS contract_status, cc.company_id AS contract_company_id
+          FROM contractor_reminders cr
+          JOIN contractor_contracts cc ON cc.id = cr.entity_id
+          WHERE cr.company_id = ${cid}
+            AND cr.entity_type = 'contract'
+            AND cr.reminder_type = 'signing_request_config'
+            AND cr.status = 'pending'
+            AND cr.scheduled_at <= NOW()
+            AND cc.status NOT IN ('fully_signed','completed','void','terminated')
+        `);
+        for (const reminder of configuredSigningReminders.rows as any[]) {
+          let config: any = {};
+          try { config = reminder.notes ? JSON.parse(reminder.notes) : {}; } catch { config = { message: reminder.notes || undefined }; }
+          const frequencyDays = Number(config.frequencyDays || 7);
+          const nextAt = new Date(Date.now() + Math.max(1, frequencyDays) * 86400000);
+          const pendingSigners = await db.execute(sql`
+            SELECT id, name, email, status FROM contract_signers
+            WHERE contract_id = ${reminder.entity_id}
+              AND status IN ('pending','sent','viewed','unsent')
+              AND email IS NOT NULL
+              ${config.selectedSignerId ? sql`AND id = ${config.selectedSignerId}` : sql``}
+          `);
+          const { sendGenericNotificationEmail } = await import("./notifications.js");
+          let sentCount = 0;
+          let lastError: string | null = null;
+          for (const signer of pendingSigners.rows as any[]) {
+            const actionUrl = `/app/contractor-hub?section=contracts&id=${reminder.entity_id}`;
+            const subject = `Reminder: please sign ${reminder.contract_title || reminder.contract_number || "contract"}`;
+            const body = config.message || "Please sign this contract when you have a moment.";
+            try {
+              const result = await sendGenericNotificationEmail({ recipientName: signer.name || "Signer", email: signer.email, title: subject, body, actionUrl });
+              const ok = (result as any)?.sent !== false;
+              if (ok) sentCount++; else lastError = (result as any)?.error || "email_not_sent";
+              await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status, error_message) VALUES ('contract', ${reminder.entity_id}, 'email', ${signer.email}, 'contract_signing_reminder', ${subject}, ${body}, ${ok ? "sent" : "failed"}, ${ok ? null : lastError})`).catch(() => {});
+            } catch (err: any) {
+              lastError = err?.message || "send_failed";
+              await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status, error_message) VALUES ('contract', ${reminder.entity_id}, 'email', ${signer.email}, 'contract_signing_reminder', ${subject}, ${body}, 'failed', ${lastError})`).catch(() => {});
+            }
+          }
+          const retryCount = lastError ? Number(config.retryCount || 0) + 1 : 0;
+          await db.execute(sql`
+            UPDATE contractor_reminders
+            SET sent_at = NOW(), scheduled_at = ${nextAt}, updated_at = NOW(), notes = ${JSON.stringify({ ...config, retryCount, lastError, lastSentCount: sentCount })}
+            WHERE id = ${reminder.id}
+          `);
+          if (sentCount > 0) created += sentCount;
+        }
+
         // ── Contract expiring soon ───────────────────────────────────────────
         const expiring = await db.execute(sql`
           SELECT id, contract_number, title, contractor_id, end_date FROM contractor_contracts

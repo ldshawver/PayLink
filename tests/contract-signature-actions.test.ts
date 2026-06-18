@@ -23,7 +23,7 @@ for (const role of ["contractor", "employee", "reviewer", null]) {
 }
 console.log("PASS: unauthorized users do not see signature actions");
 
-assert.equal(getDocumensoDisabledReason({ role: "admin", signerCount: 0 }), "Add at least one signer with an email before sending via Documenso", "no signer is disabled, not hidden");
+assert.equal(getDocumensoDisabledReason({ role: "admin", signerCount: 0 }), "Add at least one signer with an email before sending.", "no signer is disabled, not hidden");
 assert.equal(getDocumensoDisabledReason({ role: "admin", signerCount: 1 }), null, "signer with email enables Documenso action");
 assert.equal(getDocumensoDisabledReason({ role: "manager", signerCount: 1 }), null, "manager signer with email enables Documenso action");
 assert.equal(getDocumensoDisabledReason({ role: "contractor", signerCount: 1 }), "Only admins, managers, and global admins can send contracts for Documenso signature", "unauthorized role stays disabled");

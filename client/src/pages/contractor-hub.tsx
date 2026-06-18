@@ -33,7 +33,7 @@ import {
   UserCheck
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { canShowContractSignatureActions, getDocumensoDisabledReason } from "@/lib/contractSignatureActions";
+import { canShowContractSignatureActions, getDocumensoDisabledReason, buildContractorHubProposalRoute, buildContractorHubInvoiceRoute } from "@/lib/contractSignatureActions";
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 class ProposalErrorBoundary extends Component<
@@ -233,8 +233,14 @@ interface Signer {
   workerId?: string;
   userId?: string;
   order?: number;
-  status: "pending" | "signed" | "declined";
+  status: "draft" | "unsent" | "pending" | "sent" | "viewed" | "signed" | "declined" | "revoked" | "replaced";
   signedAt?: string;
+  sentAt?: string;
+  lastSentAt?: string;
+  signingUrl?: string;
+  documensoSigningUrl?: string;
+  isRequired?: boolean;
+  reminderRecipientSetting?: string;
   signatureData?: string;
   createdAt?: string;
 }
@@ -276,6 +282,15 @@ interface Contract {
   archivedByUserId?: string;
   archiveReason?: string;
   isArchived?: boolean;
+  documensoDocumentId?: string;
+  documensoSigningUrl?: string;
+  signingUrl?: string;
+  signedDocumentUrl?: string;
+  invoiceId?: string;
+  invoiceStatus?: string;
+  invoiceAutoCreateError?: string;
+  approvedProposalTitle?: string;
+  approvedProposalNumber?: string;
   signers?: Signer[];
 }
 
@@ -4433,6 +4448,8 @@ function ContractDetailPanel({
   const [newSignerEmail, setNewSignerEmail] = useState("");
   const [newSignerRole, setNewSignerRole] = useState("reviewer");
   const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
+  const [editingSigner, setEditingSigner] = useState<Signer | null>(null);
+  const [reminderMessage, setReminderMessage] = useState("Please sign this contract when you have a moment.");
 
   const { data: contract, refetch } = useQuery<Contract>({
     queryKey: ["/api/contractor-contracts", initialContract.id],
@@ -4448,6 +4465,14 @@ function ContractDetailPanel({
 
   const signers: Signer[] = (contract?.signers || []).map(snakeToCamel) as Signer[];
   const totalValue = contract?.totalValue || (contract as any)?.total_value;
+  const signerEmailCount = signers.filter(s => !!s.email).length;
+  const proposalId = (contract as any).proposalId || (contract as any).proposal_id;
+  const proposalTitle = (contract as any).approvedProposalTitle || (contract as any).approved_proposal_title || (contract as any).proposalTitle || (contract as any).proposal_title;
+  const proposalNumber = (contract as any).approvedProposalNumber || (contract as any).approved_proposal_number || (contract as any).proposalNumber || (contract as any).proposal_number;
+  const invoiceId = (contract as any).invoiceId || (contract as any).invoice_id;
+  const invoiceStatus = (contract as any).invoiceStatus || (contract as any).invoice_status;
+  const documensoSigningUrl = (contract as any).documensoSigningUrl || (contract as any).documenso_signing_url || (contract as any).signingUrl || (contract as any).signing_url;
+  const signedDocumentUrl = (contract as any).signedDocumentUrl || (contract as any).signed_document_url;
 
   const daysUntilExpiry = contract?.endDate
     ? Math.round((new Date(contract.endDate).getTime() - Date.now()) / 86400000)
@@ -4465,6 +4490,24 @@ function ContractDetailPanel({
     mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/send`, {}),
     onSuccess: () => { refetch(); toast({ title: "Contract sent for signing" }); onRefresh(); },
     onError: (e: any) => toast({ title: e?.message || "Failed to send", variant: "destructive" }),
+  });
+
+  const resendSigningMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/contractor-contracts/${contract.id}/resend-signing-request`, {})).json(),
+    onSuccess: (data: any) => { refetch(); toast({ title: "Signing request re-sent", description: `${data?.sentCount ?? 0} pending signer(s) notified.` }); onRefresh(); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to re-send signing request", variant: "destructive" }),
+  });
+
+  const sendReminderNowMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/contractor-contracts/${contract.id}/signing-reminders/send-now`, { message: reminderMessage })).json(),
+    onSuccess: (data: any) => { refetch(); toast({ title: "Reminder sent", description: `${data?.sentCount ?? 0} pending signer(s) reminded.` }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to send reminder", variant: "destructive" }),
+  });
+
+  const saveReminderMutation = useMutation({
+    mutationFn: async (body: any) => (await apiRequest("PATCH", `/api/contractor-contracts/${contract.id}/signing-reminders`, body)).json(),
+    onSuccess: () => toast({ title: "Reminder settings saved" }),
+    onError: (e: any) => toast({ title: e?.message || "Failed to save reminders", variant: "destructive" }),
   });
 
   const sendViaDocumensoMutation = useMutation({
@@ -4488,6 +4531,24 @@ function ContractDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Failed to void", variant: "destructive" }),
   });
 
+  const updateSignerMutation = useMutation({
+    mutationFn: (payload: Partial<Signer> & { id: string }) => apiRequest("PATCH", `/api/contractor-contracts/${contract.id}/signers/${payload.id}`, payload),
+    onSuccess: () => { refetch(); setEditingSigner(null); toast({ title: "Signer updated" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to update signer", variant: "destructive" }),
+  });
+
+  const deleteSignerMutation = useMutation({
+    mutationFn: (signerId: string) => apiRequest("DELETE", `/api/contractor-contracts/${contract.id}/signers/${signerId}`, {}),
+    onSuccess: () => { refetch(); toast({ title: "Signer removed or revoked" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to remove signer", variant: "destructive" }),
+  });
+
+  const replaceSignerMutation = useMutation({
+    mutationFn: (payload: Partial<Signer> & { id: string }) => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers/${payload.id}/replace`, payload),
+    onSuccess: () => { refetch(); setEditingSigner(null); toast({ title: "Signer replaced" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to replace signer", variant: "destructive" }),
+  });
+
   const addSignerMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/add-signer`, { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
     onSuccess: () => { refetch(); setAddSignerOpen(false); setNewSignerName(""); setNewSignerEmail(""); toast({ title: "Signer added" }); },
@@ -4500,12 +4561,15 @@ function ContractDetailPanel({
   const documensoDisabledReason = getDocumensoDisabledReason({
     role: currentUserRole,
     signerCount: signers.length,
+    signerEmailCount,
     isPending: sendViaDocumensoMutation.isPending,
   });
   const canActivate = isAdmin && ["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status);
   const canVoid = isAdmin && !["void", "terminated"].includes(contract.status);
   const canSign = canShowSignatureActions;
-  const canCreateInvoice = ["active", "fully_signed"].includes(contract.status);
+  const canCreateInvoice = ["active", "fully_signed", "completed"].includes(contract.status) && !invoiceId;
+  const canResendSigningRequest = canShowSignatureActions && ["sent", "awaiting_signatures", "partially_signed", "pending"].includes(contract.status);
+  const canShowDocumensoLaunch = !!documensoSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
 
   return (
     <Sheet open onOpenChange={v => !v && onClose()}>
@@ -4557,6 +4621,18 @@ function ContractDetailPanel({
                   title={documensoDisabledReason || "Email this contract for signature via Documenso"}
                 >
                   <PenLine className="h-3.5 w-3.5 mr-1" /> {sendViaDocumensoMutation.isPending ? "Sending…" : "Send via Documenso"}
+                </Button>
+              )}
+              {canShowDocumensoLaunch && (
+                <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="link-sign-with-documenso">
+                  <Button size="sm" variant="outline" className="border-teal-300 text-teal-700">
+                    <ExternalLink className="h-3.5 w-3.5 mr-1" /> Sign with Documenso
+                  </Button>
+                </a>
+              )}
+              {canResendSigningRequest && (
+                <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-resend-signing-request">
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" /> Re-send signing request
                 </Button>
               )}
               <a href={`/api/contractor-contracts/${contract.id}/download`} target="_blank" rel="noreferrer" data-testid="btn-download-contract">
@@ -4636,6 +4712,55 @@ function ContractDetailPanel({
                     <p className="text-sm">{fmtDate(contract.fullySignedAt)}</p>
                   </div>
                 )}
+              </div>
+
+              {documensoDisabledReason && canSendViaDocumenso && (
+                <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg text-sm text-blue-700 dark:text-blue-300" data-testid="alert-documenso-disabled-reason">
+                  {documensoDisabledReason}
+                </div>
+              )}
+
+              <div className="p-4 border rounded-lg space-y-3" data-testid="panel-documenso-signing-workflow">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold flex items-center gap-2"><PenLine className="h-4 w-4" /> Documenso signing</h3>
+                    <p className="text-xs text-muted-foreground">View status, launch in-app signing, copy links, or re-send pending requests.</p>
+                  </div>
+                  <Badge variant="outline" data-testid="badge-documenso-status">{contract.status}</Badge>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => sendViaDocumensoMutation.mutate()} disabled={!canSendViaDocumenso || sendViaDocumensoMutation.isPending || !!documensoDisabledReason} data-testid="btn-documenso-panel-send">Send via Documenso</Button>
+                  {canShowDocumensoLaunch && <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="btn-documenso-panel-launch"><Button size="sm" variant="outline">Sign with Documenso</Button></a>}
+                  <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={!canResendSigningRequest || resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-documenso-panel-resend">Re-send signing request</Button>
+                  <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(documensoSigningUrl || window.location.href)} disabled={!documensoSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
+                  {signedDocumentUrl && <a href={signedDocumentUrl} target="_blank" rel="noreferrer" data-testid="link-view-signed-document"><Button size="sm" variant="outline">View signed document</Button></a>}
+                </div>
+                <div className="space-y-1">
+                  {signers.map(s => <div key={s.id} className="flex items-center justify-between text-xs"><span>{s.name || s.email}</span><span className="capitalize">{s.status}</span></div>)}
+                </div>
+              </div>
+
+              <div className="p-4 border rounded-lg space-y-3" data-testid="panel-signing-reminders">
+                <h3 className="text-sm font-semibold flex items-center gap-2"><Bell className="h-4 w-4" /> Signing reminders</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <Select defaultValue="daily" onValueChange={v => saveReminderMutation.mutate({ frequency: v })}><SelectTrigger data-testid="select-reminder-frequency"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="daily">Daily</SelectItem><SelectItem value="every_2_days">Every 2 days</SelectItem><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="custom">Custom interval in days</SelectItem></SelectContent></Select>
+                  <Select defaultValue="all_pending" onValueChange={v => saveReminderMutation.mutate({ recipients: v })}><SelectTrigger data-testid="select-reminder-recipients"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all_pending">All pending signers</SelectItem><SelectItem value="selected_signer">Selected signer</SelectItem><SelectItem value="contractor">Contractor</SelectItem><SelectItem value="internal_copy">Internal admin/manager copy</SelectItem></SelectContent></Select>
+                </div>
+                <Textarea value={reminderMessage} onChange={e => setReminderMessage(e.target.value)} data-testid="textarea-reminder-message" />
+                <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => saveReminderMutation.mutate({ enabled: true, message: reminderMessage })} data-testid="btn-enable-reminders">Enable reminders</Button><Button size="sm" variant="outline" onClick={() => saveReminderMutation.mutate({ enabled: false })} data-testid="btn-disable-reminders">Disable reminders</Button><Button size="sm" onClick={() => sendReminderNowMutation.mutate()} disabled={sendReminderNowMutation.isPending} data-testid="btn-send-reminder-now">Send reminder now</Button></div>
+                <p className="text-xs text-muted-foreground">Next reminder send date and last reminder sent date are shown after reminders are configured.</p>
+              </div>
+
+              {proposalId && (
+                <div className="p-3 border rounded-lg flex items-center justify-between" data-testid="panel-approved-proposal-link">
+                  <div><p className="text-xs text-muted-foreground">Approved Proposal</p><p className="text-sm font-medium">{proposalTitle || proposalNumber || proposalId}</p></div>
+                  <a href={buildContractorHubProposalRoute(proposalId)} data-testid="link-view-approved-proposal"><Button size="sm" variant="outline">View Approved Proposal</Button></a>
+                </div>
+              )}
+
+              <div className="p-3 border rounded-lg flex items-center justify-between" data-testid="panel-contract-invoice-status">
+                <div><p className="text-xs text-muted-foreground">Invoice status</p><p className="text-sm font-medium">{invoiceId ? (invoiceStatus || "Created") : ((contract as any).invoiceAutoCreateError || "No invoice yet")}</p></div>
+                {invoiceId ? <a href={buildContractorHubInvoiceRoute(invoiceId)} data-testid="link-view-contract-invoice"><Button size="sm" variant="outline">View Invoice</Button></a> : <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-retry-create-invoice">Create Invoice</Button>}
               </div>
 
               {contract.description && (
@@ -4725,6 +4850,13 @@ function ContractDetailPanel({
                           {signer.status === "signed" ? "Signed" : signer.status === "declined" ? "Declined" : "Pending"}
                         </span>
                         {signer.signedAt && <p className="text-xs text-muted-foreground mt-1">{fmtDate(signer.signedAt)}</p>}
+                        {isAdmin && !["fully_signed","completed","void","terminated"].includes(contract.status) && (
+                          <div className="flex gap-1 mt-2 justify-end">
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingSigner(signer)} data-testid={`btn-edit-signer-${signer.id}`}>Edit</Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2 text-red-600" onClick={() => deleteSignerMutation.mutate(signer.id)} data-testid={`btn-delete-signer-${signer.id}`}>Delete/remove</Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingSigner({ ...signer, status: "replaced" as any })} data-testid={`btn-replace-signer-${signer.id}`}>Replace</Button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -4844,6 +4976,24 @@ function ContractDetailPanel({
                 {addSignerMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
                 Add Signer
               </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+
+        <Dialog open={!!editingSigner} onOpenChange={v => !v && setEditingSigner(null)}>
+          <DialogContent data-testid="dialog-edit-signer">
+            <DialogHeader><DialogTitle>{editingSigner?.status === "replaced" ? "Replace signer" : "Edit signer"}</DialogTitle></DialogHeader>
+            {editingSigner && <div className="space-y-3 py-2">
+              <Input value={editingSigner.name || ""} onChange={e => setEditingSigner({ ...editingSigner, name: e.target.value })} data-testid="input-edit-signer-name" />
+              <Input type="email" value={editingSigner.email || ""} onChange={e => setEditingSigner({ ...editingSigner, email: e.target.value })} data-testid="input-edit-signer-email" />
+              <Select value={editingSigner.role || "contractor"} onValueChange={v => setEditingSigner({ ...editingSigner, role: v })}><SelectTrigger data-testid="select-edit-signer-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="contractor">Contractor</SelectItem><SelectItem value="company_rep">Company Representative</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem><SelectItem value="witness">Witness</SelectItem></SelectContent></Select>
+              <Input type="number" value={editingSigner.order || 1} onChange={e => setEditingSigner({ ...editingSigner, order: Number(e.target.value) })} data-testid="input-edit-signer-order" />
+              <Select value={editingSigner.isRequired === false ? "optional" : "required"} onValueChange={v => setEditingSigner({ ...editingSigner, isRequired: v === "required" })}><SelectTrigger data-testid="select-edit-signer-required"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="required">Required</SelectItem><SelectItem value="optional">Optional</SelectItem></SelectContent></Select>
+            </div>}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingSigner(null)}>Cancel</Button>
+              {editingSigner?.status === "replaced" ? <Button onClick={() => replaceSignerMutation.mutate(editingSigner)} data-testid="btn-confirm-replace-signer">Replace signer</Button> : <Button onClick={() => editingSigner && updateSignerMutation.mutate(editingSigner)} data-testid="btn-confirm-edit-signer">Save signer</Button>}
             </DialogFooter>
           </DialogContent>
         </Dialog>

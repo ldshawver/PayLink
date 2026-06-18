@@ -13576,7 +13576,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
       if (isAdmin && !(await canAccessCompany(user!, contract.company_id))) return res.status(403).json({ message: "Access denied" });
       const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
-      res.json({ ...contract, signers: signers.rows });
+      const proposalInfo = contract.proposal_id ? (await db.execute(sql`SELECT id, proposal_number, title FROM contractor_proposals WHERE id = ${contract.proposal_id} AND company_id = ${contract.company_id} LIMIT 1`)).rows[0] as any : null;
+      const invoiceInfo = (await db.execute(sql`SELECT id, status FROM contractor_invoices WHERE contract_id = ${req.params.id} AND company_id = ${contract.company_id} ORDER BY created_at DESC LIMIT 1`)).rows[0] as any;
+      const documensoInfo = (await db.execute(sql`SELECT documenso_document_id, status, raw_response FROM documenso_signature_requests WHERE document_type = 'contract' AND related_record_id = ${req.params.id} AND company_id = ${contract.company_id} ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] } as any))).rows[0] as any;
+      const rawResponse = typeof documensoInfo?.raw_response === "string" ? JSON.parse(documensoInfo.raw_response || "{}") : (documensoInfo?.raw_response || {});
+      res.json({ ...contract, signers: signers.rows, approved_proposal_title: proposalInfo?.title || null, approved_proposal_number: proposalInfo?.proposal_number || null, invoice_id: invoiceInfo?.id || null, invoice_status: invoiceInfo?.status || null, documenso_document_id: documensoInfo?.documenso_document_id || null, documenso_signing_url: rawResponse?.signingUrl || rawResponse?.signing_url || rawResponse?.documentUrl || rawResponse?.document_url || null, signed_document_url: rawResponse?.signedDocumentUrl || rawResponse?.signed_document_url || null });
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
   });
 
@@ -14410,6 +14414,163 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   }
 
   // ── Contract: Download PDF ────────────────────────────────────────────────
+
+
+  function normalizeContractSigningReminderConfig(body: any = {}) {
+    const frequency = String(body.frequency || "weekly");
+    const customIntervalDays = Math.max(1, Number(body.customIntervalDays || body.custom_interval_days || 7));
+    const frequencyDays = frequency === "daily" ? 1 : frequency === "every_2_days" ? 2 : frequency === "weekly" ? 7 : customIntervalDays;
+    return {
+      enabled: body.enabled !== false,
+      frequency,
+      frequencyDays,
+      recipients: String(body.recipients || "all_pending"),
+      selectedSignerId: body.selectedSignerId || body.selected_signer_id || null,
+      message: String(body.message || "Please sign this contract when you have a moment."),
+      internalCopy: !!(body.internalCopy || body.internal_copy),
+    };
+  }
+
+  async function getContractSigningReminderRow(contractId: string) {
+    const row = (await db.execute(sql`
+      SELECT * FROM contractor_reminders
+      WHERE entity_type = 'contract' AND entity_id = ${contractId} AND reminder_type = 'signing_request_config'
+      ORDER BY created_at DESC LIMIT 1
+    `)).rows[0] as any;
+    return row || null;
+  }
+
+  function parseContractSigningReminderNotes(notes: unknown) {
+    if (!notes) return {} as any;
+    try { return typeof notes === "string" ? JSON.parse(notes) : notes as any; } catch { return { message: String(notes) }; }
+  }
+
+  async function sendContractSigningReminderNow(contract: any, contractId: string, actorUserId: string | undefined, message: string, selectedSignerId?: string | null) {
+    const terminal = ["fully_signed", "completed", "void", "terminated"];
+    if (terminal.includes(contract.status)) throw new Error("Reminders are stopped for completed, fully signed, void, or terminated contracts");
+    const pending = selectedSignerId
+      ? await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${selectedSignerId} AND contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`)
+      : await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`);
+    const signers = pending.rows as any[];
+    const { sendGenericNotificationEmail } = await import("./notifications.js");
+    const baseUrl = process.env.APP_BASE_URL || "";
+    let sentCount = 0;
+    const failures: Array<{ signerId: string; email: string; error: string }> = [];
+    for (const signer of signers) {
+      const signingUrl = `${baseUrl}/app/contractor-hub?section=contracts&id=${contractId}`;
+      const subject = `Reminder: please sign ${contract.title || contract.contract_number || "contract"}`;
+      const body = `${message}\n\nContract: ${contract.title || contract.contract_number || contractId}\nOpen signing: ${signingUrl}`;
+      try {
+        const result = await sendGenericNotificationEmail({ recipientName: signer.name || "Signer", email: signer.email, title: subject, body, actionUrl: signingUrl });
+        const ok = (result as any)?.sent !== false;
+        if (ok) sentCount++; else failures.push({ signerId: signer.id, email: signer.email, error: (result as any)?.error || "email_not_sent" });
+        await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status, error_message) VALUES ('contract', ${contractId}, 'email', ${signer.email}, 'contract_signing_reminder', ${subject}, ${body}, ${ok ? "sent" : "failed"}, ${ok ? null : ((result as any)?.error || "email_not_sent")})`).catch(() => {});
+      } catch (err: any) {
+        failures.push({ signerId: signer.id, email: signer.email, error: err?.message || "send_failed" });
+        await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status, error_message) VALUES ('contract', ${contractId}, 'email', ${signer.email}, 'contract_signing_reminder', ${subject}, ${body}, 'failed', ${err?.message || "send_failed"})`).catch(() => {});
+      }
+    }
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "signing_reminder_sent", actorUserId, companyId: contract.company_id, metadataJson: JSON.stringify({ sentCount, failureCount: failures.length, selectedSignerId: selectedSignerId || null }) }).catch(() => {});
+    return { sentCount, failures };
+  }
+
+  app.get("/api/contractor-contracts/:id/signing-reminders", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    const row = await getContractSigningReminderRow(req.params.id);
+    const config = parseContractSigningReminderNotes(row?.notes);
+    res.json({
+      contractId: req.params.id,
+      enabled: row?.status !== "dismissed" && (config.enabled ?? false),
+      frequency: config.frequency || "weekly",
+      frequencyDays: config.frequencyDays || 7,
+      customIntervalDays: config.customIntervalDays || config.frequencyDays || 7,
+      recipients: config.recipients || "all_pending",
+      selectedSignerId: config.selectedSignerId || null,
+      message: config.message || "Please sign this contract when you have a moment.",
+      nextReminderSendDate: row?.scheduled_at || null,
+      lastReminderSentDate: row?.sent_at || null,
+      retryCount: config.retryCount || 0,
+      lastError: config.lastError || null,
+      schedulerHook: "runContractorReminderScheduler",
+    });
+  });
+
+  app.patch("/api/contractor-contracts/:id/signing-reminders", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    const config = normalizeContractSigningReminderConfig(req.body || {});
+    const next = new Date(Date.now() + config.frequencyDays * 86400000);
+    const row = await getContractSigningReminderRow(req.params.id);
+    const notes = JSON.stringify(config);
+    if (row?.id) {
+      await db.execute(sql`UPDATE contractor_reminders SET notes = ${notes}, title = ${"Contract signing reminder: " + (contract.title || contract.contract_number || req.params.id)}, scheduled_at = ${next}, status = ${config.enabled ? "pending" : "dismissed"}, updated_at = NOW() WHERE id = ${row.id}`);
+    } else {
+      await db.execute(sql`INSERT INTO contractor_reminders (worker_id, user_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${contract.contractor_id}, ${req.session.userId}, ${contract.company_id}, 'contract', ${req.params.id}, 'signing_request_config', ${"Contract signing reminder: " + (contract.title || contract.contract_number || req.params.id)}, ${notes}, ${next}, 'email', ${config.enabled ? "pending" : "dismissed"})`);
+    }
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "signing_reminders_updated", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: notes }).catch(() => {});
+    res.json({ contractId: req.params.id, ...config, nextReminderSendDate: next.toISOString(), saved: true });
+  });
+
+  app.post("/api/contractor-contracts/:id/signing-reminders/send-now", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      const row = await getContractSigningReminderRow(req.params.id);
+      const config = { ...parseContractSigningReminderNotes(row?.notes), ...normalizeContractSigningReminderConfig(req.body || {}) };
+      const result = await sendContractSigningReminderNow(contract, req.params.id, req.session.userId, config.message, config.selectedSignerId);
+      const next = new Date(Date.now() + Number(config.frequencyDays || 7) * 86400000);
+      if (row?.id) await db.execute(sql`UPDATE contractor_reminders SET sent_at = NOW(), scheduled_at = ${next}, notes = ${JSON.stringify({ ...config, retryCount: result.failures.length ? (config.retryCount || 0) + 1 : 0, lastError: result.failures[0]?.error || null })}, updated_at = NOW() WHERE id = ${row.id}`).catch(() => {});
+      res.status(result.failures.length ? 207 : 200).json({ success: result.failures.length === 0, sentCount: result.sentCount, failures: result.failures, nextReminderSendDate: next.toISOString() });
+    } catch (e: any) { res.status(400).json({ message: e?.message || "Failed to send reminder" }); }
+  });
+
+  app.post("/api/contractor-contracts/:id/resend-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot re-send signing requests for this contract status" });
+    const pending = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`);
+    await db.execute(sql`UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(), updated_at = NOW() WHERE contract_id = ${req.params.id} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`).catch(() => {});
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "signing_request_resent", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ signerCount: pending.rows.length }) }).catch(() => {});
+    res.json({ success: true, sentCount: pending.rows.length });
+  });
+
+  app.patch("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const contract = await assertContractCompanyAccess(req.params.contractId, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot edit signers after completion/void/termination" });
+    const signer = (await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`)).rows[0] as any;
+    if (!signer) return res.status(404).json({ message: "Signer not found" });
+    if (signer.status === "signed") return res.status(400).json({ message: "Signed signers cannot be edited" });
+    const body = req.body || {};
+    const updated = await db.execute(sql`UPDATE contract_signers SET name = COALESCE(${body.name || null}, name), email = COALESCE(${body.email || null}, email), role = COALESCE(${body.role || null}, role), signer_role = COALESCE(${body.signerRole || body.role || null}, signer_role), signing_order = COALESCE(${body.order || null}, signing_order), is_required = COALESCE(${body.isRequired ?? null}, is_required), updated_at = NOW() WHERE id = ${req.params.signerId} RETURNING *`);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_updated", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
+    res.json(updated.rows[0]);
+  });
+
+  app.delete("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const contract = await assertContractCompanyAccess(req.params.contractId, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot delete signers after completion/void/termination" });
+    const signer = (await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`)).rows[0] as any;
+    if (!signer) return res.status(404).json({ message: "Signer not found" });
+    if (["pending", "draft", "unsent"].includes(signer.status)) await db.execute(sql`DELETE FROM contract_signers WHERE id = ${req.params.signerId}`);
+    else await db.execute(sql`UPDATE contract_signers SET status = 'revoked', updated_at = NOW() WHERE id = ${req.params.signerId}`);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_deleted_or_revoked", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
+    res.json({ success: true, mode: ["pending", "draft", "unsent"].includes(signer.status) ? "deleted" : "revoked" });
+  });
+
+  app.post("/api/contractor-contracts/:contractId/signers/:signerId/replace", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const contract = await assertContractCompanyAccess(req.params.contractId, req.session.userId!);
+    if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot replace signers after completion/void/termination" });
+    await db.execute(sql`UPDATE contract_signers SET status = 'replaced', updated_at = NOW() WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`);
+    const body = req.body || {};
+    const result = await db.execute(sql`INSERT INTO contract_signers (contract_id, company_id, contractor_id, name, email, role, signer_role, signer_type, is_delegated, replaces_signer_id, status) VALUES (${req.params.contractId}, ${contract.company_id}, ${contract.contractor_id}, ${body.name || body.email || "Replacement signer"}, ${body.email || null}, ${body.role || "contractor"}, ${body.role || "contractor"}, 'replacement', TRUE, ${req.params.signerId}, 'pending') RETURNING *`);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_replaced", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
+    res.status(201).json(result.rows[0]);
+  });
+
   app.get("/api/contractor-contracts/:id/download", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -14442,7 +14603,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractId = req.params.id;
       const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      if (!["draft", "pending", "awaiting_signatures"].includes(contract.status)) {
+      if (!["draft", "pending", "awaiting_signatures", "sent", "partially_signed"].includes(contract.status)) {
         return res.status(400).json({ message: `Cannot send a contract in '${contract.status}' status for signature` });
       }
       const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} ORDER BY "order" ASC`);
