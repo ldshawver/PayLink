@@ -9,7 +9,9 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "typecheck": "tsc --project tsconfig.server.json",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "cleanup:test-workers": "tsx scripts/delete-test-workers.ts",
+    "test:cleanup-guards": "tsx tests/delete-test-workers-static.test.ts"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.0",
