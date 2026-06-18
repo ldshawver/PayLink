@@ -14,9 +14,18 @@ export function canSignContract(input: ContractSigningAuthInput): boolean {
   return input.isContractor || isCompanyAdmin || input.hasRegisteredSigner;
 }
 
-export function buildContractDocumensoReturnUrl(baseUrl: string, contractId: string): string {
+export function buildContractSigningUrl(baseUrl: string, token: string): string {
   const safeBase = String(baseUrl || "").replace(/\/+$/, "");
-  return `${safeBase}/app/contractor-hub?section=contracts&id=${encodeURIComponent(contractId)}`;
+  return `${safeBase}/sign/contracts/${encodeURIComponent(token)}`;
+}
+
+export function buildAuthenticatedContractSigningUrl(baseUrl: string, contractId: string): string {
+  const safeBase = String(baseUrl || "").replace(/\/+$/, "");
+  return `${safeBase}/app/contractor-hub/contracts/${encodeURIComponent(contractId)}/sign`;
+}
+
+export function buildContractDocumensoReturnUrl(baseUrl: string, contractId: string): string {
+  return buildAuthenticatedContractSigningUrl(baseUrl, contractId);
 }
 
 export interface ProposalForInvoice {

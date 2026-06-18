@@ -67,6 +67,7 @@ const ProvisioningPage = lazy(() => import("@/pages/provisioning"));
 const AuditLogPage = lazy(() => import("@/pages/audit-log"));
 const BizDocsPage = lazy(() => import("@/pages/biz-docs"));
 const ContractorHubPage = lazy(() => import("@/pages/contractor-hub"));
+const ContractSigningPage = lazy(() => import("@/pages/contract-signing"));
 const TreasuryPage = lazy(() => import("@/pages/treasury"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const PlatformHomePage = lazy(() => import("@/pages/platform-home"));
@@ -292,6 +293,7 @@ function AuthenticatedRouter() {
         <Route path="/app/provisioning">{() => <PlatformRedirect to="/platform/provisioning" />}</Route>
         <Route path="/app/audit-log">{() => <PlatformRedirect to="/platform/audit-log" />}</Route>
         <Route path="/app/biz-docs" component={BizDocsPage} />
+        <Route path="/app/contractor-hub/contracts/:id/sign">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
         <Route path="/app/contractor-hub">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><FeatureGate featureKey="tenant.finance.treasury" featureName="Stripe Treasury"><TreasuryPage /></FeatureGate></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
@@ -662,6 +664,14 @@ function AppContent() {
     return (
       <Suspense fallback={<PageLoader />}>
         <PayInvoicePage />
+      </Suspense>
+    );
+  }
+
+  if (location.startsWith("/sign/contracts/")) {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ContractSigningPage />
       </Suspense>
     );
   }

@@ -13,15 +13,31 @@ function normalizeBaseUrl(url: string): string {
 }
 
 function getBaseUrl(): string {
-  return normalizeBaseUrl(process.env.DOCUMENSO_BASE_URL || process.env.DOCUMENSO_URL || DEFAULT_BASE_URL);
+  const raw = process.env.MYPAYLINK_DOCUMENSO_BASE_URL || process.env.DOCUMENSO_BASE_URL || process.env.DOCUMENSO_URL || DEFAULT_BASE_URL;
+  const normalized = normalizeBaseUrl(raw);
+  return normalized.endsWith("/api/v2") ? normalized : `${normalized}/api/v2`;
 }
 
 function getApiKey(): string {
-  const key = (process.env.DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY || "").trim();
+  const key = (process.env.MYPAYLINK_DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY || process.env.DOCUMENSO_API_KEY || "").trim();
   if (!key || key === "REPLIT_SECRET_ONLY") {
-    throw new Error("Documenso is not configured. Add DOCUMENSO_API_KEY to Replit Secrets and rotate the token shared in chat.");
+    throw new Error("Documenso is not configured. Set MYPAYLINK_DOCUMENSO_API_KEY in environment settings.");
   }
   return key;
+}
+
+export function isDocumensoEnabled(): boolean {
+  return String(process.env.MYPAYLINK_DOCUMENSO_ENABLED || process.env.DOCUMENSO_ENABLED || "true").toLowerCase() !== "false";
+}
+
+export function validateDocumensoConfig(): { ok: boolean; message?: string; baseUrl: string } {
+  try {
+    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getBaseUrl() };
+    getApiKey();
+    return { ok: true, baseUrl: getBaseUrl() };
+  } catch (error: any) {
+    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: getBaseUrl() };
+  }
 }
 
 async function parseResponse(res: Response): Promise<any> {
