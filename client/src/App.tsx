@@ -750,10 +750,11 @@ function AppContent() {
 }
 
 function RedirectToLogin() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   useEffect(() => {
-    setLocation("/login");
-  }, [setLocation]);
+    const returnTo = `${location}${window.location.search || ""}${window.location.hash || ""}`;
+    setLocation(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+  }, [location, setLocation]);
   return <PageLoader />;
 }
 

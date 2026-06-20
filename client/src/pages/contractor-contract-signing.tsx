@@ -18,6 +18,19 @@ function confirmationMessage(status?: string | null) {
     : "Your signature was submitted. Waiting for other signer(s).";
 }
 
+function stateMessage(state?: string | null) {
+  switch (state) {
+    case "pending_signature": return "This contract is ready for your signature.";
+    case "already_signed": return "You already signed this contract. Waiting for other signer(s).";
+    case "fully_signed": return "Contract fully signed.";
+    case "expired_or_canceled": return "This signing link is expired or no longer active. Please request a new signing link.";
+    case "not_authorized": return "You do not have access to this contract.";
+    case "malformed_contract_id":
+    case "missing_contract":
+    default: return "We could not find this contract.";
+  }
+}
+
 export default function ContractorContractSigningPage() {
   const [location, navigate] = useLocation();
   const contractId = useMemo(() => contractIdFromPath(location), [location]);
@@ -64,7 +77,19 @@ export default function ContractorContractSigningPage() {
   }
 
   const data = signingQuery.data || {};
-  const status = completionStatus || (data.alreadySigned ? data.contractStatus : null);
+  const status = completionStatus || (data.state === "fully_signed" ? "fully_signed" : data.state === "already_signed" ? "partially_signed" : null);
+  const terminalState = ["missing_contract", "malformed_contract_id", "not_authorized", "expired_or_canceled"].includes(data.state);
+
+  if (terminalState) {
+    return (
+      <SigningShell>
+        <ErrorState
+          title={data.state === "not_authorized" ? "Not authorized" : data.state === "expired_or_canceled" ? "Signing link inactive" : "Contract not found"}
+          message={data.message || stateMessage(data.state)}
+        />
+      </SigningShell>
+    );
+  }
 
   if (status) {
     return (
@@ -72,7 +97,7 @@ export default function ContractorContractSigningPage() {
         <Alert data-testid="contract-signing-confirmation">
           <CheckCircle className="h-4 w-4" />
           <AlertTitle>Signature received</AlertTitle>
-          <AlertDescription>{confirmationMessage(status)}</AlertDescription>
+          <AlertDescription>{data.message || confirmationMessage(status)}</AlertDescription>
         </Alert>
         <div className="mt-4">
           <Button variant="outline" onClick={() => navigate(`/app/contractor-hub?section=contracts&id=${encodeURIComponent(contractId)}`)} data-testid="btn-return-to-contract">
@@ -90,6 +115,7 @@ export default function ContractorContractSigningPage() {
           <div className="rounded-full bg-primary/10 p-3"><FileSignature className="h-6 w-6 text-primary" /></div>
           <div>
             <h1 className="text-2xl font-semibold">{data.title || "Contract ready for signature"}</h1>
+            <p className="text-sm text-muted-foreground" data-testid="text-contract-ready-for-signature">{data.message || stateMessage("pending_signature")}</p>
             <p className="text-sm text-muted-foreground">Signer: {data.signerName || data.signerEmail || "Authenticated signer"}</p>
           </div>
         </div>
@@ -119,4 +145,4 @@ function ErrorState({ title, message }: { title: string; message: string }) {
   return <Alert variant="destructive" data-testid="contract-signing-friendly-not-found"><AlertTriangle className="h-4 w-4" /><AlertTitle>{title}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert>;
 }
 
-export { confirmationMessage };
+export { confirmationMessage, stateMessage };

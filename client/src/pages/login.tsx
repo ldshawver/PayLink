@@ -168,12 +168,19 @@ function AdminLoginForm() {
   const [mfaError, setMfaError] = useState("");
   const [mfaLoading, setMfaLoading] = useState(false);
 
+  function getSafeReturnTo() {
+    const params = new URLSearchParams(window.location.search);
+    const returnTo = params.get("returnTo");
+    if (!returnTo || !returnTo.startsWith("/") || returnTo.startsWith("//")) return null;
+    return returnTo;
+  }
+
   async function finishAuthenticatedLogin(data: AuthUser & { mfaEnrollmentRequired?: boolean }, path = "/app") {
     if (data?.id) {
       queryClient.setQueryData(["/api/auth/me"], data);
     }
     await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], exact: true });
-    setLocation(path);
+    setLocation(path === "/app" ? getSafeReturnTo() || path : path);
   }
 
   async function handleSubmit(e: React.FormEvent) {

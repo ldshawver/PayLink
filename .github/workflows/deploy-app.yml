@@ -12,6 +12,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false --reporter=append-only
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Signing route regression tests
+        run: |
+          pnpm exec tsx tests/contract-signing-redirect-static.test.ts
+          pnpm exec tsx tests/contract-documenso-static.test.ts
+          pnpm exec tsx tests/contract-signer-management-static.test.ts
+          pnpm exec tsx tests/mypaylink-nginx-signing-static.test.ts
+
+      - name: Build
+        run: pnpm build
+
       - name: Verify SSH connectivity
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -138,7 +168,9 @@ jobs:
 
             pm2 delete paylink 2>/dev/null || true
 
-            pm2 start "$APP_PATH/dist/index.cjs" \
+            PAYLINK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+            PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
               --name paylink \
               --cwd "$APP_PATH" \
               --interpreter node \
@@ -170,7 +202,8 @@ jobs:
                 pnpm build || true
 
                 pm2 delete paylink 2>/dev/null || true
-                pm2 start "$APP_PATH/dist/index.cjs" \
+                ROLLBACK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+                PAYLINK_COMMIT="$PREV_COMMIT" PAYLINK_BUILD_TIME="$ROLLBACK_BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
                   --name paylink \
                   --cwd "$APP_PATH" \
                   --interpreter node \
@@ -211,6 +244,41 @@ jobs:
             fi
 
             echo "Deployment complete — commit $NEW_COMMIT"
+
+      - name: Production signing smoke tests
+        if: success()
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          BASE_URL: https://mypaylink.app
+          APP_BASE_URL: https://app.mypaylink.app
+          REPORT_FILE: deployment-smoke-artifacts/documenso-signing-smoke-report.txt
+        run: |
+          mkdir -p deployment-smoke-artifacts
+          ./scripts/verify_documenso_signing.sh
+
+      - name: Write deployment manifest
+        if: always()
+        run: |
+          mkdir -p deployment-smoke-artifacts
+          cat > deployment-smoke-artifacts/deployment-manifest.json <<MANIFEST
+          {
+            "commit": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "run_id": "${{ github.run_id }}",
+            "run_attempt": "${{ github.run_attempt }}",
+            "actor": "${{ github.actor }}",
+            "workflow": "${{ github.workflow }}",
+            "generated_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          }
+          MANIFEST
+
+      - name: Upload deployment smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paylink-deployment-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deployment-smoke-artifacts/
+          retention-days: 30
 
       - name: Notify success
         if: success()
