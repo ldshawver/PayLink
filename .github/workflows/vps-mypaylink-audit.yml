@@ -1,0 +1,45 @@
+name: MyPayLink VPS Audit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run MyPayLink VPS audit
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            set -euo pipefail
+            hostname
+            whoami
+            cat /etc/os-release || true
+
+            cd "${{ secrets.APP_DIR }}"
+
+            echo "Current directory:"
+            pwd
+
+            echo "Files:"
+            ls -la
+
+            echo "Service status:"
+            systemctl status mypaylink --no-pager || true
+            systemctl status nginx --no-pager || true
+
+            echo "Recent app logs:"
+            journalctl -u mypaylink -n 150 --no-pager || true
+
+            echo "Nginx config check:"
+            nginx -t || true
+
+            echo "Check signing route:"
+            curl -I https://app.mypaylink.app/app/contractor-hub/contracts/735551c2-ec6c-41e6-976d-1eef4e13bfa5/sign || true
