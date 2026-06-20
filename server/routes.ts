@@ -13927,15 +13927,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-contracts/:id/signing-status", requireAuth, async (req, res) => {
     try {
+      const contractId = String(req.params.id || "");
+      const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidLike.test(contractId)) {
+        return res.json({ state: "malformed_contract_id", message: "We could not find this contract." });
+      }
       const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id, email, company_id FROM users WHERE id = ${req.session.userId}`);
       const currentUserRow = wRes.rows[0] as any;
       const workerId = currentUserRow?.worker_id || null;
       const currentUserCompanyId = currentUserRow?.company_id || null;
       const currentUserEmail = typeof currentUserRow?.email === "string" ? currentUserRow.email.trim().toLowerCase() : null;
-      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
       const contract = contractRes.rows[0] as any;
-      if (!contract) return res.status(404).json({ message: "Contract signing page not found." });
+      if (!contract) return res.json({ state: "missing_contract", message: "We could not find this contract." });
       const isPlatformAdmin = (user?.role || "").startsWith("platform_");
       const isAdmin = user?.role === "admin" || user?.role === "owner" || user?.role === "manager" || user?.role === "supervisor" ||
         (user?.role || "").startsWith("tenant_") || isPlatformAdmin;
@@ -13953,20 +13958,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         currentUserEmail
           ? sql`
             SELECT * FROM contract_signers
-            WHERE contract_id = ${req.params.id}
+            WHERE contract_id = ${contractId}
               AND (
                 worker_id = ${workerId || null}
                 OR user_id = ${req.session.userId}
                 OR (email IS NOT NULL AND lower(trim(email)) = ${currentUserEmail} AND (${currentUserCompanyId || null} = ${contract.company_id} OR ${workerId || null} = ${contract.contractor_id}))
               )
-              AND status IN ('pending','sent','viewed','unsent','draft','signed')
+              AND status IN ('pending','sent','viewed','unsent','draft','signed','canceled','cancelled','expired','replaced')
             ORDER BY CASE WHEN status = 'signed' THEN 2 ELSE 1 END, COALESCE(signing_order, "order", 1) ASC
             LIMIT 1`
           : sql`
             SELECT * FROM contract_signers
-            WHERE contract_id = ${req.params.id}
+            WHERE contract_id = ${contractId}
               AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId})
-              AND status IN ('pending','sent','viewed','unsent','draft','signed')
+              AND status IN ('pending','sent','viewed','unsent','draft','signed','canceled','cancelled','expired','replaced')
             ORDER BY CASE WHEN status = 'signed' THEN 2 ELSE 1 END, COALESCE(signing_order, "order", 1) ASC
             LIMIT 1`
       );
@@ -13979,23 +13984,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         hasExplicitCompanyAccess: hasExplicitCompanyAccess.rows.length > 0,
         hasRegisteredSigner: !!registeredSigner,
       })) {
-        return res.status(403).json({ message: "You do not have access to this contract signing page." });
+        return res.json({ state: "not_authorized", message: "You do not have access to this contract." });
       }
       const pending = await db.execute(sql`
         SELECT COUNT(*) FROM contract_signers
-        WHERE contract_id = ${req.params.id}
+        WHERE contract_id = ${contractId}
           AND COALESCE(is_required, TRUE) = TRUE
           AND status IN ('pending','sent','viewed','unsent','draft')
       `);
+      const pendingSignerCount = Number((pending.rows[0] as any)?.count || 0);
+      const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced"];
+      const state = ["fully_signed", "completed", "active"].includes(contract.status)
+        ? "fully_signed"
+        : inactiveSignerStatuses.includes(String(registeredSigner?.status || contract.status))
+          ? "expired_or_canceled"
+          : registeredSigner?.status === "signed"
+            ? "already_signed"
+            : "pending_signature";
       res.json({
+        state,
+        message: state === "fully_signed" ? "Contract fully signed."
+          : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
+          : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
+          : "This contract is ready for your signature.",
         contractId: contract.id,
         title: contract.title,
         contractStatus: contract.status,
         signerName: registeredSigner?.name || user?.username || null,
         signerEmail: registeredSigner?.email || currentUserEmail,
         signerStatus: registeredSigner?.status || null,
-        alreadySigned: registeredSigner?.status === "signed" || ["fully_signed", "completed", "active"].includes(contract.status),
-        pendingSignerCount: Number((pending.rows[0] as any)?.count || 0),
+        alreadySigned: state === "already_signed" || state === "fully_signed",
+        pendingSignerCount,
       });
     } catch (e: any) { res.status(500).json({ message: "Failed to load contract signing page" }); }
   });
