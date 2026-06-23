@@ -22,7 +22,9 @@ export function apiJsonGuardMiddleware(
   res.on("finish", () => {
     const ct = res.getHeader("Content-Type");
     const ctStr = Array.isArray(ct) ? ct[0] : String(ct ?? "");
-    if (!ctStr.includes("application/json")) {
+    const isExpectedEmpty = res.statusCode === 204 || res.statusCode === 304;
+    const isAllowedBinary = /^(application\/pdf|application\/octet-stream|image\/|text\/csv)/i.test(ctStr) || /\.(pdf|csv|xlsx?|zip)$/i.test(req.path);
+    if (!isExpectedEmpty && !isAllowedBinary && !ctStr.includes("application/json")) {
       console.warn(
         `[API JSON guard] Non-JSON response sent for ${req.method} ${req.originalUrl} — ` +
         `Content-Type: ${ctStr || "(none)"}, status: ${res.statusCode}. ` +

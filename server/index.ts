@@ -611,9 +611,15 @@ app.use((req, res, next) => {
       email_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       sms_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       in_app_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      push_enabled BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("notification_preferences push_enabled column", sql`ALTER TABLE notification_preferences ADD COLUMN IF NOT EXISTS push_enabled BOOLEAN NOT NULL DEFAULT TRUE`);
+    await run("documenso_signature_requests signing url column", sql`ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
+    await run("documenso_signature_requests recipient ids column", sql`ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_recipient_ids JSONB`);
+    await run("contract_signers documenso recipient id column", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id TEXT`);
+    await run("contract_signers documenso signing url column", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
 
     await run("expense_categories table", sql`CREATE TABLE IF NOT EXISTS expense_categories (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -4002,7 +4008,7 @@ Thank you,
     {
       port,
       host,
-      reusePort: true,
+      reusePort: false,
     },
     async () => {
       log(`serving on ${host}:${port}`);
