@@ -30,13 +30,13 @@ export function isDocumensoEnabled(): boolean {
   return String(process.env.MYPAYLINK_DOCUMENSO_ENABLED || process.env.DOCUMENSO_ENABLED || "true").toLowerCase() !== "false";
 }
 
-export function validateDocumensoConfig(): { ok: boolean; message?: string; baseUrl: string } {
+export function validateDocumensoConfig(): { ok: boolean; message?: string; baseUrl: string; apiKeyConfigured?: boolean; webhookSecretConfigured?: boolean } {
   try {
-    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getBaseUrl() };
+    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getBaseUrl(), apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
     getApiKey();
-    return { ok: true, baseUrl: getBaseUrl() };
+    return { ok: true, baseUrl: getBaseUrl(), apiKeyConfigured: true, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
   } catch (error: any) {
-    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: getBaseUrl() };
+    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: getBaseUrl(), apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
   }
 }
 
@@ -278,13 +278,15 @@ export function verifyWebhookSignature(rawBody: Buffer, signature: string, secre
 }
 
 export function verifyWebhookSecret(headers: Record<string, string | string[] | undefined>, rawBody: Buffer): boolean {
-  const secret = process.env.DOCUMENSO_WEBHOOK_SECRET;
+  const secret = (process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET || "").trim();
   if (!secret) return false;
   const headerSecret = headers["x-documenso-secret"] || headers["x-webhook-secret"];
   const signature = headers["x-documenso-signature"] || headers["documenso-signature"];
   const headerValue = Array.isArray(headerSecret) ? headerSecret[0] : headerSecret;
   if (headerValue) {
-    return crypto.timingSafeEqual(Buffer.from(headerValue), Buffer.from(secret));
+    const expected = Buffer.from(secret);
+    const actual = Buffer.from(headerValue);
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
   }
   const sigValue = Array.isArray(signature) ? signature[0] : signature;
   return verifyWebhookSignature(rawBody, sigValue || "", secret);
@@ -292,7 +294,8 @@ export function verifyWebhookSecret(headers: Record<string, string | string[] | 
 
 export function logDocumensoConfig(): void {
   console.log("[Documenso] Configuration check:");
-  console.log(`  API Key:        ${process.env.DOCUMENSO_API_KEY || process.env.MyPayLink_DOCUMENSO_API_KEY ? "configured" : "MISSING — e-signature disabled"}`);
-  console.log(`  Webhook Secret: ${process.env.DOCUMENSO_WEBHOOK_SECRET ? "configured" : "MISSING — webhooks rejected"}`);
+  const config = validateDocumensoConfig();
+  console.log(`  API Key:        ${config.apiKeyConfigured ? "configured" : "MISSING — e-signature disabled"}`);
+  console.log(`  Webhook Secret: ${config.webhookSecretConfigured ? "configured" : "MISSING — webhooks rejected"}`);
   console.log(`  Base URL:       ${getBaseUrl()}`);
 }

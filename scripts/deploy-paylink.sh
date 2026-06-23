@@ -42,19 +42,28 @@ rm -rf "$APP_DIR/dist"
 mkdir -p "$APP_DIR/dist"
 npm run build
 
+if [ ! -f "$APP_DIR/dist/public/index.html" ] || [ ! -f "$APP_DIR/dist/public/app.html" ]; then
+  echo "ERROR: frontend build artifacts missing from dist/public (index.html/app.html). Refusing PM2 restart."
+  exit 1
+fi
+
 echo "5. Copying session table SQL..."
 cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
 
 echo "6. Starting app as paylinkssh (clean delete + fresh start)..."
 cd "$APP_DIR"
 
-# Remove from paylinkssh PM2 list if present
+# Remove known PayLink PM2 apps only; do not kill unrelated services on port 8000.
 pm2 delete paylink 2>/dev/null || true
-
-# Kill any process holding port 8000 (handles root-owned processes too)
-fuser -k 8000/tcp 2>/dev/null || true
-# Fallback: pkill by binary path
-pkill -f "dist/index.cjs" 2>/dev/null || true
+pm2 delete paylink-app 2>/dev/null || true
+if ss -lntp 2>/dev/null | grep -q '127.0.0.1:8000'; then
+  if ! ss -lntp 2>/dev/null | grep '127.0.0.1:8000' | grep -E 'node|PM2|dist/index\.cjs' >/dev/null; then
+    echo "ERROR: 127.0.0.1:8000 is owned by a non-PayLink process. Refusing to kill unrelated service."
+    ss -lntp | grep '127.0.0.1:8000' || true
+    exit 1
+  fi
+fi
+pkill -f "$APP_DIR/dist/index.cjs" 2>/dev/null || true
 sleep 3
 
 pm2 start dist/index.cjs \
@@ -86,6 +95,9 @@ fi
 
 echo "8. Waiting for startup..."
 sleep 12
+
+pm2 list
+ss -lntp | grep '127.0.0.1:8000' || true
 
 HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo "000")
 READY=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ready 2>/dev/null || echo "000")

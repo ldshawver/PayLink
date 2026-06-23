@@ -13913,7 +13913,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Notify contractor
       try {
         const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
-        const wRes = await db.execute(sql`SELECT u.email, u.phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
+        const wRes = await db.execute(sql`SELECT u.email, COALESCE(w.phone, w.mobile_phone, NULL) AS phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
         const recipient = wRes.rows[0] as any;
         const baseUrl = process.env.APP_BASE_URL || "";
         const payload = { event: "contract_sent" as const, recipientName: recipient?.name || "Contractor", email: recipient?.email, phone: recipient?.phone, contractTitle: contract.title, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
@@ -14142,7 +14142,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         try {
           const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
           const baseUrl = process.env.APP_BASE_URL || "";
-          const adminsRes = await db.execute(sql`SELECT u.email, u.phone, u.username AS name FROM users u WHERE u.company_id = ${contractData?.company_id} AND (u.role IN ('admin','manager','tenant_admin','tenant_hr_admin','tenant_payroll_admin','tenant_owner')) LIMIT 5`);
+          const adminsRes = await db.execute(sql`SELECT u.email, COALESCE(w.phone, w.mobile_phone, NULL) AS phone, u.username AS name FROM users u LEFT JOIN workers w ON w.id = u.worker_id WHERE u.company_id = ${contractData?.company_id} AND (u.role IN ('admin','manager','tenant_admin','tenant_hr_admin','tenant_payroll_admin','tenant_owner')) LIMIT 5`);
           for (const admin of adminsRes.rows as any[]) {
             const payload = { event: "signature_complete" as const, recipientName: admin.name || "Admin", email: admin.email, phone: admin.phone, contractTitle: contractData?.title || req.params.id, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
             sendContractEventEmail(payload).catch(() => {});
@@ -14358,7 +14358,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Notify contractor of activation
       try {
         const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
-        const wRes = await db.execute(sql`SELECT u.email, u.phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
+        const wRes = await db.execute(sql`SELECT u.email, COALESCE(w.phone, w.mobile_phone, NULL) AS phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
         const recipient = wRes.rows[0] as any;
         const baseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
         const payload = { event: "contract_activated" as const, recipientName: recipient?.name || "Contractor", email: recipient?.email, phone: recipient?.phone, contractTitle: contract.title, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
@@ -14839,14 +14839,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         returnUrl,
       });
 
-      // Persist the Documenso request
+      // Persist the Documenso request and signer metadata.
       const primarySigner = recipients[0];
+      const signingLinks = docResult.signingLinks || [];
+      const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
+      const recipientMetadata = signingLinks.map((link) => ({ email: normalizeSignerEmail(link.email), recipientId: link.token || null, signingUrl: link.signingUrl || null, status: link.status || null }));
       await db.execute(sql`
         INSERT INTO documenso_signature_requests
-          (document_type, related_record_id, company_id, documenso_document_id, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
-        VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, 'sent_for_signature',
+          (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
+        VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
                 ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
       `);
+
+      for (const link of signingLinks) {
+        const email = normalizeSignerEmail(link.email);
+        if (!email) continue;
+        await db.execute(sql`
+          UPDATE contract_signers
+          SET status = CASE WHEN status IN ('pending','unsent','draft','failed') THEN 'sent' ELSE status END,
+              documenso_recipient_id = COALESCE(${link.token || null}, documenso_recipient_id),
+              documenso_signing_url = COALESCE(${link.signingUrl || null}, documenso_signing_url)
+          WHERE contract_id = ${contractId} AND lower(email) = ${email}
+        `);
+      }
 
       // Update contract status
       await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`);
@@ -14866,7 +14881,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json({ success: true, documensoDocumentId: docResult.documentId });
     } catch (e: any) {
       const msg = e?.message || "";
-      if (msg.includes("Documenso not configured") || msg.includes("DOCUMENSO_API_KEY")) {
+      if (msg.includes("Documenso not configured") || msg.includes("Documenso is not configured") || msg.includes("DOCUMENSO_API_KEY") || msg.includes("MYPAYLINK_DOCUMENSO_API_KEY")) {
         return res.status(503).json({ message: "Documenso is not configured. Set DOCUMENSO_API_KEY in Replit Secrets." });
       }
       if (msg.includes("401") || msg.toLowerCase().includes("not authenticated") || msg.toLowerCase().includes("unauthorized")) {
@@ -25168,7 +25183,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             test_plan = ${analysis.testPlan || null},
             rollback_plan = ${analysis.rollbackPlan || null},
             updated_at = NOW()
-        WHERE id = ${reportId}
+        WHERE id = ${reportId}::varchar
       `);
     } catch (e: any) {
       // Older self-hosted/Replit databases may not have the enhanced App Doctor columns yet.
@@ -25186,7 +25201,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
               recommended_files = ${recommendedPayload},
               risk_level = ${analysis.riskLevel || null},
               updated_at = NOW()
-          WHERE id = ${reportId}
+          WHERE id = ${reportId}::varchar
         `);
       } else {
         throw e;
