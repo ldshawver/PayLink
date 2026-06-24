@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Loader2, FileSignature, CheckCircle, AlertTriangle } from "lucide-react";
+import { Loader2, FileSignature, CheckCircle, AlertTriangle, ExternalLink } from "lucide-react";
 
 function tokenFromPath(pathname: string): string {
   return decodeURIComponent(pathname.split("/sign/contracts/")[1]?.split("/")[0] || "");
@@ -60,6 +60,31 @@ export default function ContractSigningPage() {
   }
 
   const contract = contractQuery.data;
+  if (["already_signed", "fully_signed"].includes(contract.state)) {
+    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>{contract.state === "fully_signed" ? "Contract fully signed" : "Already signed"}</AlertTitle><AlertDescription>{contract.message}</AlertDescription></Alert></SigningShell>;
+  }
+  if (contract.state === "expired_or_canceled") {
+    return <SigningShell><ErrorState title="Signing link inactive" message={contract.message || "This signing link is expired or no longer active."} /></SigningShell>;
+  }
+  if (contract.documensoSigningUrl) {
+    return (
+      <SigningShell>
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="rounded-full bg-primary/10 p-3"><FileSignature className="h-6 w-6 text-primary" /></div>
+            <div>
+              <h1 className="text-2xl font-semibold">{contract.title || "Contract ready for signature"}</h1>
+              <p className="text-sm text-muted-foreground">{contract.message || "This contract is ready for your signature."}</p>
+              <p className="text-sm text-muted-foreground">Signer: {contract.signerName || contract.signerEmail || "External signer"}</p>
+            </div>
+          </div>
+          <Button asChild data-testid="button-open-documenso-signing">
+            <a href={contract.documensoSigningUrl} rel="noopener noreferrer">Open Documenso signing <ExternalLink className="ml-2 h-4 w-4" /></a>
+          </Button>
+        </div>
+      </SigningShell>
+    );
+  }
   return (
     <SigningShell>
       <div className="space-y-4">

@@ -13816,17 +13816,51 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`
         SELECT cs.id AS signer_id, cs.name AS signer_name, cs.email, cs.status AS signer_status,
-               cs.signing_token_expires_at, cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status
+               cs.signing_token_expires_at, cs.documenso_signing_url, cs.documenso_recipient_id,
+               cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status,
+               dsr.id AS signature_request_id, dsr.documenso_document_id, dsr.status AS signature_request_status
         FROM contract_signers cs
         JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        LEFT JOIN LATERAL (
+          SELECT * FROM documenso_signature_requests dsr
+          WHERE dsr.document_type = 'contract'
+            AND dsr.related_record_id = cc.id
+            AND dsr.company_id = cc.company_id
+          ORDER BY dsr.created_at DESC LIMIT 1
+        ) dsr ON TRUE
         WHERE cs.signing_token_hash = ${tokenHash}
         LIMIT 1
       `);
       const row = result.rows[0] as any;
-      if (!row) return res.status(404).json({ message: "Signing link not found" });
-      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      if (!row) return res.status(404).json({ state: "missing_contract", message: "We could not find this contract." });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_or_canceled", message: "This signing link is expired or no longer active." });
       await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
-      res.json({ contractId: row.contract_id, title: row.title, signerName: row.signer_name, signerEmail: row.email, status: row.signer_status, canSign: true });
+      const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
+      const state = ["fully_signed", "completed", "active"].includes(String(row.contract_status))
+        ? "fully_signed"
+        : inactiveSignerStatuses.includes(String(row.signer_status || row.signature_request_status || row.contract_status))
+          ? "expired_or_canceled"
+          : row.signer_status === "signed"
+            ? "already_signed"
+            : "pending_signature";
+      res.json({
+        state,
+        message: state === "fully_signed" ? "Contract fully signed."
+          : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
+          : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
+          : "This contract is ready for your signature.",
+        contractId: row.contract_id,
+        title: row.title,
+        signerName: row.signer_name,
+        signerEmail: row.email,
+        signerStatus: row.signer_status,
+        contractStatus: row.contract_status,
+        signatureRequestId: row.signature_request_id,
+        documensoDocumentId: row.documenso_document_id,
+        documensoRecipientId: row.documenso_recipient_id,
+        documensoSigningUrl: row.documenso_signing_url,
+        canSign: state === "pending_signature",
+      });
     } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
   });
 
@@ -14760,9 +14794,39 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (!CONTRACT_UNSIGNED_SIGNER_STATUSES.includes(signer.status || "pending")) return res.status(400).json({ message: "Only pending or unsigned signers can be resent" });
     const token = crypto.randomBytes(32).toString("base64url");
     const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 14);
-    await db.execute(sql`UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(), signing_token_hash = ${hashSigningToken(token)}, signing_token_expires_at = ${expires}, updated_at = NOW() WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`);
-    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_request_resent", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ contractId: req.params.contractId }) }).catch(() => {});
-    res.json({ success: true, signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token) });
+    let latestDocumensoSigningUrl = signer.documenso_signing_url || null;
+    let latestRecipientId = signer.documenso_recipient_id || null;
+    const sigReq = (await db.execute(sql`
+      SELECT * FROM documenso_signature_requests
+      WHERE document_type = 'contract'
+        AND related_record_id = ${req.params.contractId}
+        AND company_id = ${contract.company_id}
+        AND documenso_document_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `)).rows[0] as any;
+    if (sigReq?.documenso_document_id) {
+      const resendResult = await resendDocumensoDocument(sigReq.documenso_document_id).catch(() => null);
+      const matchingLink = resendResult?.signingLinks?.find((link: any) => normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email));
+      latestDocumensoSigningUrl = matchingLink?.signingUrl || resendResult?.signingLinks?.find((link: any) => link.signingUrl)?.signingUrl || latestDocumensoSigningUrl;
+      latestRecipientId = matchingLink?.token || latestRecipientId;
+      const updatedRecipientMetadata = resendResult?.signingLinks?.map((link: any) => ({
+        email: normalizeSignerEmail(link.email),
+        recipientId: link.token || null,
+        signingUrl: link.signingUrl || null,
+        myPayLinkSigningUrl: normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email) ? buildContractSigningUrl(getAppBaseUrl(req), token) : null,
+        status: link.status || null,
+      })) || null;
+      await db.execute(sql`
+        UPDATE documenso_signature_requests
+        SET documenso_signing_url = COALESCE(${latestDocumensoSigningUrl}, documenso_signing_url),
+            documenso_recipient_ids = COALESCE(${updatedRecipientMetadata ? JSON.stringify(updatedRecipientMetadata) : null}::jsonb, documenso_recipient_ids),
+            status = 'sent_for_signature', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW()
+        WHERE id = ${sigReq.id}
+      `).catch(() => {});
+    }
+    await db.execute(sql`UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(), signing_token_hash = ${hashSigningToken(token)}, signing_token_expires_at = ${expires}, documenso_recipient_id = COALESCE(${latestRecipientId}, documenso_recipient_id), documenso_signing_url = COALESCE(${latestDocumensoSigningUrl}, documenso_signing_url), updated_at = NOW() WHERE id = ${req.params.signerId} AND contract_id = ${req.params.contractId}`);
+    await storage.createExpenseApprovalAction({ objectType: "contract_signer", objectId: req.params.signerId, actionType: "signer_request_resent", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ contractId: req.params.contractId, documensoDocumentId: sigReq?.documenso_document_id || null }) }).catch(() => {});
+    res.json({ success: true, signingUrl: buildContractSigningUrl(getAppBaseUrl(req), token), documensoSigningUrl: latestDocumensoSigningUrl, documensoRecipientId: latestRecipientId });
   });
 
   app.post("/api/contractor-contracts/:contractId/signers/:signerId/replace", requireAuth, requireRole("admin", "manager"), async (req, res) => {
@@ -14828,7 +14892,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for signing" });
 
       const { sendDocumentForSignature } = await import("./services/documenso.js");
-      const returnUrl = buildContractDocumensoReturnUrl(getAppBaseUrl(req), contractId);
+      const appBaseUrl = getAppBaseUrl(req);
+      const signerTokens = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
+      for (const signer of signers) {
+        const email = normalizeSignerEmail(signer.email);
+        if (!email || signerTokens.has(email)) continue;
+        const token = crypto.randomBytes(32).toString("base64url");
+        signerTokens.set(email, {
+          token,
+          expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14),
+          myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token),
+        });
+      }
+      const primaryReturnUrl = signerTokens.get(normalizeSignerEmail(recipients[0]?.email) || "")?.myPayLinkSigningUrl
+        || buildContractDocumensoReturnUrl(appBaseUrl, contractId);
       const docResult = await sendDocumentForSignature({
         title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
         pdfBuffer,
@@ -14836,14 +14913,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         metadata: { externalId: contractId, contractId, companyId: contract.company_id },
         subject: `Please sign: ${contract.title}`,
         message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
-        returnUrl,
+        returnUrl: primaryReturnUrl,
       });
 
       // Persist the Documenso request and signer metadata.
       const primarySigner = recipients[0];
       const signingLinks = docResult.signingLinks || [];
       const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
-      const recipientMetadata = signingLinks.map((link) => ({ email: normalizeSignerEmail(link.email), recipientId: link.token || null, signingUrl: link.signingUrl || null, status: link.status || null }));
+      const recipientMetadata = signingLinks.map((link) => {
+        const email = normalizeSignerEmail(link.email);
+        const localToken = email ? signerTokens.get(email) : undefined;
+        return {
+          email,
+          recipientId: link.token || null,
+          signingUrl: link.signingUrl || null,
+          myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null,
+          status: link.status || null,
+        };
+      });
       await db.execute(sql`
         INSERT INTO documenso_signature_requests
           (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
@@ -14858,8 +14945,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           UPDATE contract_signers
           SET status = CASE WHEN status IN ('pending','unsent','draft','failed') THEN 'sent' ELSE status END,
               documenso_recipient_id = COALESCE(${link.token || null}, documenso_recipient_id),
-              documenso_signing_url = COALESCE(${link.signingUrl || null}, documenso_signing_url)
-          WHERE contract_id = ${contractId} AND lower(email) = ${email}
+              documenso_signing_url = COALESCE(${link.signingUrl || null}, documenso_signing_url),
+              signing_token_hash = COALESCE(${signerTokens.get(email)?.token ? hashSigningToken(signerTokens.get(email)!.token) : null}, signing_token_hash),
+              signing_token_expires_at = COALESCE(${signerTokens.get(email)?.expires || null}, signing_token_expires_at),
+              last_sent_at = NOW(),
+              sent_at = COALESCE(sent_at, NOW()),
+              updated_at = NOW()
+          WHERE contract_id = ${contractId} AND lower(trim(email)) = ${email}
         `);
       }
 
@@ -14878,7 +14970,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actionUrl: `/app/contractor-hub?section=contracts&id=${contractId}`,
       }).catch(() => {});
 
-      res.json({ success: true, documensoDocumentId: docResult.documentId });
+      res.json({ success: true, documensoDocumentId: docResult.documentId, signingLinks: recipientMetadata });
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("Documenso not configured") || msg.includes("Documenso is not configured") || msg.includes("DOCUMENSO_API_KEY") || msg.includes("MYPAYLINK_DOCUMENSO_API_KEY")) {
