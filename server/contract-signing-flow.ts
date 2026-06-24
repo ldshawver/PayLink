@@ -24,8 +24,9 @@ export function buildAuthenticatedContractSigningUrl(baseUrl: string, contractId
   return `${safeBase}/app/contractor-hub/contracts/${encodeURIComponent(contractId)}/sign`;
 }
 
-export function buildContractDocumensoReturnUrl(baseUrl: string, contractId: string): string {
-  return buildAuthenticatedContractSigningUrl(baseUrl, contractId);
+export function buildContractDocumensoReturnUrl(baseUrl: string, tokenOrContractId: string): string {
+  const safeBase = String(baseUrl || "").replace(/\/+$/, "");
+  return `${safeBase}/sign/contracts/${encodeURIComponent(tokenOrContractId)}/status`;
 }
 
 export interface ProposalForInvoice {

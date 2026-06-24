@@ -15002,10 +15002,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "Add at least one signer with an email address before sending for signature." });
       }
 
-      const pdfBuffer = await generateContractPdf(contractId);
-      if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for signing" });
+      const existingReqRes = await db.execute(sql`
+        SELECT * FROM documenso_signature_requests
+        WHERE document_type IN ('contract', 'contractor_hub_contract')
+          AND related_record_id = ${contractId}
+          AND company_id = ${contract.company_id}
+          AND documenso_document_id IS NOT NULL
+          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error')
+        ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
+        LIMIT 1
+      `);
+      const existingReq = existingReqRes.rows[0] as any;
 
-      const { sendDocumentForSignature } = await import("./services/documenso.js");
+      const { sendDocumentForSignature, getDocumensoDocument } = await import("./services/documenso.js");
       const appBaseUrl = getAppBaseUrl(req);
       const signerTokens = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
       for (const signer of signers) {
@@ -15018,21 +15027,47 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token),
         });
       }
-      const primaryReturnUrl = signerTokens.get(normalizeSignerEmail(recipients[0]?.email) || "")?.myPayLinkSigningUrl
-        || buildContractDocumensoReturnUrl(appBaseUrl, contractId);
-      const docResult = await sendDocumentForSignature({
-        title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
-        pdfBuffer,
-        recipients,
-        metadata: { externalId: contractId, contractId, companyId: contract.company_id },
-        subject: `Please sign: ${contract.title}`,
-        message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
-        returnUrl: primaryReturnUrl,
-      });
+      const primarySignerToken = signerTokens.get(normalizeSignerEmail(recipients[0]?.email) || "")?.token;
+      const primaryReturnUrl = primarySignerToken
+        ? buildContractDocumensoReturnUrl(appBaseUrl, primarySignerToken)
+        : buildContractDocumensoReturnUrl(appBaseUrl, contractId);
+      let docResult: any;
+      let reusedExistingDocumensoRequest = false;
+      let externalSendSucceeded = false;
+      if (existingReq?.documenso_document_id) {
+        reusedExistingDocumensoRequest = true;
+        const remote = await getDocumensoDocument(existingReq.documenso_document_id).catch(() => null);
+        const storedRecipients = Array.isArray(existingReq.documenso_recipient_ids) ? existingReq.documenso_recipient_ids : [];
+        docResult = {
+          documentId: existingReq.documenso_document_id,
+          status: remote?.status || existingReq.status || "sent",
+          signingLinks: (remote?.recipients?.length ? remote.recipients : storedRecipients).map((r: any) => ({
+            name: r.name || "",
+            email: r.email || "",
+            signingUrl: r.signingUrl || r.signing_url || null,
+            token: r.id || r.token || r.recipientId || null,
+            status: r.status || r.documensoStatus || null,
+          })),
+          rawResponse: { reusedExistingDocumensoRequest: true, existingRequestId: existingReq.id, remote: remote?.rawResponse || null },
+        };
+      } else {
+        const pdfBuffer = await generateContractPdf(contractId);
+        if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for signing" });
+        docResult = await sendDocumentForSignature({
+          title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
+          pdfBuffer,
+          recipients,
+          metadata: { externalId: contractId, contractId, companyId: contract.company_id },
+          subject: `Please sign: ${contract.title}`,
+          message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+          returnUrl: primaryReturnUrl,
+        });
+        externalSendSucceeded = true;
+      }
 
       // Persist the Documenso request and signer metadata.
       const primarySigner = recipients[0];
-      const signingLinks = docResult.signingLinks || [];
+      const signingLinks = (docResult.signingLinks || []) as Array<{ email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
       const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
       const recipientMetadata = signingLinks.map((link) => {
         const email = normalizeSignerEmail(link.email);
@@ -15045,12 +15080,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           status: link.status || null,
         };
       });
-      await db.execute(sql`
-        INSERT INTO documenso_signature_requests
-          (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
-        VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
-                ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
-      `);
+      try {
+        await db.execute(sql`
+          INSERT INTO documenso_signature_requests
+            (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
+          VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
+                  ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
+          ON CONFLICT DO NOTHING
+        `);
+      } catch (persistError: any) {
+        if (externalSendSucceeded) {
+          console.error("[CRITICAL] Documenso send succeeded but local signature request persistence failed", { contractId, companyId: contract.company_id, documensoDocumentId: docResult.documentId, error: persistError?.message });
+          return res.status(202).json({
+            success: false,
+            documensoDocumentId: docResult.documentId,
+            message: "Documenso emails may have been sent, but MyPayLink could not save the signing status. Please do not resend until this is reviewed.",
+            recovery: "Admin should run the Documenso metadata repair after confirming the existing Documenso document and recipients.",
+          });
+        }
+        throw persistError;
+      }
 
       for (const link of signingLinks) {
         const email = normalizeSignerEmail(link.email);
@@ -15084,7 +15133,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actionUrl: `/app/contractor-hub?section=contracts&id=${contractId}`,
       }).catch(() => {});
 
-      res.json({ success: true, documensoDocumentId: docResult.documentId, signingLinks: recipientMetadata });
+      res.json({ success: true, reusedExistingDocumensoRequest, documensoDocumentId: docResult.documentId, signingLinks: recipientMetadata });
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("Documenso not configured") || msg.includes("Documenso is not configured") || msg.includes("DOCUMENSO_API_KEY") || msg.includes("MYPAYLINK_DOCUMENSO_API_KEY")) {

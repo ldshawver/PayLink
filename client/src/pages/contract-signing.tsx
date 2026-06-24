@@ -55,11 +55,16 @@ export default function ContractSigningPage() {
     return <SigningShell><ErrorState title="Signing link unavailable" message={(contractQuery.error as Error).message} /></SigningShell>;
   }
 
+  const isPostDocumensoReturn = location.includes("/status") || location.includes("signed=1");
+
   if (completeMutation.isSuccess) {
     return <SigningShell><Alert><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>Your contract signature has been recorded.</AlertDescription></Alert></SigningShell>;
   }
 
   const contract = contractQuery.data;
+  if (isPostDocumensoReturn && contract.state === "pending_signature") {
+    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>Signature received. We are confirming completion.</AlertDescription></Alert></SigningShell>;
+  }
   if (["already_signed", "fully_signed"].includes(contract.state)) {
     return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>{contract.state === "fully_signed" ? "Contract fully signed" : "Already signed"}</AlertTitle><AlertDescription>{contract.message}</AlertDescription></Alert></SigningShell>;
   }
