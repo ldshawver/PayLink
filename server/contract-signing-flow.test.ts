@@ -20,9 +20,9 @@ function run() {
   );
 
   assert.equal(
-    buildContractDocumensoReturnUrl("https://mypaylink.app/", "contract 1"),
-    "https://mypaylink.app/app/contractor-hub/contracts/contract%201/sign",
-    "Documenso return URL should land on the authenticated signing route",
+    buildContractDocumensoReturnUrl("https://mypaylink.app/", "signer token 1"),
+    "https://mypaylink.app/sign/contracts/signer%20token%201/status",
+    "Documenso return URL should land on the public signing status route",
   );
 
   assert.equal(

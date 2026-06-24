@@ -18,9 +18,10 @@ assert.equal(canSignContract({ isContractor: false, isAdmin: false, isPlatformAd
 console.log("PASS: internal contract signing authorization matrix");
 
 const returnUrl = buildContractDocumensoReturnUrl("https://mypaylink.app///", "contract 1/?bad=https://evil.example");
-assert.equal(returnUrl, "https://mypaylink.app/app/contractor-hub?section=contracts&id=contract%201%2F%3Fbad%3Dhttps%3A%2F%2Fevil.example", "return URL is anchored to PayLink route and encodes contract id");
+assert.equal(returnUrl, "https://mypaylink.app/sign/contracts/contract%201%2F%3Fbad%3Dhttps%3A%2F%2Fevil.example/status", "return URL is anchored to the public signing status route and encodes the signer token");
 assert.ok(!returnUrl.startsWith("https://evil.example"), "return URL is not an open redirect");
-console.log("PASS: contract-specific return URL is not open redirectable");
+assert.ok(!returnUrl.includes("/app/contractor-hub/contracts/"), "return URL does not use the old authenticated contract signing route");
+console.log("PASS: public token return URL is not open redirectable");
 
 const contract = { id: "contract-1", company_id: "company-a", proposal_id: "proposal-1", status: "sent" };
 const proposal = { id: "proposal-1", contractor_id: "worker-a", amount: "125.00", title: "Approved work", proposal_number: "PROP-1", converted_to_invoice_id: null };
