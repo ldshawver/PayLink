@@ -35,10 +35,16 @@ const CAPACITOR_ORIGINS = [
   'https://app.mypaylink.paylink',
 ];
 
-/* ── URL masking: redirect app.mypaylink.app → mypaylink.app ────────────── */
+/* ── URL masking: redirect app.mypaylink.app → mypaylink.app ──────────────
+ * Keep public signing callback URLs on the app host. Documenso redirects
+ * signers back to /sign/contracts/:token after completion, and redirecting
+ * those deep links to the marketing host can produce a plain 404 before the
+ * React signing shell or /api/signing/contracts/:token can load.
+ */
 app.use((req, res, next) => {
   const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString().split(':')[0];
-  if (host === 'app.mypaylink.app') {
+  const isPublicSigningRoute = req.path === '/sign' || req.path.startsWith('/sign/') || req.path.startsWith('/api/signing/');
+  if (host === 'app.mypaylink.app' && !isPublicSigningRoute) {
     return res.redirect(301, `https://mypaylink.app${req.originalUrl}`);
   }
   next();
