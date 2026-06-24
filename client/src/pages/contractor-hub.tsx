@@ -4500,7 +4500,19 @@ function ContractDetailPanel({
 
   const resendSigningMutation = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/contractor-contracts/${contract.id}/resend-signing-request`, {})).json(),
-    onSuccess: (data: any) => { refetch(); toast({ title: "Signing request re-sent", description: `${data?.sentCount ?? 0} pending signer(s) notified.` }); onRefresh(); },
+    onSuccess: (data: any) => {
+      refetch();
+      const recipients = Array.isArray(data?.recipients) ? data.recipients : [];
+      const recipientSummary = recipients.length
+        ? recipients.map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.resendResult || "unknown"}${recipient.documensoRecipientId ? " (recipient id present)" : " (missing recipient id)"}`).join("; ")
+        : "No pending signer recipients were targeted.";
+      toast({
+        title: data?.success ? "Signing request re-sent" : "Documenso resend needs review",
+        description: `${data?.sentCount ?? 0}/${data?.targetedCount ?? recipients.length ?? 0} recipient(s) accepted by Documenso. ${recipientSummary}`,
+        variant: data?.success ? "default" : "destructive",
+      });
+      onRefresh();
+    },
     onError: (e: any) => toast({ title: e?.message || "Failed to re-send signing request", variant: "destructive" }),
   });
 
