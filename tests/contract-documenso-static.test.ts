@@ -27,3 +27,11 @@ ok("Documenso duplicate already-signed contracts do not re-run completion side e
 
 ok("public signing endpoint exposes Documenso metadata", routes.includes("documensoSigningUrl: row.documenso_signing_url") && routes.includes("documensoRecipientId: row.documenso_recipient_id"));
 ok("resend refreshes persisted Documenso signer metadata", routes.includes("const resendResult = await resendDocumensoDocument(sigReq.documenso_document_id)") && routes.includes("documenso_recipient_ids = COALESCE"));
+
+const schema = fs.readFileSync("server/index.ts", "utf8") + "\n" + fs.readFileSync("migrations/0011_notification_preferences_push_enabled.sql", "utf8");
+const signingFlow = fs.readFileSync("server/contract-signing-flow.ts", "utf8");
+const app = fs.readFileSync("client/src/App.tsx", "utf8");
+const publicSigningPage = fs.readFileSync("client/src/pages/contract-signing.tsx", "utf8");
+ok("schema repair supports signer tokens and Documenso metadata", schema.includes("ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_token_hash TEXT") && schema.includes("ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS signing_token_expires_at TIMESTAMP") && schema.includes("ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id TEXT") && schema.includes("ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT") && schema.includes("ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_recipient_ids JSONB"));
+ok("token security stores only hash and expiry", routes.includes('crypto.randomBytes(32).toString("base64url")') && routes.includes("signing_token_hash = ${hashSigningToken(token)}") && routes.includes("signing_token_expires_at = ${expires}") && !routes.includes("signing_token = ${token}"));
+ok("public route pattern is consistent", signingFlow.includes("/sign/contracts/${encodeURIComponent(token)}") && app.includes('location.startsWith("/sign/contracts/")') && publicSigningPage.includes('/api/signing/contracts/${encodeURIComponent(token)}') && routes.includes('app.get("/api/signing/contracts/:token"') && routes.includes('app.post("/api/signing/contracts/:token/complete"'));

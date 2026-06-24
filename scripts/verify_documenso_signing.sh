@@ -75,7 +75,7 @@ check_url "app shell" "$BASE_URL/app" '^(200|302)$'
 check_url "contractor hub shell" "$BASE_URL/app/contractor-hub" '^(200|302)$'
 check_url "affected contract signing URL" "$APP_BASE_URL/app/contractor-hub/contracts/$AFFECTED_CONTRACT_ID/sign" '^(200|302)$'
 check_url "malformed contract signing URL" "$BASE_URL/app/contractor-hub/contracts/not-a-valid-id/sign" '^(200|302)$'
-check_url "public sign fallback" "$BASE_URL/sign/test-invalid" '^(200|302)$'
+check_url "public sign fallback" "$BASE_URL/sign/contracts/test-invalid" '^(200|302)$'
 
 check_optional_url EXPIRED_SIGNING_URL "expired signer URL"
 check_optional_url ALREADY_SIGNED_URL "already signed signer URL"
