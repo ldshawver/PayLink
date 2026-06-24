@@ -14726,10 +14726,124 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
     if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot re-send signing requests for this contract status" });
-    const pending = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`);
-    await db.execute(sql`UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(), updated_at = NOW() WHERE contract_id = ${req.params.id} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`).catch(() => {});
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "signing_request_resent", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ signerCount: pending.rows.length }) }).catch(() => {});
-    res.json({ success: true, sentCount: pending.rows.length });
+
+    const pending = (await db.execute(sql`
+      SELECT * FROM contract_signers
+      WHERE contract_id = ${req.params.id}
+        AND status IN ('pending','sent','viewed','unsent')
+        AND email IS NOT NULL
+      ORDER BY COALESCE(signing_order, "order", 1) ASC
+    `)).rows as any[];
+
+    const sigReq = (await db.execute(sql`
+      SELECT * FROM documenso_signature_requests
+      WHERE document_type = 'contract'
+        AND related_record_id = ${req.params.id}
+        AND company_id = ${contract.company_id}
+        AND documenso_document_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `)).rows[0] as any;
+
+    const appBaseUrl = getAppBaseUrl(req);
+    const tokenByEmail = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
+    for (const signer of pending) {
+      const email = normalizeSignerEmail(signer.email);
+      if (!email || tokenByEmail.has(email)) continue;
+      const token = crypto.randomBytes(32).toString("base64url");
+      tokenByEmail.set(email, {
+        token,
+        expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14),
+        myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token),
+      });
+    }
+
+    let documensoResult: Awaited<ReturnType<typeof resendDocumensoDocument>> | null = null;
+    let documensoError: string | null = null;
+    if (sigReq?.documenso_document_id) {
+      try {
+        documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+      } catch (e: any) {
+        documensoError = e?.message || "Documenso resend failed";
+      }
+    } else {
+      documensoError = "No Documenso signature request/document id exists for this contract.";
+    }
+
+    const linksByEmail = new Map((documensoResult?.signingLinks || []).map((link: any) => [normalizeSignerEmail(link.email), link]));
+    const recipients = pending.map((signer) => {
+      const email = normalizeSignerEmail(signer.email);
+      const link: any = email ? linksByEmail.get(email) : undefined;
+      const localToken = email ? tokenByEmail.get(email) : undefined;
+      const accepted = !!documensoResult && !!link && !documensoError;
+      return {
+        signerId: signer.id,
+        name: signer.name || null,
+        email,
+        role: signer.role || signer.signer_role || null,
+        signerRowExists: true,
+        documensoDocumentId: sigReq?.documenso_document_id || null,
+        documensoRecipientId: link?.token || link?.id || signer.documenso_recipient_id || null,
+        documensoSigningUrl: link?.signingUrl || signer.documenso_signing_url || null,
+        myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null,
+        sentAt: signer.sent_at || null,
+        resentAt: accepted ? new Date().toISOString() : null,
+        documensoStatus: link?.status || null,
+        resendResult: accepted ? "accepted" : (documensoError ? "errored" : "skipped"),
+        error: accepted ? null : documensoError || "Documenso did not return a matching recipient for this signer.",
+      };
+    });
+
+    const acceptedRecipients = recipients.filter((r) => r.resendResult === "accepted");
+    for (const recipient of acceptedRecipients) {
+      const localToken = recipient.email ? tokenByEmail.get(recipient.email) : undefined;
+      await db.execute(sql`
+        UPDATE contract_signers
+        SET status = 'sent',
+            sent_at = COALESCE(sent_at, NOW()),
+            last_sent_at = NOW(),
+            signing_token_hash = COALESCE(${localToken?.token ? hashSigningToken(localToken.token) : null}, signing_token_hash),
+            signing_token_expires_at = COALESCE(${localToken?.expires || null}, signing_token_expires_at),
+            documenso_recipient_id = COALESCE(${recipient.documensoRecipientId}, documenso_recipient_id),
+            documenso_signing_url = COALESCE(${recipient.documensoSigningUrl}, documenso_signing_url),
+            updated_at = NOW()
+        WHERE id = ${recipient.signerId} AND contract_id = ${req.params.id}
+      `).catch(() => {});
+    }
+
+    const recipientMetadata = recipients.map(({ signerId, name, email, role, documensoRecipientId, documensoSigningUrl, myPayLinkSigningUrl, documensoStatus, resendResult, error }) => ({ signerId, name, email, role, recipientId: documensoRecipientId, signingUrl: documensoSigningUrl, myPayLinkSigningUrl, status: documensoStatus, resendResult, error }));
+    if (sigReq?.id) {
+      await db.execute(sql`
+        UPDATE documenso_signature_requests
+        SET documenso_signing_url = COALESCE(${acceptedRecipients.find((r) => r.documensoSigningUrl)?.documensoSigningUrl || null}, documenso_signing_url),
+            documenso_recipient_ids = ${JSON.stringify(recipientMetadata)}::jsonb,
+            status = ${acceptedRecipients.length ? "sent_for_signature" : "resend_failed"},
+            sent_at = COALESCE(sent_at, NOW()),
+            raw_response = COALESCE(${documensoResult ? JSON.stringify({ resend: documensoResult.rawResponse }) : null}, raw_response),
+            updated_at = NOW()
+        WHERE id = ${sigReq.id}
+      `).catch(() => {});
+    }
+
+    const auditPayload = {
+      documensoDocumentId: sigReq?.documenso_document_id || null,
+      targetedEmails: recipients.map((r) => r.email),
+      acceptedEmails: acceptedRecipients.map((r) => r.email),
+      failedEmails: recipients.filter((r) => r.resendResult !== "accepted").map((r) => r.email),
+      documensoError,
+    };
+    console.info("[Documenso] contract resend result", { contractId: req.params.id, companyId: contract.company_id, ...auditPayload });
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "signing_request_resent", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify(auditPayload) }).catch(() => {});
+
+    res.status(200).json({
+      success: recipients.length > 0 && acceptedRecipients.length === recipients.length,
+      documensoResult: documensoError ? "errored" : (acceptedRecipients.length ? "accepted" : "skipped"),
+      targetedCount: recipients.length,
+      sentCount: acceptedRecipients.length,
+      failedCount: recipients.length - acceptedRecipients.length,
+      recipients,
+      documensoDocumentId: sigReq?.documenso_document_id || null,
+      message: documensoError || `${acceptedRecipients.length} of ${recipients.length} pending signer(s) accepted by Documenso for resend.`,
+    });
   });
 
   app.patch("/api/contractor-contracts/:contractId/signers/:signerId", requireAuth, async (req, res) => {
