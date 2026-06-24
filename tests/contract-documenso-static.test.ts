@@ -13,7 +13,7 @@ function ok(name: string, condition: boolean) {
 ok("contract signing authorization uses company_user_access", routes.includes("FROM company_user_access cua"));
 ok("contract signing authorization no longer references missing user_company_access", !routes.includes("FROM user_company_access uca"));
 ok("contract Documenso send creates public MyPayLink signer tokens", routes.includes("const signerTokens = new Map") && routes.includes("myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token)"));
-ok("contract Documenso return URL prefers public token route", routes.includes("const primaryReturnUrl = signerTokens.get") && routes.includes("returnUrl: primaryReturnUrl"));
+ok("contract Documenso return URL prefers public token route", routes.includes("const primarySignerToken = signerTokens.get") && routes.includes("returnUrl: primaryReturnUrl"));
 ok("contract Documenso send persists contract metadata", routes.includes("metadata: { externalId: contractId, contractId, companyId: contract.company_id }"));
 ok("Documenso webhook handles contract signature request table", routes.includes("FROM documenso_signature_requests") && routes.includes("document_type IN ('contract', 'contractor_hub_contract')"));
 ok("Documenso contract completion creates invoice", routes.includes("INSERT INTO contractor_invoices") && routes.includes("converted_to_invoice_id = ${invoiceId}"));

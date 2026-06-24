@@ -368,6 +368,15 @@ app.use((req, res, next) => {
     await run("employee_groups.company_id nullable", sql`ALTER TABLE employee_groups ALTER COLUMN company_id DROP NOT NULL`);
     await run("employee_titles.company_id nullable", sql`ALTER TABLE employee_titles ALTER COLUMN company_id DROP NOT NULL`);
     await run("pay_stub_amendments.amendment_type", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS amendment_type TEXT DEFAULT 'earning'`);
+    await run("documenso_signature_requests.sent_at", sql`ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`);
+    await run("contract_signers.sent_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`);
+    await run("contractor_contracts.sent_at", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`);
+    await run("documenso_signature_requests.documenso_signing_url", sql`ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
+    await run("documenso_signature_requests.documenso_recipient_ids", sql`ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_recipient_ids JSONB`);
+    await run("contract_signers.documenso_recipient_id", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id TEXT`);
+    await run("contract_signers.documenso_signing_url", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
+    await run("contract_signers.last_sent_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS last_sent_at TIMESTAMPTZ`);
+    await run("documenso_signature_requests contract index", sql`CREATE INDEX IF NOT EXISTS idx_documenso_signature_requests_contract_sent_at ON documenso_signature_requests(document_type, related_record_id, company_id, sent_at)`);
     // time_punches additions
     await run("time_punches.approval_status", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
     await run("time_punches.approved_by", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approved_by VARCHAR`);

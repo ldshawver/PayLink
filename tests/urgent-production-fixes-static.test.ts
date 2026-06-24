@@ -15,11 +15,13 @@ assert(routes.includes("UPDATE contract_signers") && routes.includes("documenso_
 
 const index = fs.readFileSync("server/index.ts", "utf8");
 assert(index.includes("ALTER TABLE notification_preferences ADD COLUMN IF NOT EXISTS push_enabled"), "Startup schema repair adds push_enabled when older DBs drift");
-assert(index.includes("ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_signing_url") && index.includes("ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id"), "Startup schema repair adds missing Documenso metadata columns");
+assert(index.includes("ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS documenso_signing_url") && index.includes("ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_recipient_id") && index.includes("ALTER TABLE documenso_signature_requests ADD COLUMN IF NOT EXISTS sent_at"), "Startup schema repair adds missing Documenso metadata columns");
 assert(index.includes("reusePort: false"), "Server does not enable SO_REUSEPORT for duplicate PayLink binders");
 
 const migration = fs.readFileSync("migrations/0011_notification_preferences_push_enabled.sql", "utf8");
-assert(migration.includes("ADD COLUMN IF NOT EXISTS push_enabled") && migration.includes("ADD COLUMN IF NOT EXISTS documenso_signing_url") && migration.includes("ADD COLUMN IF NOT EXISTS documenso_recipient_id"), "Idempotent migration adds only missing notification and Documenso metadata columns");
+assert(migration.includes("ADD COLUMN IF NOT EXISTS push_enabled") && migration.includes("ADD COLUMN IF NOT EXISTS documenso_signing_url") && migration.includes("ADD COLUMN IF NOT EXISTS documenso_recipient_id"), "Idempotent migration adds notification and Documenso metadata columns");
+const sentAtMigration = fs.readFileSync("migrations/0012_documenso_sent_at_repair.sql", "utf8");
+assert(sentAtMigration.includes("ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ"), "Idempotent migration adds missing Documenso sent_at columns");
 
 const guard = fs.readFileSync("server/middleware/api-json-guard.ts", "utf8");
 assert(guard.includes("res.statusCode === 304") && guard.includes("application\\/pdf"), "API JSON guard ignores 304 and allowed binary/PDF responses");
