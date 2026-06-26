@@ -61,15 +61,23 @@ export default function ContractSigningPage() {
     return <SigningShell><Alert><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>Your contract signature has been recorded.</AlertDescription></Alert></SigningShell>;
   }
 
-  const contract = contractQuery.data;
-  if (isPostDocumensoReturn && contract.state === "pending_signature") {
+  const contract = contractQuery.data || {};
+  const state = typeof contract.state === "string" ? contract.state : (isPostDocumensoReturn ? "pending_signature" : "missing_contract");
+  const message = typeof contract.message === "string" ? contract.message : (
+    state === "fully_signed" ? "Contract fully signed." :
+    state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)." :
+    state === "expired_or_canceled" ? "This signing link is expired or no longer active." :
+    "Signature received. We are confirming completion."
+  );
+
+  if (isPostDocumensoReturn && state === "pending_signature") {
     return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>Signature received. We are confirming completion.</AlertDescription></Alert></SigningShell>;
   }
-  if (["already_signed", "fully_signed"].includes(contract.state)) {
-    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>{contract.state === "fully_signed" ? "Contract fully signed" : "Already signed"}</AlertTitle><AlertDescription>{contract.message}</AlertDescription></Alert></SigningShell>;
+  if (["already_signed", "fully_signed"].includes(state)) {
+    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>{state === "fully_signed" ? "Contract fully signed" : "Already signed"}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert></SigningShell>;
   }
-  if (contract.state === "expired_or_canceled") {
-    return <SigningShell><ErrorState title="Signing link inactive" message={contract.message || "This signing link is expired or no longer active."} /></SigningShell>;
+  if (state === "expired_or_canceled" || state === "missing_contract") {
+    return <SigningShell><ErrorState title={state === "missing_contract" ? "Signing link unavailable" : "Signing link inactive"} message={message} /></SigningShell>;
   }
   if (contract.documensoSigningUrl) {
     return (
@@ -79,7 +87,7 @@ export default function ContractSigningPage() {
             <div className="rounded-full bg-primary/10 p-3"><FileSignature className="h-6 w-6 text-primary" /></div>
             <div>
               <h1 className="text-2xl font-semibold">{contract.title || "Contract ready for signature"}</h1>
-              <p className="text-sm text-muted-foreground">{contract.message || "This contract is ready for your signature."}</p>
+              <p className="text-sm text-muted-foreground">{message || "This contract is ready for your signature."}</p>
               <p className="text-sm text-muted-foreground">Signer: {contract.signerName || contract.signerEmail || "External signer"}</p>
             </div>
           </div>

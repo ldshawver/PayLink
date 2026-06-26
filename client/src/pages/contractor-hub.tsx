@@ -4472,13 +4472,15 @@ function ContractDetailPanel({
   const invoiceId = (contract as any).invoiceId || (contract as any).invoice_id;
   const invoiceStatus = (contract as any).invoiceStatus || (contract as any).invoice_status;
   const documensoSigningUrl = (contract as any).documensoSigningUrl || (contract as any).documenso_signing_url || (contract as any).signingUrl || (contract as any).signing_url;
-  const signedDocumentUrl = (contract as any).signedDocumentUrl || (contract as any).signed_document_url;
+  const signedDocumentUrl = (contract as any).signedDocumentUrl || (contract as any).signed_document_url || (contract as any).archivedDocumentUrl || ((contract as any).archivedDocumentId ? `/api/dam-documents/${(contract as any).archivedDocumentId}/download` : null);
+  const usesDocumenso = !!documensoSigningUrl || !!(contract as any).documensoDocumentId || signers.some(s => !!(s as any).documensoSigningUrl || !!(s as any).documenso_signing_url || !!(s as any).documensoRecipientId || !!(s as any).documenso_recipient_id);
+  const terminalSigningStatuses = ["fully_signed", "completed", "void", "terminated", "expired", "canceled", "cancelled"];
 
   const daysUntilExpiry = contract?.endDate
     ? Math.round((new Date(contract.endDate).getTime() - Date.now()) / 86400000)
     : null;
   const isExpiringSoon = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
-  const hasUnsignedSigners = signers.some(s => s.status === "pending");
+  const hasUnsignedSigners = signers.some(s => ["pending", "sent", "viewed", "unsent", "draft"].includes(s.status));
   const canManageSigners = isAdmin || currentUserRole === "contractor";
   const isActiveUnsignedSigner = (signer: Signer) => ["draft", "unsent", "pending", "sent", "viewed", "failed"].includes(signer.status);
   const hasDuplicateSignerEmail = (email: string, excludeId?: string) => {
@@ -4590,9 +4592,9 @@ function ContractDetailPanel({
   });
   const canActivate = isAdmin && ["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status);
   const canVoid = isAdmin && !["void", "terminated"].includes(contract.status);
-  const canSign = canShowSignatureActions;
+  const canSign = canShowSignatureActions && !usesDocumenso;
   const canCreateInvoice = ["active", "fully_signed", "completed"].includes(contract.status) && !invoiceId;
-  const canResendSigningRequest = canShowSignatureActions && ["sent", "awaiting_signatures", "partially_signed", "pending"].includes(contract.status);
+  const canResendSigningRequest = canShowSignatureActions && !terminalSigningStatuses.includes(contract.status) && ["sent", "awaiting_signatures", "partially_signed", "pending"].includes(contract.status) && signers.some(s => ["pending", "sent", "viewed", "unsent", "draft"].includes(s.status));
   const canShowDocumensoLaunch = !!documensoSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
 
   return (
@@ -4611,7 +4613,7 @@ function ContractDetailPanel({
             <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
               {canSign && (
                 <Button size="sm" className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => setSignOpen(true)} data-testid="btn-sign-contract">
-                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign Internally
+                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign Internally (legacy/manual)
                 </Button>
               )}
               {canSend && (
@@ -4755,12 +4757,12 @@ function ContractDetailPanel({
                 <div className="flex flex-wrap gap-2">
                   <Button size="sm" onClick={() => sendViaDocumensoMutation.mutate()} disabled={!canSendViaDocumenso || sendViaDocumensoMutation.isPending || !!documensoDisabledReason} data-testid="btn-documenso-panel-send">Send via Documenso</Button>
                   {canShowDocumensoLaunch && <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="btn-documenso-panel-launch"><Button size="sm" variant="outline">Sign with Documenso</Button></a>}
-                  <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={!canResendSigningRequest || resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-documenso-panel-resend">Re-send signing request</Button>
+                  <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={!canResendSigningRequest || resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-documenso-panel-resend" title={!canResendSigningRequest ? "Reminders stop after signature, completion, cancellation, or when no active Documenso document exists." : "Re-send through Documenso"}>Re-send signing request</Button>
                   <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(documensoSigningUrl || window.location.href)} disabled={!documensoSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
                   {signedDocumentUrl && <a href={signedDocumentUrl} target="_blank" rel="noreferrer" data-testid="link-view-signed-document"><Button size="sm" variant="outline">View signed document</Button></a>}
                 </div>
                 <div className="space-y-1">
-                  {signers.map(s => <div key={s.id} className="flex items-center justify-between text-xs"><span>{s.name || s.email}</span><span className="capitalize">{s.status}</span></div>)}
+                  {signers.map(s => <div key={s.id} className="flex items-center justify-between text-xs" data-testid={`documenso-signer-status-${s.id}`}><span>{s.name || s.email} {s.email ? `• ${s.email}` : ""} • {(s.role || "signer").replace(/_/g, " ")}</span><span className="capitalize">{s.status}{s.signedAt ? ` • signed ${fmtDate(s.signedAt)}` : ""}</span></div>)}
                 </div>
               </div>
 
@@ -4771,7 +4773,7 @@ function ContractDetailPanel({
                   <Select defaultValue="all_pending" onValueChange={v => saveReminderMutation.mutate({ recipients: v })}><SelectTrigger data-testid="select-reminder-recipients"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all_pending">All pending signers</SelectItem><SelectItem value="selected_signer">Selected signer</SelectItem><SelectItem value="contractor">Contractor</SelectItem><SelectItem value="internal_copy">Internal admin/manager copy</SelectItem></SelectContent></Select>
                 </div>
                 <Textarea value={reminderMessage} onChange={e => setReminderMessage(e.target.value)} data-testid="textarea-reminder-message" />
-                <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => saveReminderMutation.mutate({ enabled: true, message: reminderMessage })} data-testid="btn-enable-reminders">Enable reminders</Button><Button size="sm" variant="outline" onClick={() => saveReminderMutation.mutate({ enabled: false })} data-testid="btn-disable-reminders">Disable reminders</Button><Button size="sm" onClick={() => sendReminderNowMutation.mutate()} disabled={sendReminderNowMutation.isPending} data-testid="btn-send-reminder-now">Send reminder now</Button></div>
+                <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => saveReminderMutation.mutate({ enabled: true, message: reminderMessage })} disabled={!canResendSigningRequest} data-testid="btn-enable-reminders">Enable reminders</Button><Button size="sm" variant="outline" onClick={() => saveReminderMutation.mutate({ enabled: false })} data-testid="btn-disable-reminders">Disable reminders</Button><Button size="sm" onClick={() => sendReminderNowMutation.mutate()} disabled={sendReminderNowMutation.isPending || !canResendSigningRequest} data-testid="btn-send-reminder-now">Send reminder now</Button></div>
                 <p className="text-xs text-muted-foreground">Next reminder send date and last reminder sent date are shown after reminders are configured.</p>
               </div>
 
@@ -4884,7 +4886,7 @@ function ContractDetailPanel({
                           <div className="flex gap-1 mt-2 justify-end">
                             <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingSigner(signer)} data-testid={`btn-edit-signer-${signer.id}`}>Edit/Reassign</Button>
                             <Button size="sm" variant="ghost" className="h-7 px-2 text-red-600" onClick={() => deleteSignerMutation.mutate(signer.id)} data-testid={`btn-delete-signer-${signer.id}`}>Delete/remove</Button>
-                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resendSignerMutation.mutate(signer.id)} data-testid={`btn-resend-signer-${signer.id}`}>Resend</Button>
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => resendSignerMutation.mutate(signer.id)} disabled={terminalSigningStatuses.includes(contract.status) || signer.status === "signed"} data-testid={`btn-resend-signer-${signer.id}`}>Resend</Button>
                           </div>
                         )}
                       </div>
@@ -4896,7 +4898,7 @@ function ContractDetailPanel({
               {canSign && (
                 <div className="pt-2 border-t">
                   <Button onClick={() => setSignOpen(true)} className="w-full bg-teal-600 hover:bg-teal-700 text-white" data-testid="btn-sign-contract-tab">
-                    <CheckSquare className="h-4 w-4 mr-2" /> Sign This Contract
+                    <CheckSquare className="h-4 w-4 mr-2" /> Sign This Contract (legacy/manual)
                   </Button>
                 </div>
               )}
