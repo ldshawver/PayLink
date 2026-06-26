@@ -13835,6 +13835,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!row) return res.status(404).json({ state: "missing_contract", message: "We could not find this contract." });
       if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_or_canceled", message: "This signing link is expired or no longer active." });
       await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      if ((req.path || "").includes("/status") || row.documenso_document_id) {
+        await syncDocumensoContractStatus(row.contract_id).catch((err) => console.warn("[Documenso] contract status sync failed", err?.message || err));
+      }
+      const refreshed = firstRow<any>(await db.execute(sql`
+        SELECT cs.status AS signer_status, cc.status AS contract_status
+        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        WHERE cs.id = ${row.signer_id}
+      `).catch(() => ({ rows: [] } as any)));
+      if (refreshed) { row.signer_status = refreshed.signer_status; row.contract_status = refreshed.contract_status; }
       const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
       const state = ["fully_signed", "completed", "active"].includes(String(row.contract_status))
         ? "fully_signed"
@@ -13871,6 +13880,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const signer = result.rows[0] as any;
       if (!signer) return res.status(404).json({ message: "Signing link not found" });
       if (signer.signing_token_expires_at && new Date(signer.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      if (signer.documenso_recipient_id || signer.documenso_signing_url) {
+        const syncResult = await syncDocumensoContractStatus(signer.contract_id).catch(() => null);
+        return res.status(409).json({ message: "This contract is Documenso-managed. Please complete signing in Documenso; MyPayLink will update after Documenso confirms signer status.", state: "documenso_managed", documensoSigningUrl: signer.documenso_signing_url || null, syncResult });
+      }
       await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${req.body?.signatureData || null}, ip_address = ${req.ip || null}, updated_at = NOW() WHERE id = ${signer.id}`);
       const pending = await db.execute(sql`
         SELECT COUNT(*) FROM contract_signers
@@ -14066,6 +14079,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contract = contractRes.rows[0] as any;
       if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const documensoBacked = firstRow<any>(await db.execute(sql`SELECT id, documenso_document_id FROM documenso_signature_requests WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id} AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] } as any)));
+      if (documensoBacked?.documenso_document_id) {
+        const syncResult = await syncDocumensoContractStatus(req.params.id).catch(() => null);
+        return res.status(409).json({ message: "Production signing for this contract is managed by Documenso. Open the Documenso signing link instead of signing internally.", state: "documenso_managed", documensoDocumentId: documensoBacked.documenso_document_id, syncResult });
+      }
       if (!["draft", "pending", "awaiting_signatures", "sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
 
       // Authorization: caller must be either:
@@ -14642,9 +14660,119 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try { return typeof notes === "string" ? JSON.parse(notes) : notes as any; } catch { return { message: String(notes) }; }
   }
 
+  async function syncDocumensoContractStatus(contractId: string) {
+    const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
+    const contract = firstRow<any>(contractRes);
+    if (!contract) return { contractId, status: "missing_contract", signersUpdated: 0 };
+    const sigReq = firstRow<any>(await db.execute(sql`
+      SELECT * FROM documenso_signature_requests
+      WHERE document_type IN ('contract', 'contractor_hub_contract')
+        AND related_record_id = ${contractId}
+        AND company_id = ${contract.company_id}
+        AND documenso_document_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `));
+    if (!sigReq?.documenso_document_id) return { contractId, status: contract.status, signersUpdated: 0, message: "no_active_documenso_document" };
+
+    const remote = await getDocumensoDocument(sigReq.documenso_document_id).catch(() => null);
+    const rawRecipients = Array.isArray((remote as any)?.recipients) ? (remote as any).recipients
+      : Array.isArray((remote as any)?.signingLinks) ? (remote as any).signingLinks
+      : Array.isArray((remote as any)?.rawResponse?.recipients) ? (remote as any).rawResponse.recipients
+      : Array.isArray((remote as any)?.rawResponse?.data?.recipients) ? (remote as any).rawResponse.data.recipients
+      : [];
+    const normalizeRecipientStatus = (value: any) => {
+      const v = String(value || "").toLowerCase();
+      if (["completed", "complete", "signed", "document.signed", "recipient.signed"].includes(v)) return "signed";
+      if (["viewed", "opened"].includes(v)) return "viewed";
+      if (["declined", "rejected"].includes(v)) return "declined";
+      if (["cancelled", "canceled", "voided"].includes(v)) return "canceled";
+      if (["expired"].includes(v)) return "expired";
+      if (["sent", "pending", "created"].includes(v)) return "sent";
+      return null;
+    };
+    let signersUpdated = 0;
+    for (const recipient of rawRecipients) {
+      const recipientId = String(recipient?.id || recipient?.token || recipient?.recipientId || recipient?.recipient_id || "") || null;
+      const email = normalizeSignerEmail(recipient?.email || recipient?.recipientEmail || recipient?.recipient_email);
+      const status = normalizeRecipientStatus(recipient?.status || recipient?.signingStatus || recipient?.readStatus);
+      if (!status || (!recipientId && !email)) continue;
+      const signedAt = status === "signed" ? (recipient?.signedAt || recipient?.signed_at || recipient?.completedAt || recipient?.completed_at || new Date()) : null;
+      const updateRes = await db.execute(sql`
+        UPDATE contract_signers
+        SET status = ${status},
+            signed_at = CASE WHEN ${status} = 'signed' THEN COALESCE(signed_at, ${signedAt}) ELSE signed_at END,
+            documenso_recipient_id = COALESCE(documenso_recipient_id, ${recipientId}),
+            documenso_signing_url = COALESCE(documenso_signing_url, ${recipient?.signingUrl || recipient?.signing_url || null}),
+            updated_at = NOW()
+        WHERE contract_id = ${contractId}
+          AND (${recipientId} IS NOT NULL AND documenso_recipient_id = ${recipientId}
+               OR ${email} IS NOT NULL AND lower(trim(email)) = ${email})
+          AND status IS DISTINCT FROM ${status}
+        RETURNING id
+      `).catch(() => ({ rows: [] } as any));
+      signersUpdated += Number((updateRes as any).rows?.length || 0);
+    }
+    const counts = firstRow<any>(await db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE COALESCE(is_required, TRUE) = TRUE AND status = 'signed') AS signed_required,
+        COUNT(*) FILTER (WHERE COALESCE(is_required, TRUE) = TRUE AND status NOT IN ('canceled','cancelled','expired','declined','replaced','voided')) AS active_required
+      FROM contract_signers WHERE contract_id = ${contractId}
+    `));
+    const signedRequired = Number(counts?.signed_required || 0);
+    const activeRequired = Number(counts?.active_required || 0);
+    const remoteStatus = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus((remote as any)?.status || (remote as any)?.rawResponse?.status || sigReq.status));
+    const allSigned = activeRequired > 0 && signedRequired >= activeRequired;
+    const nextStatus = allSigned || remoteStatus === "completed" ? "fully_signed" : signedRequired > 0 ? "partially_signed" : contract.status;
+    if (["partially_signed", "fully_signed"].includes(nextStatus) && contract.status !== nextStatus && contract.status !== "completed") {
+      await db.execute(nextStatus === "fully_signed"
+        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`
+        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${contractId}`);
+    }
+    await db.execute(sql`UPDATE documenso_signature_requests SET status = ${remoteStatus}, raw_response = COALESCE(${remote ? JSON.stringify((remote as any).rawResponse || remote) : null}, raw_response), updated_at = NOW() WHERE id = ${sigReq.id}`).catch(() => {});
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_status_synced", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, status: nextStatus, signersUpdated }) }).catch(() => {});
+    return { contractId, status: nextStatus, documensoDocumentId: sigReq.documenso_document_id, signersUpdated, remoteStatus };
+  }
+
+  async function fileDocumensoFinalAgreementPacket(contract: any, documensoDocumentId: string, completionEventId?: string | null) {
+    const existing = firstRow<any>(await db.execute(sql`
+      SELECT id FROM dam_documents
+      WHERE contract_id = ${contract.id}
+        AND document_type = 'contractor_signed_agreement_packet'
+        AND source_record_type = 'documenso'
+      ORDER BY created_at DESC LIMIT 1
+    `).catch(() => ({ rows: [] } as any)));
+    if (existing?.id) return { documentId: existing.id, created: false };
+    const pdf = await downloadCompletedDocumensoPdf(documensoDocumentId).catch(() => null);
+    const contractPdfBuf = pdf || await generateContractPdf(contract.id);
+    if (!contractPdfBuf) return { documentId: null, created: false, error: "completed_pdf_unavailable" };
+    const tenantDir = path.join(resolvedUploadDir, "signed", contract.company_id);
+    await fs.promises.mkdir(tenantDir, { recursive: true });
+    const fileName = `contractor-signed-agreement-packet-${String(contract.id).slice(0, 8)}-${documensoDocumentId}.pdf`.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const abs = path.join(tenantDir, fileName);
+    await fs.promises.writeFile(abs, contractPdfBuf);
+    const fSize = (await fs.promises.stat(abs)).size;
+    const signerRows = (await db.execute(sql`SELECT name, email FROM contract_signers WHERE contract_id = ${contract.id} ORDER BY COALESCE(signing_order, "order", 1) ASC`).catch(() => ({ rows: [] } as any))).rows as any[];
+    const metadata = { document_status: "signed_final", retention_category: "contractor_agreement", source: "documenso", contract_id: contract.id, proposal_id: contract.proposal_id || null, invoice_id: contract.invoice_id || null, signer_names: signerRows.map(s => s.name).filter(Boolean), signer_emails: signerRows.map(s => s.email).filter(Boolean), fully_signed_at: contract.fully_signed_at || new Date().toISOString(), documenso_document_id: documensoDocumentId, documenso_completion_event_id: completionEventId || null, tags: ["contractor", "contract", "proposal", "signed", "final", "documenso", "agreement", "legal"] };
+    const inserted = await db.execute(sql`
+      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id, contract_id, proposal_id, invoice_id, source_record_type, source_record_id, generated_at, signed_at, tags, source_module, lifecycle_status, category)
+      VALUES (${contract.company_id}, ${contract.contractor_id || null}, 'worker', 'contractor_signed_agreement_packet',
+        ${contract.title || contract.contract_number || "Final signed agreement packet"},
+        ${"Final MyPayLink agreement packet filed from Documenso. Includes proposal linkage where available and the completed signed contract PDF."},
+        ${`/uploads/signed/${contract.company_id}/${fileName}`}, ${fileName}, 'document', ${fSize}, 'application/pdf',
+        'contract', ${contract.id}, NULL, ${contract.id}, ${contract.proposal_id || null}, ${contract.invoice_id || null}, 'documenso', ${documensoDocumentId}, NOW(), NOW(), ${metadata.tags.join(",")}, 'contractor_hub', 'signed', 'Contracts')
+      RETURNING id
+    `);
+    const documentId = firstRow<any>(inserted)?.id || null;
+    await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = COALESCE(${documentId}, archived_document_id), status = CASE WHEN status = 'fully_signed' THEN 'completed' ELSE status END, updated_at = NOW() WHERE id = ${contract.id}`).catch(() => {});
+    return { documentId, created: true };
+  }
+
   async function sendContractSigningReminderNow(contract: any, contractId: string, actorUserId: string | undefined, message: string, selectedSignerId?: string | null) {
     const terminal = ["fully_signed", "completed", "void", "terminated"];
     if (terminal.includes(contract.status)) throw new Error("Reminders are stopped for completed, fully signed, void, or terminated contracts");
+    const activeDocumenso = firstRow<any>(await db.execute(sql`SELECT id, documenso_document_id FROM documenso_signature_requests WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${contractId} AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL AND status NOT IN ('completed','canceled','cancelled','expired','voided') ORDER BY created_at DESC LIMIT 1`).catch(() => ({ rows: [] } as any)));
+    if (!activeDocumenso?.documenso_document_id) throw new Error("Cannot send reminders because no active Documenso document exists for this contract");
+    await syncDocumensoContractStatus(contractId).catch(() => null);
     const pending = selectedSignerId
       ? await db.execute(sql`SELECT * FROM contract_signers WHERE id = ${selectedSignerId} AND contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`)
       : await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`);
@@ -24329,7 +24457,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         if (contractSig) {
           const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
           const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || contractSig.status));
-          const completed = status === "completed";
+          const completed = status === "completed" || /recipient.*signed|document.*completed|document.*signed/i.test(eventType);
+          await syncDocumensoContractStatus(contractSig.related_record_id).catch((err) => console.warn("[Documenso] contract webhook sync failed", err?.message || err));
           await db.execute(sql`
             UPDATE documenso_signature_requests
             SET status = ${status},
@@ -24348,6 +24477,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                 await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id}`);
                 await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status IN ('pending','sent','viewed')`).catch(() => {});
               }
+              const packetResult = await fileDocumensoFinalAgreementPacket({ ...contract, status: 'fully_signed', fully_signed_at: contract.fully_signed_at || new Date().toISOString() }, documensoDocumentId, webhookEventId).catch((err) => ({ error: err?.message || String(err) }));
+              await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contract.id, actionType: "documenso_completion_packet_filed", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId, webhookEventId, packetResult }) }).catch(() => {});
               if (!wasAlreadyFullySigned && contract.proposal_id) {
                 const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contract.proposal_id}`);
                 const prop = firstRow<any>(propRes);
