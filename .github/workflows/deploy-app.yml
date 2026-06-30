@@ -10,6 +10,8 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_NOTIFY_EMAIL: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
 
     steps:
       - name: Checkout repository
@@ -120,20 +122,56 @@ jobs:
           command_timeout: 30m
           script_stop: false
           script: |
-            set -e
+            set -uo pipefail
             echo "Starting deployment — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
             APP_PATH="/home/paylinkssh/paylink-app/PayLink"
-            cd "$APP_PATH"
+            cd "$APP_PATH" || exit 1
 
             PREV_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "")
             echo "Previous commit: ${PREV_COMMIT:-none}"
 
-            git fetch origin main
-            git reset --hard origin/main
+            rollback() {
+              reason="$1"
+              echo "Deployment failed: $reason — triggering rollback"
+              pm2 logs paylink --lines 80 --nostream || true
 
-            NEW_COMMIT=$(git rev-parse HEAD)
-            echo "Repository updated → $NEW_COMMIT"
+              if [ -z "$PREV_COMMIT" ]; then
+                echo "No previous commit recorded — cannot rollback"
+                return 1
+              fi
+
+              git reset --hard "$PREV_COMMIT" || return 1
+              pnpm install --frozen-lockfile=false --reporter=append-only || true
+              pnpm build || true
+
+              pm2 delete paylink 2>/dev/null || true
+              ROLLBACK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+              PAYLINK_COMMIT="$PREV_COMMIT" PAYLINK_BUILD_TIME="$ROLLBACK_BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
+                --name paylink \
+                --cwd "$APP_PATH" \
+                --interpreter node \
+                --node-args="--require dotenv/config" \
+                -- dotenv_config_path=/etc/paylink/.env || return 1
+
+              pm2 save --force || true
+
+              sleep 5
+              curl -fs http://127.0.0.1:8000/health >/dev/null 2>&1 || {
+                echo "Rollback also failed — manual intervention required"
+                return 1
+              }
+
+              echo "Rollback successful"
+              return 0
+            }
+
+            git fetch origin main || exit 1
+            git reset --hard origin/main || exit 1
+
+            NEW_COMMIT=$(git rev-parse HEAD) || exit 1
+            echo "✔ Repository updated"
+            echo "Repository commit → $NEW_COMMIT"
 
             sudo chown -R paylinkssh:paylinkssh . 2>/dev/null || true
 
@@ -144,35 +182,55 @@ jobs:
             }
 
             if ! command -v pnpm >/dev/null 2>&1; then
-              sudo npm install -g pnpm@10.33.0
+              sudo npm install -g pnpm@10.33.0 || exit 1
             fi
 
-            pnpm install --frozen-lockfile=false --reporter=append-only
+            pnpm install --frozen-lockfile=false --reporter=append-only || exit 1
+            echo "✔ Dependencies installed"
 
             rm -rf dist/
-            pnpm build
+            if ! pnpm build; then
+              rollback "build failed" || true
+              exit 1
+            fi
+            echo "✔ Build successful"
 
             NGINX_CONF_SRC="$APP_PATH/scripts/nginx-mypaylink.conf"
-
+            NGINX_STATUS="skipped"
             if sudo -n true 2>/dev/null; then
-              "$APP_PATH/scripts/apply_mypaylink_nginx.sh" "$NGINX_CONF_SRC"
+              NGINX_LOG=$(mktemp)
+              if "$APP_PATH/scripts/apply_mypaylink_nginx.sh" "$NGINX_CONF_SRC" 2>&1 | tee "$NGINX_LOG"; then
+                if grep -q "Nginx configuration updated and reloaded" "$NGINX_LOG"; then
+                  NGINX_STATUS="updated"
+                else
+                  NGINX_STATUS="skipped"
+                fi
+              else
+                echo "Warning: nginx configuration could not be applied; continuing deployment"
+                NGINX_STATUS="skipped"
+              fi
+              rm -f "$NGINX_LOG"
             else
-              echo "Passwordless sudo unavailable — cannot inspect or apply active nginx config"
-              exit 1
+              echo "Skipping nginx configuration (no passwordless sudo)"
+              NGINX_STATUS="skipped"
             fi
 
             pm2 delete paylink 2>/dev/null || true
 
             PAYLINK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-            PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
+            if ! PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
               --name paylink \
               --cwd "$APP_PATH" \
               --interpreter node \
               --node-args="--require dotenv/config" \
-              -- dotenv_config_path=/etc/paylink/.env
+              -- dotenv_config_path=/etc/paylink/.env; then
+              rollback "PM2 start failed" || true
+              exit 1
+            fi
 
-            pm2 save --force
+            pm2 save --force || true
+            echo "✔ PM2 restarted"
 
             sleep 5
 
@@ -180,44 +238,15 @@ jobs:
             for i in $(seq 1 30); do
               if curl -fs http://127.0.0.1:8000/health >/dev/null 2>&1; then
                 HEALTH_OK=1
-                echo "Health check passed"
+                echo "✔ Local health passed"
                 break
               fi
-              echo "Waiting for health check... attempt $i/30"
+              echo "Waiting for local health check... attempt $i/30"
               sleep 3
             done
 
             if [ "$HEALTH_OK" = "0" ]; then
-              echo "Health check failed — triggering rollback"
-              pm2 logs paylink --lines 80 --nostream || true
-
-              if [ -n "$PREV_COMMIT" ]; then
-                git reset --hard "$PREV_COMMIT"
-                pnpm install --frozen-lockfile=false --reporter=append-only || true
-                pnpm build || true
-
-                pm2 delete paylink 2>/dev/null || true
-                ROLLBACK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-                PAYLINK_COMMIT="$PREV_COMMIT" PAYLINK_BUILD_TIME="$ROLLBACK_BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
-                  --name paylink \
-                  --cwd "$APP_PATH" \
-                  --interpreter node \
-                  --node-args="--require dotenv/config" \
-                  -- dotenv_config_path=/etc/paylink/.env
-
-                pm2 save --force
-
-                sleep 5
-                curl -fs http://127.0.0.1:8000/health >/dev/null 2>&1 || {
-                  echo "Rollback also failed — manual intervention required"
-                  exit 1
-                }
-
-                echo "Rollback successful"
-              else
-                echo "No previous commit recorded — cannot rollback"
-              fi
-
+              rollback "local health endpoint failed" || true
               exit 1
             fi
 
@@ -226,7 +255,7 @@ jobs:
               HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 https://mypaylink.app/health 2>/dev/null || echo "ERR")
               if [ "$HTTP_CODE" = "200" ]; then
                 PUBLIC_OK=1
-                echo "Public health check passed"
+                echo "✔ Public health passed"
                 break
               fi
               echo "Public health attempt $j/6 → $HTTP_CODE"
@@ -234,14 +263,22 @@ jobs:
             done
 
             if [ "$PUBLIC_OK" = "0" ]; then
-              echo "Public health check failed"
+              rollback "public health endpoint failed" || true
               exit 1
             fi
 
+            if [ "$NGINX_STATUS" = "updated" ]; then
+              echo "✔ Nginx updated"
+            else
+              echo "✔ Nginx skipped"
+            fi
+
+            echo "Deployment successful"
             echo "Deployment complete — commit $NEW_COMMIT"
 
       - name: Production signing smoke tests
         if: success()
+        continue-on-error: true
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
           BASE_URL: https://mypaylink.app
@@ -269,14 +306,19 @@ jobs:
 
       - name: Upload deployment smoke artifacts
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: paylink-deployment-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: deployment-smoke-artifacts/
           retention-days: 30
 
+      - name: Skip success email when recipients are empty
+        if: success() && env.DEPLOY_NOTIFY_EMAIL == ''
+        run: echo "Skipping email notification (no recipients configured)"
+
       - name: Notify success
-        if: success()
+        if: success() && env.DEPLOY_NOTIFY_EMAIL != ''
         uses: dawidd6/action-send-mail@v3
         continue-on-error: true
         with:
@@ -285,7 +327,7 @@ jobs:
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: PayLink deployed successfully
-          to: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
+          to: ${{ env.DEPLOY_NOTIFY_EMAIL }}
           from: ${{ secrets.SMTP_FROM }}
           html_body: |
             <p><strong>PayLink deployed successfully.</strong></p>
@@ -295,8 +337,12 @@ jobs:
             <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View GitHub Actions run</a></p>
             <p><a href="https://mypaylink.app/health">Check PayLink health</a></p>
 
+      - name: Skip failure email when recipients are empty
+        if: failure() && env.DEPLOY_NOTIFY_EMAIL == ''
+        run: echo "Skipping email notification (no recipients configured)"
+
       - name: Notify failure
-        if: failure()
+        if: failure() && env.DEPLOY_NOTIFY_EMAIL != ''
         uses: dawidd6/action-send-mail@v3
         continue-on-error: true
         with:
@@ -305,7 +351,7 @@ jobs:
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: PayLink deploy FAILED
-          to: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
+          to: ${{ env.DEPLOY_NOTIFY_EMAIL }}
           from: ${{ secrets.SMTP_FROM }}
           html_body: |
             <p><strong>PayLink deployment failed.</strong></p>
