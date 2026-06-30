@@ -26,7 +26,7 @@ ok("Documenso contract invoice count is company-scoped", routes.includes("WHERE 
 ok("Documenso duplicate already-signed contracts do not re-run completion side effects", routes.includes("const wasAlreadyFullySigned = contract.status === \"fully_signed\"") && routes.includes("if (!wasAlreadyFullySigned && contract.proposal_id)"));
 
 ok("public signing endpoint exposes Documenso metadata", routes.includes("documensoSigningUrl: row.documenso_signing_url") && routes.includes("documensoRecipientId: row.documenso_recipient_id"));
-ok("resend refreshes persisted Documenso signer metadata", routes.includes("const resendResult = await resendDocumensoDocument(sigReq.documenso_document_id)") && routes.includes("documenso_recipient_ids = COALESCE"));
+ok("resend refreshes persisted Documenso signer metadata", routes.includes("await refreshDocumensoContractRecipientMetadata") && routes.includes("documenso_recipient_ids ="));
 
 const schema = fs.readFileSync("server/index.ts", "utf8") + "\n" + fs.readFileSync("migrations/0011_notification_preferences_push_enabled.sql", "utf8");
 const signingFlow = fs.readFileSync("server/contract-signing-flow.ts", "utf8");

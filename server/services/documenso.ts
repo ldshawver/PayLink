@@ -46,6 +46,40 @@ async function parseResponse(res: Response): Promise<any> {
   return res.text();
 }
 
+export class DocumensoApiError extends Error {
+  status: number;
+  code?: string | null;
+  body: any;
+  requestId?: string | null;
+  endpoint: string;
+  method: string;
+  timestamp: string;
+
+  constructor(method: string, endpoint: string, status: number, body: any, requestId?: string | null) {
+    const message = typeof body === "string" ? body : (body?.message || body?.error || body?.code || JSON.stringify(body));
+    super(`Documenso API ${method} ${endpoint} failed with ${status}: ${message}`);
+    this.name = "DocumensoApiError";
+    this.method = method;
+    this.endpoint = endpoint;
+    this.status = status;
+    this.code = typeof body === "object" ? (body?.code || body?.errorCode || body?.error) : null;
+    this.body = body;
+    this.requestId = requestId || null;
+    this.timestamp = new Date().toISOString();
+  }
+}
+
+export function serializeDocumensoError(error: any) {
+  return {
+    httpStatus: error?.status || null,
+    errorCode: error?.code || null,
+    errorMessage: error?.message || "Documenso request failed",
+    responseBody: error?.body ?? null,
+    requestId: error?.requestId || null,
+    timestamp: error?.timestamp || new Date().toISOString(),
+  };
+}
+
 async function apiJson<T = any>(method: string, endpoint: string, body?: any): Promise<T> {
   const res = await fetch(`${getBaseUrl()}${endpoint}`, {
     method,
@@ -58,7 +92,7 @@ async function apiJson<T = any>(method: string, endpoint: string, body?: any): P
   });
   if (!res.ok) {
     const err = await parseResponse(res).catch(() => "");
-    throw new Error(`Documenso API ${method} ${endpoint} failed with ${res.status}: ${typeof err === "string" ? err : JSON.stringify(err)}`);
+    throw new DocumensoApiError(method, endpoint, res.status, err, res.headers.get("x-request-id") || res.headers.get("x-correlation-id"));
   }
   return parseResponse(res) as Promise<T>;
 }
@@ -239,7 +273,7 @@ export async function resendDocumensoDocument(documentId: string): Promise<Docum
   return {
     documentId,
     status: mapDocumensoStatus(res?.status || "PENDING"),
-    signingLinks: (res?.recipients || []).map((r: any) => ({ name: r.name || "", email: r.email || "", signingUrl: r.signingUrl, token: r.token, status: r.signingStatus || r.status })),
+    signingLinks: (res?.recipients || []).map((r: any) => ({ name: r.name || "", email: r.email || "", signingUrl: r.signingUrl, token: r.token || r.id || r.recipientId, status: r.signingStatus || r.status })),
     auditUrl: `${getBaseUrl()}/envelope/${documentId}/audit-log`,
     rawResponse: res,
   };
