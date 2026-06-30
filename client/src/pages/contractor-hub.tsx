@@ -103,6 +103,12 @@ interface Proposal {
   counterofferNotes?: string;
   archivedAt?: string;
   archiveReason?: string;
+  workflowContractId?: string | null;
+  workflowContractCreatedAt?: string | null;
+  workflowInvoiceCount?: number;
+  workflowLastEvent?: string | null;
+  workflowError?: string | null;
+  workflowStage?: string | null;
 }
 
 interface ContractorBranding {
@@ -501,7 +507,7 @@ const PROPOSAL_STATUS_CONFIG: Record<string, { label: string; color: string; bg:
   approved:              { label: "Approved",             color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
   out_for_signature:     { label: "Out for Signature",    color: "text-violet-700", bg: "bg-violet-50 dark:bg-violet-950/30" },
   signed:                { label: "Signed",               color: "text-emerald-700",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
-  converted_to_contract: { label: "Converted to Contract",color: "text-emerald-700",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+  converted_to_contract: { label: "Contract Created",   color: "text-emerald-700",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
   declined:              { label: "Declined",             color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
   rejected:              { label: "Rejected",             color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
   expired:               { label: "Expired",              color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
@@ -1147,6 +1153,18 @@ function ProposalDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" }),
   });
 
+  const repairContractMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposal.id}/repair-contract`, {}),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-contracts"] });
+      refetchEvents();
+      toast({ title: data?.repaired ? "Missing contract created" : "Proposal re-linked to contract" });
+      onRefresh();
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to repair contract", variant: "destructive" }),
+  });
+
   const revisionMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposal.id}/create-revision`),
     onSuccess: () => {
@@ -1231,6 +1249,10 @@ function ProposalDetailPanel({
   const canRetryEmail = isAdmin && proposal.status === "sent" && !!proposal.lastSentEventNotes?.startsWith("Email delivery failed");
   const canAcceptCounteroffer = !isAdmin && proposal.status === "countered";
   const canRejectCounteroffer = !isAdmin && proposal.status === "countered";
+  const finalizedProposalStatuses = ["approved", "accepted", "negotiated", "signed", "converted_to_contract"];
+  const proposalContractId = proposal.convertedToContractId || proposal.workflowContractId || null;
+  const isFinalizedProposal = finalizedProposalStatuses.includes(proposal.status);
+  const canRepairMissingContract = isAdmin && isFinalizedProposal && !proposalContractId;
 
   function handleMarkSent() {
     setSendEmailDraft(proposal.clientEmail ?? "");
@@ -1326,7 +1348,7 @@ function ProposalDetailPanel({
             </div>
           </div>
           {/* Row 2: action buttons — horizontally scrollable so nothing gets clipped */}
-          {(isLocked || canEdit || canSubmit || canMarkSent || canAdminAction || canMarkNegotiated || canConvertToContract || (proposal.status === "approved" && isAdmin) || canCreateRevision || canAcceptCounteroffer) && (
+          {(isLocked || canEdit || canSubmit || canMarkSent || canAdminAction || canMarkNegotiated || canConvertToContract || canRepairMissingContract || (proposal.status === "approved" && isAdmin) || canCreateRevision || canAcceptCounteroffer) && (
             <div className="flex items-center gap-2 overflow-x-auto pb-3 pt-1 scrollbar-none" style={{ scrollbarWidth: "none" }}>
               {isLocked && (
                 <span className="shrink-0 flex items-center gap-1 text-xs text-muted-foreground border rounded px-2 py-1" data-testid="label-locked-proposal">
@@ -1387,13 +1409,18 @@ function ProposalDetailPanel({
                   <FileSignature className="h-3.5 w-3.5 mr-1" /> Convert to Contract
                 </Button>
               )}
+              {canRepairMissingContract && (
+                <Button size="sm" className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => repairContractMutation.mutate()} disabled={repairContractMutation.isPending} data-testid="btn-create-missing-contract">
+                  {repairContractMutation.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <FileSignature className="h-3.5 w-3.5 mr-1" />} Create Missing Contract
+                </Button>
+              )}
               {proposal.status === "approved" && isAdmin && (
                 <Button size="sm" variant="outline" className="shrink-0 border-violet-300 text-violet-700" onClick={() => actionMutation.mutate({ action: "request-signature" })} disabled={actionMutation.isPending} data-testid="btn-request-signature">
                   <FileSignature className="h-3.5 w-3.5 mr-1" /> Request Signature
                 </Button>
               )}
-              {proposal.status === "approved" && isAdmin && !proposal.convertedToInvoiceId && (
-                <Button size="sm" variant="outline" className="shrink-0" onClick={() => actionMutation.mutate({ action: "convert-to-invoice" })} disabled={actionMutation.isPending} data-testid="btn-convert-invoice">
+              {isFinalizedProposal && isAdmin && !proposal.convertedToInvoiceId && (
+                <Button size="sm" variant="outline" className="shrink-0" onClick={() => actionMutation.mutate({ action: "convert-to-invoice" })} disabled={actionMutation.isPending || !proposalContractId} data-testid="btn-convert-invoice" title={proposalContractId ? "Create invoice from this proposal" : "Create a contract before invoicing this finalized proposal"}>
                   <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
                 </Button>
               )}
@@ -1450,6 +1477,20 @@ function ProposalDetailPanel({
             </div>
           )}
         </SheetHeader>
+
+        {isFinalizedProposal && (
+          <div className="shrink-0 border-b bg-muted/20 px-6 py-3" data-testid="panel-proposal-workflow-diagnostics">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div><span className="text-muted-foreground">Proposal ID</span><div className="font-mono truncate">{proposal.id}</div></div>
+              <div><span className="text-muted-foreground">Contract ID</span><div className="font-mono truncate">{proposalContractId || "Missing"}</div></div>
+              <div><span className="text-muted-foreground">Workflow Stage</span><div>{proposal.workflowStage || (proposalContractId ? "Contract Created" : "Final")}</div></div>
+              <div><span className="text-muted-foreground">Contract Created</span><div>{proposal.workflowContractCreatedAt ? fmtDate(proposal.workflowContractCreatedAt) : "—"}</div></div>
+              <div><span className="text-muted-foreground">Invoice Count</span><div>{proposal.workflowInvoiceCount ?? (proposal.convertedToInvoiceId ? 1 : 0)}</div></div>
+              <div><span className="text-muted-foreground">Last Event</span><div>{proposal.workflowLastEvent || "—"}</div></div>
+              <div className="md:col-span-2"><span className="text-muted-foreground">Workflow Error</span><div className={proposal.workflowError ? "text-red-600" : ""}>{proposal.workflowError || "None"}</div></div>
+            </div>
+          </div>
+        )}
 
         <Tabs value={tab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0">
           <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0 overflow-x-auto">
