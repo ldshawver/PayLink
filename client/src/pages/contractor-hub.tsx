@@ -4506,7 +4506,7 @@ function ContractDetailPanel({
       refetch();
       const recipients = Array.isArray(data?.recipients) ? data.recipients : [];
       const recipientSummary = recipients.length
-        ? recipients.map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.resendResult || "unknown"}${recipient.documensoRecipientId ? " (recipient id present)" : " (missing recipient id)"}`).join("; ")
+        ? recipients.map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.resendResult || "unknown"}${recipient.reason || recipient.error ? ` (${recipient.reason || recipient.error})` : recipient.documensoStatus ? ` (${recipient.documensoStatus})` : recipient.documensoRecipientId ? " (accepted by Documenso)" : " (Recipient missing remotely)"}`).join("; ")
         : "No pending signer recipients were targeted.";
       toast({
         title: data?.success ? "Signing request re-sent" : "Documenso resend needs review",
