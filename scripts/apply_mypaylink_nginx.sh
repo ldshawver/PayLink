@@ -32,6 +32,11 @@ $SUDO nginx -T 2>/tmp/paylink-nginx-before.err | awk \
   '/server_name/ && ($0 ~ /mypaylink\.app/ || $0 ~ /app\.mypaylink\.app/) { print }' || true
 cat /tmp/paylink-nginx-before.err >&2 || true
 
+NEEDS_UPDATE=0
+if [ ! -f "$CONF_DST" ] || ! $SUDO cmp -s "$CONF_SRC" "$CONF_DST"; then
+  NEEDS_UPDATE=1
+fi
+
 # CloudPanel/certbot can leave an old app.mypaylink.app static or redirect-only vhost
 # enabled beside the PayLink vhost. Move only enabled files that explicitly claim the
 # app subdomain and are not the canonical destination.
@@ -45,13 +50,19 @@ if [ -d /etc/nginx/sites-enabled ]; then
       backup_name="$(basename "$enabled_conf").disabled.$(date -u +%Y%m%dT%H%M%SZ)"
       echo "Disabling conflicting enabled nginx vhost for $APP_SUBDOMAIN: $enabled_conf -> $CONFLICT_DIR/$backup_name"
       $SUDO mv "$enabled_conf" "$CONFLICT_DIR/$backup_name"
+      NEEDS_UPDATE=1
     fi
   done < <(find /etc/nginx/sites-enabled -maxdepth 1 -type f -o -type l 2>/dev/null)
 fi
 
-$SUDO cp "$CONF_SRC" "$CONF_DST"
-$SUDO nginx -t
-$SUDO systemctl reload nginx
+if [ "$NEEDS_UPDATE" = "1" ]; then
+  $SUDO cp "$CONF_SRC" "$CONF_DST"
+  $SUDO nginx -t
+  $SUDO systemctl reload nginx
+  echo "Nginx configuration updated and reloaded"
+else
+  echo "Nginx configuration already current; no reload needed"
+fi
 
 echo "--- Active nginx config after reload: $APP_DOMAIN / $APP_SUBDOMAIN references ---"
 ACTIVE_CONFIG="$($SUDO nginx -T 2>/tmp/paylink-nginx-after.err)"
