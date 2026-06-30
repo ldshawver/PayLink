@@ -11188,6 +11188,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const result = await db.execute(sql`
           SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
                  co.name as company_name,
+                 COALESCE(cp.converted_to_contract_id, (SELECT cc.id FROM contractor_contracts cc WHERE cc.proposal_id = cp.id ORDER BY cc.created_at ASC LIMIT 1)) AS workflow_contract_id,
+                 (SELECT cc.created_at FROM contractor_contracts cc WHERE cc.proposal_id = cp.id ORDER BY cc.created_at ASC LIMIT 1) AS workflow_contract_created_at,
+                 (SELECT COUNT(*)::int FROM contractor_invoices ci WHERE ci.proposal_id = cp.id) AS workflow_invoice_count,
+                 (SELECT pae.event_type FROM proposal_approval_events pae WHERE pae.proposal_id = cp.id ORDER BY pae.created_at DESC LIMIT 1) AS workflow_last_event,
+                 (SELECT pae.notes FROM proposal_approval_events pae WHERE pae.proposal_id = cp.id AND pae.event_type IN ('workflow_error','contract_creation_failed') ORDER BY pae.created_at DESC LIMIT 1) AS workflow_error,
+                 CASE
+                   WHEN cp.converted_to_invoice_id IS NOT NULL OR EXISTS (SELECT 1 FROM contractor_invoices ci WHERE ci.proposal_id = cp.id) THEN 'Invoice Created'
+                   WHEN cp.signed_at IS NOT NULL OR cp.status = 'signed' THEN 'Signed'
+                   WHEN cp.converted_to_contract_id IS NOT NULL OR EXISTS (SELECT 1 FROM contractor_contracts cc WHERE cc.proposal_id = cp.id) THEN 'Contract Created'
+                   WHEN cp.status IN ('approved','accepted','negotiated','converted_to_contract') THEN 'Final'
+                   WHEN cp.status = 'sent' THEN 'Sent'
+                   WHEN cp.status IN ('draft','internal_review') THEN 'Draft'
+                   ELSE initcap(replace(COALESCE(cp.status, 'draft'), '_', ' '))
+                 END AS workflow_stage,
                  (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
           FROM contractor_proposals cp
           LEFT JOIN workers w ON w.id = cp.contractor_id
@@ -11203,6 +11217,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const result = await db.execute(sql`
           SELECT cp.*, w.first_name, w.last_name, w.worker_type,
                  co.name as company_name,
+                 COALESCE(cp.converted_to_contract_id, (SELECT cc.id FROM contractor_contracts cc WHERE cc.proposal_id = cp.id ORDER BY cc.created_at ASC LIMIT 1)) AS workflow_contract_id,
+                 (SELECT cc.created_at FROM contractor_contracts cc WHERE cc.proposal_id = cp.id ORDER BY cc.created_at ASC LIMIT 1) AS workflow_contract_created_at,
+                 (SELECT COUNT(*)::int FROM contractor_invoices ci WHERE ci.proposal_id = cp.id) AS workflow_invoice_count,
+                 (SELECT pae.event_type FROM proposal_approval_events pae WHERE pae.proposal_id = cp.id ORDER BY pae.created_at DESC LIMIT 1) AS workflow_last_event,
+                 (SELECT pae.notes FROM proposal_approval_events pae WHERE pae.proposal_id = cp.id AND pae.event_type IN ('workflow_error','contract_creation_failed') ORDER BY pae.created_at DESC LIMIT 1) AS workflow_error,
+                 CASE
+                   WHEN cp.converted_to_invoice_id IS NOT NULL OR EXISTS (SELECT 1 FROM contractor_invoices ci WHERE ci.proposal_id = cp.id) THEN 'Invoice Created'
+                   WHEN cp.signed_at IS NOT NULL OR cp.status = 'signed' THEN 'Signed'
+                   WHEN cp.converted_to_contract_id IS NOT NULL OR EXISTS (SELECT 1 FROM contractor_contracts cc WHERE cc.proposal_id = cp.id) THEN 'Contract Created'
+                   WHEN cp.status IN ('approved','accepted','negotiated','converted_to_contract') THEN 'Final'
+                   WHEN cp.status = 'sent' THEN 'Sent'
+                   WHEN cp.status IN ('draft','internal_review') THEN 'Draft'
+                   ELSE initcap(replace(COALESCE(cp.status, 'draft'), '_', ' '))
+                 END AS workflow_stage,
                  (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
           FROM contractor_proposals cp
           LEFT JOIN workers w ON w.id = cp.contractor_id
@@ -11460,6 +11488,47 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         repaired,
         skipped,
       });
+    } catch (e: any) {
+      res.status(500).json({ message: "Repair failed: " + (e?.message || String(e)) });
+    }
+  });
+
+  // POST /api/contractor-proposals/:id/repair-contract — self-heal one finalized proposal missing its contract
+  app.post("/api/contractor-proposals/:id/repair-contract", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      const p = access.prop;
+      if (!["approved", "accepted", "negotiated", "signed", "converted_to_contract"].includes(p.status)) {
+        return res.status(400).json({ message: "Only finalized proposals can be repaired into contracts" });
+      }
+      const existingContract = await db.execute(sql`SELECT * FROM contractor_contracts WHERE proposal_id = ${p.id} ORDER BY created_at ASC LIMIT 1`);
+      if (existingContract.rows[0]) {
+        const contract = existingContract.rows[0] as any;
+        await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contract.id}, updated_at = NOW() WHERE id = ${p.id} AND converted_to_contract_id IS NULL`).catch(() => {});
+        await writeAuditLog({ actorUserId: req.session.userId!, targetResource: `contractor_proposal:${p.id}`, changeType: "repair_contract_relink", companyId: p.company_id || null, note: `Re-linked proposal to existing contract ${contract.id}` }).catch(() => {});
+        return res.json({ repaired: false, linked: true, contract });
+      }
+      if (p.converted_to_contract_id) {
+        return res.status(409).json({ message: "Proposal already references a contract", contractId: p.converted_to_contract_id });
+      }
+      await autoSnapshot(req.params.id, p, "Repair missing contract requested", req.session.userId || null);
+      const contractNumber = `CON-RPR-${Date.now()}-${p.id.slice(0, 6)}`;
+      const cRes = await db.execute(sql`
+        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, contract_type, status, created_by_user_id, job_id, cost_center_id)
+        VALUES (${p.company_id}, ${p.contractor_id}, ${p.id}, ${contractNumber},
+          ${p.title || "Service Contract"}, ${p.description || null}, ${p.scope_of_work || null},
+          ${p.payment_terms || null}, ${p.amount || 0}, ${p.currency || "USD"},
+          ${p.payment_type || "monetary"}, ${p.trade_offered || null}, ${p.trade_value || null},
+          ${p.issue_date || null}, 'service', 'draft', ${req.session.userId},
+          ${p.job_id || null}, ${p.cost_center_id || null})
+        RETURNING *
+      `);
+      const contract = cRes.rows[0] as any;
+      await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contract.id}, updated_at = NOW() WHERE id = ${p.id} AND converted_to_contract_id IS NULL`);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${p.id}, 'contract_repaired', ${p.status}, ${p.status}, ${req.session.userId}, NULL, ${"Created missing contract " + contract.contract_number}, ${req.ip || null})`).catch(() => {});
+      await writeAuditLog({ actorUserId: req.session.userId!, targetResource: `contractor_proposal:${p.id}`, changeType: "repair_contract_create", companyId: p.company_id || null, note: `Created missing contract ${contract.id}` }).catch(() => {});
+      res.status(201).json({ repaired: true, linked: true, contract });
     } catch (e: any) {
       res.status(500).json({ message: "Repair failed: " + (e?.message || String(e)) });
     }
@@ -11886,7 +11955,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // ── Auto-create draft contract on proposal approval ──────────────────────
       const freshPropRes = await db.execute(sql`SELECT converted_to_contract_id FROM contractor_proposals WHERE id = ${req.params.id}`).catch(() => null);
-      const alreadyHasContract = (freshPropRes?.rows[0] as any)?.converted_to_contract_id;
+      const existingAutoContractRes = await db.execute(sql`SELECT id FROM contractor_contracts WHERE proposal_id = ${req.params.id} ORDER BY created_at ASC LIMIT 1`).catch(() => null);
+      const existingAutoContractId = (existingAutoContractRes?.rows[0] as any)?.id || null;
+      const alreadyHasContract = (freshPropRes?.rows[0] as any)?.converted_to_contract_id || existingAutoContractId;
+      if (existingAutoContractId && !(freshPropRes?.rows[0] as any)?.converted_to_contract_id) {
+        await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${existingAutoContractId}, updated_at = NOW() WHERE id = ${req.params.id} AND converted_to_contract_id IS NULL`).catch(() => {});
+      }
       if (!alreadyHasContract) {
         try {
           const contractNumber = `CON-${Date.now()}`;
@@ -13319,7 +13393,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const prop = access.prop;
-      if (!["approved", "accepted", "negotiated", "signed"].includes(prop.status)) return res.status(400).json({ message: "Only approved, signed, or negotiated proposals can be converted to contracts" });
+      if (!["approved", "accepted", "negotiated", "signed", "converted_to_contract"].includes(prop.status)) return res.status(400).json({ message: "Only approved, signed, converted, or negotiated proposals can be converted to contracts" });
+
+      const existingContractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE proposal_id = ${prop.id} ORDER BY created_at ASC LIMIT 1`);
+      const existingContract = existingContractRes.rows[0] as any;
+      if (prop.converted_to_contract_id || existingContract?.id) {
+        const contractId = prop.converted_to_contract_id || existingContract.id;
+        await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contractId}, updated_at = NOW() WHERE id = ${prop.id} AND converted_to_contract_id IS NULL`).catch(() => {});
+        return res.status(200).json(existingContract || { id: contractId, proposal_id: prop.id, duplicatePrevented: true });
+      }
 
       const contractNumber = `CON-${Date.now()}`;
       // Allow caller to override any field; fall back to proposal values
@@ -13594,6 +13676,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Validate contractor exists and belongs to the company
       const workerCheck = await db.execute(sql`SELECT id FROM workers WHERE id = ${contractorId}`);
       if (!workerCheck.rows[0]) return res.status(400).json({ message: "Contractor not found" });
+      if (proposalId) {
+        const existingForProposal = await db.execute(sql`SELECT * FROM contractor_contracts WHERE proposal_id = ${proposalId} ORDER BY created_at ASC LIMIT 1`);
+        if (existingForProposal.rows[0]) return res.status(409).json({ message: "A contract already exists for this proposal", contract: existingForProposal.rows[0] });
+      }
       const result = await db.execute(sql`
         INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, end_date, contract_type, special_terms, body_html, body_markdown, template_id, status, created_by_user_id)
         VALUES (${effectiveCompanyId}, ${contractorId}, ${proposalId || null}, ${contractNumber}, ${title}, ${description || null}, ${scopeOfWork || null}, ${paymentTerms || null}, ${totalValue || null}, ${currency || "USD"}, ${paymentType || "monetary"}, ${tradeDetails || null}, ${tradeValue || null}, ${startDate || null}, ${endDate || null}, ${contractType || "service"}, ${specialTerms || null}, ${bodyHtml || null}, ${bodyMarkdown || null}, ${templateId || null}, 'draft', ${req.session.userId})
