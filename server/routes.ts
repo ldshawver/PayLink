@@ -33,6 +33,7 @@ import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
+import { writeDiagnosticLog, redactSensitive, newId } from "./diagnostics";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -26224,10 +26225,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         WHERE t.id = ${req.params.id}
       `));
       if (!ticket) return res.status(404).json({ message: "Repair ticket not found" });
-      if (ticket.status !== "approved") return res.status(400).json({ message: "Ticket must be approved before creating a PR" });
+      if (!["approved", "pr_creation_failed"].includes(ticket.status)) return res.status(400).json({ message: "Ticket must be approved before creating a PR" });
+      if (ticket.status === "pr_creation_failed") {
+        writeDiagnosticLog("security", { level: "info", service: "security", message: "App Dr retry PR creation triggered", requestId: (req as any).requestId, correlationId: (req as any).correlationId, tenantId: (req as any).tenantId, userId: req.session.userId, metadata: { ticketId: ticket.id } });
+      }
 
       const githubToken = process.env.GITHUB_TOKEN;
       const githubRepo = process.env.GITHUB_REPO; // format: "owner/repo"
+      const correlationId = (req as any).correlationId || newId("appdr_");
+      const baseBranch = process.env.GITHUB_BASE_BRANCH || "main";
 
       if (!githubToken || !githubRepo) {
         // Degrade gracefully — mark as pr_requested without actual GitHub PR
@@ -26254,7 +26260,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const ghBase = `https://api.github.com/repos/${owner}/${repo}`;
 
       // Get base SHA
-      const refRes = await fetch(`${ghBase}/git/ref/heads/main`, { headers: ghHeaders });
+      const refRes = await fetch(`${ghBase}/git/ref/heads/${baseBranch}`, { headers: ghHeaders });
+      writeDiagnosticLog("github", { level: refRes.ok ? "info" : "error", service: "github", message: "App Doctor base ref fetch", requestId: (req as any).requestId, correlationId, tenantId: (req as any).tenantId, userId: req.session.userId, metadata: { ticketId: ticket.id, githubRepo, targetBranch: baseBranch, generatedBranchName: branchName, status: refRes.status } });
       if (!refRes.ok) throw new Error(`GitHub ref fetch failed: ${refRes.status}`);
       const refData: any = await refRes.json();
       const baseSha = refData.object?.sha;
@@ -26302,11 +26309,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           title: `[App Doctor] ${ticket.report_title}`,
           body: prBody,
           head: branchName,
-          base: "main",
+          base: baseBranch,
         }),
       });
       if (!prRes.ok) {
         const err: any = await prRes.json().catch(() => ({}));
+        writeDiagnosticLog("github", { level: "error", service: "github", message: "App Doctor GitHub PR creation failed", requestId: (req as any).requestId, correlationId, tenantId: (req as any).tenantId, userId: req.session.userId, metadata: { ticketId: ticket.id, githubRepo, targetBranch: baseBranch, generatedBranchName: branchName, prTitle: `[App Doctor] ${ticket.report_title}`, githubApiStatus: prRes.status, githubApiErrorBody: redactSensitive(err) } });
         throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
       }
       const pr: any = await prRes.json();
@@ -26325,9 +26333,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         WHERE id = ${req.params.id} RETURNING *
       `));
 
+      writeDiagnosticLog("github", { level: "info", service: "github", message: "App Doctor GitHub PR created", requestId: (req as any).requestId, correlationId, tenantId: (req as any).tenantId, userId: req.session.userId, metadata: { ticketId: ticket.id, githubRepo, targetBranch: baseBranch, generatedBranchName: branchName, prTitle: `[App Doctor] ${ticket.report_title}`, githubApiStatus: prRes.status } });
       res.json({ ...updated, prUrl: pr.html_url });
     } catch (e: any) {
-      res.status(500).json({ message: safeErrorMessage(e, "Failed to create GitHub PR") });
+      const correlationId = (req as any).correlationId || newId("appdr_");
+      writeDiagnosticLog("appdr", { level: "error", service: "appdr", message: "Repair ticket saved, but PR creation failed", requestId: (req as any).requestId, correlationId, tenantId: (req as any).tenantId, userId: req.session?.userId, metadata: { ticketId: req.params.id }, errorName: e?.name, errorMessage: e?.message, stack: e?.stack });
+      await db.execute(sql`UPDATE app_doctor_repair_tickets SET status = 'pr_creation_failed', updated_at = NOW() WHERE id = ${req.params.id}`).catch(() => undefined);
+      res.status(200).json({ success: false, status: "pr_creation_failed", message: `Repair ticket saved, but PR creation failed. Error ID: ${correlationId}`, correlationId, retryAction: "Retry PR Creation" });
     }
   });
 

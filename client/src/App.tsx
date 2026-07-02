@@ -87,6 +87,7 @@ const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
+const DeveloperDiagnosticsPage = lazy(() => import("@/pages/developer-diagnostics"));
 const PlatformTenantsPage = lazy(() => import("@/pages/platform-tenants"));
 const MarketingHomePage = lazy(() => import("@/pages/marketing-home"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
@@ -305,6 +306,7 @@ function AuthenticatedRouter() {
         <Route path="/app/mfa-settings" component={MfaSettingsPage} />
         <Route path="/app/privacy-audit-log">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><PrivacyAuditLogPage /></StrictRoleGuard>}</Route>
         <Route path="/app/app-doctor">{() => <RoleGuard roles={["admin", "manager"]}><AppDoctorPage /></RoleGuard>}</Route>
+        <Route path="/app/developer-diagnostics">{() => <RoleGuard roles={["platform_owner", "super_admin", "system_admin"]}><DeveloperDiagnosticsPage /></RoleGuard>}</Route>
         <Route path="/app/feedback-admin">{() => <RoleGuard roles={["admin", "manager"]}><FeedbackAdminPage /></RoleGuard>}</Route>
         <Route path="/app/my-feedback" component={MyFeedbackPage} />
         <Route component={NotFound} />
@@ -481,6 +483,7 @@ function PlatformRouter() {
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
           <Route path="/platform/audit" component={PlatformAuditPage} />
           <Route path="/platform/app-doctor" component={AppDoctorPage} />
+          <Route path="/platform/developer-diagnostics" component={DeveloperDiagnosticsPage} />
           <Route path="/platform/tenants" component={PlatformTenantsPage} />
           <Route path="/platform/gdpr-inventory" component={GdprInventoryPage} />
           <Route path="/platform/privacy-audit-log" component={PrivacyAuditLogPage} />
