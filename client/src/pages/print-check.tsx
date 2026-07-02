@@ -59,6 +59,13 @@ type CheckCalibration = {
   returnAddrOffsetY: number;
   toAddrOffsetX: number;
   toAddrOffsetY: number;
+  checkLayoutCalibration?: {
+    companyLogo?: { x?: number; y?: number };
+    bankLogo?: { x?: number; y?: number };
+    fractionalRouting?: { x?: number; y?: number };
+    senderAddress?: { x?: number; y?: number };
+    receiverAddress?: { x?: number; y?: number };
+  };
 };
 
 const DEFAULT_CALIBRATION: CheckCalibration = {
@@ -72,6 +79,13 @@ const DEFAULT_CALIBRATION: CheckCalibration = {
   returnAddrOffsetY: 0,
   toAddrOffsetX: 0,
   toAddrOffsetY: 0,
+  checkLayoutCalibration: {
+    companyLogo: { x: 0, y: 0 },
+    bankLogo: { x: 0, y: 0 },
+    fractionalRouting: { x: 0, y: 0 },
+    senderAddress: { x: 0, y: 0 },
+    receiverAddress: { x: 0, y: 0 },
+  },
 };
 
 function CompanyHeader({ company, config }: { company: Company; config: Record<string, boolean> }) {
@@ -1348,6 +1362,22 @@ function GuidedCheckFace({
   const cal = calibration ?? DEFAULT_CALIBRATION;
   const gTop = cal.globalTop !== 0 ? cal.globalTop : Number(remittanceSource?.verticalAlignment || 0);
   const gLeft = cal.globalLeft !== 0 ? cal.globalLeft : Number(remittanceSource?.horizontalAlignment || 0);
+  const clampPt = (value: unknown) => Math.max(-36, Math.min(36, Number(value || 0))) / 72;
+  const layoutCal = (config as any).checkLayoutCalibration || {};
+  const companyLogoOffset = layoutCal.companyLogo || {};
+  const bankLogoOffset = layoutCal.bankLogo || {};
+  const fractionalRoutingOffset = layoutCal.fractionalRouting || {};
+  const senderAddressOffset = layoutCal.senderAddress || {};
+  const receiverAddressOffset = layoutCal.receiverAddress || {};
+  const offsetStyle = (offset: { x?: number; y?: number }): React.CSSProperties => ({
+    transform: `translate(${clampPt(offset.x)}in, ${-clampPt(offset.y)}in)`,
+  });
+  const fractionalRouting = (() => {
+    if (routing.length !== 9 || routing === "000000000") return "";
+    const denom = routing.slice(0, 4);
+    const institution = String(parseInt(routing.slice(4, 8), 10));
+    return `${(config as any).abaPrefix ? `${(config as any).abaPrefix}-${institution}` : institution} / ${denom}`;
+  })();
 
   return (
     <div style={{
@@ -1366,11 +1396,12 @@ function GuidedCheckFace({
         <img src={company.logoUrl} alt="" style={{
           position: "absolute", left: "0.30in", top: "0.24in",
           width: "0.42in", height: "0.42in", objectFit: "contain",
+          ...offsetStyle(companyLogoOffset),
         }} />
       )}
 
       {/* ── COMPANY BLOCK: x 0.80", baselines y 0.40" / 0.57" / 0.74" / 0.91" ── */}
-      <div style={{ position: "absolute", left: "0.80in", top: "0.28in" }}>
+      <div style={{ position: "absolute", left: "0.80in", top: "0.28in", ...offsetStyle(senderAddressOffset) }}>
         {config.showCompanyName && (
           <div style={{ fontSize: "12pt", fontWeight: "700", lineHeight: "1", marginBottom: "4px" }}>{company.name}</div>
         )}
@@ -1388,12 +1419,20 @@ function GuidedCheckFace({
       </div>
 
       {/* ── BANK BLOCK: centered at x 4.25" (page center), baselines y 0.42" / 0.58" ── */}
-      {institutionName && (
+      {((config as any).bankLogoUrl || institutionName) && (
         <div style={{
           position: "absolute", left: 0, right: 0, top: "0.30in",
           textAlign: "center", pointerEvents: "none",
+          ...offsetStyle(bankLogoOffset),
         }}>
-          <div style={{ fontSize: "10pt", fontWeight: "700", lineHeight: "1", marginBottom: "3px" }}>{institutionName}</div>
+          {(config as any).bankLogoUrl && <img src={(config as any).bankLogoUrl} alt="" style={{ maxWidth: "0.75in", maxHeight: "0.28in", objectFit: "contain", margin: "0 auto 2px" }} />}
+          <div style={{ fontSize: "10pt", fontWeight: "700", lineHeight: "1", marginBottom: "3px" }}>{institutionName || (config as any).bankName || "Bank"}</div>
+        </div>
+      )}
+
+      {fractionalRouting && (
+        <div style={{ position: "absolute", left: "5.25in", top: "0.30in", fontSize: "7.5pt", color: "#444", ...offsetStyle(fractionalRoutingOffset) }}>
+          {fractionalRouting}
         </div>
       )}
 
@@ -1493,7 +1532,7 @@ function GuidedCheckFace({
 
       {/* ── PAYEE MAILING ADDRESS: x 1.92", baselines y 2.00" / 2.16" ── */}
       {config.showEmployeeAddress && (worker.address || worker.city) && (
-        <div style={{ position: "absolute", left: "1.92in", top: "1.86in" }}>
+        <div style={{ position: "absolute", left: "1.92in", top: "1.86in", ...offsetStyle(receiverAddressOffset) }}>
           {worker.address && (
             <div style={{ fontSize: "10pt", lineHeight: "1.25" }}>
               {worker.address}{worker.address2 ? ", " + worker.address2 : ""}
@@ -1961,9 +2000,10 @@ function CalibrationPanel({
 }) {
   const [open, setOpen] = useState(false);
 
+  type CalibrationNumberField = Exclude<keyof CheckCalibration, "checkLayoutCalibration">;
   const Field = ({
     label, field, color, description,
-  }: { label: string; field: keyof CheckCalibration; color: string; description?: string }) => (
+  }: { label: string; field: CalibrationNumberField; color: string; description?: string }) => (
     <div className="flex flex-col gap-1">
       <Label className="text-xs font-semibold" style={{ color }}>
         ■ {label}
