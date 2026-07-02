@@ -20007,10 +20007,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Admin-adjustable address/paystub position offsets (stored in layoutConfig, in points)
     // Calibration per-source address offsets are added on top of layout-config offsets.
     // Positive X = right, positive Y = up (PDF coordinate direction)
+    const clampCheckFaceOffsetPt = (value: unknown): number => {
+      const n = Number(value ?? 0);
+      if (!Number.isFinite(n)) return 0;
+      return Math.max(-36, Math.min(36, n));
+    };
+    const nestedCalibration = cfg.checkLayoutCalibration && typeof cfg.checkLayoutCalibration === "object"
+      ? cfg.checkLayoutCalibration
+      : {};
+    const senderAddressOffset = nestedCalibration.senderAddress || {};
+    const receiverAddressOffset = nestedCalibration.receiverAddress || {};
+    const companyLogoOffset = nestedCalibration.companyLogo || {};
+    const bankLogoOffset = nestedCalibration.bankLogo || {};
+    const fractionalRoutingOffset = nestedCalibration.fractionalRouting || {};
+
+    // Existing Zone 2 envelope-window offsets are intentionally left as-is for backwards compatibility.
+    // The nested *checkLayoutCalibration* offsets below are point-based and clamped to ±36pt; they apply
+    // only to Zone 1/check-face elements so the paystub/company-copy sections remain untouched.
     const senderAddrOffX   = Number(cfg.senderAddrOffsetX   ?? 0) + (params.calibrationOffsets?.returnAddrOffsetX ?? 0);
     const senderAddrOffY   = Number(cfg.senderAddrOffsetY   ?? 0) + (params.calibrationOffsets?.returnAddrOffsetY ?? 0);
     const employeeAddrOffX = Number(cfg.employeeAddrOffsetX ?? 0) + (params.calibrationOffsets?.toAddrOffsetX     ?? 0);
     const employeeAddrOffY = Number(cfg.employeeAddrOffsetY ?? 0) + (params.calibrationOffsets?.toAddrOffsetY     ?? 0);
+    const checkFaceSenderOffX = clampCheckFaceOffsetPt(senderAddressOffset.x ?? cfg.checkFaceSenderAddrOffsetX);
+    const checkFaceSenderOffY = clampCheckFaceOffsetPt(senderAddressOffset.y ?? cfg.checkFaceSenderAddrOffsetY);
+    const checkFaceReceiverOffX = clampCheckFaceOffsetPt(receiverAddressOffset.x ?? cfg.checkFaceReceiverAddrOffsetX);
+    const checkFaceReceiverOffY = clampCheckFaceOffsetPt(receiverAddressOffset.y ?? cfg.checkFaceReceiverAddrOffsetY);
+    const companyLogoOffX = clampCheckFaceOffsetPt(companyLogoOffset.x);
+    const companyLogoOffY = clampCheckFaceOffsetPt(companyLogoOffset.y);
+    const bankLogoOffX = clampCheckFaceOffsetPt(bankLogoOffset.x);
+    const bankLogoOffY = clampCheckFaceOffsetPt(bankLogoOffset.y);
+    const fractionalRoutingOffX = clampCheckFaceOffsetPt(fractionalRoutingOffset.x);
+    const fractionalRoutingOffY = clampCheckFaceOffsetPt(fractionalRoutingOffset.y ?? cfg.fractionalRoutingOffsetY);
     const paystubOffX      = Number(cfg.paystubOffsetX      ?? 72);  // default +1in right (envelope window safety)
     const paystubOffY      = Number(cfg.paystubOffsetY      ?? -18); // default -0.25in (down, envelope window safety)
 
@@ -20107,6 +20134,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(label, { x: x + 2, y: y + h - 8, size: 5.5, font: hv, color: rgb(0.8, 0.2, 0.2) });
     };
 
+    const embedUploadOrRemoteImage = async (imageUrl: string | undefined): Promise<any | null> => {
+      if (!imageUrl) return null;
+      try {
+        let imageBytes: Buffer;
+        if (imageUrl.startsWith("/uploads/") || imageUrl.startsWith("uploads/")) {
+          const relativePart = imageUrl.replace(/^\/?uploads\//, "");
+          const localPath = path.join(resolvedUploadDir, relativePart);
+          imageBytes = await fs.promises.readFile(localPath);
+        } else {
+          const https = await import("https");
+          const http  = await import("http");
+          imageBytes = await new Promise((resolve, reject) => {
+            const proto = imageUrl.startsWith("https") ? https : http;
+            (proto as any).get(imageUrl, (res: any) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (c: Buffer) => chunks.push(c));
+              res.on("end", () => resolve(Buffer.concat(chunks)));
+              res.on("error", reject);
+            }).on("error", reject);
+          });
+        }
+        const isPng = imageUrl.toLowerCase().endsWith(".png") || imageBytes[0] === 0x89;
+        return isPng ? await doc.embedPng(imageBytes) : await doc.embedJpg(imageBytes);
+      } catch (imageErr) {
+        console.warn("[CHECK_PDF] Logo image embed failed (using text fallback):", imageErr);
+        return null;
+      }
+    };
+
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 1 — CHECK FACE  (Y: checkBot..H = 540..792)
     // canonicalCheckFaceRenderer v2 — spec-exact inch coordinates.
@@ -20127,45 +20183,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // ── Company icon — x 0.25in, y 0.22in, 0.35in × 0.35in — LEFT of name/address ─
     // Icon box top-left at (0.25in, 0.22in); bottom of box = 0.22+0.35 = 0.57in from check top
-    const logoX  = z1x(0.25);
-    const logoBot = z1y(0.22 + 0.35);   // PDF Y of bottom edge of icon box
+    const logoX  = z1x(0.25) + companyLogoOffX;
+    const logoBot = z1y(0.22 + 0.35) + companyLogoOffY;   // PDF Y of bottom edge of icon box
     const logoW  = Math.round(0.35 * 72);
     const logoH  = Math.round(0.35 * 72);
     drawGuide(logoX, logoBot, logoW, logoH, "LOGO 0.35in sq");
 
-    // Attempt to embed company logo from URL if available
+    // Attempt to embed company logo from tenant/company-scoped upload URL if available.
     let logoEmbedded = false;
     const coLogoUrl: string | undefined = (company as any)?.logo_url || (company as any)?.logoUrl;
     if (coLogoUrl && !isCalibration) {
-      try {
-        let logoBytes: Buffer;
-        if (coLogoUrl.startsWith("/uploads/") || coLogoUrl.startsWith("uploads/")) {
-          // Local upload — read directly from disk (avoids http.get failure on relative paths)
-          const relativePart = coLogoUrl.startsWith("/") ? coLogoUrl.slice(1) : coLogoUrl;
-          const localPath = path.join(resolvedUploadDir, path.basename(relativePart));
-          logoBytes = await fs.promises.readFile(localPath);
-        } else {
-          // Remote URL — fetch via HTTP/HTTPS
-          const https = await import("https");
-          const http  = await import("http");
-          logoBytes = await new Promise((resolve, reject) => {
-            const proto = coLogoUrl.startsWith("https") ? https : http;
-            (proto as any).get(coLogoUrl, (res: any) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (c: Buffer) => chunks.push(c));
-              res.on("end", () => resolve(Buffer.concat(chunks)));
-              res.on("error", reject);
-            }).on("error", reject);
-          });
-        }
-        const isPng = coLogoUrl.toLowerCase().endsWith(".png") || logoBytes[0] === 0x89;
-        const logoImg = isPng
-          ? await doc.embedPng(logoBytes)
-          : await doc.embedJpg(logoBytes);
+      const logoImg = await embedUploadOrRemoteImage(coLogoUrl);
+      if (logoImg) {
         page.drawImage(logoImg, { x: logoX, y: logoBot, width: logoW, height: logoH });
         logoEmbedded = true;
-      } catch (logoErr) {
-        console.warn("[CHECK_PDF] Company logo embed failed (skipped):", logoErr);
       }
     }
 
@@ -20180,26 +20211,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // ── Company block — x 0.68in (right of icon), name at y 0.30in ───────
     // Spec: name at (0.68in, 0.30in); lines follow at ~12pt intervals
-    const coTextX = z1x(0.68);
-    drawGuide(coTextX, z1y(0.90), Math.round(2.5*72), Math.round(0.66*72), "COMPANY BLOCK");
-    if (showCompanyName) page.drawText(senderNameEff,  { x: coTextX, y: z1y(0.30), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
+    const coTextX = z1x(0.68) + checkFaceSenderOffX;
+    const coTextY = (inches: number) => z1y(inches) + checkFaceSenderOffY;
+    drawGuide(coTextX, coTextY(0.90), Math.round(2.5*72), Math.round(0.66*72), "COMPANY BLOCK");
+    if (showCompanyName) page.drawText(senderNameEff,  { x: coTextX, y: coTextY(0.30), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
     if (showCompanyAddr) {
-      if (senderAddr1Eff) page.drawText(senderAddr1Eff, { x: coTextX, y: z1y(0.46), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (senderAddr2Eff) page.drawText(senderAddr2Eff, { x: coTextX, y: z1y(0.62), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (coPhone) page.drawText(coPhone, { x: coTextX, y: z1y(0.78), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (senderAddr1Eff) page.drawText(senderAddr1Eff, { x: coTextX, y: coTextY(0.46), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (senderAddr2Eff) page.drawText(senderAddr2Eff, { x: coTextX, y: coTextY(0.62), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coPhone) page.drawText(coPhone, { x: coTextX, y: coTextY(0.78), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
     }
 
     // ── Bank block — top-center (center x 4.25in) ────────────────────────
     // Bank name: template config takes priority; fall back to remittance source institution field.
-    const bankName    = isCalibration ? "Bank of America"                           : sanitizeForPdf(cfg.bankName    || (remittanceSource as any)?.bankName || "");
+    const bankName    = isCalibration ? "Bank of America"                           : sanitizeForPdf(cfg.bankName || (remittanceSource as any)?.bankName || (remittanceSource as any)?.institution || "");
     const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || "");
+    const bankLogoUrl: string | undefined = cfg.bankLogoUrl || cfg.bankLogo?.url;
+    const bankLogoImg = !isCalibration ? await embedUploadOrRemoteImage(bankLogoUrl) : null;
+    if (bankLogoImg) {
+      page.drawImage(bankLogoImg, { x: z1x(3.98) + bankLogoOffX, y: z1y(0.25 + 0.28) + bankLogoOffY, width: 40, height: 20 });
+    }
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
       const bnaW = bankAddress.length * 3.7;
       const bankCenterX = z1x(4.25);
-      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2), y: z1y(0.42), size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
+      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2) + bankLogoOffX, y: z1y(0.42) + bankLogoOffY, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
       if (bankAddress)
-        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2), y: z1y(0.59), size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
+        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(0.59) + bankLogoOffY, size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
     }
 
     // ── Fractional ABA routing — upper-right corner (x ~5.25in), ANSI X9 requirement ─
@@ -20209,10 +20246,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const fracStr = buildFractionalRouting(routing, isCalibration ? "11" : cfgAbaPrefix);
       if (fracStr) {
         const [fracNum, fracDen] = fracStr.split("\n");
-        const fracX = z1x(5.25);
-        const fracNumY  = z1y(0.17);   // numerator baseline
-        const fracLineY = z1y(0.22);   // fraction rule
-        const fracDenY  = z1y(0.32);   // denominator baseline
+        const fracX = z1x(5.25) + fractionalRoutingOffX;
+        const fracNumY  = z1y(0.30) + fractionalRoutingOffY;   // numerator baseline, lowered from 0.17in to clear top border
+        const fracLineY = z1y(0.35) + fractionalRoutingOffY;   // fraction rule
+        const fracDenY  = z1y(0.45) + fractionalRoutingOffY;   // denominator baseline
         drawGuide(fracX, fracDenY - 2, 70, 26, "FRACTIONAL RTG");
         page.drawText(fracNum, { x: fracX, y: fracNumY, size: 7.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
         page.drawLine({ start: { x: fracX, y: fracLineY }, end: { x: fracX + 55, y: fracLineY }, color: rgb(0.35, 0.35, 0.35), thickness: 0.6 });
@@ -20252,7 +20289,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     drawGuide(payLabelX, z1y(1.39 + 0.02), payLineX2 - payLabelX, Math.round(0.30*72), "PAYEE ROW");
     page.drawText("PAY TO THE",   { x: payLabelX, y: payLine1Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("ORDER OF",     { x: payLabelX, y: payRowY,   size: 9, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(wName, { x: payeeNameX, y: payRowY, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(wName, { x: payeeNameX + checkFaceReceiverOffX, y: payRowY + checkFaceReceiverOffY, size: 11, font: hvB, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: payLineX1, y: payeeLineY }, end: { x: payLineX2, y: payeeLineY }, color: rgb(0, 0, 0), thickness: 0.9 });
 
     // Numeric amount — no box, right-aligned bold 12pt on same baseline as payee name row
