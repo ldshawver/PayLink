@@ -77,6 +77,62 @@ function getAppBaseUrl(req: Pick<Request, "headers" | "protocol">): string {
   return `${proto}://${host}`;
 }
 
+
+function getTikTokSessionState(req: Request): string | undefined {
+  const session = req.session as any;
+  return session?.tiktokOAuthState || session?.oauthState?.tiktok || session?.oauth?.tiktok?.state;
+}
+
+function clearTikTokSessionState(req: Request): void {
+  const session = req.session as any;
+  if (!session) return;
+  delete session.tiktokOAuthState;
+  if (session.oauthState) delete session.oauthState.tiktok;
+  if (session.oauth?.tiktok) delete session.oauth.tiktok.state;
+}
+
+function isValidTikTokOAuthState(actual: string, expected: string): boolean {
+  const actualBuffer = Buffer.from(actual);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function sendTikTokOAuthError(res: Response, status: number, message: string) {
+  return res.status(status).json({
+    error: "tiktok_oauth_error",
+    message,
+  });
+}
+
+async function exchangeTikTokOAuthCode(req: Request, code: string): Promise<unknown> {
+  const clientKey = process.env.TIKTOK_CLIENT_KEY;
+  const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
+  if (!clientKey || !clientSecret) {
+    throw new Error("TikTok OAuth is not configured");
+  }
+
+  const redirectUri = `${getAppBaseUrl(req)}/api/oauth/tiktok/callback`;
+  const body = new URLSearchParams({
+    client_key: clientKey,
+    client_secret: clientSecret,
+    code,
+    grant_type: "authorization_code",
+    redirect_uri: redirectUri,
+  });
+
+  const response = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`TikTok token exchange failed with status ${response.status}`);
+  }
+  return payload;
+}
+
 async function getCompanyESignConfig(companyId: string): Promise<CompanyESignConfig | undefined> {
   const apiKeys = await storage.getProductApiKeys(companyId);
   const docusignKey = apiKeys.find(k => k.productName === "docusign" && k.isActive);
@@ -1380,6 +1436,38 @@ export async function registerRoutes(
   }
   // Global catch-all: any /api route not covered by the explicit list above
   // is also demo-read-only, except provisioning, auth, and webhook exceptions.
+
+  app.get("/api/oauth/tiktok/callback", async (req, res) => {
+    const code = queryStr(req.query.code);
+    const state = queryStr(req.query.state);
+    const expectedState = getTikTokSessionState(req);
+
+    if (!code || !state) {
+      return sendTikTokOAuthError(res, 400, "Missing TikTok OAuth code or state.");
+    }
+    if (!expectedState || !isValidTikTokOAuthState(state, expectedState)) {
+      return sendTikTokOAuthError(res, 400, "Invalid or expired TikTok OAuth state.");
+    }
+    if (!req.session?.userId) {
+      clearTikTokSessionState(req);
+      return sendTikTokOAuthError(res, 400, "TikTok OAuth session is no longer authenticated.");
+    }
+
+    try {
+      const tokenResponse = await exchangeTikTokOAuthCode(req, code);
+      (req.session as any).tiktokOAuth = {
+        userId: req.session.userId,
+        linkedAt: new Date().toISOString(),
+        tokenResponse,
+      };
+      clearTikTokSessionState(req);
+      return res.redirect(303, "/settings/integrations?connected=tiktok");
+    } catch (error) {
+      console.error("TikTok OAuth callback failed:", safeErrorMessage(error, "Token exchange failed"));
+      return sendTikTokOAuthError(res, 502, "Unable to complete TikTok OAuth.");
+    }
+  });
+
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -1774,6 +1862,7 @@ function hashSigningToken(token: string): string {
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
       || req.path === "/analytics/event"
+      || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
       || req.path.startsWith("/portal/")) {
       return next();
