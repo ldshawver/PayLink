@@ -1,34 +1,38 @@
-name: Deploy MyPayLink Staging
+name: Deploy MyPayLink Production
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag/version to deploy, for example v2.1.1"
+        required: true
+        type: string
 
 concurrency:
-  group: deploy-mypaylink-staging
+  group: deploy-mypaylink-production
   cancel-in-progress: false
 
 jobs:
-  deploy_staging:
-    name: Deploy to staging only
+  deploy_production:
+    name: Manual production deploy
     runs-on: ubuntu-latest
     env:
-      APP_ENV: staging
-      APP_VERSION: 2.1.1
-      APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-      ENV_FILE: /etc/paylink/.env.staging
-      PM2_PROCESS: paylink-staging
-      LOCAL_HEALTH_URL: http://127.0.0.1:8010/health
-      PUBLIC_HEALTH_URL: https://staging.mypaylink.app/health
-      DEPLOY_DOMAIN: staging.mypaylink.app
-      DEPLOY_PORT: "8010"
+      APP_ENV: production
+      APP_PATH: /home/paylinkssh/paylink-app/PayLink
+      ENV_FILE: /etc/paylink/.env
+      PM2_PROCESS: paylink
+      LOCAL_HEALTH_URL: http://127.0.0.1:8000/health
+      PUBLIC_HEALTH_URL: https://app.mypaylink.app/health
+      DEPLOY_DOMAIN: app.mypaylink.app
+      DEPLOY_PORT: "8000"
+      PROD_DB_NAME: mypaylink_prod
       REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
 
     steps:
-      - name: Checkout repository
+      - name: Checkout release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -47,18 +51,13 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Signing route regression tests
+      - name: Deployment validation tests
         run: |
-          pnpm exec tsx tests/contract-signing-redirect-static.test.ts
-          pnpm exec tsx tests/contract-documenso-static.test.ts
-          pnpm exec tsx tests/contract-signer-management-static.test.ts
-          pnpm exec tsx tests/staging-deployment-static.test.ts
+          pnpm exec tsx tests/deployment-validation-static.test.ts
           pnpm exec tsx tests/cloudpanel-deployment-workflows-static.test.ts
+          pnpm build
 
-      - name: Build
-        run: pnpm build
-
-      - name: Deploy to staging VPS
+      - name: Deploy approved production release
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
@@ -68,26 +67,39 @@ jobs:
           timeout: 30s
           command_timeout: 30m
           script_stop: true
-          envs: APP_ENV,APP_VERSION,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,REPO_SSH_URL
+          envs: APP_ENV,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,PROD_DB_NAME,REPO_SSH_URL
           script: |
             set -euo pipefail
-            echo "Deploying MyPayLink staging to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
+            RELEASE_TAG='${{ inputs.release_tag }}'
+            APP_VERSION="${RELEASE_TAG#v}"
+            echo "Manual production deploy: $RELEASE_TAG to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
             cd "$APP_PATH"
 
             if [ ! -f "$ENV_FILE" ]; then
-              echo "FATAL: staging env file missing: $ENV_FILE"
+              echo "FATAL: production env file missing: $ENV_FILE"
               exit 1
             fi
 
+            BACKUP_DIR="$APP_PATH/backups/predeploy"
+            mkdir -p "$BACKUP_DIR"
+            BACKUP_FILE="$BACKUP_DIR/${PROD_DB_NAME}_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).dump"
+            DATABASE_URL_VALUE="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
+            if [ -z "$DATABASE_URL_VALUE" ]; then
+              echo "FATAL: DATABASE_URL missing from $ENV_FILE; refusing production deploy without DB backup"
+              exit 1
+            fi
+            pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL_VALUE" --file="$BACKUP_FILE"
+            echo "Production DB backup complete: $BACKUP_FILE"
+
             echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
             git remote set-url origin "$REPO_SSH_URL" || true
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch --tags origin
+            git checkout "$RELEASE_TAG"
             NEW_COMMIT="$(git rev-parse HEAD)"
             pnpm install --frozen-lockfile=false --reporter=append-only
             pnpm build
 
-            export APP_ENV=staging
+            export APP_ENV=production
             export APP_VERSION="$APP_VERSION"
             export PAYLINK_COMMIT="$NEW_COMMIT"
             export PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -107,11 +119,11 @@ jobs:
 
             for i in $(seq 1 30); do
               if curl -fsS "$LOCAL_HEALTH_URL" >/dev/null; then
-                echo "Local staging health passed: $LOCAL_HEALTH_URL"
+                echo "Local production health passed: $LOCAL_HEALTH_URL"
                 break
               fi
               if [ "$i" = "30" ]; then
-                echo "FATAL: local staging health failed: $LOCAL_HEALTH_URL"
+                echo "FATAL: local production health failed: $LOCAL_HEALTH_URL"
                 exit 1
               fi
               sleep 3
@@ -119,11 +131,11 @@ jobs:
 
             for i in $(seq 1 12); do
               if curl -fsS "$PUBLIC_HEALTH_URL" >/dev/null; then
-                echo "Public staging health passed: $PUBLIC_HEALTH_URL"
+                echo "Public production health passed: $PUBLIC_HEALTH_URL"
                 break
               fi
               if [ "$i" = "12" ]; then
-                echo "FATAL: public staging health failed: $PUBLIC_HEALTH_URL"
+                echo "FATAL: public production health failed: $PUBLIC_HEALTH_URL"
                 exit 1
               fi
               sleep 5

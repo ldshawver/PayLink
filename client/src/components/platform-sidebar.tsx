@@ -1,4 +1,5 @@
 import { useLocation, Link } from "wouter";
+import { AppVersionLabel } from "./app-version-label";
 import {
   LayoutDashboard,
   FileText,
@@ -379,7 +380,7 @@ export function PlatformSidebar() {
           </div>
         )}
         <PlatformLogoutButton />
-        <div className="text-xs text-sidebar-foreground/50">PayLink Platform v2.0</div>
+        <AppVersionLabel />
       </SidebarFooter>
     </Sidebar>
   );
