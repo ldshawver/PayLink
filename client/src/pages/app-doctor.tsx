@@ -79,6 +79,7 @@ type Diagnostics = {
   dbHealth: string;
   commitHash: string;
   environment: string;
+  version: string;
   aiConfig: {
     provider: string;
     model: string;
@@ -399,7 +400,7 @@ export default function AppDoctorPage() {
           </div>
           {diag && (
             <CardDescription className="text-xs">
-              Snapshot at {new Date(diag.timestamp).toLocaleTimeString()} · Uptime {formatUptime(diag.uptimeSeconds)} · {diag.environment}
+              Snapshot at {new Date(diag.timestamp).toLocaleTimeString()} · Uptime {formatUptime(diag.uptimeSeconds)} · {diag.environment} · v{diag.version}
             </CardDescription>
           )}
         </CardHeader>
@@ -415,6 +416,16 @@ export default function AppDoctorPage() {
           )}
           {diag && (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {/* Environment/version */}
+              <div className="flex items-start gap-2 rounded-lg border p-3" data-testid="card-environment-version">
+                <Tag className="h-4 w-4 mt-0.5 text-primary" />
+                <div>
+                  <p className="text-xs font-medium">Environment</p>
+                  <p className="text-sm font-semibold capitalize">{diag.environment}</p>
+                  <p className="text-xs text-muted-foreground">Version {diag.version}</p>
+                  <p className="text-xs text-muted-foreground">Commit {diag.commitHash.slice(0, 12)}</p>
+                </div>
+              </div>
               {/* DB health */}
               <div className="flex items-start gap-2 rounded-lg border p-3">
                 <Database className={`h-4 w-4 mt-0.5 ${diag.dbHealth === "ok" ? "text-green-600" : "text-destructive"}`} />

@@ -5,6 +5,7 @@ import { createServer } from "http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import path from "path";
+import { getAppEnvironment, getAppVersion, getHealthPayload } from "./app-metadata";
 import fs from "fs";
 import { startWorkerOrchestrator, shutdownOrchestrator } from "./workers/orchestrator";
 
@@ -98,8 +99,9 @@ try {
   if (isProduction) process.exit(1);
 }
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
+app.get("/health", async (_req, res) => {
+  const payload = await getHealthPayload();
+  res.status(payload.database === "connected" ? 200 : 503).json(payload);
 });
 
 
@@ -107,7 +109,8 @@ app.get("/api/version", (_req, res) => {
   res.json({
     commit: process.env.PAYLINK_COMMIT || process.env.GITHUB_SHA || "unknown",
     build_time: process.env.PAYLINK_BUILD_TIME || process.env.BUILD_TIME || null,
-    environment: process.env.NODE_ENV || "development",
+    environment: getAppEnvironment(),
+    version: getAppVersion(),
   });
 });
 

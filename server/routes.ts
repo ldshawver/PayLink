@@ -16,6 +16,7 @@ import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, a
 import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
+import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
 import crypto from "crypto";
@@ -26077,8 +26078,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         nodeVersion: process.version,
         uptimeSeconds: Math.floor(process.uptime()),
         dbHealth,
-        commitHash: process.env.COMMIT_SHA || "unknown",
-        environment: process.env.NODE_ENV || "development",
+        commitHash: getCommitHash(),
+        environment: getAppEnvironment(),
+        version: getAppVersion(),
         aiConfig: {
           provider: process.env.XAI_API_KEY ? "xai" : process.env.OPENAI_API_KEY ? "openai" : "none",
           model: process.env.APP_DOCTOR_MODEL || "grok-3-mini",

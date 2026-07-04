@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { AppVersionLabel } from "./app-version-label";
 import { useLocation, useSearch, Link } from "wouter";
 import {
   LayoutDashboard,
@@ -568,7 +569,7 @@ export function AppSidebar() {
 
       <SidebarFooter className="p-4 space-y-3">
         <LogoutButton />
-        <div className="text-xs text-sidebar-foreground/50">PayLink v2.0</div>
+        <AppVersionLabel />
       </SidebarFooter>
     </Sidebar>
   );
