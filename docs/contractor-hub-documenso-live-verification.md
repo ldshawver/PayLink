@@ -17,7 +17,7 @@ Expected safe output:
 - `MYPAYLINK_DOCUMENSO_API_KEY: PRESENT`
 - `MYPAYLINK_DOCUMENSO_BASE_URL: PRESENT`
 - `MYPAYLINK_DOCUMENSO_ENABLED: PRESENT`
-- `MYPAYLINK_DOCUMENSO_BASE_URL_HOST: document.luxit.app`
+- `MYPAYLINK_DOCUMENSO_BASE_URL_HOST: app.documenso.com`
 - `Documenso environment verification passed without exposing secrets.`
 
 ## 2. Required Automated Checks

@@ -1,451 +1,90 @@
 # PayLink VPS Deployment Guide
 
-## Architecture
+## Confirmed deployment targets
 
-```
-mypaylink.app/app/*      -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
-mypaylink.app/api/*      -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
-mypaylink.app/clock-in   -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
-mypaylink.app/login      -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
-mypaylink.app/           -> Nginx (SSL) -> 127.0.0.1:3000 (marketing site)
-app.mypaylink.app        -> 301 redirect to mypaylink.app/app (legacy)
-```
+| Target | Repository | VPS path | PM2 user | PM2 process | Port | Env file |
+|---|---|---|---|---|---:|---|
+| Production | `git@github.com:ldshawver/PayLink.git` | `/home/paylinkssh/paylink-app/PayLink` | `paylinkssh` | `paylink` | `8000` | `/etc/paylink/.env` |
+| Staging | `git@github.com:ldshawver/PayLink.git` | `/home/paylinkssh/paylink-staging/PayLink` | `paylinkssh` | `paylink-staging` | `8010` | `/etc/paylink/.env.staging` |
 
-The PayLink app runs on `127.0.0.1:8000` (not publicly accessible).
-The public marketing site runs on `127.0.0.1:3000`.
-Nginx terminates SSL and reverse-proxies path-based routes under `mypaylink.app`.
+Do not deploy PayLink from `/root/lux-email-bot`, `/root/PayLink`, or any `luxit` path/user. PayLink is managed with PM2 only.
 
-## Prerequisites
+## Deployment policy
 
-- Node.js 20+ (LTS recommended)
-- PostgreSQL 15+
-- Nginx with SSL (certbot / Let's Encrypt)
-- PM2 (`npm install -g pm2`) or systemd for process management
-- Working directory: `/home/paylinkssh/paylink-app/PayLink`
+- Pushes to `main` deploy **staging only**.
+- Production deployments are **manual only** via `.github/workflows/deploy-app.yml`.
+- Production deployments must provide a Git release tag such as `v2.1.1`.
+- Production never deploys directly from `main`; it checks out and deploys the requested release tag.
+- Before production deploys, `package.json` `version`, `APP_VERSION` from `/etc/paylink/.env`, and the release tag without the `v` prefix must all match.
+- Before staging deploys, `/etc/paylink/.env` and `/etc/paylink/.env.staging` must both contain `DATABASE_URL`, and those values must differ.
 
-## 1. Environment Setup
+## Mandatory pre-deployment gate
 
-```bash
-cd /home/paylinkssh/paylink-app/PayLink
-cp .env.example .env
-nano .env    # Fill in production values
-```
+Every deploy aborts unless all safety gate steps succeed:
 
-### Required Environment Variables
+1. PostgreSQL backup using the selected target `DATABASE_URL`.
+2. `pm2 save --force` succeeds.
+3. Nginx config backup or explicit backup marker is written.
+4. Current Git commit and package version are recorded.
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `NODE_ENV` | Yes | Must be `production` |
-| `HOST` | Yes | `127.0.0.1` (bind to loopback only) |
-| `PORT` | Yes | `8000` (must match Nginx upstream) |
-| `DATABASE_URL` | Yes | `postgresql://lshawver:PASSWORD@127.0.0.1:5432/paylink` |
-| `SESSION_SECRET` | Yes | Generate with `openssl rand -hex 32` |
-| `APP_BASE_URL` | Recommended | `https://mypaylink.app` (used in email links) |
-| `UPLOAD_DIR` | Recommended | Absolute path to uploads directory |
-| `SMTP_HOST` | Optional | SMTP server for email notifications |
-| `SMTP_PORT` | Optional | SMTP port (587 for STARTTLS, 465 for implicit TLS) |
-| `SMTP_TLS` | Optional | `true` to enable STARTTLS on port 587 |
-| `SMTP_USER` | Optional | SMTP authentication username |
-| `SMTP_PASS` | Optional | SMTP authentication password |
-| `SMTP_FROM` | Optional | Sender address for outbound emails |
-| `OPENAI_API_KEY` | Optional | For AI receipt scanning |
-| `TWILIO_ACCOUNT_SID` | Optional | For SMS notifications |
-| `TWILIO_AUTH_TOKEN` | Optional | For SMS notifications |
-| `TWILIO_PHONE_NUMBER` | Optional | For SMS notifications |
+## Rollback and deployment history
 
-The app will **refuse to start** in production if `DATABASE_URL` or `SESSION_SECRET` is missing.
+If build, restart, Nginx apply, or health validation fails, deployment automatically rolls back to the previously recorded commit and restarts the target PM2 process. The deploy script appends JSON lines to `/home/paylinkssh/deployment-history.log` with version, commit, release tag, environment, deployment time, deployed by, migration status, rollback status, and final status.
 
-## 2. Install, Build & Start
+## Health validation
+
+The deploy script validates all of the following before recording success:
+
+- `/health`
+- `/ready` with database connectivity
+- upload/storage directory exists and is writable
+- required environment values are loaded
+- `/api/version` responds
+- `/api/version` commit matches the deployed Git commit
+- startup auto-migrations reached readiness, recorded as migration status
+
+## Manual deployment
+
+Run on the VPS as a user with access to the PayLink checkout and PM2 process:
 
 ```bash
-cd /home/paylinkssh/paylink-app/PayLink
+# Staging deploys origin/main
+/home/paylinkssh/paylink-staging/PayLink/scripts/deploy-paylink.sh staging
 
-# Install dependencies
-npm install --production=false
-
-# Build for production (compiles TypeScript + bundles frontend)
-npm run build
-
-# Copy session table SQL (required after every build)
-cp node_modules/connect-pg-simple/table.sql dist/
-
-# Create uploads directory with correct permissions
-mkdir -p uploads
-chmod 755 uploads
-
-# Start with PM2 (recommended)
-pm2 start npm --name paylink -- run start
-pm2 save
-
-# Or start directly for testing
-npm run start
+# Production deploys only an explicit release tag
+/home/paylinkssh/paylink-app/PayLink/scripts/deploy-paylink.sh production v2.1.1
 ```
 
-### Scripts Reference
-
-| Command | Purpose |
-|---------|---------|
-| `npm run dev` | Development with HMR (port 5000) |
-| `npm run build` | Production build (outputs to `dist/`) |
-| `npm run start` | Production server (`node dist/index.cjs`) |
-| `npm run check` | TypeScript type checking |
-
-### Expected App Port
-
-The app listens on **port 8000** by default in production (set via `PORT=8000` in `.env`).
-It binds to `127.0.0.1` only, so it is not directly accessible from the internet.
-
-### Working Directory
-
-All commands must be run from: `/home/paylinkssh/paylink-app/PayLink`
-
-## 3. Nginx Configuration
-
-### Primary Domain: mypaylink.app (Single-Domain Setup)
-
-All traffic is served under `mypaylink.app`. The Node app handles `/app/*`, `/api/*`, `/clock-in`, `/login`, and related paths. Everything else falls through to the marketing site.
-
-```nginx
-server {
-    listen 80;
-    server_name mypaylink.app www.mypaylink.app;
-    return 301 https://mypaylink.app$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name mypaylink.app www.mypaylink.app;
-
-    ssl_certificate /etc/letsencrypt/live/mypaylink.app/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/mypaylink.app/privkey.pem;
-
-    client_max_body_size 10m;
-
-    # Node app proxy (app, API, auth, timeclock, invoices, uploads, portal)
-    location ~ ^/(app|api|clock-in|login|pay|portal|uploads|health|ready|print-check)(/.*)?$ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
-    }
-
-    # Marketing/public site (everything else)
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_read_timeout 30s;
-        proxy_send_timeout 30s;
-    }
-}
-```
-
-### Legacy: app.mypaylink.app (redirect to mypaylink.app/app)
-
-Keep this block to redirect any users or bookmarks pointing to the old subdomain.
-
-```nginx
-server {
-    listen 80;
-    server_name app.mypaylink.app;
-    return 301 https://mypaylink.app/app$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name app.mypaylink.app;
-
-    ssl_certificate /etc/letsencrypt/live/app.mypaylink.app/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/app.mypaylink.app/privkey.pem;
-
-    return 301 https://mypaylink.app/app$request_uri;
-}
-```
-
-### Nginx Notes
-
-- `client_max_body_size 10m` matches the app's 10MB upload limit for documents
-- WebSocket upgrade headers support live reload during development
-- `proxy_read_timeout 120s` accommodates AI receipt scanning (OpenAI calls)
-- `X-Forwarded-Proto` and `X-Forwarded-Host` are required for correct absolute URL generation and secure cookies
-- Session cookies are scoped to `.mypaylink.app` in production so they work across both the app and any subdomains
-
-### Recommended Rate Limiting
-
-Add to the `http` block in `/etc/nginx/nginx.conf`:
-
-```nginx
-limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
-limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
-```
-
-Add inside the `mypaylink.app` server block:
-
-```nginx
-location /api/auth/login {
-    limit_req zone=login burst=3 nodelay;
-    proxy_pass http://127.0.0.1:8000;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-## 4. SSL Setup
+## PM2 operations
 
 ```bash
-sudo certbot --nginx -d app.mypaylink.app
-sudo certbot --nginx -d mypaylink.app -d www.mypaylink.app
+# Production
+pm2 status paylink
+pm2 logs paylink --lines 100 --nostream
+pm2 restart paylink --update-env
 
-# Verify auto-renewal
-sudo certbot renew --dry-run
+# Staging
+pm2 status paylink-staging
+pm2 logs paylink-staging --lines 100 --nostream
+pm2 restart paylink-staging --update-env
 ```
 
-## 5. Systemd Service (Alternative to PM2)
-
-Create `/etc/systemd/system/paylink.service`:
-
-```ini
-[Unit]
-Description=PayLink Application
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=paylinkssh
-WorkingDirectory=/home/paylinkssh/paylink-app/PayLink
-ExecStart=/usr/bin/node dist/index.cjs
-Restart=on-failure
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-EnvironmentFile=/home/paylinkssh/paylink-app/PayLink/.env
-
-[Install]
-WantedBy=multi-user.target
-```
+## Health checks
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable paylink
-sudo systemctl start paylink
-sudo systemctl status paylink
-```
-
-## 6. Health Checks
-
-```bash
-# Basic health (no auth required, no DB check)
-curl http://127.0.0.1:8000/health
-# Expected: {"status":"ok","timestamp":"2026-03-23T12:00:00.000Z"}
-
-# Database readiness (no auth required, pings DB)
-curl http://127.0.0.1:8000/ready
-# Expected (200): {"status":"ok","database":"connected"}
-# Expected (503): {"status":"error","database":"unavailable"}
-```
-
-These endpoints are registered before session middleware and are excluded from authentication.
-Use them for Nginx health checks, monitoring systems, or load balancer probes.
-
-## 7. File Permissions
-
-```bash
-# Uploads directory (writable by app user)
-chown paylinkssh:paylinkssh /home/paylinkssh/paylink-app/PayLink/uploads
-chmod 755 /home/paylinkssh/paylink-app/PayLink/uploads
-
-# Uploaded files will be created with the app user's default umask
-# Files are served via Express static middleware at /uploads/*
-# Behind Nginx reverse proxy, upload URLs look like:
-#   https://app.mypaylink.app/uploads/1711234567890-123456789.jpg
-```
-
-## 8. Logs & Troubleshooting
-
-### Log Locations
-
-| Service | Log Command |
-|---------|-------------|
-| PayLink (PM2) | `pm2 logs paylink` |
-| PayLink (systemd) | `journalctl -u paylink -f` |
-| Nginx access | `tail -f /var/log/nginx/access.log` |
-| Nginx errors | `tail -f /var/log/nginx/error.log` |
-| PostgreSQL | `tail -f /var/log/postgresql/postgresql-15-main.log` |
-
-### Common Issues
-
-| Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
-| App won't start, "FATAL: Missing required environment variables" | `.env` is missing `DATABASE_URL` or `SESSION_SECRET` | Fill in `.env` values |
-| App won't start, upload directory not writable | Wrong ownership on uploads dir | `chown paylinkssh:paylinkssh uploads` |
-| 502 Bad Gateway from Nginx | App not running or wrong port | Check `pm2 status` and verify `PORT=8000` |
-| Login works but session drops | `secure: true` cookie with HTTP (no SSL) | Ensure Nginx has SSL configured |
-| Cookies not set in browser | Missing `X-Forwarded-Proto` header | Add `proxy_set_header X-Forwarded-Proto $scheme;` to Nginx |
-| /ready returns 503 | Database connection failed | Check `DATABASE_URL` and PostgreSQL status |
-| Uploads return 404 | `UPLOAD_DIR` mismatch between `.env` and actual directory | Verify paths match |
-
-## 9. Automated Deployment (CI/CD)
-
-Pushing to `main` triggers a GitHub Actions workflow (`.github/workflows/deploy.yml`) that SSHs into the VPS and runs the full deploy sequence automatically.
-
-### GitHub Secrets Required
-
-| Secret | Value |
-|--------|-------|
-| `VPS_HOST` | `82.180.131.220` |
-| `VPS_USER` | `root` (or `paylinkssh`) |
-| `VPS_SSH_KEY` | Private SSH key for the VPS user |
-
-The deploy workflow:
-1. Backs up the database
-2. Pulls latest code
-3. Installs dependencies
-4. Builds the app
-5. Copies session table SQL
-6. Restarts via PM2 (creates `ecosystem.config.cjs` if missing)
-7. Runs health checks — **fails the deploy** if `/health` or `/ready` return non-200
-8. Cleans up old backups (keeps last 10)
-
-### Manual Deploy Script
-
-A standalone deploy script is also available at `scripts/deploy-paylink.sh`. To use it on the VPS:
-
-```bash
-cp /home/paylinkssh/paylink-app/PayLink/scripts/deploy-paylink.sh /var/www/deploy-paylink.sh
-chmod +x /var/www/deploy-paylink.sh
-```
-
-### PM2 Ecosystem Config
-
-The app uses `ecosystem.config.cjs` to load `.env` via Node's `--env-file` flag:
-
-```javascript
-module.exports = {
-  apps: [{
-    name: "paylink",
-    script: "dist/index.cjs",
-    cwd: "/home/paylinkssh/paylink-app/PayLink",
-    node_args: "--env-file=.env"
-  }]
-};
-```
-
-This ensures all environment variables from `.env` are loaded correctly, including values with special characters.
-
-## 10. Manual Deploy Checklist
-
-```bash
-# 1. Backup database FIRST
-mkdir -p ~/backups
-pg_dump -U lshawver -h 127.0.0.1 paylink > ~/backups/paylink_backup_$(date +%Y%m%d_%H%M%S).sql
-
-# 2. Pull new code
-cd /home/paylinkssh/paylink-app/PayLink
-git pull
-
-# 3. Install dependencies
-npm install --production=false
-
-# 4. Build
-npm run build
-
-# 5. Copy session table SQL (required after every build)
-cp node_modules/connect-pg-simple/table.sql dist/
-
-# 6. Restart
-pm2 restart paylink
-
-# 7. Verify (wait 10 seconds for startup)
-sleep 10
+# Production
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/ready
+curl http://127.0.0.1:8000/api/version
+
+# Staging
+curl http://127.0.0.1:8010/health
+curl http://127.0.0.1:8010/ready
+curl http://127.0.0.1:8010/api/version
 ```
 
-## 11. Rollback Procedure
+## Nginx
 
-If a deploy goes wrong:
+The canonical production Nginx config is `scripts/nginx-mypaylink.conf`, which proxies PayLink app traffic to `127.0.0.1:8000`. The helper `scripts/apply_mypaylink_nginx.sh` validates Nginx and reloads it with `nginx -s reload`.
 
-```bash
-# 1. Stop the app
-pm2 stop paylink
-
-# 2. Restore database from backup
-psql -U lshawver -h 127.0.0.1 paylink < ~/backups/paylink_backup_YYYYMMDD_HHMMSS.sql
-
-# 3. Revert code to previous version
-git log --oneline -5          # find the last good commit
-git checkout <commit-hash>    # revert to it
-
-# 4. Rebuild
-npm install --production=false
-npm run build
-cp node_modules/connect-pg-simple/table.sql dist/
-
-# 5. Restart
-pm2 start paylink
-
-# 6. Verify
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/ready
-```
-
-## 12. Security Summary
-
-### App-Layer (implemented)
-
-- `trust proxy` enabled in production (reads X-Forwarded headers from Nginx)
-- Secure cookies: `httpOnly: true`, `secure: true` in production, `sameSite: "lax"`
-- Session secret required in production (app refuses to start without it)
-- Production env validation: fails fast on missing `DATABASE_URL` and `SESSION_SECRET`
-- Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy
-- Production error handler hides stack traces, SQL errors, and internal file paths
-- Upload size limits (5MB images, 10MB documents) with file type whitelisting
-- Role-based access control on all sensitive API endpoints
-- Session-based auth with PostgreSQL session store
-- No CORS headers set (same-origin serving eliminates the need)
-
-### Nginx-Layer (configure in Nginx)
-
-- SSL/TLS termination with Let's Encrypt
-- Rate limiting on login endpoint (recommended config above)
-- `client_max_body_size` for upload limits
-- IP-based access control if needed
-
-## 13. Transition from paylink.adiken.org
-
-1. Deploy to VPS with new Nginx config for `app.mypaylink.app`
-2. Keep `paylink.adiken.org` config active temporarily
-3. Add redirect from old domain to new:
-   ```nginx
-   server {
-       server_name paylink.adiken.org;
-       return 301 https://app.mypaylink.app$request_uri;
-   }
-   ```
-4. After confirming everything works, remove old config
-
-## 14. Database Notes
-
-PayLink uses **PostgreSQL** (not MySQL). The `DATABASE_URL` format is:
-```
-postgresql://user:password@host:port/database
-```
-
-The app auto-migrates schema on startup (only adds columns/tables, never drops).
-Schema change rules are documented in the project README.
+Staging is intentionally not wired by this repository to the production public Nginx host; use the local `127.0.0.1:8010` health checks or an explicitly configured staging proxy.

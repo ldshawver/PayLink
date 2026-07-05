@@ -58,7 +58,7 @@ fi
 if [ "$NEEDS_UPDATE" = "1" ]; then
   $SUDO cp "$CONF_SRC" "$CONF_DST"
   $SUDO nginx -t
-  $SUDO systemctl reload nginx
+  $SUDO nginx -s reload
   echo "Nginx configuration updated and reloaded"
 else
   echo "Nginx configuration already current; no reload needed"

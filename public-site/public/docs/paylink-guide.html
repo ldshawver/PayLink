@@ -273,7 +273,7 @@ cd PayLink</code></pre>
 
 <h3><span class="step-number">1</span>Install PostgreSQL</h3>
 <pre><code>sudo apt install postgresql postgresql-contrib
-sudo systemctl enable postgresql</code></pre>
+# PostgreSQL startup is managed by the VPS platform; PayLink uses PM2 for the application process.</code></pre>
 
 <h3><span class="step-number">2</span>Create Database &amp; User</h3>
 <pre><code>sudo -u postgres psql

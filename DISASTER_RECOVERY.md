@@ -341,7 +341,7 @@ If the public routing check fails (`⚠️ nginx may need manual sudo fix`):
 ssh root@$APP_VPS_HOST
 cp /home/paylinkssh/paylink-app/PayLink/scripts/nginx-mypaylink.conf \
    /etc/nginx/sites-enabled/mypaylink.app.conf
-nginx -t && systemctl reload nginx
+nginx -t && nginx -s reload
 curl https://mypaylink.app/health
 ```
 

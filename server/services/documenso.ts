@@ -6,7 +6,7 @@
  */
 import crypto from "crypto";
 
-const DEFAULT_BASE_URL = "https://document.luxit.app/api/v2";
+const DEFAULT_BASE_URL = "https://app.documenso.com/api/v2";
 
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");

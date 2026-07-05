@@ -109,8 +109,9 @@ app.get("/api/version", (_req, res) => {
   res.json({
     commit: process.env.PAYLINK_COMMIT || process.env.GITHUB_SHA || "unknown",
     build_time: process.env.PAYLINK_BUILD_TIME || process.env.BUILD_TIME || null,
-    environment: getAppEnvironment(),
-    version: getAppVersion(),
+environment: getAppEnvironment(),
+version: getAppVersion(),
+app_version: getAppVersion(),
   });
 });
 
