@@ -1,126 +1,185 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-APP_DIR="/home/paylinkssh/paylink-app/PayLink"
+TARGET_ENV="${1:-staging}"
+RELEASE_TAG="${2:-${RELEASE_TAG:-}}"
+DEPLOYED_BY="${GITHUB_ACTOR:-${USER:-unknown}}"
+REPO_URL="git@github.com:ldshawver/PayLink.git"
+PM2_USER="paylinkssh"
 BACKUP_DIR="/home/paylinkssh/backups"
-ENV_FILE="/etc/paylink/.env"
+HISTORY_LOG="/home/paylinkssh/deployment-history.log"
+NGINX_CONF_PATH="/etc/nginx/sites-enabled/mypaylink.app.conf"
+ROLLBACK_STATUS="not_required"
+MIGRATION_STATUS="not_checked"
 
-echo "=========================================="
-echo "PayLink Deploy - $(date)"
-echo "=========================================="
+case "$TARGET_ENV" in
+  production|prod)
+    TARGET_ENV="production"
+    APP_DIR="/home/paylinkssh/paylink-app/PayLink"
+    ENV_FILE="/etc/paylink/.env"
+    PM2_PROCESS="paylink"
+    APP_PORT="8000"
+    ;;
+  staging|stage)
+    TARGET_ENV="staging"
+    APP_DIR="/home/paylinkssh/paylink-staging/PayLink"
+    ENV_FILE="/etc/paylink/.env.staging"
+    PM2_PROCESS="paylink-staging"
+    APP_PORT="8010"
+    ;;
+  *)
+    echo "Usage: $0 [production|staging] [release-tag]" >&2
+    exit 2
+    ;;
+esac
 
-# Validate required production files exist
-if [ ! -f "$ENV_FILE" ]; then
-  echo "ERROR: $ENV_FILE not found. Aborting."
-  exit 1
+if [ "$TARGET_ENV" = "production" ]; then
+  if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]; then
+    echo "ERROR: production deployments require a Git release tag like v2.1.1." >&2
+    exit 2
+  fi
+else
+  RELEASE_TAG=""
 fi
 
-# Load env for pg_dump
-source "$ENV_FILE" 2>/dev/null || true
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+record_history() {
+  status="$1"; commit="$2"; version="$3"; tag="$4"; migration="$5"; rollback="$6"
+  mkdir -p "$(dirname "$HISTORY_LOG")"
+  printf '{"version":"%s","commit":"%s","release_tag":"%s","environment":"%s","deployment_time":"%s","deployed_by":"%s","migration_status":"%s","rollback_status":"%s","status":"%s"}\n' \
+    "$(json_escape "$version")" "$(json_escape "$commit")" "$(json_escape "$tag")" "$(json_escape "$TARGET_ENV")" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(json_escape "$DEPLOYED_BY")" "$(json_escape "$migration")" "$(json_escape "$rollback")" "$(json_escape "$status")" >> "$HISTORY_LOG"
+}
+read_env_value() { grep -E "^$2=" "$1" | tail -n 1 | cut -d= -f2- | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//'; }
 
-mkdir -p "$BACKUP_DIR"
-BACKUP_FILE="$BACKUP_DIR/paylink_backup_$(date +%Y%m%d_%H%M%S).sql"
-echo "1. Backing up database..."
-pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
-echo "   Saved: $BACKUP_FILE"
+CURRENT_COMMIT="unknown"
+NEW_COMMIT="unknown"
+PACKAGE_VERSION="unknown"
+BACKUP_FILE=""
+NGINX_BACKUP=""
 
-cd "$APP_DIR"
-echo "2. Syncing latest code (hard reset to match repo)..."
-git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
-git fetch origin main
-git reset --hard origin/main
+echo "=========================================="
+echo "PayLink Deploy ($TARGET_ENV) - $(date)"
+echo "Repo: $REPO_URL"
+echo "Path: $APP_DIR"
+echo "PM2 user: $PM2_USER"
+echo "PM2 process: $PM2_PROCESS"
+echo "Port: $APP_PORT"
+echo "Env: $ENV_FILE"
+echo "Release tag: ${RELEASE_TAG:-none}"
+echo "=========================================="
 
-echo "3. Installing dependencies..."
-npm install --production=false
-chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
-
-echo "4. Normalizing ownership and building..."
-cd "$APP_DIR"
-chown -R paylinkssh:mypaylink-app "$APP_DIR"
-chmod -R u+rwX "$APP_DIR"
-rm -rf "$APP_DIR/dist"
-mkdir -p "$APP_DIR/dist"
-npm run build
-
-if [ ! -f "$APP_DIR/dist/public/index.html" ] || [ ! -f "$APP_DIR/dist/public/app.html" ]; then
-  echo "ERROR: frontend build artifacts missing from dist/public (index.html/app.html). Refusing PM2 restart."
-  exit 1
-fi
-
-echo "5. Copying session table SQL..."
-cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
-
-echo "6. Starting app as paylinkssh (clean delete + fresh start)..."
-cd "$APP_DIR"
-
-# Remove known PayLink PM2 apps only; do not kill unrelated services on port 8000.
-pm2 delete paylink 2>/dev/null || true
-pm2 delete paylink-app 2>/dev/null || true
-if ss -lntp 2>/dev/null | grep -q '127.0.0.1:8000'; then
-  if ! ss -lntp 2>/dev/null | grep '127.0.0.1:8000' | grep -E 'node|PM2|dist/index\.cjs' >/dev/null; then
-    echo "ERROR: 127.0.0.1:8000 is owned by a non-PayLink process. Refusing to kill unrelated service."
-    ss -lntp | grep '127.0.0.1:8000' || true
+if [ ! -f "$ENV_FILE" ]; then echo "ERROR: $ENV_FILE not found. Aborting."; exit 1; fi
+if [ "$TARGET_ENV" = "staging" ]; then
+  PROD_DB="$(read_env_value /etc/paylink/.env DATABASE_URL 2>/dev/null || true)"
+  STAGING_DB="$(read_env_value /etc/paylink/.env.staging DATABASE_URL 2>/dev/null || true)"
+  if [ -z "$PROD_DB" ] || [ -z "$STAGING_DB" ] || [ "$PROD_DB" = "$STAGING_DB" ]; then
+    echo "ERROR: staging DATABASE_URL must exist and differ from production DATABASE_URL." >&2
     exit 1
   fi
 fi
-pkill -f "$APP_DIR/dist/index.cjs" 2>/dev/null || true
-sleep 3
 
-pm2 start dist/index.cjs \
-  --name paylink \
-  --cwd "$APP_DIR" \
-  --interpreter node \
-  --node-args="-r dotenv/config" \
-  --update-env \
-  -- dotenv_config_path="$ENV_FILE"
-pm2 save --force
+source "$ENV_FILE" 2>/dev/null || true
 
-echo "7. Applying Nginx config..."
-NGINX_CONF="$APP_DIR/scripts/nginx-mypaylink.conf"
-NGINX_AVAIL="/etc/nginx/sites-available/mypaylink.app"
-NGINX_ENABLED="/etc/nginx/sites-enabled/mypaylink.app"
+cd "$APP_DIR"
+git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+git remote set-url origin "$REPO_URL" || true
+CURRENT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+CURRENT_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
+echo "Current commit: $CURRENT_COMMIT"
+echo "Current version: $CURRENT_VERSION"
 
-if [ -f "$NGINX_CONF" ]; then
-  sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
-  sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED" 2>/dev/null || true
-  if sudo nginx -t 2>&1; then
-    sudo systemctl reload nginx
-    echo "   Nginx reloaded successfully"
-  else
-    echo "   WARNING: nginx -t failed — config not applied. Review $NGINX_CONF"
-  fi
+echo "1. Mandatory pre-deployment gate..."
+mkdir -p "$BACKUP_DIR"
+BACKUP_FILE="$BACKUP_DIR/paylink_${TARGET_ENV}_backup_$(date +%Y%m%d_%H%M%S).sql"
+pg_dump "$DATABASE_URL" > "$BACKUP_FILE" || { echo "ERROR: PostgreSQL backup failed"; exit 1; }
+pm2 save --force || { echo "ERROR: PM2 save failed"; exit 1; }
+NGINX_BACKUP="$BACKUP_DIR/nginx_${TARGET_ENV}_$(date +%Y%m%d_%H%M%S).conf"
+if [ -f "$NGINX_CONF_PATH" ]; then
+  sudo cp "$NGINX_CONF_PATH" "$NGINX_BACKUP" || { echo "ERROR: Nginx backup failed"; exit 1; }
 else
-  echo "   WARNING: Nginx config not found at $NGINX_CONF"
+  echo "# nginx config absent at deploy time" > "$NGINX_BACKUP" || { echo "ERROR: Nginx backup marker failed"; exit 1; }
+fi
+printf 'commit=%s\nversion=%s\nenvironment=%s\ntime=%s\n' "$CURRENT_COMMIT" "$CURRENT_VERSION" "$TARGET_ENV" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$BACKUP_DIR/paylink_${TARGET_ENV}_current_version.txt" || { echo "ERROR: current version record failed"; exit 1; }
+echo "   Gate passed: database, PM2, Nginx, and current version recorded."
+
+rollback() {
+  reason="$1"
+  ROLLBACK_STATUS="attempted"
+  echo "Deployment failed: $reason — rolling back to $CURRENT_COMMIT"
+  pm2 logs "$PM2_PROCESS" --lines 80 --nostream || true
+  git reset --hard "$CURRENT_COMMIT" || true
+  pnpm install --frozen-lockfile=false --reporter=append-only || true
+  pnpm build || true
+  pm2 delete "$PM2_PROCESS" 2>/dev/null || true
+  PAYLINK_COMMIT="$CURRENT_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_VERSION="$CURRENT_VERSION" pm2 start "$APP_DIR/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE" || true
+  pm2 save --force || true
+  if [ -n "$NGINX_BACKUP" ] && [ -f "$NGINX_BACKUP" ] && [ "$TARGET_ENV" = "production" ]; then
+    sudo cp "$NGINX_BACKUP" "$NGINX_CONF_PATH" && sudo nginx -t && sudo nginx -s reload || true
+  fi
+  if curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1; then ROLLBACK_STATUS="succeeded"; else ROLLBACK_STATUS="failed"; fi
+  record_history "failed" "$NEW_COMMIT" "$PACKAGE_VERSION" "$RELEASE_TAG" "$MIGRATION_STATUS" "$ROLLBACK_STATUS"
+}
+trap 'code=$?; if [ $code -ne 0 ]; then rollback "command failed with exit $code"; fi' EXIT
+
+echo "2. Syncing target code..."
+if [ "$TARGET_ENV" = "production" ]; then
+  git fetch --tags origin
+  git checkout --force "$RELEASE_TAG"
+else
+  git fetch origin main
+  git reset --hard origin/main
+fi
+NEW_COMMIT=$(git rev-parse HEAD)
+PACKAGE_VERSION=$(node -p "require('./package.json').version")
+EXPECTED_TAG="v$PACKAGE_VERSION"
+APP_VERSION_VALUE="${APP_VERSION:-}"
+if [ "$TARGET_ENV" = "production" ]; then
+  if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ] || [ "$APP_VERSION_VALUE" != "$PACKAGE_VERSION" ]; then
+    echo "ERROR: version mismatch. package=$PACKAGE_VERSION APP_VERSION=${APP_VERSION_VALUE:-missing} release_tag=$RELEASE_TAG expected_tag=$EXPECTED_TAG" >&2
+    exit 1
+  fi
 fi
 
-echo "8. Waiting for startup..."
-sleep 12
+echo "3. Installing dependencies and building..."
+if ! command -v pnpm >/dev/null 2>&1; then npm install -g pnpm@10.33.0; fi
+pnpm install --frozen-lockfile=false --reporter=append-only
+rm -rf "$APP_DIR/dist"
+pnpm build
+[ -f "$APP_DIR/dist/public/index.html" ] && [ -f "$APP_DIR/dist/public/app.html" ] || { echo "ERROR: frontend build artifacts missing. Refusing PM2 restart."; exit 1; }
+cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
+MIGRATION_STATUS="startup_auto_migrations_pending_app_start"
 
-pm2 list
-ss -lntp | grep '127.0.0.1:8000' || true
-
-HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo "000")
-READY=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ready 2>/dev/null || echo "000")
-
-echo "   Health: $HEALTH | Ready: $READY"
-
-if [ "$HEALTH" != "200" ] || [ "$READY" != "200" ]; then
-  echo "ERROR: Health checks failed!"
-  echo "--- PM2 Logs ---"
-  pm2 logs paylink --lines 40 --nostream
-  echo ""
-  echo "To rollback:"
-  echo "  pg_dump -> psql restore: psql \$DATABASE_URL < $BACKUP_FILE"
-  echo "  git checkout HEAD~1 && npm run build"
-  echo "  cp node_modules/connect-pg-simple/table.sql dist/"
-  echo "  pm2 restart paylink --update-env"
+echo "4. Restarting PM2..."
+pm2 delete "$PM2_PROCESS" 2>/dev/null || true
+if ss -lntp 2>/dev/null | grep -q "127.0.0.1:$APP_PORT" && ! ss -lntp 2>/dev/null | grep "127.0.0.1:$APP_PORT" | grep -E 'node|PM2|dist/index\.cjs' >/dev/null; then
+  echo "ERROR: 127.0.0.1:$APP_PORT is owned by a non-PayLink process." >&2
   exit 1
 fi
+PAYLINK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" APP_VERSION="$PACKAGE_VERSION" pm2 start dist/index.cjs --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE"
+pm2 save --force
 
-# Keep only 10 most recent backups
-ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+if [ "$TARGET_ENV" = "production" ]; then
+  "$APP_DIR/scripts/apply_mypaylink_nginx.sh" "$APP_DIR/scripts/nginx-mypaylink.conf"
+else
+  echo "5. Skipping Nginx config for staging."
+fi
+
+echo "6. Expanded health validation..."
+for i in $(seq 1 30); do curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1 && break; sleep 3; [ "$i" = "30" ] && { echo "ERROR: /health failed"; exit 1; }; done
+curl -fs "http://127.0.0.1:$APP_PORT/ready" | grep -q '"database":"connected"' || { echo "ERROR: /ready database connectivity failed"; exit 1; }
+[ -d "${UPLOAD_DIR:-$APP_DIR/uploads}" ] && [ -w "${UPLOAD_DIR:-$APP_DIR/uploads}" ] || { echo "ERROR: storage connectivity failed"; exit 1; }
+[ -n "${NODE_ENV:-}" ] && [ -n "${APP_BASE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ] || { echo "ERROR: environment validation failed"; exit 1; }
+VERSION_JSON=$(curl -fs "http://127.0.0.1:$APP_PORT/api/version") || { echo "ERROR: version endpoint failed"; exit 1; }
+printf '%s' "$VERSION_JSON" | grep -q "\"commit\":\"$NEW_COMMIT\"" || { echo "ERROR: deployed git commit mismatch: $VERSION_JSON"; exit 1; }
+printf '%s' "$VERSION_JSON" | grep -q "\"environment\":" || { echo "ERROR: environment missing from version endpoint"; exit 1; }
+MIGRATION_STATUS="startup_auto_migrations_verified_by_ready"
+
+trap - EXIT
+ROLLBACK_STATUS="not_required"
+record_history "success" "$NEW_COMMIT" "$PACKAGE_VERSION" "$RELEASE_TAG" "$MIGRATION_STATUS" "$ROLLBACK_STATUS"
+ls -t "$BACKUP_DIR"/paylink_${TARGET_ENV}_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
 echo "=========================================="
-echo "Deploy Complete! Health: $HEALTH | Ready: $READY"
-echo "$(date)"
+echo "Deploy Complete! Target: $TARGET_ENV | Version: $PACKAGE_VERSION | Commit: $NEW_COMMIT"
 echo "=========================================="

@@ -23,7 +23,8 @@ jobs:
             whoami
             cat /etc/os-release || true
 
-            cd "${{ secrets.APP_DIR }}"
+            APP_DIR="/home/paylinkssh/paylink-app/PayLink"
+            cd "$APP_DIR"
 
             echo "Current directory:"
             pwd
@@ -31,12 +32,11 @@ jobs:
             echo "Files:"
             ls -la
 
-            echo "Service status:"
-            systemctl status mypaylink --no-pager || true
-            systemctl status nginx --no-pager || true
+            echo "PM2 status:"
+            pm2 status paylink || true
 
             echo "Recent app logs:"
-            journalctl -u mypaylink -n 150 --no-pager || true
+            pm2 logs paylink --lines 150 --nostream || true
 
             echo "Nginx config check:"
             nginx -t || true

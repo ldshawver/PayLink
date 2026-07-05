@@ -28,6 +28,6 @@ assert(guard.includes("res.statusCode === 304") && guard.includes("application\\
 
 const deploy = fs.readFileSync("scripts/deploy-paylink.sh", "utf8");
 assert(deploy.includes("dist/public/index.html") && deploy.includes("Refusing PM2 restart"), "Deploy script verifies frontend index.html before PM2 restart");
-assert(deploy.includes("pm2 delete paylink-app") && deploy.includes("non-PayLink process"), "Deploy script guards duplicate PM2 apps without killing unrelated port owners");
+assert(deploy.includes("pm2 delete \"$PM2_PROCESS\"") && deploy.includes("non-PayLink process"), "Deploy script targets the configured PM2 process and guards without killing unrelated port owners");
 
 console.log("urgent production static regression checks passed");
