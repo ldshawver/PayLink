@@ -1,4 +1,4 @@
-name: Deploy PayLink App
+name: Deploy MyPayLink Staging
 
 on:
   push:
@@ -19,23 +19,27 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: deploy-mypaylink-staging
+  cancel-in-progress: false
+
 jobs:
-  deploy:
-    name: Deploy to VPS
+  deploy_staging:
+    name: Deploy to staging only
     runs-on: ubuntu-latest
     env:
-      DEPLOY_NOTIFY_EMAIL: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
-      PAYLINK_REPO: git@github.com:ldshawver/PayLink.git
-      PROD_APP_PATH: /home/paylinkssh/paylink-app/PayLink
-      PROD_ENV_FILE: /etc/paylink/.env
-      PROD_PM2_PROCESS: paylink
-      PROD_PORT: "8000"
-      STAGING_APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-      STAGING_ENV_FILE: /etc/paylink/.env.staging
-      STAGING_PM2_PROCESS: paylink-staging
-      STAGING_PORT: "8010"
-      TARGET_ENV: ${{ github.event_name == 'push' && 'staging' || github.event.inputs.target_environment }}
-      RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
+DEPLOY_NOTIFY_EMAIL: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
+PAYLINK_REPO: git@github.com:ldshawver/PayLink.git
+PROD_APP_PATH: /home/paylinkssh/paylink-app/PayLink
+PROD_ENV_FILE: /etc/paylink/.env
+PROD_PM2_PROCESS: paylink
+PROD_PORT: "8000"
+STAGING_APP_PATH: /home/paylinkssh/paylink-staging/PayLink
+STAGING_ENV_FILE: /etc/paylink/.env.staging
+STAGING_PM2_PROCESS: paylink-staging
+STAGING_PORT: "8010"
+TARGET_ENV: ${{ github.event_name == 'push' && 'staging' || github.event.inputs.target_environment }}
+RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
 
     steps:
       - name: Checkout repository
@@ -90,7 +94,8 @@ jobs:
           pnpm exec tsx tests/contract-signing-redirect-static.test.ts
           pnpm exec tsx tests/contract-documenso-static.test.ts
           pnpm exec tsx tests/contract-signer-management-static.test.ts
-          pnpm exec tsx tests/mypaylink-nginx-signing-static.test.ts
+          pnpm exec tsx tests/staging-deployment-static.test.ts
+          pnpm exec tsx tests/cloudpanel-deployment-workflows-static.test.ts
 
       - name: Build
         run: pnpm build
@@ -119,6 +124,7 @@ jobs:
           timeout: 30s
           command_timeout: 45m
           script_stop: true
+          envs: APP_ENV,APP_VERSION,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,REPO_SSH_URL
           script: |
             cat > /tmp/paylink-deploy-ci.sh <<'PAYLINK_DEPLOY_SCRIPT'
             #!/bin/bash

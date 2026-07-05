@@ -1,0 +1,142 @@
+name: Deploy MyPayLink Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag/version to deploy, for example v2.1.1"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-mypaylink-production
+  cancel-in-progress: false
+
+jobs:
+  deploy_production:
+    name: Manual production deploy
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: production
+      APP_PATH: /home/paylinkssh/paylink-app/PayLink
+      ENV_FILE: /etc/paylink/.env
+      PM2_PROCESS: paylink
+      LOCAL_HEALTH_URL: http://127.0.0.1:8000/health
+      PUBLIC_HEALTH_URL: https://app.mypaylink.app/health
+      DEPLOY_DOMAIN: app.mypaylink.app
+      DEPLOY_PORT: "8000"
+      PROD_DB_NAME: mypaylink_prod
+      REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false --reporter=append-only
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Deployment validation tests
+        run: |
+          pnpm exec tsx tests/deployment-validation-static.test.ts
+          pnpm exec tsx tests/cloudpanel-deployment-workflows-static.test.ts
+          pnpm build
+
+      - name: Deploy approved production release
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.APP_VPS_HOST }}
+          username: ${{ secrets.APP_VPS_USER }}
+          key: ${{ secrets.APP_VPS_SSH_KEY }}
+          port: ${{ secrets.APP_VPS_PORT }}
+          timeout: 30s
+          command_timeout: 30m
+          script_stop: true
+          envs: APP_ENV,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,PROD_DB_NAME,REPO_SSH_URL
+          script: |
+            set -euo pipefail
+            RELEASE_TAG='${{ inputs.release_tag }}'
+            APP_VERSION="${RELEASE_TAG#v}"
+            echo "Manual production deploy: $RELEASE_TAG to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
+            cd "$APP_PATH"
+
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "FATAL: production env file missing: $ENV_FILE"
+              exit 1
+            fi
+
+            BACKUP_DIR="$APP_PATH/backups/predeploy"
+            mkdir -p "$BACKUP_DIR"
+            BACKUP_FILE="$BACKUP_DIR/${PROD_DB_NAME}_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).dump"
+            DATABASE_URL_VALUE="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
+            if [ -z "$DATABASE_URL_VALUE" ]; then
+              echo "FATAL: DATABASE_URL missing from $ENV_FILE; refusing production deploy without DB backup"
+              exit 1
+            fi
+            pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL_VALUE" --file="$BACKUP_FILE"
+            echo "Production DB backup complete: $BACKUP_FILE"
+
+            echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
+            git remote set-url origin "$REPO_SSH_URL" || true
+            git fetch --tags origin
+            git checkout "$RELEASE_TAG"
+            NEW_COMMIT="$(git rev-parse HEAD)"
+            pnpm install --frozen-lockfile=false --reporter=append-only
+            pnpm build
+
+            export APP_ENV=production
+            export APP_VERSION="$APP_VERSION"
+            export PAYLINK_COMMIT="$NEW_COMMIT"
+            export PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            export PORT="$DEPLOY_PORT"
+
+            if pm2 describe "$PM2_PROCESS" >/dev/null 2>&1; then
+              pm2 restart "$PM2_PROCESS" --update-env
+            else
+              pm2 start "$APP_PATH/dist/index.cjs" \
+                --name "$PM2_PROCESS" \
+                --cwd "$APP_PATH" \
+                --interpreter node \
+                --node-args="--require dotenv/config" \
+                -- dotenv_config_path="$ENV_FILE"
+            fi
+            pm2 save --force || true
+
+            for i in $(seq 1 30); do
+              if curl -fsS "$LOCAL_HEALTH_URL" >/dev/null; then
+                echo "Local production health passed: $LOCAL_HEALTH_URL"
+                break
+              fi
+              if [ "$i" = "30" ]; then
+                echo "FATAL: local production health failed: $LOCAL_HEALTH_URL"
+                exit 1
+              fi
+              sleep 3
+            done
+
+            for i in $(seq 1 12); do
+              if curl -fsS "$PUBLIC_HEALTH_URL" >/dev/null; then
+                echo "Public production health passed: $PUBLIC_HEALTH_URL"
+                break
+              fi
+              if [ "$i" = "12" ]; then
+                echo "FATAL: public production health failed: $PUBLIC_HEALTH_URL"
+                exit 1
+              fi
+              sleep 5
+            done

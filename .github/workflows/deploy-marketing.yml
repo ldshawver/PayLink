@@ -1,9 +1,6 @@
-name: Deploy Marketing Site
+name: Deploy Marketing Site (manual production)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:

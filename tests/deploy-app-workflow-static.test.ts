@@ -1,5 +1,5 @@
 /**
- * Static regression checks for deploy app pre-flight env validation.
+ * Static regression checks for CloudPanel staging deployment validation.
  * Run: npx tsx tests/deploy-app-workflow-static.test.ts
  */
 import fs from "node:fs";
@@ -10,10 +10,10 @@ function ok(name: string, condition: boolean) {
   console.log(`PASS: ${name}`);
 }
 
-ok("pre-flight runs under bash with strict debug flags", workflow.includes("bash <<'PAYLINK_PREFLIGHT'") && workflow.includes("set -euxo pipefail"));
-ok("pre-flight prints host/user/env-file diagnostics", workflow.includes('echo "Host: $(hostname)"') && workflow.includes('echo "User: $(whoami)"') && workflow.includes('echo "Env file exists: $(test -f "$ENV_FILE" && echo yes || echo no)"'));
-ok("diagnostic grep commands cannot abort workflow", workflow.includes("grep -n '^DATABASE_URL=' \"$ENV_FILE\" | sed 's/=.*$/=<redacted>/' || true") && workflow.includes("grep -n '^SESSION_SECRET=' \"$ENV_FILE\" | sed 's/=.*$/=<redacted>/' || true") && workflow.includes("grep -n '^APP_BASE_URL=' \"$ENV_FILE\" | sed 's/=.*$/=<redacted>/' || true"));
-ok("diagnostics redact secret values", workflow.includes("<redacted>") && !workflow.includes("DATABASE_URL_VALUE=$(grep"));
-ok("required variable checks use grep -q under if negation", workflow.includes("if ! grep -q '^DATABASE_URL=.' \"$ENV_FILE\"; then") && workflow.includes("if ! grep -q '^SESSION_SECRET=.' \"$ENV_FILE\"; then") && workflow.includes("if ! grep -q '^APP_BASE_URL=.' \"$ENV_FILE\"; then"));
+ok("deploy-app is staging-only", workflow.includes("Deploy MyPayLink Staging") && workflow.includes("APP_ENV: staging") && workflow.includes("PM2_PROCESS: paylink-staging"));
+ok("staging uses required env/domain/port", workflow.includes("/etc/paylink/.env.staging") && workflow.includes("staging.mypaylink.app") && workflow.includes('DEPLOY_PORT: "8010"'));
+ok("staging health checks local and public CloudPanel routes", workflow.includes("http://127.0.0.1:8010/health") && workflow.includes("https://staging.mypaylink.app/health"));
+ok("workflow gates deployment on typecheck, signing static tests, CloudPanel static tests, and build", workflow.includes("pnpm typecheck") && workflow.includes("Signing route regression tests") && workflow.includes("tests/cloudpanel-deployment-workflows-static.test.ts") && workflow.includes("pnpm build"));
+ok("workflow does not apply nginx because CloudPanel owns nginx reverse proxy", workflow.includes("CloudPanel owns nginx reverse proxy; workflow expects") && !workflow.includes("scripts/apply_mypaylink_nginx.sh"));
 
-console.log("\nDeploy app workflow env validation checks passed.");
+console.log("\nDeploy app staging workflow checks passed.");
