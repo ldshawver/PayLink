@@ -7339,12 +7339,37 @@ function hashSigningToken(token: string): string {
         return res.json({ published: 0, notified: 0, message: "No draft schedules found to publish" });
       }
 
-      const approvedTimeOff = await storage.getTimeOffRequests(companyId);
+      const scheduleCompanyIds = Array.from(new Set(targetSchedules.map((s: any) => s.companyId).filter(Boolean)));
+      if (scheduleCompanyIds.length !== 1) {
+        return res.status(400).json({ message: "Cannot publish schedules across multiple companies in one request" });
+      }
+      const publishCompanyId = scheduleCompanyIds[0];
+      if (companyId && companyId !== publishCompanyId) {
+        return res.status(400).json({ message: "Schedule company does not match requested company" });
+      }
+      const publishUser = await storage.getUser(req.session.userId!);
+      const publishAccess = evaluateScheduleAccess({
+        isPlatformUser: isPlatformUser(publishUser?.role),
+        requestorCompanyId: publishUser?.companyId,
+        targetCompanyId: publishCompanyId,
+        targetCompanyAccessible: publishUser
+          ? await canAccessCompany(
+              { id: publishUser.id, companyId: publishUser.companyId, role: publishUser.role },
+              publishCompanyId,
+            )
+          : false,
+      });
+      if (!publishAccess.allowed) {
+        return res.status(publishAccess.status ?? 403).json({ message: publishAccess.message });
+      }
+
+      const approvedTimeOff = await storage.getTimeOffRequests(publishCompanyId);
       const approvedOff = approvedTimeOff.filter((r: any) => r.status === "approved");
       const conflicts: string[] = [];
-      // Single getWorkers(companyId) call shared for both conflict-check and notification
-      // grouping — previously made two separate unscoped getWorkers() calls.
-      const allWorkers = await storage.getWorkers(companyId);
+      // Single getWorkers(publishCompanyId) call shared for both conflict-check and
+      // notification grouping. This prevents scheduleIds publishes from loading
+      // workers outside the company being published.
+      const allWorkers = await storage.getWorkers(publishCompanyId);
       const allCompanies = await storage.getCompanies();
       for (const s of targetSchedules) {
         const schedDate = s.date;
@@ -7379,17 +7404,28 @@ function hashSigningToken(token: string): string {
 
       const scheduleViewUrl = `${getAppBaseUrl(req)}/app/schedule`;
 
-      // Send notifications
+      // Send transactional schedule notifications.  Each worker's channels are
+      // gated by their schedule_published notification preference (default on).
+      // Delivery failures are recorded and logged but never roll back publishing.
       let notified = 0;
       const notificationResults: any[] = [];
+      const workerIds = Object.keys(byWorker);
+      const schedCoId = publishCompanyId;
+      const schedCoUsers = await storage.getUsersByCompany(schedCoId);
+      const workerUserMap = schedCoUsers.filter(u => u.workerId && workerIds.includes(u.workerId));
 
       for (const { worker, shifts } of Object.values(byWorker)) {
         const company = allCompanies.find((c: any) => c.id === (shifts[0]?.companyId));
         const workerName = `${worker.firstName} ${worker.lastName}`;
         const companyName = company?.name || "Your employer";
+        const scheduleCompanyId = shifts[0]?.companyId;
 
         const email = worker.workEmail || worker.email || worker.homeEmail;
         const phone = worker.mobilePhone || worker.phone || worker.homePhone;
+        const pref = (await storage.getNotificationPreferences(worker.id))
+          .find((p: any) => p.eventType === "schedule_published");
+        const emailEnabled = pref?.emailEnabled !== false;
+        const smsEnabled = pref?.smsEnabled !== false;
 
         const payload = {
           workerName,
@@ -7401,36 +7437,53 @@ function hashSigningToken(token: string): string {
         };
 
         const [emailResult, smsResult] = await Promise.all([
-          sendScheduleEmailNotification(payload),
-          sendScheduleSmsNotification(payload),
+          (async () => {
+            if (!emailEnabled || !email) return { sent: false, error: emailEnabled ? "No email address" : "Email schedule alerts disabled" };
+            try {
+              return await sendScheduleEmailNotification(payload);
+            } catch (err: any) {
+              return { sent: false, error: err?.message || "Email schedule alert failed" };
+            }
+          })(),
+          (async () => {
+            if (!smsEnabled || !phone) return { sent: false, error: smsEnabled ? "No phone number" : "SMS schedule alerts disabled" };
+            try {
+              return await sendScheduleSmsNotification(payload);
+            } catch (err: any) {
+              return { sent: false, error: err?.message || "SMS schedule alert failed" };
+            }
+          })(),
         ]);
 
         const sent = emailResult.sent || smsResult.sent;
         if (sent) notified++;
-        notificationResults.push({ worker: workerName, email: emailResult, sms: smsResult });
-      }
+        if (!emailResult.sent) {
+          console.warn(`[Publish] Schedule email alert not sent for worker ${worker.id}: ${emailResult.error || "unknown error"}`);
+        }
+        if (!smsResult.sent) {
+          console.warn(`[Publish] Schedule SMS alert not sent for worker ${worker.id}: ${smsResult.error || "unknown error"}`);
+        }
 
-      try {
-        const workerIds = Object.keys(byWorker);
-        const schedCoId = targetSchedules[0]?.companyId;
-        const schedCoUsers = schedCoId ? await storage.getUsersByCompany(schedCoId) : await storage.getUsers();
-        const workerUserMap = schedCoUsers.filter(u => u.workerId && workerIds.includes(u.workerId));
-        for (const u of workerUserMap) {
-          const companyId = schedCoId;
-          if (companyId) {
+        const result = { worker: workerName, workerId: worker.id, email: emailResult, sms: smsResult };
+        notificationResults.push(result);
+
+        if (scheduleCompanyId) {
+          try {
+            const linkedUser = workerUserMap.find(u => u.workerId === worker.id);
             await storage.createNotification({
-              companyId,
-              userId: u.id,
+              companyId: scheduleCompanyId,
+              userId: linkedUser?.id,
+              workerId: worker.id,
               type: "schedule_published",
               title: "New Schedule Published",
-              message: "Your schedule has been published. Check your upcoming shifts.",
-              actionUrl: "/schedule",
+              message: `Your schedule has been published. Email: ${emailResult.sent ? "sent" : `not sent (${emailResult.error || "unknown error"})`}; SMS: ${smsResult.sent ? "sent" : `not sent (${smsResult.error || "unknown error"})`}.`,
+              actionUrl: "/app/schedule",
               isRead: false,
             });
+          } catch (notifErr) {
+            console.error(`[Publish] Failed to record schedule notification attempt for worker ${worker.id}:`, notifErr);
           }
         }
-      } catch (notifErr) {
-        console.error("Failed to dispatch schedule notifications:", notifErr);
       }
 
       console.log(`[Publish] Published ${targetSchedules.length} schedules, notified ${notified} workers`);
