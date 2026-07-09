@@ -7,13 +7,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Activity, Download, Search } from "lucide-react";
 
-type Health = { uptimeSeconds: number; environment: string; commitSha: string; database: string; storageWritable: boolean; githubConfigured: boolean; emailConfigured: boolean; queueStatus: string; luxitServiceStatus?: string; memory?: { rss: number; free: number; total: number } };
-const services = ["luxit-error", "luxit-access", "journal-luxit", "app", "error", "appdr", "github", "database", "security"];
+type Health = { uptimeSeconds: number; environment: string; commitSha: string; database: string; storageWritable: boolean; githubConfigured: boolean; emailConfigured: boolean; queueStatus: string; serviceStatus?: string; memory?: { rss: number; free: number; total: number } };
+const services = ["error", "app", "appdr", "github", "database", "security", "journal"];
 
 async function fetchJson<T>(url: string): Promise<T> { const res = await fetch(url, { credentials: "include" }); if (!res.ok) throw new Error(await res.text()); return res.json(); }
 
 export default function DeveloperDiagnosticsPage() {
-  const [service, setService] = useState("luxit-error");
+  const [service, setService] = useState("error");
   const [level, setLevel] = useState("all");
   const [search, setSearch] = useState("");
   const [correlationId, setCorrelationId] = useState("");
@@ -27,7 +27,7 @@ export default function DeveloperDiagnosticsPage() {
   return <div className="container mx-auto space-y-6 p-6" data-testid="page-developer-diagnostics">
     <div className="flex items-center justify-between"><div><h1 className="text-3xl font-bold">Developer Diagnostics</h1><p className="text-muted-foreground">Admin-only redacted diagnostics for runtime, App Dr, GitHub, payroll, PDF, and database issues.</p></div><Button onClick={exportBundle} data-testid="button-export-diagnostics"><Download className="mr-2 h-4 w-4" />Export ZIP</Button></div>
     <Card><CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5" />System Health</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-4">
-      {[ ["Environment", health.data?.environment], ["Uptime", `${health.data?.uptimeSeconds ?? 0}s`], ["Commit", health.data?.commitSha], ["Database", health.data?.database], ["Storage writable", health.data?.storageWritable ? "yes" : "no"], ["GitHub configured", health.data?.githubConfigured ? "yes" : "no"], ["Email configured", health.data?.emailConfigured ? "yes" : "no"], ["Queue/worker", health.data?.queueStatus], ["Luxit systemd", health.data?.luxitServiceStatus ? "available" : "unknown"] ].map(([k,v]) => <div key={k} className="rounded border p-3"><div className="text-xs text-muted-foreground">{k}</div><div className="font-medium break-all">{v || "unknown"}</div></div>)}
+      {[ ["Environment", health.data?.environment], ["Uptime", `${health.data?.uptimeSeconds ?? 0}s`], ["Commit", health.data?.commitSha], ["Database", health.data?.database], ["Storage writable", health.data?.storageWritable ? "yes" : "no"], ["GitHub configured", health.data?.githubConfigured ? "yes" : "no"], ["Email configured", health.data?.emailConfigured ? "yes" : "no"], ["Queue/worker", health.data?.queueStatus], ["MyPayLink systemd", health.data?.serviceStatus ? "available" : "unknown"] ].map(([k,v]) => <div key={k} className="rounded border p-3"><div className="text-xs text-muted-foreground">{k}</div><div className="font-medium break-all">{v || "unknown"}</div></div>)}
     </CardContent></Card>
     <Card><CardHeader><CardTitle>Log Viewer</CardTitle></CardHeader><CardContent className="space-y-4">
       <div className="grid gap-3 md:grid-cols-5"><Select value={service} onValueChange={setService}><SelectTrigger data-testid="select-diagnostics-service"><SelectValue /></SelectTrigger><SelectContent>{services.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select><Select value={level} onValueChange={setLevel}><SelectTrigger data-testid="select-diagnostics-level"><SelectValue /></SelectTrigger><SelectContent>{["all","info","warn","error","fatal"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select><Input placeholder="correlationId" value={correlationId} onChange={e=>setCorrelationId(e.target.value)} data-testid="input-diagnostics-correlation" /><Input placeholder="Search text" value={search} onChange={e=>setSearch(e.target.value)} data-testid="input-diagnostics-search" /><Button onClick={()=>logs.refetch()} data-testid="button-search-diagnostics"><Search className="mr-2 h-4 w-4" />Search</Button></div>

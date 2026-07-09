@@ -12,24 +12,27 @@ type LogType = typeof LOG_TYPES[number];
 
 const MAX_LOG_BYTES = 10 * 1024 * 1024;
 const KEEP_ROTATIONS = 10;
+const MAX_READ_BYTES = 512 * 1024;
 const logDir = process.env.PAYLINK_LOG_DIR || path.join(process.cwd(), "storage", "logs");
+const serviceName = process.env.PAYLINK_SYSTEMD_SERVICE || "paylink";
 
 export function getLogDir() { return logDir; }
 export function newId(prefix = "") { return `${prefix}${crypto.randomUUID()}`; }
 
-const secretKeys = /(password|secret|token|api[_-]?key|authorization|cookie|session|jwt|refresh|access|github_token|stripe|private[_-]?key)/i;
+const secretKeys = /(password|secret|token|api[_-]?key|authorization|cookie|session|jwt|refresh|access|github_token|stripe|private[_-]?key|key)$/i;
 const piiKeys = /(ssn|social|ein|tax[_-]?id|dob|birth|address|home[_-]?address)/i;
 const bankKeys = /(bank|routing|account|ach|direct[_-]?deposit|iban)/i;
 const payrollKeys = /(payroll|gross|net|wage|salary|withholding|deduction|paystub|employee[_-]?pay|direct[_-]?deposit)/i;
-const LUXIT_ACCESS_LOG = process.env.LUXIT_ACCESS_LOG || "/var/log/luxit-access.log";
-const LUXIT_ERROR_LOG = process.env.LUXIT_ERROR_LOG || "/var/log/luxit-error.log";
 
 export function redactSensitive(input: any): any {
   if (input == null) return input;
   if (typeof input === "string") {
     let s = input;
-    s = s.replace(/Bearer\s+[A-Za-z0-9._~+\-/]+=*/gi, "Bearer [REDACTED_SECRET]");
-    s = s.replace(/(ghp|github_pat|sk|rk|xox[baprs])-?[A-Za-z0-9_\-]{20,}/gi, "[REDACTED_SECRET]");
+    s = s.replace(/\b(?:authorization:\s*)?Bearer\s+[A-Za-z0-9._~+\-/]+=*/gi, "Bearer [REDACTED_SECRET]");
+    s = s.replace(/\b(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\b/gi, "[REDACTED_SECRET]");
+    s = s.replace(/\b(token|session|jwt|password|api[_-]?key|key|secret|access[_-]?token|refresh[_-]?token)=([^\s&?#]+)/gi, (_m, key) => `${key}=[REDACTED_SECRET]`);
+    s = s.replace(/([?&](?:token|session|jwt|password|api[_-]?key|key|secret|access[_-]?token|refresh[_-]?token)=)[^\s&#]+/gi, "$1[REDACTED_SECRET]");
+    s = s.replace(/https?:\/\/[^\s"']*(?:reset|sign|signing|invite|magic-link)[^\s"']*/gi, "[REDACTED_SECRET_LINK]");
     s = s.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED_PII]");
     s = s.replace(/\b\d{2}-\d{7}\b/g, "[REDACTED_PII]");
     s = s.replace(/\b(?:\d[ -]*?){13,17}\b/g, "[REDACTED_BANK]");
@@ -51,57 +54,6 @@ export function redactSensitive(input: any): any {
   return out;
 }
 
-function safeCommand(command: string, args: string[]): { ok: boolean; output: string; error?: string } {
-  try {
-    return { ok: true, output: execFileSync(command, args, { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 }) };
-  } catch (e: any) {
-    return { ok: false, output: "", error: String(e?.message || e) };
-  }
-}
-
-function tailFile(filePath: string, lines = 500): string {
-  const sudoTail = safeCommand("sudo", ["tail", "-n", String(lines), filePath]);
-  if (sudoTail.ok) return redactSensitive(sudoTail.output);
-  const plainTail = safeCommand("tail", ["-n", String(lines), filePath]);
-  if (plainTail.ok) return redactSensitive(plainTail.output);
-  try {
-    if (!fs.existsSync(filePath)) return `Log file unavailable: ${filePath}`;
-    return redactSensitive(fs.readFileSync(filePath, "utf8").split("\n").slice(-lines).join("\n"));
-  } catch (e: any) {
-    return `Log read unavailable: ${redactSensitive(e?.message || String(e))}`;
-  }
-}
-
-function journalLuxit(lines = 500): string {
-  const sudoJournal = safeCommand("sudo", ["journalctl", "-u", "luxit", "-n", String(lines), "--no-pager"]);
-  if (sudoJournal.ok) return redactSensitive(sudoJournal.output);
-  const plainJournal = safeCommand("journalctl", ["-u", "luxit", "-n", String(lines), "--no-pager"]);
-  if (plainJournal.ok) return redactSensitive(plainJournal.output);
-  return `journalctl unavailable: ${redactSensitive(sudoJournal.error || plainJournal.error || "unknown error")}`;
-}
-
-function systemctlLuxitStatus(): string {
-  const sudoStatus = safeCommand("sudo", ["systemctl", "status", "luxit", "--no-pager"]);
-  if (sudoStatus.ok) return redactSensitive(sudoStatus.output);
-  const plainStatus = safeCommand("systemctl", ["status", "luxit", "--no-pager"]);
-  if (plainStatus.ok) return redactSensitive(plainStatus.output);
-  return `systemctl status unavailable: ${redactSensitive(sudoStatus.error || plainStatus.error || "unknown error")}`;
-}
-
-function luxitLogText(source: string): string {
-  if (source === "luxit-access") return tailFile(LUXIT_ACCESS_LOG);
-  if (source === "journal-luxit") return journalLuxit();
-  if (source === "luxit-error") return tailFile(LUXIT_ERROR_LOG);
-  return tailFile(LUXIT_ERROR_LOG);
-}
-
-function luxitLogRows(source: string, query: any, limit = 200) {
-  return luxitLogText(source).split("\n").filter(Boolean)
-    .filter((line) => !query.search || line.toLowerCase().includes(String(query.search).toLowerCase()))
-    .filter((line) => !query.correlationId || line.includes(String(query.correlationId)))
-    .slice(-limit).reverse().map((line) => ({ timestamp: null, level: line.toLowerCase().includes("error") ? "error" : "info", service: source, message: line, correlationId: line.match(/(?:correlationId|correlation_id)[=: ]([A-Za-z0-9_-]+)/)?.[1] || null }));
-}
-
 function ensureLogs() { fs.mkdirSync(logDir, { recursive: true }); }
 function rotateIfNeeded(file: string) {
   try {
@@ -115,6 +67,33 @@ function rotateIfNeeded(file: string) {
     if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
   } catch (e) { console.warn("[Diagnostics] log rotation failed", e); }
 }
+
+function readLastBytes(filePath: string, maxBytes = MAX_READ_BYTES): string {
+  try {
+    if (!fs.existsSync(filePath)) return "";
+    const stat = fs.statSync(filePath);
+    const start = Math.max(0, stat.size - maxBytes);
+    const length = stat.size - start;
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, start);
+      return redactSensitive(buffer.toString("utf8"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (e: any) {
+    return `Log read unavailable: ${redactSensitive(e?.message || String(e))}`;
+  }
+}
+
+function safeCommand(command: string, args: string[]): string {
+  try { return redactSensitive(execFileSync(command, args, { encoding: "utf8", timeout: 5000, maxBuffer: MAX_READ_BYTES })); }
+  catch (e: any) { return `Command unavailable: ${redactSensitive(e?.message || String(e))}`; }
+}
+
+function serviceStatus() { return safeCommand("systemctl", ["status", serviceName, "--no-pager"]); }
+function serviceJournal() { return safeCommand("journalctl", ["-u", serviceName, "-n", "500", "--no-pager"]); }
 
 export function writeDiagnosticLog(type: LogType, entry: Record<string, any>) {
   const safe = redactSensitive({ timestamp: new Date().toISOString(), environment: process.env.NODE_ENV || "development", ...entry });
@@ -144,56 +123,70 @@ export function requestDiagnostics(req: Request, res: Response, next: NextFuncti
   next();
 }
 
-function requireDiagnosticsRole(req: Request, res: Response, next: NextFunction) {
-  const role = String((req as any).session?.role || "");
-  if (!(req as any).session?.userId) return res.status(401).json({ message: "Not authenticated" });
-  if (!DIAGNOSTIC_ROLES.has(role)) return res.status(403).json({ message: "Developer diagnostics require system administrator access" });
+async function getRequestUser(req: Request): Promise<any | null> {
+  if ((req as any).user) return (req as any).user;
+  const userId = (req as any).session?.userId;
+  if (!userId) return null;
+  try { const { storage } = await import("./storage"); return await storage.getUser(userId); } catch { return null; }
+}
+
+async function requireDiagnosticsRole(req: Request, res: Response, next: NextFunction) {
+  const user = await getRequestUser(req);
+  if (!user) return res.status(401).json({ message: "Not authenticated" });
+  if (!DIAGNOSTIC_ROLES.has(String(user.role || ""))) return res.status(403).json({ message: "Developer diagnostics require system administrator access" });
+  (req as any).diagnosticsUser = user;
   next();
 }
 
+function parseLogRows(text: string, source: string, query: any, limit = 200) {
+  return text.split("\n").filter(Boolean)
+    .filter((line) => !query.search || line.toLowerCase().includes(String(query.search).toLowerCase()))
+    .filter((line) => !query.correlationId || line.includes(String(query.correlationId)))
+    .slice(-limit).reverse().map((line) => {
+      try { return { ...JSON.parse(line), source }; }
+      catch { return { timestamp: null, level: line.toLowerCase().includes("error") ? "error" : "info", service: source, message: line, correlationId: line.match(/(?:correlationId|correlation_id)[=: ]([A-Za-z0-9_-]+)/)?.[1] || null }; }
+    });
+}
+
 function readLogs(query: any, limit = 200) {
-  if (["luxit-access", "luxit-error", "journal-luxit"].includes(String(query.service || ""))) return luxitLogRows(String(query.service), query, limit);
+  if (query.service === "journal") return parseLogRows(serviceJournal(), "journal", query, limit);
   const service = LOG_TYPES.includes(query.service) ? query.service : "error";
-  const file = path.join(logDir, `${service}.log`);
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, "utf8").trim().split("\n").slice(-1000).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
+  return parseLogRows(readLastBytes(path.join(logDir, `${service}.log`)), service, query, limit)
     .filter((r: any) => !query.level || r.level === query.level)
-    .filter((r: any) => !query.correlationId || r.correlationId === query.correlationId)
-    .filter((r: any) => !query.search || JSON.stringify(r).toLowerCase().includes(String(query.search).toLowerCase()))
-    .slice(-limit).reverse();
+    .slice(0, limit);
 }
 
 async function health() {
   let database = "unknown"; try { const { db } = await import("./db"); const { sql } = await import("drizzle-orm"); await db.execute(sql`SELECT 1`); database = "connected"; } catch { database = "unavailable"; }
   let storageWritable = false; try { ensureLogs(); fs.accessSync(logDir, fs.constants.W_OK); storageWritable = true; } catch {}
-  return { uptimeSeconds: Math.floor(process.uptime()), environment: process.env.NODE_ENV || process.env.FLASK_ENV || "development", commitSha: process.env.PAYLINK_COMMIT || process.env.GITHUB_SHA || "unknown", database, storageWritable, githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO), emailConfigured: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY || process.env.MAIL_SERVER), queueStatus: "systemd", luxitServiceStatus: systemctlLuxitStatus().split("\n").slice(0, 12).join("\n"), diskFree: null, memory: { rss: process.memoryUsage().rss, free: os.freemem(), total: os.totalmem() } };
+  return { uptimeSeconds: Math.floor(process.uptime()), environment: process.env.NODE_ENV || "development", commitSha: process.env.PAYLINK_COMMIT || process.env.GITHUB_SHA || "unknown", database, storageWritable, githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO), emailConfigured: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY), queueStatus: "in-process", serviceName, serviceStatus: serviceStatus().split("\n").slice(0, 12).join("\n"), diskFree: null, memory: { rss: process.memoryUsage().rss, free: os.freemem(), total: os.totalmem() } };
 }
 
 export function registerDiagnosticsRoutes(app: Express) {
-  app.get("/api/admin/diagnostics/health", requireDiagnosticsRole, async (req, res) => { writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics viewed", requestId: (req as any).requestId, userId: (req as any).session?.userId }); res.json(await health()); });
-  app.get("/api/admin/diagnostics/logs", requireDiagnosticsRole, (req, res) => { writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics logs searched", requestId: (req as any).requestId, userId: (req as any).session?.userId, metadata: { query: req.query } }); res.json({ logs: readLogs(req.query) }); });
+  app.get("/api/admin/diagnostics/health", requireDiagnosticsRole, async (req, res) => { const user = (req as any).diagnosticsUser; writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics viewed", requestId: (req as any).requestId, userId: user?.id }); res.json(await health()); });
+  app.get("/api/admin/diagnostics/logs", requireDiagnosticsRole, (req, res) => { const user = (req as any).diagnosticsUser; writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics logs searched", requestId: (req as any).requestId, userId: user?.id, metadata: { query: req.query } }); res.json({ logs: readLogs(req.query) }); });
   app.get("/api/admin/diagnostics/export", requireDiagnosticsRole, async (req, res) => {
-    writeDiagnosticLog("security", { level: "warn", service: "security", message: "diagnostic bundle exported", requestId: (req as any).requestId, userId: (req as any).session?.userId });
+    const user = (req as any).diagnosticsUser;
+    writeDiagnosticLog("security", { level: "warn", service: "security", message: "diagnostic bundle exported", requestId: (req as any).requestId, userId: user?.id });
     const zip = new AdmZip(); ensureLogs();
-    zip.addFile("logs/luxit-access.log", Buffer.from(luxitLogText("luxit-access")));
-    zip.addFile("logs/luxit-error.log", Buffer.from(luxitLogText("luxit-error")));
-    zip.addFile("logs/journal-luxit.log", Buffer.from(luxitLogText("journal-luxit")));
-    const env = { DATABASE_URL_PRESENT: !!process.env.DATABASE_URL, GITHUB_TOKEN_PRESENT: !!process.env.GITHUB_TOKEN, EMAIL_CONFIG_PRESENT: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY || process.env.MAIL_SERVER), STORAGE_CONFIG_PRESENT: !!(process.env.UPLOAD_DIR || process.env.PAYLINK_LOG_DIR || process.env.STORAGE_PATH), FLASK_ENV: process.env.FLASK_ENV || process.env.NODE_ENV || null, PYTHON_VERSION: process.env.PYTHON_VERSION || null, GUNICORN_PRESENT: !!process.env.GUNICORN_CMD_ARGS || systemctlLuxitStatus().toLowerCase().includes("gunicorn") };
+    for (const type of LOG_TYPES) zip.addFile(`logs/${type}.log`, Buffer.from(readLastBytes(path.join(logDir, `${type}.log`))));
+    zip.addFile("logs/journal.log", Buffer.from(serviceJournal()));
+    const env = { NODE_ENV: process.env.NODE_ENV || "development", DATABASE_URL_PRESENT: !!process.env.DATABASE_URL, GITHUB_TOKEN_PRESENT: !!process.env.GITHUB_TOKEN, EMAIL_PROVIDER_PRESENT: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY), STORAGE_CONFIG_PRESENT: !!(process.env.UPLOAD_DIR || process.env.PAYLINK_LOG_DIR) };
     const h = await health();
-    const jsons: Record<string, any> = { "environment.json": env, "system-health.json": h, "recent-errors.json": readLogs({ service: "luxit-error" }, 100), "appdr-status.json": { repairEnabled: process.env.APP_DOCTOR_REPAIR_ENABLED !== "false" }, "github-status.json": { tokenConfigured: !!process.env.GITHUB_TOKEN, repo: process.env.GITHUB_REPO || null, baseBranch: process.env.GITHUB_BASE_BRANCH || "main" }, "versions.json": { node: process.version, python: process.env.PYTHON_VERSION || null, app: process.env.npm_package_version || "unknown" } };
+    const jsons: Record<string, any> = { "environment.json": env, "system-health.json": h, "recent-errors.json": readLogs({ service: "error" }, 100), "appdr-status.json": { repairEnabled: process.env.APP_DOCTOR_REPAIR_ENABLED !== "false" }, "github-status.json": { tokenConfigured: !!process.env.GITHUB_TOKEN, repo: process.env.GITHUB_REPO || null, baseBranch: process.env.GITHUB_BASE_BRANCH || "main" }, "versions.json": { node: process.version, app: process.env.npm_package_version || "unknown" } };
     for (const [name, value] of Object.entries(jsons)) zip.addFile(`json/${name}`, Buffer.from(JSON.stringify(redactSensitive(value), null, 2)));
-    res.setHeader("Content-Type", "application/zip"); res.setHeader("Content-Disposition", `attachment; filename=paylink-diagnostics-${Date.now()}.zip`); res.send(zip.toBuffer());
+    res.setHeader("Content-Type", "application/zip"); res.setHeader("Content-Disposition", `attachment; filename=mypaylink-diagnostics-${Date.now()}.zip`); res.send(zip.toBuffer());
   });
 }
 
-export function globalErrorHandler(err: any, req: Request, res: Response, next: NextFunction) {
+export async function globalErrorHandler(err: any, req: Request, res: Response, next: NextFunction) {
   const status = err.status || err.statusCode || 500;
   const correlationId = (req as any).correlationId || newId("err_");
   (req as any).correlationId = correlationId;
   writeDiagnosticLog("error", { level: status >= 500 ? "error" : "warn", service: "app", message: err?.message || "Unhandled error", requestId: (req as any).requestId, correlationId, userId: (req as any).session?.userId, method: req.method, path: req.path, statusCode: status, errorName: err?.name, errorMessage: err?.message, stack: err?.stack });
   if (res.headersSent) return next(err);
-  const role = String((req as any).session?.role || "");
+  const user = await getRequestUser(req);
   const body: any = { success: false, error: status >= 500 ? "Internal server error" : (err.message || "Bad request"), correlationId };
-  if (DIAGNOSTIC_ROLES.has(role)) Object.assign(body, { route: req.path, service: "app", timestamp: new Date().toISOString() });
+  if (user && DIAGNOSTIC_ROLES.has(String(user.role || ""))) Object.assign(body, { route: req.path, service: "app", timestamp: new Date().toISOString() });
   res.status(status).json(body);
 }

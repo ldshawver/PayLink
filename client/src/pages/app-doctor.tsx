@@ -280,6 +280,14 @@ export default function AppDoctorPage() {
       apiRequest("POST", `/api/app-doctor/repair-tickets/${id}/create-pr`, {}).then(r => r.json()),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/repair-tickets"] });
+      if (data?.success === false || data?.status === "pr_creation_failed") {
+        toast({
+          title: "PR creation failed",
+          description: data?.message || `Repair ticket saved, but PR creation failed. Error ID: ${data?.correlationId || "unknown"}`,
+          variant: "destructive",
+        });
+        return;
+      }
       if (data.prUrl) {
         toast({ title: "GitHub PR created", description: data.prUrl });
       } else {
@@ -843,6 +851,21 @@ export default function AppDoctorPage() {
                                 {createPrMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitPullRequest className="h-3 w-3 mr-1" />}
                                 Create PR
                               </Button>
+                            )}
+                            {ticket.status === "pr_creation_failed" && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-destructive">PR creation failed</span>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => createPrMutation.mutate(ticket.id)}
+                                  disabled={createPrMutation.isPending}
+                                  data-testid={`button-retry-pr-${ticket.id}`}
+                                >
+                                  {createPrMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3 mr-1" />}
+                                  Retry PR Creation
+                                </Button>
+                              </div>
                             )}
                             {ticket.pr_url && (
                               <Button size="sm" variant="outline" asChild>
