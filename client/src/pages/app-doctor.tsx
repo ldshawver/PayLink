@@ -124,7 +124,7 @@ type Company = { id: string; name: string };
 
 function statusVariant(status: string): "default" | "secondary" | "outline" | "destructive" {
   if (status === "ai_review_ready" || status === "fixed" || status === "approved" || status === "merged") return "default";
-  if (status === "needs_ai_config" || status === "rejected") return "destructive";
+  if (status === "needs_ai_config" || status === "rejected" || status === "pr_creation_failed") return "destructive";
   if (status === "reviewed" || status === "ignored" || status === "pr_created" || status === "pr_requested") return "secondary";
   return "outline";
 }
@@ -304,6 +304,8 @@ export default function AppDoctorPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/repair-tickets"] });
       if (data.prUrl) {
         toast({ title: "GitHub PR created", description: data.prUrl });
+      } else if (data?.success === false || data?.status === "pr_creation_failed") {
+        toast({ title: "PR creation failed", description: data.note || "Retry PR creation after fixing GitHub configuration.", variant: "destructive" });
       } else {
         toast({ title: "Marked for manual PR", description: data.note || "GITHUB_TOKEN not configured" });
       }
@@ -894,7 +896,7 @@ export default function AppDoctorPage() {
                                 </Button>
                               </>
                             )}
-                            {ticket.status === "approved" && (
+                            {(ticket.status === "approved" || ticket.status === "pr_creation_failed") && (
                               <Button
                                 size="sm"
                                 onClick={() => createPrMutation.mutate(ticket.id)}
@@ -902,7 +904,7 @@ export default function AppDoctorPage() {
                                 data-testid={`button-create-pr-${ticket.id}`}
                               >
                                 {createPrMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitPullRequest className="h-3 w-3 mr-1" />}
-                                Create PR
+                                {ticket.status === "pr_creation_failed" ? "Retry PR Creation" : "Create PR"}
                               </Button>
                             )}
                             {ticket.pr_url && (

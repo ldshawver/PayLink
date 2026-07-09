@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { redactDiagnosticText } from "./diagnostics-safety";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import session from "express-session";
@@ -320,12 +321,12 @@ export function log(message: string, source = "express") {
     hour12: true,
   });
 
-  console.log(`${formattedTime} [${source}] ${message}`);
+  console.log(`${formattedTime} [${source}] ${redactDiagnosticText(message)}`);
 }
 
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const path = redactDiagnosticText(req.originalUrl || req.path);
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalResJson = res.json;
@@ -341,7 +342,7 @@ app.use((req, res, next) => {
       if (capturedJsonResponse) {
         // Truncate large response bodies (e.g. bulk worker/payroll list endpoints)
         // to prevent multi-megabyte log lines that spike memory on every request.
-        const bodyStr = JSON.stringify(capturedJsonResponse);
+        const bodyStr = redactDiagnosticText(JSON.stringify(capturedJsonResponse));
         logLine += ` :: ${bodyStr.length > 500 ? bodyStr.slice(0, 500) + "…" : bodyStr}`;
       }
       log(logLine);

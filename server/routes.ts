@@ -255,7 +255,7 @@ function requireAuth<P extends ParamsDictionary>(req: Request<P>, res: Response,
  * super-admins so that platform support staff can assist tenants.
  */
 function expandRoleForGuard(role: string): string[] {
-  if (role === "platform_super_admin" || role === "platform_admin") {
+  if (role === "platform_super_admin" || role === "platform_admin" || role === "platform_owner") {
     return ["admin", "manager", "supervisor", role];
   }
   if (role === "system_admin") {
@@ -363,6 +363,10 @@ function isManagerRole(role: string | null | undefined): boolean {
 function isPlatformUser(role: string | null | undefined): boolean {
   if (!role) return false;
   return role.startsWith("platform_");
+}
+
+function isGlobalDiagnosticsRole(role: string | null | undefined): boolean {
+  return role === "platform_super_admin" || role === "platform_admin" || role === "platform_owner";
 }
 
 /**
@@ -26354,9 +26358,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
+      const user = (req.user as any) || await storage.getUser(req.session.userId!);
       const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
-      const companyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
+      const isGlobalDiagnostics = isGlobalDiagnosticsRole(user?.role);
+      if (!isGlobalDiagnostics && !user?.companyId) {
+        return res.status(403).json({ message: "Global diagnostics require a platform admin role" });
+      }
+      const companyId = isGlobalDiagnostics ? requestedCompanyId : user?.companyId;
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
@@ -26468,8 +26476,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── App Doctor: Repair Tickets ───────────────────────────────────────────────
   app.get("/api/app-doctor/repair-tickets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      const isPlatform = isPlatformUser(user?.role);
+      const user = (req.user as any) || await storage.getUser(req.session.userId!);
+      const isPlatform = isGlobalDiagnosticsRole(user?.role);
       const companyId = isPlatform
         ? (typeof req.query.companyId === "string" ? req.query.companyId : undefined)
         : user?.companyId;
@@ -26594,12 +26602,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!githubToken || !githubRepo) {
         // Degrade gracefully — mark as pr_requested without actual GitHub PR
         const updated = pgRow<any>(await db.execute(sql`
-          UPDATE app_doctor_repair_tickets SET status = 'pr_requested', updated_at = NOW()
+          UPDATE app_doctor_repair_tickets SET status = 'pr_creation_failed', updated_at = NOW()
           WHERE id = ${req.params.id} RETURNING *
         `));
-        return res.json({
+        return res.status(503).json({
           ...updated,
-          note: "GITHUB_TOKEN and GITHUB_REPO are not configured. Set these environment variables to enable automatic PR creation. The ticket has been marked as pr_requested for manual processing.",
+          success: false,
+          status: "pr_creation_failed",
+          note: "GITHUB_TOKEN and GITHUB_REPO are not configured. Retry PR creation after configuring GitHub credentials.",
           manualBranch: `app-doctor/fix-${req.params.id.slice(0, 8)}-${(ticket.report_title || "repair").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
         });
       }

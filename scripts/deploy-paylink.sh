@@ -49,7 +49,7 @@ record_history() {
   printf '{"version":"%s","commit":"%s","release_tag":"%s","environment":"%s","deployment_time":"%s","deployed_by":"%s","migration_status":"%s","rollback_status":"%s","status":"%s"}\n' \
     "$(json_escape "$version")" "$(json_escape "$commit")" "$(json_escape "$tag")" "$(json_escape "$TARGET_ENV")" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(json_escape "$DEPLOYED_BY")" "$(json_escape "$migration")" "$(json_escape "$rollback")" "$(json_escape "$status")" >> "$HISTORY_LOG"
 }
-read_env_value() { grep -E "^$2=" "$1" | tail -n 1 | cut -d= -f2- | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//'; }
+read_env_value() { node -e 'const fs=require("fs"); const k=process.argv[2], f=process.argv[3]; for (const line of fs.readFileSync(f,"utf8").split(/\r?\n/)) { const m=line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/); if (m && m[1]===k) { let v=m[2].trim(); if ((v.startsWith("\"")&&v.endsWith("\""))||(v.startsWith("\'" )&&v.endsWith("\'"))) v=v.slice(1,-1); process.stdout.write(v); process.exit(0); } } process.exit(1);' "$2" "$1"; }
 
 CURRENT_COMMIT="unknown"
 NEW_COMMIT="unknown"
@@ -78,7 +78,10 @@ if [ "$TARGET_ENV" = "staging" ]; then
   fi
 fi
 
-source "$ENV_FILE" 2>/dev/null || true
+# Never source production env globally; read only specific values needed for preflight.
+DATABASE_URL_FOR_BACKUP="$(read_env_value "$ENV_FILE" DATABASE_URL)"
+APP_BASE_URL_FOR_HEALTH="$(read_env_value "$ENV_FILE" APP_BASE_URL 2>/dev/null || true)"
+NODE_ENV_FOR_CHECK="$(read_env_value "$ENV_FILE" NODE_ENV 2>/dev/null || echo production)"
 
 cd "$APP_DIR"
 git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
@@ -89,9 +92,12 @@ echo "Current commit: $CURRENT_COMMIT"
 echo "Current version: $CURRENT_VERSION"
 
 echo "1. Mandatory pre-deployment gate..."
+umask 077
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/paylink_${TARGET_ENV}_backup_$(date +%Y%m%d_%H%M%S).sql"
-pg_dump "$DATABASE_URL" > "$BACKUP_FILE" || { echo "ERROR: PostgreSQL backup failed"; exit 1; }
+( DATABASE_URL="$DATABASE_URL_FOR_BACKUP"; pg_dump "$DATABASE_URL" > "$BACKUP_FILE" ) || { echo "ERROR: PostgreSQL backup failed"; exit 1; }
+chmod 600 "$BACKUP_FILE"
 pm2 save --force || { echo "ERROR: PM2 save failed"; exit 1; }
 NGINX_BACKUP="$BACKUP_DIR/nginx_${TARGET_ENV}_$(date +%Y%m%d_%H%M%S).conf"
 if [ -f "$NGINX_CONF_PATH" ]; then
@@ -110,8 +116,8 @@ rollback() {
   git reset --hard "$CURRENT_COMMIT" || true
   pnpm install --frozen-lockfile=false --reporter=append-only || true
   pnpm build || true
-  pm2 delete "$PM2_PROCESS" 2>/dev/null || true
-  PAYLINK_COMMIT="$CURRENT_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_VERSION="$CURRENT_VERSION" pm2 start "$APP_DIR/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE" || true
+  pm2 delete "${PM2_PROCESS}-candidate" 2>/dev/null || true
+  pm2 restart "$PM2_PROCESS" --update-env || PAYLINK_COMMIT="$CURRENT_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_VERSION="$CURRENT_VERSION" pm2 start "$APP_DIR/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE" || true
   pm2 save --force || true
   if [ -n "$NGINX_BACKUP" ] && [ -f "$NGINX_BACKUP" ] && [ "$TARGET_ENV" = "production" ]; then
     sudo cp "$NGINX_BACKUP" "$NGINX_CONF_PATH" && sudo nginx -t && sudo nginx -s reload || true
@@ -124,7 +130,8 @@ trap 'code=$?; if [ $code -ne 0 ]; then rollback "command failed with exit $code
 echo "2. Syncing target code..."
 if [ "$TARGET_ENV" = "production" ]; then
   git fetch --tags origin
-  git checkout --force "$RELEASE_TAG"
+  git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null || { echo "ERROR: refs/tags/$RELEASE_TAG does not exist; branch names are not allowed" >&2; exit 2; }
+  git checkout --force "refs/tags/$RELEASE_TAG"
 else
   git fetch origin main
   git reset --hard origin/main
@@ -132,7 +139,7 @@ fi
 NEW_COMMIT=$(git rev-parse HEAD)
 PACKAGE_VERSION=$(node -p "require('./package.json').version")
 EXPECTED_TAG="v$PACKAGE_VERSION"
-APP_VERSION_VALUE="${APP_VERSION:-}"
+APP_VERSION_VALUE="${RELEASE_TAG#v}"
 if [ "$TARGET_ENV" = "production" ]; then
   if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ] || [ "$APP_VERSION_VALUE" != "$PACKAGE_VERSION" ]; then
     echo "ERROR: version mismatch. package=$PACKAGE_VERSION APP_VERSION=${APP_VERSION_VALUE:-missing} release_tag=$RELEASE_TAG expected_tag=$EXPECTED_TAG" >&2
@@ -149,14 +156,15 @@ pnpm build
 cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
 MIGRATION_STATUS="startup_auto_migrations_pending_app_start"
 
-echo "4. Restarting PM2..."
-pm2 delete "$PM2_PROCESS" 2>/dev/null || true
+echo "4. Starting candidate PM2 process without deleting current production..."
+CANDIDATE_PM2_PROCESS="${PM2_PROCESS}-candidate"
+pm2 delete "$CANDIDATE_PM2_PROCESS" 2>/dev/null || true
 if ss -lntp 2>/dev/null | grep -q "127.0.0.1:$APP_PORT" && ! ss -lntp 2>/dev/null | grep "127.0.0.1:$APP_PORT" | grep -E 'node|PM2|dist/index\.cjs' >/dev/null; then
   echo "ERROR: 127.0.0.1:$APP_PORT is owned by a non-PayLink process." >&2
   exit 1
 fi
 PAYLINK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" APP_VERSION="$PACKAGE_VERSION" pm2 start dist/index.cjs --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE"
+PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" APP_VERSION="$PACKAGE_VERSION" pm2 start dist/index.cjs --name "$CANDIDATE_PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE"
 pm2 save --force
 
 if [ "$TARGET_ENV" = "production" ]; then
@@ -169,11 +177,13 @@ echo "6. Expanded health validation..."
 for i in $(seq 1 30); do curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1 && break; sleep 3; [ "$i" = "30" ] && { echo "ERROR: /health failed"; exit 1; }; done
 curl -fs "http://127.0.0.1:$APP_PORT/ready" | grep -q '"database":"connected"' || { echo "ERROR: /ready database connectivity failed"; exit 1; }
 [ -d "${UPLOAD_DIR:-$APP_DIR/uploads}" ] && [ -w "${UPLOAD_DIR:-$APP_DIR/uploads}" ] || { echo "ERROR: storage connectivity failed"; exit 1; }
-[ -n "${NODE_ENV:-}" ] && [ -n "${APP_BASE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ] || { echo "ERROR: environment validation failed"; exit 1; }
+[ -n "${NODE_ENV_FOR_CHECK:-}" ] && [ -n "${APP_BASE_URL_FOR_HEALTH:-}" ] && [ -n "${DATABASE_URL_FOR_BACKUP:-}" ] || { echo "ERROR: environment validation failed"; exit 1; }
 VERSION_JSON=$(curl -fs "http://127.0.0.1:$APP_PORT/api/version") || { echo "ERROR: version endpoint failed"; exit 1; }
 printf '%s' "$VERSION_JSON" | grep -q "\"commit\":\"$NEW_COMMIT\"" || { echo "ERROR: deployed git commit mismatch: $VERSION_JSON"; exit 1; }
 printf '%s' "$VERSION_JSON" | grep -q "\"environment\":" || { echo "ERROR: environment missing from version endpoint"; exit 1; }
 MIGRATION_STATUS="startup_auto_migrations_verified_by_ready"
+pm2 delete "$PM2_PROCESS" 2>/dev/null || true
+pm2 restart "$CANDIDATE_PM2_PROCESS" --name "$PM2_PROCESS" --update-env
 
 trap - EXIT
 ROLLBACK_STATUS="not_required"
