@@ -8,6 +8,13 @@ import fs from "node:fs";
 const routes = fs.readFileSync("server/routes.ts", "utf8");
 const appDoctor = fs.readFileSync("client/src/pages/app-doctor.tsx", "utf8");
 
+for (const [file, content] of [
+  ["server/routes.ts", routes],
+  ["client/src/pages/app-doctor.tsx", appDoctor],
+] as const) {
+  assert(!new RegExp("^(" + "<{7}" + "|={7}|" + ">{7}" + ")$", "m").test(content), `${file} has no unresolved merge conflict markers`);
+}
+
 assert(routes.includes('app.get("/api/app-doctor/diagnostics"'), "diagnostics endpoint is registered");
 assert(routes.includes('app.get("/api/app-doctor/reports"') && routes.includes('app.post("/api/app-doctor/reports"'), "report list/create routes are preserved");
 assert(routes.includes('app.get("/api/app-doctor/repair-tickets"') && routes.includes('app.post("/api/app-doctor/repair-tickets"'), "repair-ticket list/create routes are preserved");
@@ -17,5 +24,7 @@ assert(appDoctor.includes('data-testid="button-send-test-report"') && appDoctor.
 assert(appDoctor.includes('data-testid="card-documenso-contract-diagnostics"'), "Documenso diagnostics card is preserved in the operational hub");
 assert(appDoctor.includes("Retry PR Creation") && appDoctor.includes('ticket.status === "pr_creation_failed"'), "PR retry action is visible for failed PR creation");
 assert(routes.includes("isGlobalDiagnosticsRole") && routes.includes("Global diagnostics require a platform admin role"), "global diagnostics role guard is preserved");
+assert(routes.includes("documenso") && routes.includes("duplicateEmails") && routes.includes("possibleIdentityMismatches"), "Documenso diagnostics resend fixes are preserved");
+assert(!routes.includes("<".repeat(7)) && !routes.includes(">".repeat(7)), "server/routes.ts is conflict-marker free after resolution");
 
 console.log("PASS: App Doctor operational hub static checks passed");

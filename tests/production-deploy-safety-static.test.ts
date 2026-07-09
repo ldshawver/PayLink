@@ -3,7 +3,12 @@ import fs from "node:fs";
 
 const workflow = fs.readFileSync(".github/workflows/deploy-production.yml", "utf8");
 const script = fs.readFileSync("scripts/deploy-paylink.sh", "utf8");
+const stagingWorkflow = fs.readFileSync(".github/workflows/deploy-app.yml", "utf8");
 
+for (const [file, content] of [["deploy-production.yml", workflow], ["deploy-app.yml", stagingWorkflow]] as const) {
+  assert(!/^(<<<<<<<|=======|>>>>>>>)$/m.test(content), `${file} has no unresolved merge conflict markers`);
+  assert(!content.includes("luxit") && !content.includes("/root/lux-email-bot") && !content.includes("luxit-prod") && !content.includes("luxit-staging") && !content.includes("systemd"), `${file} does not contain unrelated luxit/systemd deployment references`);
+}
 assert(workflow.includes("ref: refs/tags/${{ inputs.release_tag }}") && workflow.includes('refs/tags/$RELEASE_TAG') && workflow.includes("branch names like main are not deployable"), "production workflow checks out exact existing tag refs and rejects branches");
 assert(!workflow.includes("set -a") && !workflow.includes("source $ENV_FILE") && !workflow.includes("source /etc/paylink/" + "production" + ".env"), "production workflow does not broadly source production env before install/build");
 assert(workflow.includes("dotenv_get") && workflow.includes("DATABASE_URL") && workflow.includes("pg_dump") && workflow.includes("umask 077") && workflow.includes("chmod 600 \"$BACKUP_FILE\"") && workflow.includes("chmod 700 \"$BACKUP_DIR\""), "production workflow privately extracts DATABASE_URL only for backups");
