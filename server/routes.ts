@@ -26137,8 +26137,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.post("/api/app-doctor/reports", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = req.body?.companyId || user?.companyId || null;
+      if (requestedCompanyId && !isPlatformUser(user?.role) && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       const report = await recordAppDoctorReport(req, {
-        companyId: req.body?.companyId || null,
+        companyId: requestedCompanyId,
         source: req.body?.source,
         severity: req.body?.severity,
         title: req.body?.title,
@@ -26187,9 +26192,80 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  function appDoctorMasked(value: string | undefined | null) {
+    if (!value) return "missing";
+    return "configured";
+  }
+
+  async function collectAppDoctorOperationsSnapshot(companyId?: string | null) {
+    const deploymentHistoryPath = "/home/paylinkssh/deployment-history.log";
+    const prodEnv = process.env.APP_ENV || getAppEnvironment();
+    const port = process.env.PORT || (prodEnv === "staging" ? "8010" : "8000");
+    const companyCount = pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM companies`));
+    const scopedOpenReports = companyId
+      ? pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_reports WHERE company_id = ${companyId} AND status IN ('open','reopened','ai_review_ready')`))
+      : pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_reports WHERE status IN ('open','reopened','ai_review_ready')`));
+    const pendingTickets = companyId
+      ? pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE company_id = ${companyId} AND status IN ('pending_approval','approved','pr_requested')`))
+      : pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status IN ('pending_approval','approved','pr_requested')`));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      deploymentManagement: {
+        environment: prodEnv,
+        port,
+        commit: getCommitHash(),
+        historyLog: deploymentHistoryPath,
+        productionManualOnly: true,
+        stagingDefaultOnPush: true,
+      },
+      stagingVerification: {
+        requiredProcess: "paylink-staging",
+        requiredPort: "8010",
+        requiredHost: "staging.mypaylink.app",
+        requiresSeparateDatabaseUrl: true,
+        requiresSeparateUploads: true,
+        status: prodEnv === "staging" && port === "8010" ? "current-process-staging" : "verify-on-vps",
+      },
+      databaseIntegrityScans: {
+        databaseUrl: appDoctorMasked(process.env.DATABASE_URL),
+        lastCheck: "SELECT 1 performed by diagnostics endpoint",
+        destructiveChecks: false,
+      },
+      tenantHealthScans: {
+        companyCount: Number(companyCount?.cnt || 0),
+        scopedCompanyId: companyId || null,
+        openReports: Number(scopedOpenReports?.cnt || 0),
+        pendingRepairTickets: Number(pendingTickets?.cnt || 0),
+      },
+      pushNotificationDiagnostics: {
+        vapidPublicKey: appDoctorMasked(process.env.VAPID_PUBLIC_KEY),
+        vapidPrivateKey: appDoctorMasked(process.env.VAPID_PRIVATE_KEY),
+        twilioConfigured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+      },
+      releaseManagement: {
+        version: getAppVersion(),
+        releaseTagRequiredForProduction: true,
+        productionPushDeploysBlocked: true,
+      },
+      rollbackManagement: {
+        rollbackRequiresHumanApproval: true,
+        deploymentHistoryLog: deploymentHistoryPath,
+        stagingRollbackCommand: "pm2 restart paylink-staging --update-env",
+        productionRollbackCommand: "Use manual production workflow with approved release tag or documented rollback procedure.",
+      },
+    };
+  }
+
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      if (requestedCompanyId && !isPlatformUser(user?.role) && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const diagnosticsCompanyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
@@ -26241,9 +26317,25 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           open: parseInt(openTicketRow?.cnt || "0"),
           pendingApproval: parseInt(pendingApprovalRow?.cnt || "0"),
         },
+        operations: await collectAppDoctorOperationsSnapshot(diagnosticsCompanyId || null),
       });
     } catch (e: any) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to collect diagnostics") });
+    }
+  });
+
+  app.get("/api/app-doctor/operations", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = isPlatformUser(user?.role);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const companyId = isPlatform ? requestedCompanyId : user?.companyId;
+      if (requestedCompanyId && !isPlatform && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.json(await collectAppDoctorOperationsSnapshot(companyId));
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to collect App Doctor operations") });
     }
   });
 
@@ -26279,6 +26371,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!reportId) return res.status(400).json({ message: "reportId required" });
       const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
       if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const existingTicket = pgRow<any>(await db.execute(sql`
+        SELECT * FROM app_doctor_repair_tickets
+        WHERE report_id = ${reportId}
+          AND status NOT IN ('rejected','merged')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `));
+      if (existingTicket) return res.status(200).json({ ...existingTicket, duplicate: true });
 
       const severityClass = report.severity_class || "medium";
       const requiredApproverRole = severityClass === "major" ? "global_admin" : "admin";
@@ -26368,6 +26469,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         WHERE t.id = ${req.params.id}
       `));
       if (!ticket) return res.status(404).json({ message: "Repair ticket not found" });
+      if (ticket.status === "pr_created" && ticket.pr_url) return res.json({ ...ticket, prUrl: ticket.pr_url, duplicate: true });
+      if (ticket.status === "pr_requested") return res.json({ ...ticket, note: "Manual PR already requested for this ticket.", duplicate: true });
       if (ticket.status !== "approved") return res.status(400).json({ message: "Ticket must be approved before creating a PR" });
 
       const githubToken = process.env.GITHUB_TOKEN;
@@ -26403,11 +26506,45 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const refData: any = await refRes.json();
       const baseSha = refData.object?.sha;
 
-      // Create branch
-      await fetch(`${ghBase}/git/refs`, {
+      // Create branch; tolerate retries when the App Doctor button is clicked twice.
+      const branchRes = await fetch(`${ghBase}/git/refs`, {
         method: "POST",
         headers: ghHeaders,
         body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+      });
+      if (!branchRes.ok && branchRes.status !== 422) {
+        const err: any = await branchRes.json().catch(() => ({}));
+        throw new Error(`GitHub branch creation failed: ${branchRes.status} — ${err.message || JSON.stringify(err)}`);
+      }
+
+      // Commit a review artifact so the branch has a diff and GitHub can open a PR.
+      const artifactPath = `.github/app-doctor-tickets/${ticket.id}.md`;
+      const artifactBody = [
+        `# App Doctor Repair Ticket`,
+        ``,
+        `- Ticket ID: ${ticket.id}`,
+        `- Report: ${ticket.report_title || "Unknown"}`,
+        `- Severity: ${ticket.severity_class}`,
+        `- Required approver: ${ticket.required_approver_role}`,
+        ``,
+        `## Proposed patch`,
+        "```diff",
+        ticket.proposed_patch || "# No generated patch; engineer must apply a manual fix.",
+        "```",
+      ].join("\n");
+      await fetch(`${ghBase}/contents/${artifactPath}`, {
+        method: "PUT",
+        headers: ghHeaders,
+        body: JSON.stringify({
+          message: `App Doctor repair ticket ${ticket.id}`,
+          content: Buffer.from(artifactBody).toString("base64"),
+          branch: branchName,
+        }),
+      }).then(async (artifactRes) => {
+        if (!artifactRes.ok && artifactRes.status !== 422) {
+          const err: any = await artifactRes.json().catch(() => ({}));
+          throw new Error(`GitHub repair artifact commit failed: ${artifactRes.status} — ${err.message || JSON.stringify(err)}`);
+        }
       });
 
       // Compose PR body
@@ -26449,11 +26586,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           base: "main",
         }),
       });
+      let pr: any;
       if (!prRes.ok) {
         const err: any = await prRes.json().catch(() => ({}));
-        throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+        if (prRes.status === 422) {
+          const existingPrRes = await fetch(`${ghBase}/pulls?head=${encodeURIComponent(`${owner}:${branchName}`)}&state=open`, { headers: ghHeaders });
+          const existingPrs: any[] = existingPrRes.ok ? await existingPrRes.json() : [];
+          pr = existingPrs[0];
+        }
+        if (!pr) throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+      } else {
+        pr = await prRes.json();
       }
-      const pr: any = await prRes.json();
 
       // Add labels (best-effort)
       await fetch(`${ghBase}/issues/${pr.number}/labels`, {

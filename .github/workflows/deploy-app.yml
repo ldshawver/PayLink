@@ -28,18 +28,27 @@ jobs:
     name: Deploy to staging only
     runs-on: ubuntu-latest
     env:
-DEPLOY_NOTIFY_EMAIL: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
-PAYLINK_REPO: git@github.com:ldshawver/PayLink.git
-PROD_APP_PATH: /home/paylinkssh/paylink-app/PayLink
-PROD_ENV_FILE: /etc/paylink/.env
-PROD_PM2_PROCESS: paylink
-PROD_PORT: "8000"
-STAGING_APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-STAGING_ENV_FILE: /etc/paylink/.env.staging
-STAGING_PM2_PROCESS: paylink-staging
-STAGING_PORT: "8010"
-TARGET_ENV: ${{ github.event_name == 'push' && 'staging' || github.event.inputs.target_environment }}
-RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
+      DEPLOY_NOTIFY_EMAIL: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
+      PAYLINK_REPO: git@github.com:ldshawver/PayLink.git
+      PROD_APP_PATH: /home/paylinkssh/paylink-app/PayLink
+      PROD_ENV_FILE: /etc/paylink/.env
+      PROD_PM2_PROCESS: paylink
+      PROD_PORT: "8000"
+      STAGING_APP_PATH: /home/paylinkssh/paylink-staging/PayLink
+      STAGING_ENV_FILE: /etc/paylink/.env.staging
+      STAGING_PM2_PROCESS: paylink-staging
+      STAGING_PORT: "8010"
+      TARGET_ENV: ${{ github.event_name == 'push' && 'staging' || github.event.inputs.target_environment }}
+      RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
+      APP_ENV: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'staging' || 'production' }}
+      APP_PATH: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && '/home/paylinkssh/paylink-staging/PayLink' || '/home/paylinkssh/paylink-app/PayLink' }}
+      ENV_FILE: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && '/etc/paylink/.env.staging' || '/etc/paylink/.env' }}
+      PM2_PROCESS: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'paylink-staging' || 'paylink' }}
+      DEPLOY_PORT: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && '8010' || '8000' }}
+      DEPLOY_DOMAIN: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'staging.mypaylink.app' || 'app.mypaylink.app' }}
+      LOCAL_HEALTH_URL: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'http://127.0.0.1:8010/health' || 'http://127.0.0.1:8000/health' }}
+      PUBLIC_HEALTH_URL: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'https://staging.mypaylink.app/health' || 'https://app.mypaylink.app/health' }}
+      REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
 
     steps:
       - name: Checkout repository
