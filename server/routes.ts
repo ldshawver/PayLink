@@ -14055,7 +14055,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return res.status(202).json({ message: "Documenso is configured. Use POST /api/contractor-contracts/:id/send-for-signature to create and send the signing envelope.", contractId: req.params.id, baseUrl: config.baseUrl });
   });
 
-  app.get("/api/signing/contracts/:token", async (req, res) => {
+  const getPublicContractSigningStatus = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`
@@ -14064,10 +14064,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status,
                dsr.id AS signature_request_id, dsr.documenso_document_id, dsr.status AS signature_request_status
         FROM contract_signers cs
-        JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
         LEFT JOIN LATERAL (
           SELECT * FROM documenso_signature_requests dsr
-          WHERE dsr.document_type = 'contract'
+          WHERE dsr.document_type IN ('contract', 'contractor_hub_contract')
             AND dsr.related_record_id = cc.id
             AND dsr.company_id = cc.company_id
           ORDER BY dsr.created_at DESC LIMIT 1
@@ -14076,16 +14076,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         LIMIT 1
       `);
       const row = result.rows[0] as any;
-      if (!row) return res.status(404).json({ state: "missing_contract", message: "We could not find this contract." });
-      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_or_canceled", message: "This signing link is expired or no longer active." });
-      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      if (!row) return res.status(404).json({ state: "invalid_link", reason: "invalid_link", safeErrorReason: "invalid_link", message: "This signing link is invalid. Please contact the sender for a new link." });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_link", reason: "expired_link", safeErrorReason: "expired_link", message: "This signing link has expired. Please contact the sender for a new link." });
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id} AND company_id = ${row.company_id}`).catch(() => {});
       if ((req.path || "").includes("/status") || row.documenso_document_id) {
         await syncDocumensoContractStatus(row.contract_id).catch((err) => console.warn("[Documenso] contract status sync failed", err?.message || err));
       }
       const refreshed = firstRow<any>(await db.execute(sql`
         SELECT cs.status AS signer_status, cc.status AS contract_status
-        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id
-        WHERE cs.id = ${row.signer_id}
+        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
+        WHERE cs.id = ${row.signer_id} AND cs.company_id = ${row.company_id}
       `).catch(() => ({ rows: [] } as any)));
       if (refreshed) { row.signer_status = refreshed.signer_status; row.contract_status = refreshed.contract_status; }
       const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
@@ -14098,11 +14098,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             : "pending_signature";
       res.json({
         state,
+        reason: state,
+        safeErrorReason: state === "pending_signature" ? null : state,
         message: state === "fully_signed" ? "Contract fully signed."
           : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
           : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
           : "This contract is ready for your signature.",
         contractId: row.contract_id,
+        publicContractId: row.contract_id,
         title: row.title,
         signerName: row.signer_name,
         signerEmail: row.email,
@@ -14111,13 +14114,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         signatureRequestId: row.signature_request_id,
         documensoDocumentId: row.documenso_document_id,
         documensoRecipientId: row.documenso_recipient_id,
+        signingProviderUrl: row.documenso_signing_url,
         documensoSigningUrl: row.documenso_signing_url,
+        embeddedSigningData: null,
         canSign: state === "pending_signature",
       });
-    } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
-  });
+    } catch (e: any) {
+      console.error("[PublicContractSigning] status lookup failed", e?.message || e);
+      res.status(500).json({ state: "server_error", reason: "server_error", safeErrorReason: "server_error", message: "We could not load this signing link right now. Please try again or contact the sender." });
+    }
+  };
 
-  app.post("/api/signing/contracts/:token/complete", async (req, res) => {
+  app.get("/api/public/sign/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/public/sign/contracts/:token/status", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token/status", getPublicContractSigningStatus);
+
+  const completePublicContractSignature = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`SELECT * FROM contract_signers WHERE signing_token_hash = ${tokenHash} LIMIT 1`);
@@ -14141,8 +14154,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
       );
       res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
-    } catch (e: any) { res.status(500).json({ message: "Failed to complete signature" }); }
-  });
+    } catch (e: any) { res.status(500).json({ state: "server_error", message: "Failed to complete signature" }); }
+  };
+
+  app.post("/api/public/sign/contracts/:token/complete", completePublicContractSignature);
+  app.post("/api/signing/contracts/:token/complete", completePublicContractSignature);
 
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
