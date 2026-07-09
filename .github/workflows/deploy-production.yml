@@ -72,6 +72,13 @@ jobs:
             set -euo pipefail
             RELEASE_TAG='${{ inputs.release_tag }}'
             APP_VERSION="${RELEASE_TAG#v}"
+            DEPLOYED_BY="${GITHUB_ACTOR:-unknown}"
+            HISTORY_LOG="/home/paylinkssh/deployment-history.log"
+            record_history() {
+              status="$1"; commit="${2:-unknown}"; version="${3:-unknown}"; tag="${4:-$RELEASE_TAG}"
+              mkdir -p "$(dirname "$HISTORY_LOG")"
+              printf '{"version":"%s","commit":"%s","release_tag":"%s","environment":"production","deployment_time":"%s","deployed_by":"%s","status":"%s"}\n'                 "$version" "$commit" "$tag" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$DEPLOYED_BY" "$status" >> "$HISTORY_LOG"
+            }
             echo "Manual production deploy: $RELEASE_TAG to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
             cd "$APP_PATH"
 
@@ -83,19 +90,36 @@ jobs:
             BACKUP_DIR="$APP_PATH/backups/predeploy"
             mkdir -p "$BACKUP_DIR"
             BACKUP_FILE="$BACKUP_DIR/${PROD_DB_NAME}_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).dump"
+            NGINX_CONF_PATH="/etc/nginx/sites-enabled/mypaylink.app.conf"
+            NGINX_BACKUP="$BACKUP_DIR/nginx_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).conf"
             DATABASE_URL_VALUE="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
             if [ -z "$DATABASE_URL_VALUE" ]; then
               echo "FATAL: DATABASE_URL missing from $ENV_FILE; refusing production deploy without DB backup"
               exit 1
             fi
-            pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL_VALUE" --file="$BACKUP_FILE"
+            pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL_VALUE" --file="$BACKUP_FILE" || { echo "FATAL: database backup failed; aborting production deploy"; exit 1; }
             echo "Production DB backup complete: $BACKUP_FILE"
+
+            pm2 save --force || { echo "FATAL: PM2 save/backup gate failed; aborting production deploy"; exit 1; }
+            if [ -f "$NGINX_CONF_PATH" ]; then
+              sudo cp "$NGINX_CONF_PATH" "$NGINX_BACKUP" || { echo "FATAL: nginx backup failed; aborting production deploy"; exit 1; }
+            else
+              echo "# nginx config absent before production deploy; CloudPanel marker" > "$NGINX_BACKUP" || { echo "FATAL: nginx backup marker failed; aborting production deploy"; exit 1; }
+            fi
+            echo "Production nginx backup/marker complete: $NGINX_BACKUP"
 
             echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
             git remote set-url origin "$REPO_SSH_URL" || true
             git fetch --tags origin
             git checkout "$RELEASE_TAG"
             NEW_COMMIT="$(git rev-parse HEAD)"
+            PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+            APP_VERSION_VALUE="$APP_VERSION"
+            expected_tag="v$PACKAGE_VERSION"
+            if [ "$RELEASE_TAG" != "$expected_tag" ] || [ "$APP_VERSION_VALUE" != "$PACKAGE_VERSION" ]; then
+              echo "FATAL: version mismatch. package=$PACKAGE_VERSION APP_VERSION_VALUE=$APP_VERSION_VALUE release_tag=$RELEASE_TAG expected_tag=$expected_tag"
+              exit 1
+            fi
             pnpm install --frozen-lockfile=false --reporter=append-only
             pnpm build
 
@@ -115,7 +139,7 @@ jobs:
                 --node-args="--require dotenv/config" \
                 -- dotenv_config_path="$ENV_FILE"
             fi
-            pm2 save --force || true
+            pm2 save --force || { echo "FATAL: PM2 save after restart failed"; exit 1; }
 
             for i in $(seq 1 30); do
               if curl -fsS "$LOCAL_HEALTH_URL" >/dev/null; then
@@ -129,6 +153,11 @@ jobs:
               sleep 3
             done
 
+            curl -fsS "http://127.0.0.1:$DEPLOY_PORT/ready" | grep -q '"database":"connected"' || { echo "FATAL: /ready database connectivity failed"; exit 1; }
+            [ -d "${UPLOAD_DIR:-$APP_PATH/uploads}" ] && [ -w "${UPLOAD_DIR:-$APP_PATH/uploads}" ] || { echo "FATAL: storage connectivity failed"; exit 1; }
+            VERSION_JSON="$(curl -fsS "http://127.0.0.1:$DEPLOY_PORT/api/version")" || { echo "FATAL: /api/version failed"; exit 1; }
+            printf '%s' "$VERSION_JSON" | grep -q "\"commit\":\"$NEW_COMMIT\"" || { echo "FATAL: /api/version commit mismatch: $VERSION_JSON"; exit 1; }
+
             for i in $(seq 1 12); do
               if curl -fsS "$PUBLIC_HEALTH_URL" >/dev/null; then
                 echo "Public production health passed: $PUBLIC_HEALTH_URL"
@@ -140,3 +169,26 @@ jobs:
               fi
               sleep 5
             done
+            record_history "success" "$NEW_COMMIT" "$PACKAGE_VERSION" "$RELEASE_TAG"
+
+
+      - name: Production signing smoke tests
+        if: success()
+        continue-on-error: true
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          BASE_URL: https://mypaylink.app
+          APP_BASE_URL: https://app.mypaylink.app
+          REPORT_FILE: deployment-smoke-artifacts/documenso-signing-smoke-report.txt
+        run: |
+          mkdir -p deployment-smoke-artifacts
+          ./scripts/verify_documenso_signing.sh
+
+      - name: Upload deployment smoke artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: paylink-production-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deployment-smoke-artifacts/
+          retention-days: 30
