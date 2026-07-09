@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import DeveloperDiagnosticsPanel from "@/components/app-doctor/developer-diagnostics-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -311,6 +312,14 @@ export default function AppDoctorPage() {
       apiRequest("POST", `/api/app-doctor/repair-tickets/${id}/create-pr`, {}).then(r => r.json()),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/repair-tickets"] });
+      if (data?.success === false || data?.status === "pr_creation_failed") {
+        toast({
+          title: "PR creation failed",
+          description: data?.message || `Repair ticket saved, but PR creation failed. Error ID: ${data?.correlationId || "unknown"}`,
+          variant: "destructive",
+        });
+        return;
+      }
       if (data.prUrl) {
         toast({ title: "GitHub PR created", description: data.prUrl });
       } else if (data?.success === false || data?.status === "pr_creation_failed") {
@@ -603,22 +612,31 @@ export default function AppDoctorPage() {
       <Tabs defaultValue="issues">
         <TabsList data-testid="tabs-app-doctor">
           <TabsTrigger value="issues" data-testid="tab-issues">
-            <Bug className="h-4 w-4 mr-1" />
-            Detected Issues
+            <Bot className="h-4 w-4 mr-1" />
+            AI-assisted Operations
             {reports.length > 0 && <Badge variant="outline" className="ml-1.5 text-xs">{reports.length}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="diagnostics" data-testid="tab-diagnostics">
+            <Activity className="h-4 w-4 mr-1" />
+            Diagnostics
           </TabsTrigger>
           <TabsTrigger value="tickets" data-testid="tab-tickets">
             <TicketCheck className="h-4 w-4 mr-1" />
-            Repair Tickets
+            Repair Center
             {tickets.filter(t => t.status === "pending_approval").length > 0 && (
               <Badge variant="destructive" className="ml-1.5 text-xs">
                 {tickets.filter(t => t.status === "pending_approval").length}
               </Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="deployment" data-testid="tab-deployment-center"><Server className="h-4 w-4 mr-1" />Deployment Center</TabsTrigger>
+          <TabsTrigger value="releases" data-testid="tab-release-manager"><Tag className="h-4 w-4 mr-1" />Release Manager</TabsTrigger>
+          <TabsTrigger value="database" data-testid="tab-database-management"><Database className="h-4 w-4 mr-1" />Database Management</TabsTrigger>
+          <TabsTrigger value="environments" data-testid="tab-environment-comparison"><Cpu className="h-4 w-4 mr-1" />Environment Comparison</TabsTrigger>
+          <TabsTrigger value="audit" data-testid="tab-audit-center"><ClipboardList className="h-4 w-4 mr-1" />Audit Center</TabsTrigger>
         </TabsList>
 
-        {/* ── Issues Tab ─────────────────────────────────────────────────────────── */}
+        {/* ── AI-assisted Operations Tab ─────────────────────────────────────────── */}
         <TabsContent value="issues" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,540px)]">
 
@@ -858,7 +876,12 @@ export default function AppDoctorPage() {
           </div>
         </TabsContent>
 
-        {/* ── Repair Tickets Tab ──────────────────────────────────────────────────── */}
+        {/* ── Diagnostics Tab ─────────────────────────────────────────────────────── */}
+        <TabsContent value="diagnostics" className="mt-4">
+          <DeveloperDiagnosticsPanel embedded />
+        </TabsContent>
+
+        {/* ── Repair Center Tab ───────────────────────────────────────────────────── */}
         <TabsContent value="tickets" className="mt-4">
           <Card>
             <CardHeader>
@@ -953,6 +976,21 @@ export default function AppDoctorPage() {
                                 {ticket.status === "pr_creation_failed" ? "Retry PR Creation" : "Create PR"}
                               </Button>
                             )}
+                            {ticket.status === "pr_creation_failed" && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-destructive">PR creation failed</span>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => createPrMutation.mutate(ticket.id)}
+                                  disabled={createPrMutation.isPending}
+                                  data-testid={`button-retry-pr-${ticket.id}`}
+                                >
+                                  {createPrMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3 mr-1" />}
+                                  Retry PR Creation
+                                </Button>
+                              </div>
+                            )}
                             {ticket.pr_url && (
                               <Button size="sm" variant="outline" asChild>
                                 <a href={ticket.pr_url} target="_blank" rel="noopener noreferrer" data-testid={`link-pr-${ticket.id}`}>
@@ -1011,6 +1049,22 @@ export default function AppDoctorPage() {
               </p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="deployment" className="mt-4">
+          <Card data-testid="panel-deployment-center"><CardHeader><CardTitle>Deployment Center</CardTitle><CardDescription>Staging and production deployment controls are centralized here for Platform Operations. GitHub Actions remain the execution backend.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Use the staging and production deployment workflows for controlled releases; production requires a release tag and database backup.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="releases" className="mt-4">
+          <Card data-testid="panel-release-manager"><CardHeader><CardTitle>Release Manager</CardTitle><CardDescription>Release tags, build metadata, rollback notes, and deployment evidence will be reviewed here.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Current release metadata is surfaced in Diagnostics → System Health.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="database" className="mt-4">
+          <Card data-testid="panel-database-management"><CardHeader><CardTitle>Database Management</CardTitle><CardDescription>Read-only database status and backup evidence belong here.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Production deployments run pg_dump before restart; destructive database actions are not exposed.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="environments" className="mt-4">
+          <Card data-testid="panel-environment-comparison"><CardHeader><CardTitle>Environment Comparison</CardTitle><CardDescription>Compare staging and production version, commit, DB, storage, PM2, and health signals.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">This comparison is planned as a read-only view fed by diagnostics snapshots.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="audit" className="mt-4">
+          <Card data-testid="panel-audit-center"><CardHeader><CardTitle>Audit Center</CardTitle><CardDescription>Diagnostics exports, log searches, repair retries, and deployment actions are audited here.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Diagnostics export events include user, role, IP, user agent, correlation ID, and export contents.</CardContent></Card>
         </TabsContent>
       </Tabs>
 

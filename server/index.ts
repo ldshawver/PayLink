@@ -9,6 +9,7 @@ import path from "path";
 import { getAppEnvironment, getAppVersion, getHealthPayload } from "./app-metadata";
 import fs from "fs";
 import { startWorkerOrchestrator, shutdownOrchestrator } from "./workers/orchestrator";
+import { requestDiagnostics, registerDiagnosticsRoutes, globalErrorHandler } from "./diagnostics";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -26,6 +27,7 @@ if (isProduction) {
 
 const app = express();
 const httpServer = createServer(app);
+app.use(requestDiagnostics);
 
 if (isProduction) {
   app.set("trust proxy", 1);
@@ -3999,6 +4001,7 @@ Thank you,
   }
 
   await registerRoutes(httpServer, app);
+  registerDiagnosticsRoutes(app);
 
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
@@ -4007,20 +4010,7 @@ Thank you,
     await setupVite(httpServer, app);
   }
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    console.error("Unhandled error:", isProduction ? err.message : err);
-
-    if (res.headersSent) {
-      return next(err);
-    }
-
-    const safeMessage = isProduction
-      ? (status < 500 ? (err.message || "Bad request") : "Internal server error")
-      : (err.message || "Internal Server Error");
-
-    return res.status(status).json({ message: safeMessage });
-  });
+  app.use(globalErrorHandler);
 
   const port = parseInt(process.env.PORT || "5000", 10);
   const host = process.env.HOST || (isProduction ? "127.0.0.1" : "0.0.0.0");
