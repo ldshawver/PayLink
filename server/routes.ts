@@ -22,7 +22,7 @@ import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, ins
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
-import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError } from "./services/documenso";
+import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError, getDocumensoBaseUrlInfo } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
@@ -15575,6 +15575,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Update contract status
       await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`);
 
+      // Send PayLink email with the direct Documenso signing URL as the primary CTA.
+      const { sendGenericNotificationEmail } = await import("./notifications.js");
+      for (const link of signingLinks) {
+        const email = normalizeSignerEmail(link.email);
+        if (!email || !link.signingUrl) continue;
+        const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
+        const hubUrl = `${appBaseUrl}/app/contractor-hub?section=contracts&id=${contractId}`;
+        await sendGenericNotificationEmail({
+          recipientName: matchingSigner?.name || link.email || "Signer",
+          email,
+          title: `Please sign: ${contract.title || "Contract"}`,
+          body: `Please sign this contract in Documenso.
+
+Documenso signing link: ${link.signingUrl}
+
+Secondary PayLink view: ${hubUrl}`,
+          actionUrl: link.signingUrl,
+        }).catch((err) => console.warn("[Documenso] PayLink signer email failed", err?.message || err));
+      }
+
       // Notify signers in-app
       createContractorNotification({
         workerId: contract.contractor_id,
@@ -26334,6 +26354,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const companyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
@@ -26358,6 +26381,48 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       `));
 
       const toMap = (rows: any[]) => Object.fromEntries(rows.map(r => [r.severity || r.status || r.issue_category, parseInt(r.cnt)]));
+      const documensoBase = getDocumensoBaseUrlInfo();
+      const documensoConfig = validateDocumensoConfig();
+      const webhookUrl = process.env.DOCUMENSO_WEBHOOK_URL || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_URL || `${process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || ""}/api/webhooks/documenso`;
+      const requestedContractId = typeof req.query.contractId === "string" ? req.query.contractId : null;
+      const contractRows = pgRows<any>(await db.execute(sql`
+        SELECT c.id AS contract_id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url,
+               dsr.documenso_recipient_ids, dsr.status AS request_status,
+               COUNT(cs.id)::int AS local_recipient_count,
+               COUNT(cs.id) FILTER (WHERE cs.documenso_recipient_id IS NOT NULL)::int AS local_recipient_id_count,
+               COUNT(cs.id) FILTER (WHERE cs.documenso_signing_url IS NOT NULL)::int AS local_signing_url_count
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        LEFT JOIN contract_signers cs ON cs.contract_id = c.id AND cs.status NOT IN ('canceled','cancelled','replaced')
+        WHERE (${requestedContractId}::text IS NULL OR c.id = ${requestedContractId})
+          AND (${companyId}::text IS NULL OR c.company_id = ${companyId})
+        GROUP BY c.id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url, dsr.documenso_recipient_ids, dsr.status, dsr.created_at
+        ORDER BY dsr.created_at DESC NULLS LAST, c.updated_at DESC
+        LIMIT 10
+      `).catch(() => ({ rows: [] } as any)));
+      const contractDiagnostics = contractRows.map((row) => {
+        const remoteRecipients = Array.isArray(row.documenso_recipient_ids) ? row.documenso_recipient_ids : [];
+        const remoteRecipientCount = remoteRecipients.length;
+        const localRecipientCount = Number(row.local_recipient_count || 0);
+        const localRecipientIdCount = Number(row.local_recipient_id_count || 0);
+        const localSigningUrlCount = Number(row.local_signing_url_count || 0);
+        const documentExists = !!row.documenso_document_id;
+        const recipientIdsExist = localRecipientCount > 0 && localRecipientIdCount >= localRecipientCount;
+        const signingUrlPresent = !!row.documenso_signing_url || localSigningUrlCount > 0 || remoteRecipients.some((r: any) => !!(r.signingUrl || r.signing_url));
+        return {
+          localContractId: row.contract_id,
+          documensoDocumentId: row.documenso_document_id,
+          documentIdExists: documentExists,
+          localRecipientCount,
+          remoteRecipientCount,
+          recipientIdsExist,
+          recipientIdMatch: remoteRecipientCount === 0 ? "unknown" : (remoteRecipientCount === localRecipientCount && recipientIdsExist ? "match" : "mismatch"),
+          signingUrlPresent,
+          webhookStatus: webhookUrl ? "configured" : "missing",
+          resendEligibility: documentExists && recipientIdsExist && signingUrlPresent ? "eligible" : "needs_repair",
+          repairActions: [!documentExists ? "recreate_document" : null, !recipientIdsExist ? "sync_recipients" : null, !signingUrlPresent ? "regenerate_signing_link" : null].filter(Boolean),
+        };
+      });
 
       res.json({
         timestamp: new Date().toISOString(),
@@ -26375,6 +26440,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
           maxRiskAutoDraft: process.env.APP_DOCTOR_MAX_RISK_AUTO_DRAFT || "minor",
           requireApproval: process.env.APP_DOCTOR_REQUIRE_APPROVAL !== "false",
+        },
+        documenso: {
+          configuredBaseUrl: documensoBase.publicBaseUrl,
+          apiBaseUrl: documensoBase.apiBaseUrl,
+          baseUrlEnv: documensoBase.source,
+          apiKeyPresent: !!documensoConfig.apiKeyConfigured,
+          webhookUrl,
+          webhookSecretPresent: !!documensoConfig.webhookSecretConfigured,
+          contracts: contractDiagnostics,
         },
         reports: {
           last24hBySeverity: toMap(errorCounts),
