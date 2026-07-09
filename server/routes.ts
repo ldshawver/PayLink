@@ -18,11 +18,11 @@ import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
-import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError } from "./services/documenso";
+import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError, getDocumensoBaseUrlInfo } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
@@ -34,8 +34,16 @@ import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
+import { assertContractorTradeCreditsPrintable, calculateContractorTradeSettlement } from "./contractor-trade-compensation";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
+function isIndependentContractorWorker(worker: any): boolean {
+  const workerGroup = String(worker?.workerGroup || worker?.worker_group || "").toLowerCase();
+  const workerType = String(worker?.workerType || worker?.worker_type || "").toLowerCase();
+  return INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup) || workerType === "independent_contractor" || (workerType === "contractor" && INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup));
+}
 
 function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -1718,6 +1726,13 @@ export async function registerRoutes(
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
       const isProduction = process.env.NODE_ENV === "production";
+
+const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
+function isIndependentContractorWorker(worker: any): boolean {
+  const workerGroup = String(worker?.workerGroup || worker?.worker_group || "").toLowerCase();
+  const workerType = String(worker?.workerType || worker?.worker_type || "").toLowerCase();
+  return INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup) || workerType === "independent_contractor" || (workerType === "contractor" && INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup));
+}
 
 function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -7339,12 +7354,37 @@ function hashSigningToken(token: string): string {
         return res.json({ published: 0, notified: 0, message: "No draft schedules found to publish" });
       }
 
-      const approvedTimeOff = await storage.getTimeOffRequests(companyId);
+      const scheduleCompanyIds = Array.from(new Set(targetSchedules.map((s: any) => s.companyId).filter(Boolean)));
+      if (scheduleCompanyIds.length !== 1) {
+        return res.status(400).json({ message: "Cannot publish schedules across multiple companies in one request" });
+      }
+      const publishCompanyId = scheduleCompanyIds[0];
+      if (companyId && companyId !== publishCompanyId) {
+        return res.status(400).json({ message: "Schedule company does not match requested company" });
+      }
+      const publishUser = await storage.getUser(req.session.userId!);
+      const publishAccess = evaluateScheduleAccess({
+        isPlatformUser: isPlatformUser(publishUser?.role),
+        requestorCompanyId: publishUser?.companyId,
+        targetCompanyId: publishCompanyId,
+        targetCompanyAccessible: publishUser
+          ? await canAccessCompany(
+              { id: publishUser.id, companyId: publishUser.companyId, role: publishUser.role },
+              publishCompanyId,
+            )
+          : false,
+      });
+      if (!publishAccess.allowed) {
+        return res.status(publishAccess.status ?? 403).json({ message: publishAccess.message });
+      }
+
+      const approvedTimeOff = await storage.getTimeOffRequests(publishCompanyId);
       const approvedOff = approvedTimeOff.filter((r: any) => r.status === "approved");
       const conflicts: string[] = [];
-      // Single getWorkers(companyId) call shared for both conflict-check and notification
-      // grouping — previously made two separate unscoped getWorkers() calls.
-      const allWorkers = await storage.getWorkers(companyId);
+      // Single getWorkers(publishCompanyId) call shared for both conflict-check and
+      // notification grouping. This prevents scheduleIds publishes from loading
+      // workers outside the company being published.
+      const allWorkers = await storage.getWorkers(publishCompanyId);
       const allCompanies = await storage.getCompanies();
       for (const s of targetSchedules) {
         const schedDate = s.date;
@@ -7379,17 +7419,28 @@ function hashSigningToken(token: string): string {
 
       const scheduleViewUrl = `${getAppBaseUrl(req)}/app/schedule`;
 
-      // Send notifications
+      // Send transactional schedule notifications.  Each worker's channels are
+      // gated by their schedule_published notification preference (default on).
+      // Delivery failures are recorded and logged but never roll back publishing.
       let notified = 0;
       const notificationResults: any[] = [];
+      const workerIds = Object.keys(byWorker);
+      const schedCoId = publishCompanyId;
+      const schedCoUsers = await storage.getUsersByCompany(schedCoId);
+      const workerUserMap = schedCoUsers.filter(u => u.workerId && workerIds.includes(u.workerId));
 
       for (const { worker, shifts } of Object.values(byWorker)) {
         const company = allCompanies.find((c: any) => c.id === (shifts[0]?.companyId));
         const workerName = `${worker.firstName} ${worker.lastName}`;
         const companyName = company?.name || "Your employer";
+        const scheduleCompanyId = shifts[0]?.companyId;
 
         const email = worker.workEmail || worker.email || worker.homeEmail;
         const phone = worker.mobilePhone || worker.phone || worker.homePhone;
+        const pref = (await storage.getNotificationPreferences(worker.id))
+          .find((p: any) => p.eventType === "schedule_published");
+        const emailEnabled = pref?.emailEnabled !== false;
+        const smsEnabled = pref?.smsEnabled !== false;
 
         const payload = {
           workerName,
@@ -7401,36 +7452,53 @@ function hashSigningToken(token: string): string {
         };
 
         const [emailResult, smsResult] = await Promise.all([
-          sendScheduleEmailNotification(payload),
-          sendScheduleSmsNotification(payload),
+          (async () => {
+            if (!emailEnabled || !email) return { sent: false, error: emailEnabled ? "No email address" : "Email schedule alerts disabled" };
+            try {
+              return await sendScheduleEmailNotification(payload);
+            } catch (err: any) {
+              return { sent: false, error: err?.message || "Email schedule alert failed" };
+            }
+          })(),
+          (async () => {
+            if (!smsEnabled || !phone) return { sent: false, error: smsEnabled ? "No phone number" : "SMS schedule alerts disabled" };
+            try {
+              return await sendScheduleSmsNotification(payload);
+            } catch (err: any) {
+              return { sent: false, error: err?.message || "SMS schedule alert failed" };
+            }
+          })(),
         ]);
 
         const sent = emailResult.sent || smsResult.sent;
         if (sent) notified++;
-        notificationResults.push({ worker: workerName, email: emailResult, sms: smsResult });
-      }
+        if (!emailResult.sent) {
+          console.warn(`[Publish] Schedule email alert not sent for worker ${worker.id}: ${emailResult.error || "unknown error"}`);
+        }
+        if (!smsResult.sent) {
+          console.warn(`[Publish] Schedule SMS alert not sent for worker ${worker.id}: ${smsResult.error || "unknown error"}`);
+        }
 
-      try {
-        const workerIds = Object.keys(byWorker);
-        const schedCoId = targetSchedules[0]?.companyId;
-        const schedCoUsers = schedCoId ? await storage.getUsersByCompany(schedCoId) : await storage.getUsers();
-        const workerUserMap = schedCoUsers.filter(u => u.workerId && workerIds.includes(u.workerId));
-        for (const u of workerUserMap) {
-          const companyId = schedCoId;
-          if (companyId) {
+        const result = { worker: workerName, workerId: worker.id, email: emailResult, sms: smsResult };
+        notificationResults.push(result);
+
+        if (scheduleCompanyId) {
+          try {
+            const linkedUser = workerUserMap.find(u => u.workerId === worker.id);
             await storage.createNotification({
-              companyId,
-              userId: u.id,
+              companyId: scheduleCompanyId,
+              userId: linkedUser?.id,
+              workerId: worker.id,
               type: "schedule_published",
               title: "New Schedule Published",
-              message: "Your schedule has been published. Check your upcoming shifts.",
-              actionUrl: "/schedule",
+              message: `Your schedule has been published. Email: ${emailResult.sent ? "sent" : `not sent (${emailResult.error || "unknown error"})`}; SMS: ${smsResult.sent ? "sent" : `not sent (${smsResult.error || "unknown error"})`}.`,
+              actionUrl: "/app/schedule",
               isRead: false,
             });
+          } catch (notifErr) {
+            console.error(`[Publish] Failed to record schedule notification attempt for worker ${worker.id}:`, notifErr);
           }
         }
-      } catch (notifErr) {
-        console.error("Failed to dispatch schedule notifications:", notifErr);
       }
 
       console.log(`[Publish] Published ${targetSchedules.length} schedules, notified ${notified} workers`);
@@ -13987,7 +14055,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return res.status(202).json({ message: "Documenso is configured. Use POST /api/contractor-contracts/:id/send-for-signature to create and send the signing envelope.", contractId: req.params.id, baseUrl: config.baseUrl });
   });
 
-  app.get("/api/signing/contracts/:token", async (req, res) => {
+  const getPublicContractSigningStatus = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`
@@ -13996,10 +14064,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status,
                dsr.id AS signature_request_id, dsr.documenso_document_id, dsr.status AS signature_request_status
         FROM contract_signers cs
-        JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
         LEFT JOIN LATERAL (
           SELECT * FROM documenso_signature_requests dsr
-          WHERE dsr.document_type = 'contract'
+          WHERE dsr.document_type IN ('contract', 'contractor_hub_contract')
             AND dsr.related_record_id = cc.id
             AND dsr.company_id = cc.company_id
           ORDER BY dsr.created_at DESC LIMIT 1
@@ -14008,16 +14076,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         LIMIT 1
       `);
       const row = result.rows[0] as any;
-      if (!row) return res.status(404).json({ state: "missing_contract", message: "We could not find this contract." });
-      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_or_canceled", message: "This signing link is expired or no longer active." });
-      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      if (!row) return res.status(404).json({ state: "invalid_link", reason: "invalid_link", safeErrorReason: "invalid_link", message: "This signing link is invalid. Please contact the sender for a new link." });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_link", reason: "expired_link", safeErrorReason: "expired_link", message: "This signing link has expired. Please contact the sender for a new link." });
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id} AND company_id = ${row.company_id}`).catch(() => {});
       if ((req.path || "").includes("/status") || row.documenso_document_id) {
         await syncDocumensoContractStatus(row.contract_id).catch((err) => console.warn("[Documenso] contract status sync failed", err?.message || err));
       }
       const refreshed = firstRow<any>(await db.execute(sql`
         SELECT cs.status AS signer_status, cc.status AS contract_status
-        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id
-        WHERE cs.id = ${row.signer_id}
+        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
+        WHERE cs.id = ${row.signer_id} AND cs.company_id = ${row.company_id}
       `).catch(() => ({ rows: [] } as any)));
       if (refreshed) { row.signer_status = refreshed.signer_status; row.contract_status = refreshed.contract_status; }
       const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
@@ -14030,11 +14098,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             : "pending_signature";
       res.json({
         state,
+        reason: state,
+        safeErrorReason: state === "pending_signature" ? null : state,
         message: state === "fully_signed" ? "Contract fully signed."
           : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
           : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
           : "This contract is ready for your signature.",
         contractId: row.contract_id,
+        publicContractId: row.contract_id,
         title: row.title,
         signerName: row.signer_name,
         signerEmail: row.email,
@@ -14043,13 +14114,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         signatureRequestId: row.signature_request_id,
         documensoDocumentId: row.documenso_document_id,
         documensoRecipientId: row.documenso_recipient_id,
+        signingProviderUrl: row.documenso_signing_url,
         documensoSigningUrl: row.documenso_signing_url,
+        embeddedSigningData: null,
         canSign: state === "pending_signature",
       });
-    } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
-  });
+    } catch (e: any) {
+      console.error("[PublicContractSigning] status lookup failed", e?.message || e);
+      res.status(500).json({ state: "server_error", reason: "server_error", safeErrorReason: "server_error", message: "We could not load this signing link right now. Please try again or contact the sender." });
+    }
+  };
 
-  app.post("/api/signing/contracts/:token/complete", async (req, res) => {
+  app.get("/api/public/sign/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/public/sign/contracts/:token/status", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token/status", getPublicContractSigningStatus);
+
+  const completePublicContractSignature = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`SELECT * FROM contract_signers WHERE signing_token_hash = ${tokenHash} LIMIT 1`);
@@ -14073,8 +14154,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
       );
       res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
-    } catch (e: any) { res.status(500).json({ message: "Failed to complete signature" }); }
-  });
+    } catch (e: any) { res.status(500).json({ state: "server_error", message: "Failed to complete signature" }); }
+  };
+
+  app.post("/api/public/sign/contracts/:token/complete", completePublicContractSignature);
+  app.post("/api/signing/contracts/:token/complete", completePublicContractSignature);
 
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -15506,6 +15590,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Update contract status
       await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`);
+
+      // Send PayLink email with the direct Documenso signing URL as the primary CTA.
+      const { sendGenericNotificationEmail } = await import("./notifications.js");
+      for (const link of signingLinks) {
+        const email = normalizeSignerEmail(link.email);
+        if (!email || !link.signingUrl) continue;
+        const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
+        const hubUrl = `${appBaseUrl}/app/contractor-hub?section=contracts&id=${contractId}`;
+        await sendGenericNotificationEmail({
+          recipientName: matchingSigner?.name || link.email || "Signer",
+          email,
+          title: `Please sign: ${contract.title || "Contract"}`,
+          body: `Please sign this contract in Documenso.
+
+Documenso signing link: ${link.signingUrl}
+
+Secondary PayLink view: ${hubUrl}`,
+          actionUrl: link.signingUrl,
+        }).catch((err) => console.warn("[Documenso] PayLink signer email failed", err?.message || err));
+      }
 
       // Notify signers in-app
       createContractorNotification({
@@ -20159,10 +20263,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
 
     // ── Data values ─────────────────────────────────────────────────────────
+    const tradeCredits = Array.isArray(item?.tradeCredits) ? item.tradeCredits : [];
+    const totalTradeCredit = tradeCredits.reduce((sum: number, credit: any) => sum + Number(credit.totalValue || credit.total_value || 0), 0);
     const netPayRaw = isCalibration ? 1234.56 : params.vendorCheck ? params.vendorCheck.amount : Number(item?.netPay || 0);
     const netPay   = isNaN(netPayRaw) ? 0 : netPayRaw;
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
+    const totalCompensation = grossPay;
     const checkNum    = isCalibration ? "0001"  : params.vendorCheck?.checkNumber ? params.vendorCheck.checkNumber : String(item?.checkNumber || "0000");
     const fmtCheckNum = formatCheckNumber(checkNum); // zero-padded to 4 digits, e.g. "0011"
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
@@ -20188,9 +20295,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" "));
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
-    const isContractor  = isCalibration
-      ? true
-      : (worker?.compensationType === "contractor" || worker?.compensationType === "1099");
+    const isContractor  = isCalibration ? true : isIndependentContractorWorker(worker);
+    const statementLabel = isContractor ? "CONTRACTOR STATEMENT" : "PAYSTUB";
+    const statementTitle = isContractor ? "Contractor Statement" : "Paystub";
 
     // Company fields
     const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
@@ -20484,7 +20591,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
     page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText(statementLabel, { x: psX + psW / 2 - (isContractor ? 55 : 22), y: checkBot - 14 + paystubOffY, size: isContractor ? 8.5 : 10, font: hvB, color: rgb(1, 1, 1) });
     const psChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
@@ -20505,7 +20612,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const psC5 = Math.min(psX + 262, rm - 5); // capped so YTD column never overflows right margin
     let psY = checkBot - 88 + paystubOffY;
     page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
-    page.drawText("EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(isContractor ? "SERVICES / COMPENSATION" : "EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("HOURS",     { x: psC2, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("RATE",      { x: psC3, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("CURRENT",   { x: psC4, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
@@ -20573,19 +20680,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     psY -= 4;
     if (psY >= mailBot + 34) {
       page.drawLine({ start: { x: psC1 - 2, y: psY + 8 }, end: { x: rm + 2, y: psY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
-      page.drawText("GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(isContractor ? "TOTAL COMPENSATION" : "GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       page.drawText(`$${fmtMoney(grossPay)}`, { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       if (showYtdTotals) page.drawText(`$${fmtMoney(ytdGross)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       psY -= 11;
-      page.drawText("TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`-$${fmtMoney(totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
-      if (showYtdTotals) page.drawText(`-$${fmtMoney(ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      page.drawText(isContractor ? "TRADE COMPENSATION - GOODS" : "TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      if (showYtdTotals) page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
       psY -= 11;
       page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
-      page.drawText("NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      page.drawText(isContractor ? "CASH PAYMENT / CHECK AMOUNT" : "NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       page.drawText(`$${fmtMoney(netPay)}`, { x: psC4, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       if (showYtdTotals) page.drawText(`$${fmtMoney(ytdNet)}`, { x: psC5, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       psY -= 14;
+    }
+
+    if (isContractor && tradeCredits.length > 0 && psY >= mailBot + 32) {
+      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.90, 0.96, 0.92), opacity: 0.9 });
+      page.drawText("TRADE GOODS CREDIT DETAIL", { x: psC1, y: psY, size: 6, font: hvB, color: rgb(0.05, 0.35, 0.12) }); psY -= 12;
+      for (const credit of tradeCredits.slice(0, 2)) {
+        if (psY < mailBot + 8) break;
+        const sku = credit.itemSku || credit.item_sku || "";
+        const qty = credit.quantity || "1";
+        const status = credit.deliveryStatus || credit.delivery_status || "pending";
+        const name = sanitizeForPdf(`${credit.itemName || credit.item_name || "Goods"}${sku ? ` (${sku})` : ""} x${qty} — ${status}`);
+        page.drawText(name.slice(0, 42), { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) });
+        page.drawText(`-$${fmtMoney(Number(credit.totalValue || credit.total_value || 0))}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) });
+        psY -= 10;
+      }
+      if (psY >= mailBot + 8) { page.drawText(`Proof of Payment: Total $${fmtMoney(totalCompensation)} = Goods $${fmtMoney(totalTradeCredit)} + Check $${fmtMoney(netPay)}`, { x: psC1, y: psY, size: 5.6, font: hvB, color: rgb(0.05,0.25,0.08) }); psY -= 9; }
     }
 
     // SE tax reference (Zone 2 right col, contractor only)
@@ -20783,7 +20906,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Typed interfaces for raw SQL rows returned by check PDF endpoints.
   interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; status: string | null; }
   interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; phone: string; ein: string; }
-  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; }
+  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; worker_type?: string; worker_group?: string; }
   interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; institution: string | null; }
   interface CheckTplRow { layout_config: unknown; }
   // Normalize pg / drizzle raw execute result to a typed array.
@@ -20892,6 +21015,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
       ]);
 
+      let tradeCreditsForItem: any[] = [];
+      let printableItemRow: any = itemRow;
+      if (isIndependentContractorWorker(worker)) {
+        tradeCreditsForItem = await db.select().from(contractorTradeCompensation).where(and(eq(contractorTradeCompensation.payrollItemId, payrollItemId), eq(contractorTradeCompensation.companyId, compId)));
+        if (tradeCreditsForItem.length > 0) {
+          try {
+            const settlement = assertContractorTradeCreditsPrintable({ grossCompensation: Number(itemRow.grossPay || 0), tradeCredits: tradeCreditsForItem });
+            printableItemRow = { ...itemRow, netPay: settlement.paidByCheck.toFixed(2), tradeCredits: tradeCreditsForItem };
+          } catch (tradeErr: any) {
+            await db.execute(sql`
+              INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
+              VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${req.session.userId || null}, 1, ${itemRow.netPay || 0}, 'failed', ${JSON.stringify([tradeErr?.message || "Contractor trade credit validation failed"])}, true, 'server-pdf', 'trade_credit_print_blocked', ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
+            `).catch(() => {});
+            return res.status(422).json({ message: tradeErr?.message || "Contractor trade credit validation failed" });
+          }
+        }
+      }
+
       let rs: CheckRsRow | null = null;
       if (runRow?.funding_account_id) {
         rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
@@ -20915,8 +21056,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const calibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
       const pdfBytes = await renderCheckPdf({
-        item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
+        item: printableItemRow,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
@@ -20933,7 +21074,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const printUserId = req.session.userId;
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
-          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${itemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
+          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${printableItemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
         `);
       }
 
@@ -21227,7 +21368,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           };
           const bytes = await renderCheckPdf({
             item: normalizedItem,
-            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type } : null,
+            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type, workerType: w.worker_type, workerGroup: w.worker_group } : null,
             run: runNorm, company: coNorm, remittanceSource: remSrc,
             layoutConfig: batchLayoutConfig,
             calibrationOffsets: batchCalibrationOffsets,
@@ -21415,7 +21556,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" },
@@ -21448,6 +21589,50 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       console.error("[reprintCheck] ERROR:", err?.message || err, err?.stack);
       res.status(500).json({ message: err?.message || "Failed to generate reprint PDF" });
     }
+  });
+
+
+  // ── Contractor trade compensation credits ───────────────────────────────
+  app.get("/api/contractor-trade-compensation", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const payrollItemId = queryStr(req.query.payrollItemId);
+      const companyId = queryStr(req.query.companyId) || user?.companyId || null;
+      if (!companyId || !(await canAccessCompany(user!, companyId))) return res.status(403).json({ message: "Access denied" });
+      const conditions = [eq(contractorTradeCompensation.companyId, companyId)];
+      if (payrollItemId) conditions.push(eq(contractorTradeCompensation.payrollItemId, payrollItemId));
+      if (user?.role === "contractor" && user.workerId) conditions.push(eq(contractorTradeCompensation.contractorUserId, user.workerId));
+      res.json(await db.select().from(contractorTradeCompensation).where(and(...conditions)));
+    } catch (e: any) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch trade credits") }); }
+  });
+
+  app.post("/api/contractor-trade-compensation", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = String(req.body.companyId || user?.companyId || "");
+      if (!companyId || !(await canAccessCompany(user!, companyId))) return res.status(403).json({ message: "Access denied" });
+      const totalValue = (Number(req.body.quantity || 0) * Number(req.body.unitValue || 0)).toFixed(2);
+      const payload = insertContractorTradeCompensationSchema.parse({ ...req.body, companyId, totalValue });
+      if (payload.payrollItemId) {
+        const [item] = await db.select().from(payrollItems).where(eq(payrollItems.id, payload.payrollItemId));
+        if (item) calculateContractorTradeSettlement({ grossCompensation: Number(item.grossPay || 0), tradeCredits: [{ totalValue }] });
+      }
+      const [created] = await db.insert(contractorTradeCompensation).values(payload).returning();
+      await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: created.id, actionType: "trade_credit_created", companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ contractorStatementId: created.contractorStatementId, settlementId: created.settlementId, payrollItemId: created.payrollItemId, totalValue: created.totalValue }) }).catch(() => {});
+      res.status(201).json(created);
+    } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to create trade credit") }); }
+  });
+
+  app.post("/api/contractor-trade-compensation/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const [credit] = await db.select().from(contractorTradeCompensation).where(eq(contractorTradeCompensation.id, req.params.id));
+      if (!credit) return res.status(404).json({ message: "Trade credit not found" });
+      if (!(await canAccessCompany(user!, credit.companyId))) return res.status(403).json({ message: "Access denied" });
+      const [updated] = await db.update(contractorTradeCompensation).set({ approvedByUserId: user?.id || null, approvedAt: new Date(), updatedAt: new Date() }).where(eq(contractorTradeCompensation.id, req.params.id)).returning();
+      await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: updated.id, actionType: "trade_credit_approved", companyId: updated.companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ totalValue: updated.totalValue }) }).catch(() => {});
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to approve trade credit") }); }
   });
 
   // ── Payroll Payment Methods ───────────────────────────────────────────────
@@ -21727,15 +21912,63 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       }
 
+      const tradeTotalsByItem: Record<string, number> = {};
+      if (itemIds.length > 0) {
+        const credits = await db.select().from(contractorTradeCompensation).where(inArray(contractorTradeCompensation.payrollItemId, itemIds));
+        for (const credit of credits) {
+          tradeTotalsByItem[credit.payrollItemId || ""] = (tradeTotalsByItem[credit.payrollItemId || ""] || 0) + Number(credit.totalValue || 0);
+        }
+      }
+
       res.json(rows.map(r => ({
         ...r.item,
         run: r.run,
+        documentLabel: tradeTotalsByItem[r.item.id] > 0 ? "Contractor Statement" : undefined,
+        tradeCreditTotal: tradeTotalsByItem[r.item.id] || 0,
         paymentStatus: recordsByItem[r.item.id]?.status || null,
         paidAt: recordsByItem[r.item.id]?.paidAt || null,
         failureReason: recordsByItem[r.item.id]?.failureReason || null,
         reconciledAt: recordsByItem[r.item.id]?.reconciledAt || null,
       })));
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch paystubs" }); }
+  });
+
+
+  app.get("/api/my/paystubs/:id/pdf", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker profile" });
+      const payrollItemId = String(req.params.id);
+      const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
+      if (!itemRow || itemRow.workerId !== user.workerId) return res.status(404).json({ message: "Statement not found" });
+      const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
+      if (!runRow) return res.status(404).json({ message: "Payroll run not found" });
+      if (user.companyId && runRow.company_id && user.companyId !== runRow.company_id) return res.status(403).json({ message: "Access denied" });
+      const [company, worker] = await Promise.all([
+        db.execute(sql`SELECT * FROM companies WHERE id = ${runRow.company_id}`).then(r => pgRow<CheckCompanyRow>(r)),
+        db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
+      ]);
+      let printableItemRow: any = itemRow;
+      if (isIndependentContractorWorker(worker)) {
+        const tradeCredits = await db.select().from(contractorTradeCompensation).where(and(eq(contractorTradeCompensation.payrollItemId, payrollItemId), eq(contractorTradeCompensation.companyId, runRow.company_id)));
+        if (tradeCredits.length > 0) {
+          const settlement = assertContractorTradeCreditsPrintable({ grossCompensation: Number(itemRow.grossPay || 0), tradeCredits });
+          printableItemRow = { ...itemRow, netPay: settlement.paidByCheck.toFixed(2), tradeCredits };
+        }
+      }
+      let rs: CheckRsRow | null = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${runRow.company_id} ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      const pdfBytes = await renderCheckPdf({
+        item: printableItemRow,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
+        run: { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end },
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
+        remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
+      });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_statement", objectId: payrollItemId, actionType: "statement_downloaded", companyId: runRow.company_id, actorUserId: user.id, actorWorkerId: user.workerId, metadataJson: JSON.stringify({ checkNumber: itemRow.checkNumber }) }).catch(() => {});
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${isIndependentContractorWorker(worker) ? "contractor-statement" : "paystub"}-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
+    } catch (e: any) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download statement PDF") }); }
   });
 
   app.get("/api/my/documents", requireAuth, async (req, res) => {
@@ -26137,6 +26370,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const companyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
@@ -26161,6 +26397,48 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       `));
 
       const toMap = (rows: any[]) => Object.fromEntries(rows.map(r => [r.severity || r.status || r.issue_category, parseInt(r.cnt)]));
+      const documensoBase = getDocumensoBaseUrlInfo();
+      const documensoConfig = validateDocumensoConfig();
+      const webhookUrl = process.env.DOCUMENSO_WEBHOOK_URL || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_URL || `${process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || ""}/api/webhooks/documenso`;
+      const requestedContractId = typeof req.query.contractId === "string" ? req.query.contractId : null;
+      const contractRows = pgRows<any>(await db.execute(sql`
+        SELECT c.id AS contract_id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url,
+               dsr.documenso_recipient_ids, dsr.status AS request_status,
+               COUNT(cs.id)::int AS local_recipient_count,
+               COUNT(cs.id) FILTER (WHERE cs.documenso_recipient_id IS NOT NULL)::int AS local_recipient_id_count,
+               COUNT(cs.id) FILTER (WHERE cs.documenso_signing_url IS NOT NULL)::int AS local_signing_url_count
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        LEFT JOIN contract_signers cs ON cs.contract_id = c.id AND cs.status NOT IN ('canceled','cancelled','replaced')
+        WHERE (${requestedContractId}::text IS NULL OR c.id = ${requestedContractId})
+          AND (${companyId}::text IS NULL OR c.company_id = ${companyId})
+        GROUP BY c.id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url, dsr.documenso_recipient_ids, dsr.status, dsr.created_at
+        ORDER BY dsr.created_at DESC NULLS LAST, c.updated_at DESC
+        LIMIT 10
+      `).catch(() => ({ rows: [] } as any)));
+      const contractDiagnostics = contractRows.map((row) => {
+        const remoteRecipients = Array.isArray(row.documenso_recipient_ids) ? row.documenso_recipient_ids : [];
+        const remoteRecipientCount = remoteRecipients.length;
+        const localRecipientCount = Number(row.local_recipient_count || 0);
+        const localRecipientIdCount = Number(row.local_recipient_id_count || 0);
+        const localSigningUrlCount = Number(row.local_signing_url_count || 0);
+        const documentExists = !!row.documenso_document_id;
+        const recipientIdsExist = localRecipientCount > 0 && localRecipientIdCount >= localRecipientCount;
+        const signingUrlPresent = !!row.documenso_signing_url || localSigningUrlCount > 0 || remoteRecipients.some((r: any) => !!(r.signingUrl || r.signing_url));
+        return {
+          localContractId: row.contract_id,
+          documensoDocumentId: row.documenso_document_id,
+          documentIdExists: documentExists,
+          localRecipientCount,
+          remoteRecipientCount,
+          recipientIdsExist,
+          recipientIdMatch: remoteRecipientCount === 0 ? "unknown" : (remoteRecipientCount === localRecipientCount && recipientIdsExist ? "match" : "mismatch"),
+          signingUrlPresent,
+          webhookStatus: webhookUrl ? "configured" : "missing",
+          resendEligibility: documentExists && recipientIdsExist && signingUrlPresent ? "eligible" : "needs_repair",
+          repairActions: [!documentExists ? "recreate_document" : null, !recipientIdsExist ? "sync_recipients" : null, !signingUrlPresent ? "regenerate_signing_link" : null].filter(Boolean),
+        };
+      });
 
       res.json({
         timestamp: new Date().toISOString(),
@@ -26178,6 +26456,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
           maxRiskAutoDraft: process.env.APP_DOCTOR_MAX_RISK_AUTO_DRAFT || "minor",
           requireApproval: process.env.APP_DOCTOR_REQUIRE_APPROVAL !== "false",
+        },
+        documenso: {
+          configuredBaseUrl: documensoBase.publicBaseUrl,
+          apiBaseUrl: documensoBase.apiBaseUrl,
+          baseUrlEnv: documensoBase.source,
+          apiKeyPresent: !!documensoConfig.apiKeyConfigured,
+          webhookUrl,
+          webhookSecretPresent: !!documensoConfig.webhookSecretConfigured,
+          contracts: contractDiagnostics,
         },
         reports: {
           last24hBySeverity: toMap(errorCounts),

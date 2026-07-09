@@ -499,6 +499,8 @@ type MyPaystub = {
   grossPay: string | null;
   netPay: string | null;
   totalDeductions: string | null;
+  deductions: string | null;
+  tradeCreditTotal?: string | number | null;
   run: { id: string; periodStart: string; periodEnd: string; status: string; companyId: string };
   paymentStatus: string | null;
   paidAt: string | null;
@@ -524,7 +526,10 @@ function PaymentStatusBadge({ paymentStatus, runStatus, paidAt, failureReason }:
   return <Badge variant={variant} data-testid={`badge-payment-status-${status}`}>{label}</Badge>;
 }
 
-function PaystubsTab() {
+function PaystubsTab({ worker }: { worker: Worker | null }) {
+  const isContractor = worker?.workerGroup === "hourly_contractor" || worker?.workerGroup === "invoiced_contractor" || worker?.workerGroup === "independent_contractor" || String(worker?.workerType || "") === "independent_contractor";
+  const statementLabel = isContractor ? "Contractor Statement" : "Pay Stub";
+  const statementPlural = isContractor ? "Contractor Statements" : "Pay Stubs";
   const { data: paystubs, isLoading } = useQuery<MyPaystub[]>({
     queryKey: ["/api/my/paystubs"],
   });
@@ -533,7 +538,7 @@ function PaystubsTab() {
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">My Pay Stubs</h3>
+      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">{`My ${statementPlural}`}</h3>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -543,15 +548,16 @@ function PaystubsTab() {
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Regular Hrs</TableHead>
                 <TableHead className="text-right">OT Hrs</TableHead>
-                <TableHead className="text-right">Gross Pay</TableHead>
-                <TableHead className="text-right">Deductions</TableHead>
-                <TableHead className="text-right">Net Pay</TableHead>
+                <TableHead className="text-right">{isContractor ? "Total Compensation" : "Gross Pay"}</TableHead>
+                <TableHead className="text-right">{isContractor ? "Trade Goods Credit" : "Deductions"}</TableHead>
+                <TableHead className="text-right">{isContractor ? "Cash Payment / Check Amount" : "Net Pay"}</TableHead>
+                <TableHead className="text-right">Download</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {(!paystubs || paystubs.length === 0) ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No pay stubs found</TableCell>
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">{`No ${statementPlural.toLowerCase()} found`}</TableCell>
                 </TableRow>
               ) : (
                 paystubs.map((stub) => (
@@ -572,8 +578,13 @@ function PaystubsTab() {
                     <TableCell className="text-right">{parseFloat(stub.regularHours || "0").toFixed(2)}</TableCell>
                     <TableCell className="text-right">{parseFloat(stub.overtimeHours || "0").toFixed(2)}</TableCell>
                     <TableCell className="text-right font-medium">${parseFloat(stub.grossPay || "0").toFixed(2)}</TableCell>
-                    <TableCell className="text-right text-destructive">${parseFloat(stub.totalDeductions || "0").toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-destructive">${parseFloat(isContractor ? String(stub.tradeCreditTotal || "0") : (stub.totalDeductions || stub.deductions || "0")).toFixed(2)}</TableCell>
                     <TableCell className="text-right font-semibold text-green-600 dark:text-green-400">${parseFloat(stub.netPay || "0").toFixed(2)}</TableCell>
+                    <TableCell className="text-right">
+                      <Button asChild size="sm" variant="outline" data-testid={`button-download-statement-${stub.id}`}>
+                        <a href={`/api/my/paystubs/${stub.id}/pdf`} target="_blank" rel="noreferrer"><Download className="h-3 w-3 mr-1" />{statementLabel}</a>
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -1253,7 +1264,7 @@ export default function MyProfilePage() {
             <Settings className="h-4 w-4" />Preferences
           </TabsTrigger>
           <TabsTrigger value="paystubs" data-testid="tab-paystubs" className="flex items-center gap-1">
-            <Receipt className="h-4 w-4" />Pay Stubs
+            <Receipt className="h-4 w-4" />{worker?.workerGroup === "hourly_contractor" || worker?.workerGroup === "invoiced_contractor" || worker?.workerGroup === "independent_contractor" || String(worker?.workerType || "") === "independent_contractor" ? "Contractor Statements" : "Pay Stubs"}
           </TabsTrigger>
           <TabsTrigger value="documents" data-testid="tab-documents" className="flex items-center gap-1">
             <FileText className="h-4 w-4" />Documents
@@ -1282,7 +1293,7 @@ export default function MyProfilePage() {
           <PreferencesTab worker={worker || null} />
         </TabsContent>
         <TabsContent value="paystubs" className="mt-4">
-          <PaystubsTab />
+          <PaystubsTab worker={worker || null} />
         </TabsContent>
         <TabsContent value="documents" className="mt-4">
           <DocumentsTab />

@@ -6,16 +6,28 @@
  */
 import crypto from "crypto";
 
-const DEFAULT_BASE_URL = "https://app.documenso.com/api/v2";
-
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+export function getDocumensoBaseUrlInfo(): { apiBaseUrl: string; publicBaseUrl: string; source: string | null; configured: boolean } {
+  const candidates: Array<[string, string | undefined]> = [
+    ["DOCUMENSO_URL", process.env.DOCUMENSO_URL],
+    ["MYPAYLINK_DOCUMENSO_BASE_URL", process.env.MYPAYLINK_DOCUMENSO_BASE_URL],
+    ["DOCUMENSO_BASE_URL", process.env.DOCUMENSO_BASE_URL],
+  ];
+  const selected = candidates.find(([, value]) => !!value?.trim());
+  if (!selected) return { apiBaseUrl: "", publicBaseUrl: "", source: null, configured: false };
+  const normalized = normalizeBaseUrl(selected[1]!.trim());
+  const publicBaseUrl = normalized.replace(/\/api\/v2$/, "");
+  const apiBaseUrl = normalized.endsWith("/api/v2") ? normalized : `${normalized}/api/v2`;
+  return { apiBaseUrl, publicBaseUrl, source: selected[0], configured: true };
+}
+
 function getBaseUrl(): string {
-  const raw = process.env.MYPAYLINK_DOCUMENSO_BASE_URL || process.env.DOCUMENSO_BASE_URL || process.env.DOCUMENSO_URL || DEFAULT_BASE_URL;
-  const normalized = normalizeBaseUrl(raw);
-  return normalized.endsWith("/api/v2") ? normalized : `${normalized}/api/v2`;
+  const info = getDocumensoBaseUrlInfo();
+  if (!info.configured) throw new Error("Documenso is not configured. Set DOCUMENSO_URL in environment settings.");
+  return info.apiBaseUrl;
 }
 
 function getApiKey(): string {
@@ -32,11 +44,14 @@ export function isDocumensoEnabled(): boolean {
 
 export function validateDocumensoConfig(): { ok: boolean; message?: string; baseUrl: string; apiKeyConfigured?: boolean; webhookSecretConfigured?: boolean } {
   try {
-    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getBaseUrl(), apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
+    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getDocumensoBaseUrlInfo().apiBaseUrl, apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
     getApiKey();
-    return { ok: true, baseUrl: getBaseUrl(), apiKeyConfigured: true, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
+    const baseInfo = getDocumensoBaseUrlInfo();
+    if (!baseInfo.configured) throw new Error("Documenso is not configured. Set DOCUMENSO_URL in environment settings.");
+    return { ok: true, baseUrl: baseInfo.apiBaseUrl, apiKeyConfigured: true, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
   } catch (error: any) {
-    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: getBaseUrl(), apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
+    const baseInfo = getDocumensoBaseUrlInfo();
+    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: baseInfo.apiBaseUrl, apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
   }
 }
 
