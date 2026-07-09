@@ -1,9 +1,6 @@
 name: Deploy Marketing Site
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:

@@ -31,15 +31,12 @@ jobs:
             echo "Files:"
             ls -la
 
-            echo "Service status:"
-            systemctl status mypaylink --no-pager || true
-            systemctl status nginx --no-pager || true
+            echo "PM2 status:"
+            pm2 status || true
 
             echo "Recent app logs:"
-            journalctl -u mypaylink -n 150 --no-pager || true
+            pm2 logs paylink --lines 150 --nostream || true
 
-            echo "Nginx config check:"
-            nginx -t || true
 
             echo "Check signing route:"
             curl -I https://app.mypaylink.app/app/contractor-hub/contracts/735551c2-ec6c-41e6-976d-1eef4e13bfa5/sign || true

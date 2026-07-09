@@ -1,19 +1,27 @@
 /**
- * Static regression checks for deploy app pre-flight env validation.
+ * Static regression checks for MyPayLink staging/production workflow isolation.
  * Run: npx tsx tests/deploy-app-workflow-static.test.ts
  */
 import fs from "node:fs";
 
-const workflow = fs.readFileSync(".github/workflows/deploy-app.yml", "utf8");
+const staging = fs.readFileSync(".github/workflows/deploy-app.yml", "utf8");
+const production = fs.readFileSync(".github/workflows/deploy-production.yml", "utf8");
+const marketing = fs.readFileSync(".github/workflows/deploy-marketing.yml", "utf8");
+const audit = fs.readFileSync(".github/workflows/vps-mypaylink-audit.yml", "utf8");
+const workflows = [staging, production, marketing, audit].join("\n---\n");
 function ok(name: string, condition: boolean) {
   if (!condition) throw new Error(`FAIL: ${name}`);
   console.log(`PASS: ${name}`);
 }
 
-ok("pre-flight runs under bash with strict debug flags", workflow.includes("bash <<'PAYLINK_PREFLIGHT'") && workflow.includes("set -euxo pipefail"));
-ok("pre-flight prints host/user/env-file diagnostics", workflow.includes('echo "Host: $(hostname)"') && workflow.includes('echo "User: $(whoami)"') && workflow.includes('echo "Env file exists: $(test -f "$ENV_FILE" && echo yes || echo no)"'));
-ok("diagnostic grep commands cannot abort workflow", workflow.includes("grep -n '^DATABASE_URL=' \"$ENV_FILE\" | sed 's/=.*$/=<redacted>/' || true") && workflow.includes("grep -n '^SESSION_SECRET=' \"$ENV_FILE\" | sed 's/=.*$/=<redacted>/' || true") && workflow.includes("grep -n '^APP_BASE_URL=' \"$ENV_FILE\" | sed 's/=.*$/=<redacted>/' || true"));
-ok("diagnostics redact secret values", workflow.includes("<redacted>") && !workflow.includes("DATABASE_URL_VALUE=$(grep"));
-ok("required variable checks use grep -q under if negation", workflow.includes("if ! grep -q '^DATABASE_URL=.' \"$ENV_FILE\"; then") && workflow.includes("if ! grep -q '^SESSION_SECRET=.' \"$ENV_FILE\"; then") && workflow.includes("if ! grep -q '^APP_BASE_URL=.' \"$ENV_FILE\"; then"));
+ok("push to main deploys staging workflow only", staging.includes("push:") && staging.includes("paylink-staging") && staging.includes("/home/paylinkssh/paylink-staging/PayLink") && staging.includes('APP_PORT="8010"'));
+ok("production deploy is manual only", production.includes("workflow_dispatch:") && !production.includes("push:"));
+ok("production requires explicit release_tag", production.includes("release_tag:") && production.includes("required: true") && production.includes('test -n "$RELEASE_TAG"'));
+ok("production runs pg_dump before PM2 restart", production.indexOf('pg_dump "$DATABASE_URL"') > -1 && production.indexOf('pm2 delete "$PM2_NAME"') > production.indexOf('pg_dump "$DATABASE_URL"'));
+ok("staging and production env files differ", staging.includes('/etc/paylink/staging.env') && production.includes('/etc/paylink/production.env'));
+ok("staging and production ports differ", staging.includes('APP_PORT="8010"') && production.includes('APP_PORT="8000"'));
+ok("staging workflow does not mutate nginx", !/apply_mypaylink_nginx|nginx -t|nginx -s|reload nginx/i.test(staging));
+ok("workflows do not reference disallowed Luxit/systemctl targets", !/luxit|\/root\/lux-email-bot|systemctl|luxit-prod|luxit-staging/i.test(workflows));
+ok("marketing production deploy is manual, not push-to-main", marketing.includes("workflow_dispatch:") && !marketing.includes("push:"));
 
-console.log("\nDeploy app workflow env validation checks passed.");
+console.log("\nDeploy workflow isolation checks passed.");

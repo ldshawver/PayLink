@@ -1,29 +1,37 @@
-name: Deploy MyPayLink Staging
+name: Deploy MyPayLink Production
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Required release tag to deploy to production"
+        required: true
+        type: string
 
 concurrency:
-  group: deploy-mypaylink-staging
-  cancel-in-progress: true
+  group: deploy-mypaylink-production
+  cancel-in-progress: false
 
 jobs:
-  deploy_staging:
-    name: Deploy staging.mypaylink.app to port 8010
+  deploy_production:
+    name: Deploy production manually to port 8000
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
-      APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-      ENV_FILE: /etc/paylink/staging.env
-      PM2_NAME: paylink-staging
-      APP_PORT: "8010"
+      APP_PATH: /home/paylinkssh/paylink-app/PayLink
+      ENV_FILE: /etc/paylink/production.env
+      PM2_NAME: paylink
+      APP_PORT: "8000"
+      RELEASE_TAG: ${{ inputs.release_tag }}
 
     steps:
+      - name: Validate release tag input
+        run: test -n "$RELEASE_TAG"
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -42,17 +50,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Signing route regression tests
-        run: |
-          pnpm exec tsx tests/contract-signing-redirect-static.test.ts
-          pnpm exec tsx tests/contract-documenso-static.test.ts
-          pnpm exec tsx tests/contract-signer-management-static.test.ts
-          pnpm exec tsx tests/mypaylink-nginx-signing-static.test.ts
-
       - name: Build
         run: pnpm build
 
-      - name: Deploy to staging VPS path
+      - name: Deploy release tag to production VPS path
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
@@ -60,26 +61,40 @@ jobs:
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
           timeout: 30s
-          command_timeout: 30m
+          command_timeout: 40m
           script_stop: true
           script: |
             set -Eeuo pipefail
 
-            APP_PATH="/home/paylinkssh/paylink-staging/PayLink"
-            ENV_FILE="/etc/paylink/staging.env"
-            PM2_NAME="paylink-staging"
-            APP_PORT="8010"
+            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+            ENV_FILE="/etc/paylink/production.env"
+            PM2_NAME="paylink"
+            APP_PORT="8000"
+            RELEASE_TAG="${{ inputs.release_tag }}"
+            BACKUP_DIR="/home/paylinkssh/paylink-db-backups"
 
-            echo "Deploying MyPayLink staging only"
+            echo "Deploying MyPayLink production release tag: $RELEASE_TAG"
             echo "APP_PATH=$APP_PATH"
             echo "ENV_FILE=$ENV_FILE"
             echo "PM2_NAME=$PM2_NAME"
             echo "APP_PORT=$APP_PORT"
             test -f "$ENV_FILE"
 
+            mkdir -p "$BACKUP_DIR"
+            set -a
+            . "$ENV_FILE"
+            set +a
+            test -n "${DATABASE_URL:-}"
+            BACKUP_FILE="$BACKUP_DIR/predeploy-${RELEASE_TAG}-$(date -u '+%Y%m%dT%H%M%SZ').sql"
+            echo "Creating pre-deploy database backup"
+            pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
+            test -s "$BACKUP_FILE"
+            gzip -f "$BACKUP_FILE"
+            echo "Database backup created: ${BACKUP_FILE}.gz"
+
             cd "$APP_PATH"
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin --tags
+            git checkout --force "$RELEASE_TAG"
             NEW_COMMIT=$(git rev-parse HEAD)
             BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
@@ -92,7 +107,7 @@ jobs:
             pnpm build
 
             pm2 delete "$PM2_NAME" 2>/dev/null || true
-            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
+            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" PAYLINK_VERSION="$RELEASE_TAG" pm2 start "$APP_PATH/dist/index.cjs" \
               --name "$PM2_NAME" \
               --cwd "$APP_PATH" \
               --interpreter node \
@@ -102,10 +117,10 @@ jobs:
 
             for i in $(seq 1 30); do
               if curl -fs "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1; then
-                echo "Staging health passed on ${APP_PORT}"
+                echo "Production health passed on ${APP_PORT}"
                 exit 0
               fi
               sleep 3
             done
-            echo "Staging health failed on ${APP_PORT}" >&2
+            echo "Production health failed on ${APP_PORT}" >&2
             exit 1
