@@ -13,8 +13,10 @@ type LogType = typeof LOG_TYPES[number];
 const MAX_LOG_BYTES = 10 * 1024 * 1024;
 const KEEP_ROTATIONS = 10;
 const MAX_READ_BYTES = 512 * 1024;
+const DEFAULT_MAX_EXPORT_BYTES = 50 * 1024 * 1024;
 const logDir = process.env.PAYLINK_LOG_DIR || path.join(process.cwd(), "storage", "logs");
-const serviceName = process.env.PAYLINK_SYSTEMD_SERVICE || "paylink";
+const serviceName = process.env.PAYLINK_SYSTEMD_SERVICE || process.env.PM2_PROCESS_NAME || "paylink";
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
 
 export function getLogDir() { return logDir; }
 export function newId(prefix = "") { return `${prefix}${crypto.randomUUID()}`; }
@@ -95,6 +97,31 @@ function safeCommand(command: string, args: string[]): string {
 function serviceStatus() { return safeCommand("systemctl", ["status", serviceName, "--no-pager"]); }
 function serviceJournal() { return safeCommand("journalctl", ["-u", serviceName, "-n", "500", "--no-pager"]); }
 
+function diagnosticsRateLimit(name: string, limit: number, windowMs: number) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const userId = (req as any).session?.userId || "anonymous";
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const key = `${name}:${userId}:${ip}`;
+    const now = Date.now();
+    const current = rateLimitBuckets.get(key);
+    if (!current || current.resetAt <= now) {
+      rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    current.count += 1;
+    if (current.count > limit) {
+      res.setHeader("Retry-After", String(Math.ceil((current.resetAt - now) / 1000)));
+      return res.status(429).json({ message: "Diagnostics rate limit exceeded" });
+    }
+    next();
+  };
+}
+
+function getMaxExportBytes() {
+  const raw = Number(process.env.DIAGNOSTICS_MAX_ZIP_BYTES || DEFAULT_MAX_EXPORT_BYTES);
+  return Number.isFinite(raw) && raw > 1024 * 1024 ? raw : DEFAULT_MAX_EXPORT_BYTES;
+}
+
 export function writeDiagnosticLog(type: LogType, entry: Record<string, any>) {
   const safe = redactSensitive({ timestamp: new Date().toISOString(), environment: process.env.NODE_ENV || "development", ...entry });
   try {
@@ -159,23 +186,41 @@ function readLogs(query: any, limit = 200) {
 async function health() {
   let database = "unknown"; try { const { db } = await import("./db"); const { sql } = await import("drizzle-orm"); await db.execute(sql`SELECT 1`); database = "connected"; } catch { database = "unavailable"; }
   let storageWritable = false; try { ensureLogs(); fs.accessSync(logDir, fs.constants.W_OK); storageWritable = true; } catch {}
-  return { uptimeSeconds: Math.floor(process.uptime()), environment: process.env.NODE_ENV || "development", commitSha: process.env.PAYLINK_COMMIT || process.env.GITHUB_SHA || "unknown", database, storageWritable, githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO), emailConfigured: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY), queueStatus: "in-process", serviceName, serviceStatus: serviceStatus().split("\n").slice(0, 12).join("\n"), diskFree: null, memory: { rss: process.memoryUsage().rss, free: os.freemem(), total: os.totalmem() } };
+  return { uptimeSeconds: Math.floor(process.uptime()), environment: process.env.NODE_ENV || "development", version: process.env.PAYLINK_VERSION || process.env.npm_package_version || "unknown", commitSha: process.env.PAYLINK_COMMIT || process.env.GITHUB_SHA || "unknown", buildTime: process.env.PAYLINK_BUILD_TIME || process.env.BUILD_TIME || null, nodeVersion: process.version, pm2Process: process.env.PM2_PROCESS_NAME || serviceName, database, storageWritable, githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO), emailConfigured: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY), queueStatus: "in-process", serviceName, serviceStatus: serviceStatus().split("\n").slice(0, 12).join("\n"), diskFree: null, memory: { rss: process.memoryUsage().rss, free: os.freemem(), total: os.totalmem() } };
 }
 
 export function registerDiagnosticsRoutes(app: Express) {
-  app.get("/api/admin/diagnostics/health", requireDiagnosticsRole, async (req, res) => { const user = (req as any).diagnosticsUser; writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics viewed", requestId: (req as any).requestId, userId: user?.id }); res.json(await health()); });
-  app.get("/api/admin/diagnostics/logs", requireDiagnosticsRole, (req, res) => { const user = (req as any).diagnosticsUser; writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics logs searched", requestId: (req as any).requestId, userId: user?.id, metadata: { query: req.query } }); res.json({ logs: readLogs(req.query) }); });
-  app.get("/api/admin/diagnostics/export", requireDiagnosticsRole, async (req, res) => {
+  app.get("/api/admin/diagnostics/health", diagnosticsRateLimit("diagnostics-health", 60, 60_000), requireDiagnosticsRole, async (req, res) => { const user = (req as any).diagnosticsUser; writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics viewed", requestId: (req as any).requestId, userId: user?.id }); res.json(await health()); });
+  app.get("/api/admin/diagnostics/logs", diagnosticsRateLimit("diagnostics-logs", 30, 60_000), requireDiagnosticsRole, (req, res) => { const user = (req as any).diagnosticsUser; writeDiagnosticLog("security", { level: "info", service: "security", message: "diagnostics logs searched", requestId: (req as any).requestId, userId: user?.id, metadata: { query: req.query } }); res.json({ logs: readLogs(req.query) }); });
+  app.get("/api/admin/diagnostics/export", diagnosticsRateLimit("diagnostics-export", 5, 60 * 60_000), requireDiagnosticsRole, async (req, res) => {
     const user = (req as any).diagnosticsUser;
-    writeDiagnosticLog("security", { level: "warn", service: "security", message: "diagnostic bundle exported", requestId: (req as any).requestId, userId: user?.id });
+    const maxExportBytes = getMaxExportBytes();
+    let remainingBytes = maxExportBytes;
+    const contents: string[] = [];
     const zip = new AdmZip(); ensureLogs();
-    for (const type of LOG_TYPES) zip.addFile(`logs/${type}.log`, Buffer.from(readLastBytes(path.join(logDir, `${type}.log`))));
-    zip.addFile("logs/journal.log", Buffer.from(serviceJournal()));
+    const addTextFile = (name: string, text: string) => {
+      const safeText = String(redactSensitive(text || ""));
+      let body = safeText;
+      const bytes = Buffer.byteLength(body);
+      if (bytes > remainingBytes) {
+        const keep = Math.max(0, remainingBytes - 256);
+        body = Buffer.from(body).subarray(0, keep).toString("utf8") + "\n[TRUNCATED: diagnostics export size limit reached]\n";
+        remainingBytes = 0;
+      } else {
+        remainingBytes -= bytes;
+      }
+      zip.addFile(name, Buffer.from(body));
+      contents.push(name);
+    };
+    for (const type of LOG_TYPES) addTextFile(`logs/${type}.log`, readLastBytes(path.join(logDir, `${type}.log`)));
+    addTextFile("logs/journal.log", serviceJournal());
     const env = { NODE_ENV: process.env.NODE_ENV || "development", DATABASE_URL_PRESENT: !!process.env.DATABASE_URL, GITHUB_TOKEN_PRESENT: !!process.env.GITHUB_TOKEN, EMAIL_PROVIDER_PRESENT: !!(process.env.SENDGRID_API_KEY || process.env.SMTP_HOST || process.env.RESEND_API_KEY), STORAGE_CONFIG_PRESENT: !!(process.env.UPLOAD_DIR || process.env.PAYLINK_LOG_DIR) };
     const h = await health();
-    const jsons: Record<string, any> = { "environment.json": env, "system-health.json": h, "recent-errors.json": readLogs({ service: "error" }, 100), "appdr-status.json": { repairEnabled: process.env.APP_DOCTOR_REPAIR_ENABLED !== "false" }, "github-status.json": { tokenConfigured: !!process.env.GITHUB_TOKEN, repo: process.env.GITHUB_REPO || null, baseBranch: process.env.GITHUB_BASE_BRANCH || "main" }, "versions.json": { node: process.version, app: process.env.npm_package_version || "unknown" } };
-    for (const [name, value] of Object.entries(jsons)) zip.addFile(`json/${name}`, Buffer.from(JSON.stringify(redactSensitive(value), null, 2)));
-    res.setHeader("Content-Type", "application/zip"); res.setHeader("Content-Disposition", `attachment; filename=mypaylink-diagnostics-${Date.now()}.zip`); res.send(zip.toBuffer());
+    const jsons: Record<string, any> = { "environment.json": env, "system-health.json": h, "recent-errors.json": readLogs({ service: "error" }, 100), "appdr-status.json": { repairEnabled: process.env.APP_DOCTOR_REPAIR_ENABLED !== "false" }, "github-status.json": { tokenConfigured: !!process.env.GITHUB_TOKEN, repo: process.env.GITHUB_REPO || null, baseBranch: process.env.GITHUB_BASE_BRANCH || "main" }, "versions.json": { node: process.version, app: process.env.npm_package_version || "unknown", commit: h.commitSha, buildTime: h.buildTime } };
+    for (const [name, value] of Object.entries(jsons)) addTextFile(`json/${name}`, JSON.stringify(redactSensitive(value), null, 2));
+    const buffer = zip.toBuffer();
+    writeDiagnosticLog("security", { level: "warn", service: "security", message: "diagnostic bundle exported", requestId: (req as any).requestId, correlationId: (req as any).correlationId, userId: user?.id, tenantId: (req as any).tenantId, companyId: user?.companyId || (req as any).resolvedCompanyId, metadata: { role: user?.role, timestamp: new Date().toISOString(), ip: req.ip || req.socket.remoteAddress, userAgent: req.get("user-agent"), exportContents: contents, maxExportBytes, zipBytes: buffer.length } });
+    res.setHeader("Content-Type", "application/zip"); res.setHeader("Content-Disposition", `attachment; filename=mypaylink-diagnostics-${Date.now()}.zip`); res.send(buffer);
   });
 }
 

@@ -104,3 +104,17 @@ Expected safe failure response when GitHub PR creation fails after a ticket exis
 ```
 
 The frontend must detect `success:false`, show the failure message, keep the ticket in `pr_creation_failed`, and render a `Retry PR Creation` button for that status.
+
+## Retention and rotation policy
+
+Diagnostic log retention is configurable and intentionally bounded:
+
+- Write path: `PAYLINK_LOG_DIR` or `storage/logs` by default.
+- Rotation threshold: `10 MB` per log file.
+- Retention count: last `10` rotated files per log type.
+- Export read window: bounded tail reads, `512 KB` per log source by default.
+- Export size ceiling: `DIAGNOSTICS_MAX_ZIP_BYTES` or `50 MB` by default.
+- Compression: ZIP export compression is generated on demand; long-term compressed archive retention is not performed by the app.
+- Deletion: old rotated files beyond the configured retention count are deleted during rotation.
+
+Diagnostics routes are read-only `GET`/`HEAD` surfaces. The separate App Doctor PR retry action remains a POST workflow because it intentionally calls GitHub and can update a repair-ticket status.

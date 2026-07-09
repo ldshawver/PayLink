@@ -25,6 +25,13 @@ ok("App Doctor UI treats success:false as failure", appDoctor.includes("data?.su
 ok("App Doctor UI renders Retry PR Creation button", appDoctor.includes('ticket.status === "pr_creation_failed"') && appDoctor.includes("button-retry-pr"));
 ok("Developer Diagnostics UI uses MyPayLink logs", page.includes("Developer Diagnostics") && page.includes('"error"') && !page.includes("luxit"));
 ok("production runtime alignment documented for MyPayLink", docs.includes("MyPayLink Node/Express") && docs.includes("not the unrelated Luxit"));
+
+ok("diagnostics endpoints have rate limits", diag.includes('diagnosticsRateLimit("diagnostics-health", 60') && diag.includes('diagnosticsRateLimit("diagnostics-logs", 30') && diag.includes('diagnosticsRateLimit("diagnostics-export", 5'));
+ok("ZIP export has configurable size limit and truncation note", diag.includes("DIAGNOSTICS_MAX_ZIP_BYTES") && diag.includes("TRUNCATED: diagnostics export size limit reached"));
+ok("ZIP export audit includes identity, request, client, and contents metadata", diag.includes("exportContents") && diag.includes("userAgent") && diag.includes("zipBytes") && diag.includes("correlationId"));
+ok("diagnostics route definitions are GET-only", diag.includes('app.get("/api/admin/diagnostics/health"') && diag.includes('app.get("/api/admin/diagnostics/logs"') && diag.includes('app.get("/api/admin/diagnostics/export"') && !diag.includes("app.post"));
+ok("health exposes environment version commit build node and process info", diag.includes("version:") && diag.includes("buildTime") && diag.includes("nodeVersion") && diag.includes("pm2Process") && page.includes("PM2 Process"));
+ok("retention policy is documented", docs.includes("Retention and rotation policy") && docs.includes("10 MB") && docs.includes("DIAGNOSTICS_MAX_ZIP_BYTES"));
 ok("diagnostics implementation does not import paycheck/paystub/MICR modules", !diag.includes("payroll-calculator") && !page.includes("print-check"));
 
 if (failed) process.exit(1);
