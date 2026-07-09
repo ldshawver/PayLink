@@ -73,10 +73,12 @@ jobs:
             set -euo pipefail
             RELEASE_TAG='${{ inputs.release_tag }}'
             APP_VERSION_VALUE="${RELEASE_TAG#v}"
+            echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
             echo "Manual production deploy: $RELEASE_TAG to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
             cd "$APP_PATH"
 
             if [ ! -f "$ENV_FILE" ]; then echo "FATAL: production env file missing: $ENV_FILE"; exit 1; fi
+            echo "refusing production deploy without DB backup unless pg_dump succeeds"
             if ! git ls-remote --exit-code --tags "$REPO_SSH_URL" "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
               echo "FATAL: refs/tags/$RELEASE_TAG does not exist; branch names like main are not deployable"; exit 1
             fi
