@@ -12,7 +12,7 @@ const services = ["error", "app", "appdr", "github", "database", "security", "jo
 
 async function fetchJson<T>(url: string): Promise<T> { const res = await fetch(url, { credentials: "include" }); if (!res.ok) throw new Error(await res.text()); return res.json(); }
 
-export default function DeveloperDiagnosticsPage() {
+export default function DeveloperDiagnosticsPanel({ embedded = false }: { embedded?: boolean }) {
   const [service, setService] = useState("error");
   const [level, setLevel] = useState("all");
   const [search, setSearch] = useState("");
@@ -24,8 +24,8 @@ export default function DeveloperDiagnosticsPage() {
   const exportBundle = () => { window.location.href = "/api/admin/diagnostics/export"; };
   const recentErrors = (logs.data?.logs || []).filter((l) => ["error", "fatal"].includes(l.level)).slice(0, 25);
 
-  return <div className="container mx-auto space-y-6 p-6" data-testid="page-developer-diagnostics">
-    <div className="flex items-center justify-between"><div><h1 className="text-3xl font-bold">Developer Diagnostics</h1><p className="text-muted-foreground">Admin-only redacted diagnostics for runtime, App Dr, GitHub, payroll, PDF, and database issues.</p></div><Button onClick={exportBundle} data-testid="button-export-diagnostics"><Download className="mr-2 h-4 w-4" />Export ZIP</Button></div>
+  return <div className={embedded ? "space-y-6" : "container mx-auto space-y-6 p-6"} data-testid="panel-app-doctor-diagnostics">
+    <div className="flex items-center justify-between"><div><h1 className="text-3xl font-bold">Diagnostics</h1><p className="text-muted-foreground">App Doctor Platform Operations diagnostics for runtime, logs, GitHub, payroll, PDF, and database issues.</p></div><Button onClick={exportBundle} data-testid="button-export-diagnostics"><Download className="mr-2 h-4 w-4" />Export ZIP</Button></div>
     <Card><CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5" />System Health</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-4">
       {[ ["Environment", health.data?.environment], ["Version", health.data?.version], ["Commit", health.data?.commitSha], ["Build", health.data?.buildTime], ["Node", health.data?.nodeVersion], ["PM2 Process", health.data?.pm2Process], ["Uptime", `${health.data?.uptimeSeconds ?? 0}s`], ["Database", health.data?.database], ["Storage writable", health.data?.storageWritable ? "yes" : "no"], ["GitHub configured", health.data?.githubConfigured ? "yes" : "no"], ["Email configured", health.data?.emailConfigured ? "yes" : "no"], ["Queue/worker", health.data?.queueStatus], ["MyPayLink systemd", health.data?.serviceStatus ? "available" : "unknown"] ].map(([k,v]) => <div key={k} className="rounded border p-3"><div className="text-xs text-muted-foreground">{k}</div><div className="font-medium break-all">{v || "unknown"}</div></div>)}
     </CardContent></Card>

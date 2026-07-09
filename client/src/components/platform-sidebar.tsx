@@ -224,13 +224,6 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
         module: "oversight",
         items: [],
       },
-      {
-        label: "Developer Diagnostics",
-        icon: Monitor,
-        url: "/platform/developer-diagnostics",
-        module: "oversight",
-        items: [],
-      },
     ],
   },
 ];

@@ -360,13 +360,6 @@ const MAIN_NAV: NavGroup[] = [
         items: [],
       },
       {
-        label: "Developer Diagnostics",
-        icon: ServerCog,
-        url: "/app/developer-diagnostics",
-        roles: ["platform_owner", "super_admin", "system_admin"],
-        items: [],
-      },
-      {
         label: "Tenant Permissions",
         icon: UserCog,
         url: "/app/role-management",
