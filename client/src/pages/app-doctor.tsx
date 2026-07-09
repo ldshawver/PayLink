@@ -89,6 +89,27 @@ type Diagnostics = {
     maxRiskAutoDraft: string;
     requireApproval: boolean;
   };
+  documenso?: {
+    configuredBaseUrl: string;
+    apiBaseUrl: string;
+    baseUrlEnv: string | null;
+    apiKeyPresent: boolean;
+    webhookUrl: string;
+    webhookSecretPresent: boolean;
+    contracts: Array<{
+      localContractId: string;
+      documensoDocumentId: string | null;
+      documentIdExists: boolean;
+      localRecipientCount: number;
+      remoteRecipientCount: number;
+      recipientIdsExist: boolean;
+      recipientIdMatch: string;
+      signingUrlPresent: boolean;
+      webhookStatus: string;
+      resendEligibility: string;
+      repairActions: string[];
+    }>;
+  };
   reports: {
     last24hBySeverity: Record<string, number>;
     last7dByStatus: Record<string, number>;
@@ -469,6 +490,7 @@ export default function AppDoctorPage() {
                 </div>
               </div>
 
+
               {/* Operations hub */}
               {diag.operations && (
                 <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="card-app-doctor-operations-hub">
@@ -502,6 +524,37 @@ export default function AppDoctorPage() {
                   </div>
                 </div>
               )}
+
+              {/* Documenso contract diagnostics */}
+              {diag.documenso && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="card-documenso-contract-diagnostics">
+                  <p className="text-xs font-medium mb-2 flex items-center gap-1"><Cpu className="h-3 w-3" />Documenso Contract Diagnostics</p>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+                    <div><span className="text-muted-foreground">Configured URL:</span> <span className="font-medium break-all">{diag.documenso.configuredBaseUrl || "missing"}</span></div>
+                    <div><span className="text-muted-foreground">Env:</span> <span className="font-medium">{diag.documenso.baseUrlEnv || "missing"}</span></div>
+                    <div><span className="text-muted-foreground">API key:</span> <span className={diag.documenso.apiKeyPresent ? "text-green-600 font-medium" : "text-destructive font-medium"}>{diag.documenso.apiKeyPresent ? "present" : "missing"}</span></div>
+                    <div><span className="text-muted-foreground">Webhook:</span> <span className="font-medium break-all">{diag.documenso.webhookUrl || "missing"}</span></div>
+                  </div>
+                  {diag.documenso.contracts.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {diag.documenso.contracts.map((contract) => (
+                        <div key={contract.localContractId} className="rounded-md bg-muted/40 p-2 text-xs" data-testid={`row-documenso-diagnostic-${contract.localContractId}`}>
+                          <div className="font-medium break-all">Contract {contract.localContractId} · Documenso {contract.documensoDocumentId || "missing"}</div>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            <Badge variant={contract.documentIdExists ? "outline" : "destructive"}>document {contract.documentIdExists ? "exists" : "missing"}</Badge>
+                            <Badge variant={contract.recipientIdsExist ? "outline" : "destructive"}>recipient IDs {contract.recipientIdsExist ? "present" : "missing"}</Badge>
+                            <Badge variant={contract.signingUrlPresent ? "outline" : "destructive"}>signing URL {contract.signingUrlPresent ? "present" : "missing"}</Badge>
+                            <Badge variant={contract.resendEligibility === "eligible" ? "outline" : "destructive"}>{contract.resendEligibility}</Badge>
+                          </div>
+                          {contract.repairActions.length > 0 && <p className="mt-1 text-muted-foreground">Repair: {contract.repairActions.join(" / ")}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="mt-2 text-xs text-muted-foreground">No recent contract Documenso records found for this scope.</p>}
+                </div>
+              )}
+
+
               {/* Repair tickets */}
               <div className="flex items-start gap-2 rounded-lg border p-3">
                 <TicketCheck className="h-4 w-4 mt-0.5 text-muted-foreground" />
