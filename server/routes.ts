@@ -18,7 +18,7 @@ import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -34,8 +34,16 @@ import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
+import { assertContractorTradeCreditsPrintable, calculateContractorTradeSettlement } from "./contractor-trade-compensation";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
+function isIndependentContractorWorker(worker: any): boolean {
+  const workerGroup = String(worker?.workerGroup || worker?.worker_group || "").toLowerCase();
+  const workerType = String(worker?.workerType || worker?.worker_type || "").toLowerCase();
+  return INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup) || workerType === "independent_contractor" || (workerType === "contractor" && INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup));
+}
 
 function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -1718,6 +1726,13 @@ export async function registerRoutes(
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
       const isProduction = process.env.NODE_ENV === "production";
+
+const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
+function isIndependentContractorWorker(worker: any): boolean {
+  const workerGroup = String(worker?.workerGroup || worker?.worker_group || "").toLowerCase();
+  const workerType = String(worker?.workerType || worker?.worker_type || "").toLowerCase();
+  return INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup) || workerType === "independent_contractor" || (workerType === "contractor" && INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup));
+}
 
 function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -20212,10 +20227,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
 
     // ── Data values ─────────────────────────────────────────────────────────
+    const tradeCredits = Array.isArray(item?.tradeCredits) ? item.tradeCredits : [];
+    const totalTradeCredit = tradeCredits.reduce((sum: number, credit: any) => sum + Number(credit.totalValue || credit.total_value || 0), 0);
     const netPayRaw = isCalibration ? 1234.56 : params.vendorCheck ? params.vendorCheck.amount : Number(item?.netPay || 0);
     const netPay   = isNaN(netPayRaw) ? 0 : netPayRaw;
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
+    const totalCompensation = grossPay;
     const checkNum    = isCalibration ? "0001"  : params.vendorCheck?.checkNumber ? params.vendorCheck.checkNumber : String(item?.checkNumber || "0000");
     const fmtCheckNum = formatCheckNumber(checkNum); // zero-padded to 4 digits, e.g. "0011"
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
@@ -20241,9 +20259,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" "));
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
-    const isContractor  = isCalibration
-      ? true
-      : (worker?.compensationType === "contractor" || worker?.compensationType === "1099");
+    const isContractor  = isCalibration ? true : isIndependentContractorWorker(worker);
+    const statementLabel = isContractor ? "CONTRACTOR STATEMENT" : "PAYSTUB";
+    const statementTitle = isContractor ? "Contractor Statement" : "Paystub";
 
     // Company fields
     const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
@@ -20537,7 +20555,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
     page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText(statementLabel, { x: psX + psW / 2 - (isContractor ? 55 : 22), y: checkBot - 14 + paystubOffY, size: isContractor ? 8.5 : 10, font: hvB, color: rgb(1, 1, 1) });
     const psChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
@@ -20558,7 +20576,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const psC5 = Math.min(psX + 262, rm - 5); // capped so YTD column never overflows right margin
     let psY = checkBot - 88 + paystubOffY;
     page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
-    page.drawText("EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(isContractor ? "SERVICES / COMPENSATION" : "EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("HOURS",     { x: psC2, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("RATE",      { x: psC3, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("CURRENT",   { x: psC4, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
@@ -20626,19 +20644,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     psY -= 4;
     if (psY >= mailBot + 34) {
       page.drawLine({ start: { x: psC1 - 2, y: psY + 8 }, end: { x: rm + 2, y: psY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
-      page.drawText("GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(isContractor ? "TOTAL COMPENSATION" : "GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       page.drawText(`$${fmtMoney(grossPay)}`, { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       if (showYtdTotals) page.drawText(`$${fmtMoney(ytdGross)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       psY -= 11;
-      page.drawText("TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`-$${fmtMoney(totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
-      if (showYtdTotals) page.drawText(`-$${fmtMoney(ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      page.drawText(isContractor ? "TRADE COMPENSATION - GOODS" : "TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      if (showYtdTotals) page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
       psY -= 11;
       page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
-      page.drawText("NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      page.drawText(isContractor ? "CASH PAYMENT / CHECK AMOUNT" : "NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       page.drawText(`$${fmtMoney(netPay)}`, { x: psC4, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       if (showYtdTotals) page.drawText(`$${fmtMoney(ytdNet)}`, { x: psC5, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       psY -= 14;
+    }
+
+    if (isContractor && tradeCredits.length > 0 && psY >= mailBot + 32) {
+      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.90, 0.96, 0.92), opacity: 0.9 });
+      page.drawText("TRADE GOODS CREDIT DETAIL", { x: psC1, y: psY, size: 6, font: hvB, color: rgb(0.05, 0.35, 0.12) }); psY -= 12;
+      for (const credit of tradeCredits.slice(0, 2)) {
+        if (psY < mailBot + 8) break;
+        const sku = credit.itemSku || credit.item_sku || "";
+        const qty = credit.quantity || "1";
+        const status = credit.deliveryStatus || credit.delivery_status || "pending";
+        const name = sanitizeForPdf(`${credit.itemName || credit.item_name || "Goods"}${sku ? ` (${sku})` : ""} x${qty} — ${status}`);
+        page.drawText(name.slice(0, 42), { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) });
+        page.drawText(`-$${fmtMoney(Number(credit.totalValue || credit.total_value || 0))}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) });
+        psY -= 10;
+      }
+      if (psY >= mailBot + 8) { page.drawText(`Proof of Payment: Total $${fmtMoney(totalCompensation)} = Goods $${fmtMoney(totalTradeCredit)} + Check $${fmtMoney(netPay)}`, { x: psC1, y: psY, size: 5.6, font: hvB, color: rgb(0.05,0.25,0.08) }); psY -= 9; }
     }
 
     // SE tax reference (Zone 2 right col, contractor only)
@@ -20836,7 +20870,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Typed interfaces for raw SQL rows returned by check PDF endpoints.
   interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; status: string | null; }
   interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; phone: string; ein: string; }
-  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; }
+  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; worker_type?: string; worker_group?: string; }
   interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; institution: string | null; }
   interface CheckTplRow { layout_config: unknown; }
   // Normalize pg / drizzle raw execute result to a typed array.
@@ -20945,6 +20979,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
       ]);
 
+      let tradeCreditsForItem: any[] = [];
+      let printableItemRow: any = itemRow;
+      if (isIndependentContractorWorker(worker)) {
+        tradeCreditsForItem = await db.select().from(contractorTradeCompensation).where(and(eq(contractorTradeCompensation.payrollItemId, payrollItemId), eq(contractorTradeCompensation.companyId, compId)));
+        if (tradeCreditsForItem.length > 0) {
+          try {
+            const settlement = assertContractorTradeCreditsPrintable({ grossCompensation: Number(itemRow.grossPay || 0), tradeCredits: tradeCreditsForItem });
+            printableItemRow = { ...itemRow, netPay: settlement.paidByCheck.toFixed(2), tradeCredits: tradeCreditsForItem };
+          } catch (tradeErr: any) {
+            await db.execute(sql`
+              INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
+              VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${req.session.userId || null}, 1, ${itemRow.netPay || 0}, 'failed', ${JSON.stringify([tradeErr?.message || "Contractor trade credit validation failed"])}, true, 'server-pdf', 'trade_credit_print_blocked', ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
+            `).catch(() => {});
+            return res.status(422).json({ message: tradeErr?.message || "Contractor trade credit validation failed" });
+          }
+        }
+      }
+
       let rs: CheckRsRow | null = null;
       if (runRow?.funding_account_id) {
         rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
@@ -20968,8 +21020,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const calibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
       const pdfBytes = await renderCheckPdf({
-        item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
+        item: printableItemRow,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
@@ -20986,7 +21038,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const printUserId = req.session.userId;
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
-          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${itemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
+          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${printableItemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
         `);
       }
 
@@ -21280,7 +21332,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           };
           const bytes = await renderCheckPdf({
             item: normalizedItem,
-            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type } : null,
+            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type, workerType: w.worker_type, workerGroup: w.worker_group } : null,
             run: runNorm, company: coNorm, remittanceSource: remSrc,
             layoutConfig: batchLayoutConfig,
             calibrationOffsets: batchCalibrationOffsets,
@@ -21468,7 +21520,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" },
@@ -21501,6 +21553,50 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       console.error("[reprintCheck] ERROR:", err?.message || err, err?.stack);
       res.status(500).json({ message: err?.message || "Failed to generate reprint PDF" });
     }
+  });
+
+
+  // ── Contractor trade compensation credits ───────────────────────────────
+  app.get("/api/contractor-trade-compensation", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const payrollItemId = queryStr(req.query.payrollItemId);
+      const companyId = queryStr(req.query.companyId) || user?.companyId || null;
+      if (!companyId || !(await canAccessCompany(user!, companyId))) return res.status(403).json({ message: "Access denied" });
+      const conditions = [eq(contractorTradeCompensation.companyId, companyId)];
+      if (payrollItemId) conditions.push(eq(contractorTradeCompensation.payrollItemId, payrollItemId));
+      if (user?.role === "contractor" && user.workerId) conditions.push(eq(contractorTradeCompensation.contractorUserId, user.workerId));
+      res.json(await db.select().from(contractorTradeCompensation).where(and(...conditions)));
+    } catch (e: any) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch trade credits") }); }
+  });
+
+  app.post("/api/contractor-trade-compensation", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = String(req.body.companyId || user?.companyId || "");
+      if (!companyId || !(await canAccessCompany(user!, companyId))) return res.status(403).json({ message: "Access denied" });
+      const totalValue = (Number(req.body.quantity || 0) * Number(req.body.unitValue || 0)).toFixed(2);
+      const payload = insertContractorTradeCompensationSchema.parse({ ...req.body, companyId, totalValue });
+      if (payload.payrollItemId) {
+        const [item] = await db.select().from(payrollItems).where(eq(payrollItems.id, payload.payrollItemId));
+        if (item) calculateContractorTradeSettlement({ grossCompensation: Number(item.grossPay || 0), tradeCredits: [{ totalValue }] });
+      }
+      const [created] = await db.insert(contractorTradeCompensation).values(payload).returning();
+      await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: created.id, actionType: "trade_credit_created", companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ contractorStatementId: created.contractorStatementId, settlementId: created.settlementId, payrollItemId: created.payrollItemId, totalValue: created.totalValue }) }).catch(() => {});
+      res.status(201).json(created);
+    } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to create trade credit") }); }
+  });
+
+  app.post("/api/contractor-trade-compensation/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const [credit] = await db.select().from(contractorTradeCompensation).where(eq(contractorTradeCompensation.id, req.params.id));
+      if (!credit) return res.status(404).json({ message: "Trade credit not found" });
+      if (!(await canAccessCompany(user!, credit.companyId))) return res.status(403).json({ message: "Access denied" });
+      const [updated] = await db.update(contractorTradeCompensation).set({ approvedByUserId: user?.id || null, approvedAt: new Date(), updatedAt: new Date() }).where(eq(contractorTradeCompensation.id, req.params.id)).returning();
+      await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: updated.id, actionType: "trade_credit_approved", companyId: updated.companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ totalValue: updated.totalValue }) }).catch(() => {});
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to approve trade credit") }); }
   });
 
   // ── Payroll Payment Methods ───────────────────────────────────────────────
@@ -21780,15 +21876,63 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       }
 
+      const tradeTotalsByItem: Record<string, number> = {};
+      if (itemIds.length > 0) {
+        const credits = await db.select().from(contractorTradeCompensation).where(inArray(contractorTradeCompensation.payrollItemId, itemIds));
+        for (const credit of credits) {
+          tradeTotalsByItem[credit.payrollItemId || ""] = (tradeTotalsByItem[credit.payrollItemId || ""] || 0) + Number(credit.totalValue || 0);
+        }
+      }
+
       res.json(rows.map(r => ({
         ...r.item,
         run: r.run,
+        documentLabel: tradeTotalsByItem[r.item.id] > 0 ? "Contractor Statement" : undefined,
+        tradeCreditTotal: tradeTotalsByItem[r.item.id] || 0,
         paymentStatus: recordsByItem[r.item.id]?.status || null,
         paidAt: recordsByItem[r.item.id]?.paidAt || null,
         failureReason: recordsByItem[r.item.id]?.failureReason || null,
         reconciledAt: recordsByItem[r.item.id]?.reconciledAt || null,
       })));
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch paystubs" }); }
+  });
+
+
+  app.get("/api/my/paystubs/:id/pdf", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker profile" });
+      const payrollItemId = String(req.params.id);
+      const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
+      if (!itemRow || itemRow.workerId !== user.workerId) return res.status(404).json({ message: "Statement not found" });
+      const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
+      if (!runRow) return res.status(404).json({ message: "Payroll run not found" });
+      if (user.companyId && runRow.company_id && user.companyId !== runRow.company_id) return res.status(403).json({ message: "Access denied" });
+      const [company, worker] = await Promise.all([
+        db.execute(sql`SELECT * FROM companies WHERE id = ${runRow.company_id}`).then(r => pgRow<CheckCompanyRow>(r)),
+        db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
+      ]);
+      let printableItemRow: any = itemRow;
+      if (isIndependentContractorWorker(worker)) {
+        const tradeCredits = await db.select().from(contractorTradeCompensation).where(and(eq(contractorTradeCompensation.payrollItemId, payrollItemId), eq(contractorTradeCompensation.companyId, runRow.company_id)));
+        if (tradeCredits.length > 0) {
+          const settlement = assertContractorTradeCreditsPrintable({ grossCompensation: Number(itemRow.grossPay || 0), tradeCredits });
+          printableItemRow = { ...itemRow, netPay: settlement.paidByCheck.toFixed(2), tradeCredits };
+        }
+      }
+      let rs: CheckRsRow | null = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${runRow.company_id} ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      const pdfBytes = await renderCheckPdf({
+        item: printableItemRow,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
+        run: { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end },
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
+        remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
+      });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_statement", objectId: payrollItemId, actionType: "statement_downloaded", companyId: runRow.company_id, actorUserId: user.id, actorWorkerId: user.workerId, metadataJson: JSON.stringify({ checkNumber: itemRow.checkNumber }) }).catch(() => {});
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${isIndependentContractorWorker(worker) ? "contractor-statement" : "paystub"}-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
+    } catch (e: any) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download statement PDF") }); }
   });
 
   app.get("/api/my/documents", requireAuth, async (req, res) => {
