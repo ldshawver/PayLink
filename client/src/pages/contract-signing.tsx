@@ -20,9 +20,14 @@ export default function ContractSigningPage() {
   const contractQuery = useQuery<any>({
     queryKey: ["/api/signing/contracts", token],
     queryFn: async () => {
-      const res = await fetch(`/api/signing/contracts/${encodeURIComponent(token)}`, { credentials: "include" });
+      const res = await fetch(`/api/public/sign/contracts/${encodeURIComponent(token)}`);
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.message || "Unable to load signing link");
+      if (!res.ok) {
+        const error = new Error(body.message || body.safeErrorReason || "Unable to load signing link") as Error & { state?: string; status?: number };
+        error.state = body.state || body.reason;
+        error.status = res.status;
+        throw error;
+      }
       return body;
     },
     enabled: !!token,
@@ -31,9 +36,8 @@ export default function ContractSigningPage() {
 
   const completeMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/signing/contracts/${encodeURIComponent(token)}/complete`, {
+      const res = await fetch(`/api/public/sign/contracts/${encodeURIComponent(token)}/complete`, {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ signatureData: signature }),
       });
@@ -52,7 +56,13 @@ export default function ContractSigningPage() {
   }
 
   if (contractQuery.isError) {
-    return <SigningShell><ErrorState title="Signing link unavailable" message={(contractQuery.error as Error).message} /></SigningShell>;
+    const error = contractQuery.error as Error & { state?: string; status?: number };
+    const title = error.state === "expired_link" || error.state === "expired_or_canceled" ? "Signing link expired"
+      : error.state === "already_signed" ? "Already signed"
+      : error.state === "fully_signed" ? "Contract fully signed"
+      : error.status && error.status >= 500 ? "Signing service unavailable"
+      : "Invalid signing link";
+    return <SigningShell><ErrorState title={title} message={error.message || "This signing link could not be loaded. Please contact the sender for a new link."} /></SigningShell>;
   }
 
   const isPostDocumensoReturn = location.includes("/status") || location.includes("signed=1");
@@ -76,8 +86,8 @@ export default function ContractSigningPage() {
   if (["already_signed", "fully_signed"].includes(state)) {
     return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>{state === "fully_signed" ? "Contract fully signed" : "Already signed"}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert></SigningShell>;
   }
-  if (state === "expired_or_canceled" || state === "missing_contract") {
-    return <SigningShell><ErrorState title={state === "missing_contract" ? "Signing link unavailable" : "Signing link inactive"} message={message} /></SigningShell>;
+  if (["expired_or_canceled", "expired_link", "invalid_link", "missing_contract", "server_error"].includes(state)) {
+    return <SigningShell><ErrorState title={state === "expired_link" ? "Signing link expired" : state === "invalid_link" || state === "missing_contract" ? "Invalid signing link" : state === "server_error" ? "Signing service unavailable" : "Signing link inactive"} message={message} /></SigningShell>;
   }
   if (contract.documensoSigningUrl) {
     return (
