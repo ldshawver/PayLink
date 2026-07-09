@@ -2464,6 +2464,39 @@ export const contractorPayments = pgTable("contractor_payments", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+
+export const contractorTradeCompensation = pgTable("contractor_trade_compensation", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull(),
+  contractorUserId: varchar("contractor_user_id").notNull(),
+  contractorPaymentId: varchar("contractor_payment_id"),
+  contractorStatementId: varchar("contractor_statement_id"),
+  settlementId: varchar("settlement_id"),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  payrollItemId: varchar("payroll_item_id").references(() => payrollItems.id),
+  itemName: text("item_name").notNull(),
+  itemSku: text("item_sku"),
+  description: text("description"),
+  quantity: numeric("quantity").notNull().default("1"),
+  unitValue: numeric("unit_value").notNull().default("0"),
+  totalValue: numeric("total_value").notNull().default("0"),
+  valuationMethod: text("valuation_method").notNull().default("fair_market_value"),
+  tradeAgreementId: text("trade_agreement_id"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  approvedAt: timestamp("approved_at"),
+  deliveryStatus: text("delivery_status").notNull().default("pending"),
+  deliveryReference: text("delivery_reference"),
+  includedIn1099: boolean("included_in_1099").notNull().default(true),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorTradeCompensationSchema = createInsertSchema(contractorTradeCompensation).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorTradeCompensation = typeof contractorTradeCompensation.$inferSelect;
+export type InsertContractorTradeCompensation = z.infer<typeof insertContractorTradeCompensationSchema>;
+
 export const insertContractorPaymentSchema = createInsertSchema(contractorPayments).omit({ id: true, createdAt: true });
 export type ContractorPayment = typeof contractorPayments.$inferSelect;
 export type InsertContractorPayment = z.infer<typeof insertContractorPaymentSchema>;
