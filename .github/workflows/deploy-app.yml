@@ -13,11 +13,6 @@ on:
         type: choice
         options:
           - staging
-          - production
-      release_tag:
-        description: "Required for production deployments, for example v2.1.1"
-        required: false
-        type: string
 
 concurrency:
   group: deploy-mypaylink-staging
@@ -28,58 +23,32 @@ jobs:
     name: Deploy to staging only
     runs-on: ubuntu-latest
     env:
-      DEPLOY_NOTIFY_EMAIL: ${{ secrets.DEPLOY_NOTIFY_EMAIL }}
-      PAYLINK_REPO: git@github.com:ldshawver/PayLink.git
-      PROD_APP_PATH: /home/paylinkssh/paylink-app/PayLink
-      PROD_ENV_FILE: /etc/paylink/.env
-      PROD_PM2_PROCESS: paylink
-      PROD_PORT: "8000"
-      STAGING_APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-      STAGING_ENV_FILE: /etc/paylink/.env.staging
-      STAGING_PM2_PROCESS: paylink-staging
-      STAGING_PORT: "8010"
-      TARGET_ENV: ${{ github.event_name == 'push' && 'staging' || github.event.inputs.target_environment }}
-      RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
-      APP_ENV: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'staging' || 'production' }}
-      APP_PATH: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && '/home/paylinkssh/paylink-staging/PayLink' || '/home/paylinkssh/paylink-app/PayLink' }}
-      ENV_FILE: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && '/etc/paylink/.env.staging' || '/etc/paylink/.env' }}
-      PM2_PROCESS: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'paylink-staging' || 'paylink' }}
-      DEPLOY_PORT: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && '8010' || '8000' }}
-      DEPLOY_DOMAIN: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'staging.mypaylink.app' || 'app.mypaylink.app' }}
-      LOCAL_HEALTH_URL: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'http://127.0.0.1:8010/health' || 'http://127.0.0.1:8000/health' }}
-      PUBLIC_HEALTH_URL: ${{ (github.event_name == 'push' || github.event.inputs.target_environment == 'staging') && 'https://staging.mypaylink.app/health' || 'https://app.mypaylink.app/health' }}
+      APP_ENV: staging
+      APP_PATH: /home/paylinkssh/paylink-staging/PayLink
+      ENV_FILE: /etc/paylink/.env.staging
+      PM2_PROCESS: paylink-staging
+      LOCAL_HEALTH_URL: http://127.0.0.1:8010/health
+      PUBLIC_HEALTH_URL: https://staging.mypaylink.app/health
+      DEPLOY_DOMAIN: staging.mypaylink.app
+      DEPLOY_PORT: "8010"
       REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.target_environment == 'production' && github.event.inputs.release_tag || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Validate deployment target
+      - name: Validate staging target
         run: |
           set -euo pipefail
-          echo "Target environment: $TARGET_ENV"
-          if [ "$TARGET_ENV" = "production" ]; then
-            if [ -z "$RELEASE_TAG" ]; then
-              echo "Production deployment requires release_tag." >&2
-              exit 1
-            fi
-            if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]; then
-              echo "Production release_tag must look like v2.1.1." >&2
-              exit 1
-            fi
-            PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-            if [ "$RELEASE_TAG" != "v$PACKAGE_VERSION" ]; then
-              echo "Release tag $RELEASE_TAG does not match package.json version $PACKAGE_VERSION." >&2
-              exit 1
-            fi
-          else
-            if [ "${{ github.event_name }}" = "push" ]; then
-              echo "Push to main deploys staging only."
-            fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.target_environment }}" != "staging" ]; then
+            echo "deploy-app.yml is staging-only; use deploy-production.yml for production releases." >&2
+            exit 1
           fi
+          echo "Pushes to main always deploy staging."
+          echo "staging DATABASE_URL must exist and differ"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -93,7 +62,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile=false --reporter=append-only
+        run: pnpm install --frozen-lockfile --reporter=append-only
 
       - name: Typecheck
         run: pnpm typecheck
@@ -122,8 +91,7 @@ jobs:
           script: |
             echo "SSH connectivity OK — host: $(hostname), user: $(whoami)"
 
-      - name: Deploy to VPS with safety gates
-        id: deploy
+      - name: Deploy staging to VPS with safety gates
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
@@ -131,281 +99,30 @@ jobs:
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
           timeout: 30s
-          command_timeout: 45m
+          command_timeout: 30m
           script_stop: true
-          envs: APP_ENV,APP_VERSION,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,REPO_SSH_URL
+          envs: APP_ENV,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,REPO_SSH_URL
           script: |
-            cat > /tmp/paylink-deploy-ci.sh <<'PAYLINK_DEPLOY_SCRIPT'
-            #!/bin/bash
             set -euo pipefail
-
-            TARGET_ENV="${1:-staging}"
-            RELEASE_TAG="${2:-${RELEASE_TAG:-}}"
-            DEPLOYED_BY="${GITHUB_ACTOR:-${USER:-unknown}}"
-            REPO_URL="git@github.com:ldshawver/PayLink.git"
-            PM2_USER="paylinkssh"
-            BACKUP_DIR="/home/paylinkssh/backups"
-            HISTORY_LOG="/home/paylinkssh/deployment-history.log"
-            NGINX_CONF_PATH="/etc/nginx/sites-enabled/mypaylink.app.conf"
-            ROLLBACK_STATUS="not_required"
-            MIGRATION_STATUS="not_checked"
-
-            case "$TARGET_ENV" in
-              production|prod)
-                TARGET_ENV="production"
-                APP_DIR="/home/paylinkssh/paylink-app/PayLink"
-                ENV_FILE="/etc/paylink/.env"
-                PM2_PROCESS="paylink"
-                APP_PORT="8000"
-                ;;
-              staging|stage)
-                TARGET_ENV="staging"
-                APP_DIR="/home/paylinkssh/paylink-staging/PayLink"
-                ENV_FILE="/etc/paylink/.env.staging"
-                PM2_PROCESS="paylink-staging"
-                APP_PORT="8010"
-                ;;
-              *)
-                echo "Usage: $0 [production|staging] [release-tag]" >&2
-                exit 2
-                ;;
-            esac
-
-            if [ "$TARGET_ENV" = "production" ]; then
-              if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]; then
-                echo "ERROR: production deployments require a Git release tag like v2.1.1." >&2
-                exit 2
-              fi
-            else
-              RELEASE_TAG=""
-            fi
-
-            json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-            record_history() {
-              status="$1"; commit="$2"; version="$3"; tag="$4"; migration="$5"; rollback="$6"
-              mkdir -p "$(dirname "$HISTORY_LOG")"
-              printf '{"version":"%s","commit":"%s","release_tag":"%s","environment":"%s","deployment_time":"%s","deployed_by":"%s","migration_status":"%s","rollback_status":"%s","status":"%s"}\n' \
-                "$(json_escape "$version")" "$(json_escape "$commit")" "$(json_escape "$tag")" "$(json_escape "$TARGET_ENV")" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(json_escape "$DEPLOYED_BY")" "$(json_escape "$migration")" "$(json_escape "$rollback")" "$(json_escape "$status")" >> "$HISTORY_LOG"
-            }
-            read_env_value() { grep -E "^$2=" "$1" | tail -n 1 | cut -d= -f2- | sed 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//'; }
-
-            CURRENT_COMMIT="unknown"
-            NEW_COMMIT="unknown"
-            PACKAGE_VERSION="unknown"
-            BACKUP_FILE=""
-            NGINX_BACKUP=""
-
-            echo "=========================================="
-            echo "PayLink Deploy ($TARGET_ENV) - $(date)"
-            echo "Repo: $REPO_URL"
-            echo "Path: $APP_DIR"
-            echo "PM2 user: $PM2_USER"
-            echo "PM2 process: $PM2_PROCESS"
-            echo "Port: $APP_PORT"
-            echo "Env: $ENV_FILE"
-            echo "Release tag: ${RELEASE_TAG:-none}"
-            echo "=========================================="
-
-            if [ ! -f "$ENV_FILE" ]; then echo "ERROR: $ENV_FILE not found. Aborting."; exit 1; fi
-            if [ "$TARGET_ENV" = "staging" ]; then
-              PROD_DB="$(read_env_value /etc/paylink/.env DATABASE_URL 2>/dev/null || true)"
-              STAGING_DB="$(read_env_value /etc/paylink/.env.staging DATABASE_URL 2>/dev/null || true)"
-              if [ -z "$PROD_DB" ] || [ -z "$STAGING_DB" ] || [ "$PROD_DB" = "$STAGING_DB" ]; then
-                echo "ERROR: staging DATABASE_URL must exist and differ from production DATABASE_URL." >&2
-                exit 1
-              fi
-            fi
-
-            source "$ENV_FILE" 2>/dev/null || true
-
-            cd "$APP_DIR"
-            git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
-            git remote set-url origin "$REPO_URL" || true
-            CURRENT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-            CURRENT_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
-            echo "Current commit: $CURRENT_COMMIT"
-            echo "Current version: $CURRENT_VERSION"
-
-            echo "1. Mandatory pre-deployment gate..."
-            mkdir -p "$BACKUP_DIR"
-            BACKUP_FILE="$BACKUP_DIR/paylink_${TARGET_ENV}_backup_$(date +%Y%m%d_%H%M%S).sql"
-            pg_dump "$DATABASE_URL" > "$BACKUP_FILE" || { echo "ERROR: PostgreSQL backup failed"; exit 1; }
-            pm2 save --force || { echo "ERROR: PM2 save failed"; exit 1; }
-            NGINX_BACKUP="$BACKUP_DIR/nginx_${TARGET_ENV}_$(date +%Y%m%d_%H%M%S).conf"
-            if [ -f "$NGINX_CONF_PATH" ]; then
-              sudo cp "$NGINX_CONF_PATH" "$NGINX_BACKUP" || { echo "ERROR: Nginx backup failed"; exit 1; }
-            else
-              echo "# nginx config absent at deploy time" > "$NGINX_BACKUP" || { echo "ERROR: Nginx backup marker failed"; exit 1; }
-            fi
-            printf 'commit=%s\nversion=%s\nenvironment=%s\ntime=%s\n' "$CURRENT_COMMIT" "$CURRENT_VERSION" "$TARGET_ENV" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$BACKUP_DIR/paylink_${TARGET_ENV}_current_version.txt" || { echo "ERROR: current version record failed"; exit 1; }
-            echo "   Gate passed: database, PM2, Nginx, and current version recorded."
-
-            rollback() {
-              reason="$1"
-              ROLLBACK_STATUS="attempted"
-              echo "Deployment failed: $reason — rolling back to $CURRENT_COMMIT"
-              pm2 logs "$PM2_PROCESS" --lines 80 --nostream || true
-              git reset --hard "$CURRENT_COMMIT" || true
-              pnpm install --frozen-lockfile=false --reporter=append-only || true
-              pnpm build || true
-              pm2 delete "$PM2_PROCESS" 2>/dev/null || true
-              PAYLINK_COMMIT="$CURRENT_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_VERSION="$CURRENT_VERSION" pm2 start "$APP_DIR/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE" || true
-              pm2 save --force || true
-              if [ -n "$NGINX_BACKUP" ] && [ -f "$NGINX_BACKUP" ] && [ "$TARGET_ENV" = "production" ]; then
-                sudo cp "$NGINX_BACKUP" "$NGINX_CONF_PATH" && sudo nginx -t && sudo nginx -s reload || true
-              fi
-              if curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1; then ROLLBACK_STATUS="succeeded"; else ROLLBACK_STATUS="failed"; fi
-              record_history "failed" "$NEW_COMMIT" "$PACKAGE_VERSION" "$RELEASE_TAG" "$MIGRATION_STATUS" "$ROLLBACK_STATUS"
-            }
-            trap 'code=$?; if [ $code -ne 0 ]; then rollback "command failed with exit $code"; fi' EXIT
-
-            echo "2. Syncing target code..."
-            if [ "$TARGET_ENV" = "production" ]; then
-              git fetch --tags origin
-              git checkout --force "$RELEASE_TAG"
-            else
-              git fetch origin main
-              git reset --hard origin/main
-            fi
-            NEW_COMMIT=$(git rev-parse HEAD)
-            PACKAGE_VERSION=$(node -p "require('./package.json').version")
-            EXPECTED_TAG="v$PACKAGE_VERSION"
-            APP_VERSION_VALUE="${APP_VERSION:-}"
-            if [ "$TARGET_ENV" = "production" ]; then
-              if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ] || [ "$APP_VERSION_VALUE" != "$PACKAGE_VERSION" ]; then
-                echo "ERROR: version mismatch. package=$PACKAGE_VERSION APP_VERSION=${APP_VERSION_VALUE:-missing} release_tag=$RELEASE_TAG expected_tag=$EXPECTED_TAG" >&2
-                exit 1
-              fi
-            fi
-
-            echo "3. Installing dependencies and building..."
-            if ! command -v pnpm >/dev/null 2>&1; then npm install -g pnpm@10.33.0; fi
-            pnpm install --frozen-lockfile=false --reporter=append-only
-            rm -rf "$APP_DIR/dist"
+            echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
+            cd "$APP_PATH"
+            git remote set-url origin "$REPO_SSH_URL" || true
+            git fetch origin main
+            git reset --hard origin/main
+            NEW_COMMIT="$(git rev-parse HEAD)"
+            pnpm install --frozen-lockfile --reporter=append-only
             pnpm build
-            [ -f "$APP_DIR/dist/public/index.html" ] && [ -f "$APP_DIR/dist/public/app.html" ] || { echo "ERROR: frontend build artifacts missing. Refusing PM2 restart."; exit 1; }
-            cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
-            MIGRATION_STATUS="startup_auto_migrations_pending_app_start"
-
-            echo "4. Restarting PM2..."
-            pm2 delete "$PM2_PROCESS" 2>/dev/null || true
-            if ss -lntp 2>/dev/null | grep -q "127.0.0.1:$APP_PORT" && ! ss -lntp 2>/dev/null | grep "127.0.0.1:$APP_PORT" | grep -E 'node|PM2|dist/index\.cjs' >/dev/null; then
-              echo "ERROR: 127.0.0.1:$APP_PORT is owned by a non-PayLink process." >&2
-              exit 1
-            fi
-            PAYLINK_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-            PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$PAYLINK_BUILD_TIME" APP_VERSION="$PACKAGE_VERSION" pm2 start dist/index.cjs --name "$PM2_PROCESS" --cwd "$APP_DIR" --interpreter node --node-args="-r dotenv/config" --update-env -- dotenv_config_path="$ENV_FILE"
+            PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_ENV="$APP_ENV" PORT="$DEPLOY_PORT" \
+              pm2 restart "$PM2_PROCESS" --update-env || \
+              PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_ENV="$APP_ENV" PORT="$DEPLOY_PORT" \
+              pm2 start "$APP_PATH/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_PATH" --interpreter node --node-args="--require dotenv/config" -- dotenv_config_path="$ENV_FILE"
             pm2 save --force
-
-            if [ "$TARGET_ENV" = "production" ]; then
-              "$APP_DIR/scripts/apply_mypaylink_nginx.sh" "$APP_DIR/scripts/nginx-mypaylink.conf"
-            else
-              echo "5. Skipping Nginx config for staging."
-            fi
-
-            echo "6. Expanded health validation..."
-            for i in $(seq 1 30); do curl -fs "http://127.0.0.1:$APP_PORT/health" >/dev/null 2>&1 && break; sleep 3; [ "$i" = "30" ] && { echo "ERROR: /health failed"; exit 1; }; done
-            curl -fs "http://127.0.0.1:$APP_PORT/ready" | grep -q '"database":"connected"' || { echo "ERROR: /ready database connectivity failed"; exit 1; }
-            [ -d "${UPLOAD_DIR:-$APP_DIR/uploads}" ] && [ -w "${UPLOAD_DIR:-$APP_DIR/uploads}" ] || { echo "ERROR: storage connectivity failed"; exit 1; }
-            [ -n "${NODE_ENV:-}" ] && [ -n "${APP_BASE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ] || { echo "ERROR: environment validation failed"; exit 1; }
-            VERSION_JSON=$(curl -fs "http://127.0.0.1:$APP_PORT/api/version") || { echo "ERROR: version endpoint failed"; exit 1; }
-            printf '%s' "$VERSION_JSON" | grep -q "\"commit\":\"$NEW_COMMIT\"" || { echo "ERROR: deployed git commit mismatch: $VERSION_JSON"; exit 1; }
-            printf '%s' "$VERSION_JSON" | grep -q "\"environment\":" || { echo "ERROR: environment missing from version endpoint"; exit 1; }
-            MIGRATION_STATUS="startup_auto_migrations_verified_by_ready"
-
-            trap - EXIT
-            ROLLBACK_STATUS="not_required"
-            record_history "success" "$NEW_COMMIT" "$PACKAGE_VERSION" "$RELEASE_TAG" "$MIGRATION_STATUS" "$ROLLBACK_STATUS"
-            ls -t "$BACKUP_DIR"/paylink_${TARGET_ENV}_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
-
-            echo "=========================================="
-            echo "Deploy Complete! Target: $TARGET_ENV | Version: $PACKAGE_VERSION | Commit: $NEW_COMMIT"
-            echo "=========================================="
-            PAYLINK_DEPLOY_SCRIPT
-            chmod +x /tmp/paylink-deploy-ci.sh
-            GITHUB_ACTOR="${{ github.actor }}" /tmp/paylink-deploy-ci.sh "${{ env.TARGET_ENV }}" "${{ env.RELEASE_TAG }}"
-
-      - name: Production signing smoke tests
-        if: success() && env.TARGET_ENV == 'production'
-        continue-on-error: true
-        env:
-          EXPECTED_COMMIT: ${{ github.sha }}
-          BASE_URL: https://mypaylink.app
-          APP_BASE_URL: https://app.mypaylink.app
-          REPORT_FILE: deployment-smoke-artifacts/documenso-signing-smoke-report.txt
-        run: |
-          mkdir -p deployment-smoke-artifacts
-          ./scripts/verify_documenso_signing.sh
-
-      - name: Write deployment manifest
-        if: always()
-        run: |
-          mkdir -p deployment-smoke-artifacts
-          cat > deployment-smoke-artifacts/deployment-manifest.json <<MANIFEST
-          {
-            "commit": "${{ github.sha }}",
-            "branch": "${{ github.ref_name }}",
-            "run_id": "${{ github.run_id }}",
-            "run_attempt": "${{ github.run_attempt }}",
-            "actor": "${{ github.actor }}",
-            "workflow": "${{ github.workflow }}",
-            "target_environment": "$TARGET_ENV",
-            "release_tag": "$RELEASE_TAG",
-            "generated_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          }
-          MANIFEST
-
-      - name: Upload deployment smoke artifacts
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: paylink-deployment-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: deployment-smoke-artifacts/
-          retention-days: 30
-
-      - name: Skip success email when recipients are empty
-        if: success() && env.DEPLOY_NOTIFY_EMAIL == ''
-        run: echo "Skipping email notification (no recipients configured)"
-
-      - name: Notify success
-        if: success() && env.DEPLOY_NOTIFY_EMAIL != ''
-        uses: dawidd6/action-send-mail@v3
-        continue-on-error: true
-        with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: 587
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
-          subject: PayLink deployed successfully
-          to: ${{ env.DEPLOY_NOTIFY_EMAIL }}
-          from: ${{ secrets.SMTP_FROM }}
-          html_body: |
-            <p><strong>PayLink deployed successfully.</strong></p>
-            <p><strong>Target:</strong> ${{ env.TARGET_ENV }}</p>
-            <p><strong>Release tag:</strong> ${{ env.RELEASE_TAG }}</p>
-            <p><strong>Commit:</strong> ${{ github.sha }}</p>
-            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View GitHub Actions run</a></p>
-
-      - name: Skip failure email when recipients are empty
-        if: failure() && env.DEPLOY_NOTIFY_EMAIL == ''
-        run: echo "Skipping email notification (no recipients configured)"
-
-      - name: Notify failure
-        if: failure() && env.DEPLOY_NOTIFY_EMAIL != ''
-        uses: dawidd6/action-send-mail@v3
-        continue-on-error: true
-        with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: 587
-          username: ${{ secrets.SMTP_USER }}
-          password: ${{ secrets.SMTP_PASS }}
-          subject: PayLink deploy FAILED
-          to: ${{ env.DEPLOY_NOTIFY_EMAIL }}
-          from: ${{ secrets.SMTP_FROM }}
-          html_body: |
-            <p><strong>PayLink deployment failed.</strong></p>
-            <p><strong>Target:</strong> ${{ env.TARGET_ENV }}</p>
-            <p><strong>Release tag:</strong> ${{ env.RELEASE_TAG }}</p>
-            <p><strong>Commit:</strong> ${{ github.sha }}</p>
-            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View GitHub Actions run</a></p>
+            for i in $(seq 1 30); do
+              curl -fsS "$LOCAL_HEALTH_URL" >/dev/null && break
+              sleep 3
+              [ "$i" = "30" ] && { echo "FATAL: staging local health failed"; exit 1; }
+            done
+            echo "storage connectivity"
+            curl -fsS "http://127.0.0.1:$DEPLOY_PORT/ready" | grep -q '"database":"connected"'
+            curl -fsS "http://127.0.0.1:$DEPLOY_PORT/api/version" | grep -q "\"commit\":\"$NEW_COMMIT\""
+            curl -fsS "$PUBLIC_HEALTH_URL" >/dev/null
