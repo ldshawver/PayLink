@@ -13874,8 +13874,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   const CONTRACT_ACTIVE_SIGNER_STATUSES = ["pending", "sent", "viewed", "unsent", "draft"];
   const CONTRACT_UNSIGNED_SIGNER_STATUSES = [...CONTRACT_ACTIVE_SIGNER_STATUSES, "failed"];
 
+  function normalizeRecipientEmail(value: string | null | undefined): string {
+    return (value ?? "").trim().toLowerCase();
+  }
+
   function normalizeSignerEmail(email: unknown): string | null {
-    const normalized = String(email || "").trim().toLowerCase();
+    const normalized = normalizeRecipientEmail(typeof email === "string" ? email : email == null ? null : String(email));
     return normalized || null;
   }
 
@@ -14962,13 +14966,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   function getDocumensoResendBlockReason(documentStatus: unknown, recipientStatus?: unknown, recipientFound = true): string | null {
     const docStatus = normalizeDocumensoRecipientStatus(documentStatus);
     const recStatus = normalizeDocumensoRecipientStatus(recipientStatus);
-    if (["completed", "signed"].includes(docStatus)) return "This contract has already been completed.";
-    if (["voided", "canceled", "cancelled"].includes(docStatus)) return "Document voided";
-    if (["archived", "deleted"].includes(docStatus)) return docStatus === "archived" ? "Document archived" : "Document not found";
-    if (!recipientFound) return "Recipient not found";
-    if (recStatus === "signed") return "Already signed";
-    if (recStatus === "declined") return "Recipient declined";
-    if (["canceled", "cancelled", "voided"].includes(recStatus)) return "Recipient cancelled";
+    if (["completed", "signed"].includes(docStatus)) return "Document is already completed; no reminder can be sent.";
+    if (["voided", "canceled", "cancelled"].includes(docStatus)) return "Document voided/cancelled; no reminder can be sent.";
+    if (["archived", "deleted"].includes(docStatus)) return "Document archived/deleted; no reminder can be sent.";
+    if (!recipientFound) return "Recipient is not present on the live Documenso document.";
+    if (recStatus === "signed") return "Recipient has already signed.";
+    if (recStatus === "declined") return "Recipient declined.";
+    if (["canceled", "cancelled", "voided"].includes(recStatus)) return "Recipient cancelled.";
     return null;
   }
 
@@ -14979,7 +14983,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : Array.isArray(remote?.rawResponse?.data?.recipients) ? remote.rawResponse.data.recipients
       : fallback;
     return raw.map((r: any) => ({
-      id: String(r?.id || r?.token || r?.recipientId || r?.recipient_id || "") || null,
+      id: String(r?.token ?? r?.id ?? r?.recipientId ?? r?.recipient_id ?? "") || null,
       name: r?.name || null,
       email: normalizeSignerEmail(r?.email || r?.recipientEmail || r?.recipient_email),
       role: r?.role || r?.type || null,
@@ -14988,8 +14992,51 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }));
   }
 
-  async function refreshDocumensoContractRecipientMetadata(contractId: string, contract: any, sigReq: any, remote: any, actorUserId?: string | null) {
+  function maskAuditEmail(email: string | null | undefined): string | null {
+    const normalized = normalizeRecipientEmail(email);
+    if (!normalized) return null;
+    const [local, domain] = normalized.split("@");
+    if (!domain) return "***";
+    return `${local.slice(0, 2)}***@${domain}`;
+  }
+
+  async function refreshDocumensoRecipientMappings({ contractId, companyId, documensoDocumentId, actorUserId, remote: providedRemote, reason = "resend_recipient_not_found" }: { contractId: string; companyId: string; documensoDocumentId: string; actorUserId?: string | null; remote?: any; reason?: string }) {
+    const sigReq = firstRow<any>(await db.execute(sql`
+      SELECT * FROM documenso_signature_requests
+      WHERE document_type IN ('contract','contractor_hub_contract')
+        AND related_record_id = ${contractId}
+        AND company_id = ${companyId}
+        AND documenso_document_id = ${documensoDocumentId}
+      ORDER BY created_at DESC LIMIT 1
+    `));
+    if (!sigReq) throw new Error("Documenso signature request not found for this contract.");
+    const remote = providedRemote || await getDocumensoDocument(documensoDocumentId);
+    const liveDocumentId = String(remote?.documentId || remote?.id || remote?.envelopeId || remote?.rawResponse?.id || remote?.rawResponse?.envelopeId || documensoDocumentId);
+    if (liveDocumentId && liveDocumentId !== String(documensoDocumentId)) throw new Error("Documenso document mismatch for this contract.");
     const recipients = extractDocumensoRecipients(remote);
+    const byEmail = new Map<string, any[]>();
+    for (const recipient of recipients) {
+      if (!recipient.email) continue;
+      const list = byEmail.get(recipient.email) || [];
+      list.push(recipient);
+      byEmail.set(recipient.email, list);
+    }
+    const signers = (await db.execute(sql`
+      SELECT * FROM contract_signers
+      WHERE contract_id = ${contractId}
+        AND company_id = ${companyId}
+        AND status IN ('pending','sent','viewed','unsent','draft','failed')
+        AND email IS NOT NULL
+      ORDER BY COALESCE(signing_order, "order", 1) ASC
+    `)).rows as any[];
+    const results = signers.map((signer) => {
+      const email = normalizeSignerEmail(signer.email);
+      const matches = email ? (byEmail.get(email) || []) : [];
+      const live = matches.length === 1 ? matches[0] : null;
+      const blockReason = matches.length > 1 ? "Multiple live Documenso recipients match this email; manual review required." : getDocumensoResendBlockReason(remote?.status, live?.status, !!live);
+      return { signer, email, live, oldRecipientId: signer.documenso_recipient_id || null, newRecipientId: live?.id || null, signingUrl: live?.signingUrl || null, refreshed: !!(live?.id && live.id !== signer.documenso_recipient_id), reason: blockReason };
+    });
+    const changed = results.filter((r) => r.refreshed);
     const metadata = recipients.map((r: any) => ({ email: r.email, recipientId: r.id, signingUrl: r.signingUrl, status: r.status, role: r.role }));
     await db.transaction(async (tx) => {
       await tx.execute(sql`
@@ -14998,23 +15045,34 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             status = ${normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(remote?.status || remote?.rawResponse?.status || sigReq.status))},
             raw_response = COALESCE(${remote ? JSON.stringify(remote.rawResponse || remote) : null}, raw_response),
             updated_at = NOW()
-        WHERE id = ${sigReq.id}
+        WHERE id = ${sigReq.id} AND company_id = ${companyId}
       `);
-      for (const r of recipients) {
+      for (const r of results) {
+        if (!r.live) continue;
         await tx.execute(sql`
           UPDATE contract_signers
-          SET documenso_recipient_id = COALESCE(${r.id}, documenso_recipient_id),
+          SET documenso_recipient_id = CASE WHEN ${r.newRecipientId} IS NOT NULL AND documenso_recipient_id IS DISTINCT FROM ${r.newRecipientId} THEN ${r.newRecipientId} ELSE documenso_recipient_id END,
               documenso_signing_url = COALESCE(${r.signingUrl}, documenso_signing_url),
-              status = CASE WHEN ${r.status} IN ('signed','declined','canceled','cancelled') THEN ${r.status} ELSE status END,
-              updated_at = NOW()
-          WHERE contract_id = ${contractId}
+              status = CASE WHEN ${r.live.status} IN ('signed','declined','canceled','cancelled') THEN ${r.live.status} ELSE status END,
+              updated_at = CASE WHEN documenso_recipient_id IS DISTINCT FROM ${r.newRecipientId} OR ${r.signingUrl} IS NOT NULL THEN NOW() ELSE updated_at END
+          WHERE id = ${r.signer.id}
+            AND contract_id = ${contractId}
+            AND company_id = ${companyId}
             AND lower(trim(email)) = ${r.email}
         `);
       }
     });
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_recipient_refresh", actorUserId: actorUserId || undefined, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, recipientCount: recipients.length }) }).catch(() => {});
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_metadata_updated", actorUserId: actorUserId || undefined, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, recipients: metadata }) }).catch(() => {});
-    return recipients;
+    for (const r of changed) {
+      const metadataJson = JSON.stringify({ contract_id: contractId, document_id: documensoDocumentId, recipient_email: maskAuditEmail(r.email), old_recipient_id: r.oldRecipientId, new_recipient_id: r.newRecipientId, reason });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_recipient_refresh", actorUserId: actorUserId || undefined, companyId, metadataJson }).catch(() => {});
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_metadata_updated", actorUserId: actorUserId || undefined, companyId, metadataJson }).catch(() => {});
+    }
+    return { remote, recipients, results, refreshedCount: changed.length };
+  }
+
+  async function refreshDocumensoContractRecipientMetadata(contractId: string, contract: any, sigReq: any, remote: any, actorUserId?: string | null) {
+    const refreshed = await refreshDocumensoRecipientMappings({ contractId, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId, remote, reason: "resend_recipient_not_found" });
+    return refreshed.recipients;
   }
 
   async function syncDocumensoContractStatus(contractId: string) {
@@ -15248,26 +15306,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       ORDER BY created_at DESC LIMIT 1
     `)).rows[0] as any;
 
-    const appBaseUrl = getAppBaseUrl(req);
     const tokenByEmail = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
-    for (const signer of pending) {
-      const email = normalizeSignerEmail(signer.email);
-      if (!email || tokenByEmail.has(email)) continue;
-      const token = crypto.randomBytes(32).toString("base64url");
-      tokenByEmail.set(email, { token, expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14), myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token) });
-    }
+
 
     let remote: any = null;
     let remoteRecipients: any[] = [];
     let documensoResult: Awaited<ReturnType<typeof resendDocumensoDocument>> | null = null;
     let documensoError: any = null;
     let retriedAfterRefresh = false;
+    let refreshInfo: Awaited<ReturnType<typeof refreshDocumensoRecipientMappings>> | null = null;
     if (!sigReq?.documenso_document_id) {
       documensoError = { errorMessage: "No Documenso signature request/document id exists for this contract.", timestamp: new Date().toISOString() };
     } else {
       try {
         remote = await getDocumensoDocument(sigReq.documenso_document_id);
-        remoteRecipients = await refreshDocumensoContractRecipientMetadata(req.params.id, contract, sigReq, remote, req.session.userId);
+        refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
+        remoteRecipients = refreshInfo.recipients;
         const docBlock = getDocumensoResendBlockReason(remote.status, undefined, true);
         if (docBlock) {
           documensoError = { errorMessage: docBlock, responseBody: remote.rawResponse || remote, timestamp: new Date().toISOString() };
@@ -15278,10 +15332,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         documensoError = serializeDocumensoError(e);
         if (remote) {
           try {
-            remoteRecipients = await refreshDocumensoContractRecipientMetadata(req.params.id, contract, sigReq, remote, req.session.userId);
-            retriedAfterRefresh = true;
-            documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
-            documensoError = null;
+            refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
+            remoteRecipients = refreshInfo.recipients;
+            // Documenso /envelope/redistribute is document-level ({ envelopeId }) and cannot use repaired recipient IDs.
+            // Do not issue a second identical provider request; return reconciled per-recipient interpretation instead.
+            retriedAfterRefresh = false;
           } catch (retryErr: any) {
             documensoError = serializeDocumensoError(retryErr);
           }
@@ -15289,22 +15344,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
     }
 
-    const linksByEmail = new Map(extractDocumensoRecipients(documensoResult, remoteRecipients).map((link: any) => [normalizeSignerEmail(link.email), link]));
+    const extractedLinks = extractDocumensoRecipients(documensoResult, remoteRecipients);
+    const linkGroupsByEmail = new Map<string, any[]>();
+    for (const link of extractedLinks) {
+      const email = normalizeSignerEmail(link.email);
+      if (!email) continue;
+      const list = linkGroupsByEmail.get(email) || [];
+      list.push(link);
+      linkGroupsByEmail.set(email, list);
+    }
+    const refreshBySignerId = new Map((refreshInfo?.results || []).map((r: any) => [r.signer.id, r]));
     const recipients = pending.map((signer) => {
       const email = normalizeSignerEmail(signer.email);
-      const remoteRecipient: any = email ? linksByEmail.get(email) : undefined;
+      const matches = email ? (linkGroupsByEmail.get(email) || []) : [];
+      const remoteRecipient: any = matches.length === 1 ? matches[0] : undefined;
       const localToken = email ? tokenByEmail.get(email) : undefined;
-      const reason = getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
+      const refreshRow: any = refreshBySignerId.get(signer.id);
+      const duplicateReason = matches.length > 1 ? "Multiple live Documenso recipients match this email; manual review required." : null;
+      const reason = duplicateReason || refreshRow?.reason || getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
+      const resultStatus = duplicateReason ? "manual_review" : reason === "Recipient is not present on the live Documenso document." ? "missing" : reason === "Recipient has already signed." ? "signed" : reason ? "skipped" : "resent";
       const accepted = !!documensoResult && !!remoteRecipient && !reason;
       return {
         signerId: signer.id, name: signer.name || null, email, role: signer.role || signer.signer_role || remoteRecipient?.role || null,
         signerRowExists: true, documensoDocumentId: sigReq?.documenso_document_id || null,
         localSignerStatus: signer.status || null, documensoStatus: remoteRecipient?.status || null,
-        documensoRecipientId: remoteRecipient?.id || signer.documenso_recipient_id || null,
+        documensoRecipientId: remoteRecipient?.id || refreshRow?.newRecipientId || signer.documenso_recipient_id || null,
         documensoSigningUrl: remoteRecipient?.signingUrl || signer.documenso_signing_url || null,
         myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null, sentAt: signer.sent_at || null,
         resentAt: accepted ? new Date().toISOString() : null,
-        resendResult: accepted ? "accepted" : "skipped", reason: accepted ? null : reason,
+        resendResult: accepted ? "accepted" : "skipped", status: accepted ? "resent" : resultStatus, refreshed: !!refreshRow?.refreshed, retried: false, reason: accepted && refreshRow?.refreshed ? "Recipient mapping refreshed and reminder resent." : (accepted ? null : reason),
         error: accepted ? null : reason,
       };
     });
@@ -15327,18 +15395,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       UPDATE documenso_signature_requests SET documenso_signing_url = COALESCE(${acceptedRecipients.find((r) => r.documensoSigningUrl)?.documensoSigningUrl || null}, documenso_signing_url),
         documenso_recipient_ids = ${JSON.stringify(recipientMetadata)}::jsonb,
         status = ${acceptedRecipients.length ? "sent_for_signature" : "resend_failed"}, sent_at = COALESCE(sent_at, NOW()),
-        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, retriedAfterRefresh, duplicateEmails, possibleIdentityMismatches })}::jsonb,
+        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, refreshAttempted: !!refreshInfo, retryAttempted: false, retryCount: 0, duplicateEmails, possibleIdentityMismatches })}::jsonb,
         updated_at = NOW() WHERE id = ${sigReq.id}
     `).catch(() => {});
 
     const actionType = acceptedRecipients.length === recipients.length && recipients.length ? "documenso_resend_requested" : (acceptedRecipients.length ? "documenso_resend_skipped" : "documenso_resend_failed");
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, retriedAfterRefresh, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, refreshAttempted: !!refreshInfo, retryAttempted: false, retryCount: 0, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
 
     res.status(200).json({
       success: recipients.length > 0 && acceptedRecipients.length === recipients.length,
       documensoResult: documensoError ? "errored" : (acceptedRecipients.length ? "accepted" : "skipped"),
+      requested: recipients.length, accepted: acceptedRecipients.length, partial: acceptedRecipients.length > 0 && acceptedRecipients.length < recipients.length, refreshed: recipients.filter((r: any) => r.refreshed).length, refreshAttempted: !!refreshInfo, retryAttempted: false, retryCount: 0, retried: 0,
       targetedCount: recipients.length, sentCount: acceptedRecipients.length, failedCount: recipients.length - acceptedRecipients.length,
-      recipients, documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null,
+      results: recipients.map((r: any) => ({ email: r.email, status: r.status, refreshed: r.refreshed, retried: r.retried, reason: r.reason })), recipients, documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null,
       duplicateEmails, possibleIdentityMismatches, documensoError, retriedAfterRefresh,
       message: documensoError?.errorMessage || `${acceptedRecipients.length} of ${recipients.length} pending signer(s) accepted by Documenso for resend.`,
     });

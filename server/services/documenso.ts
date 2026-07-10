@@ -283,8 +283,15 @@ export async function voidDocumensoDocument(documentId: string): Promise<void> {
   await apiJson("POST", "/envelope/delete", { envelopeId: documentId });
 }
 
+export const DOCUMENSO_RESEND_REQUEST_CONTRACT = {
+  method: "POST",
+  endpoint: "/envelope/redistribute",
+  bodyShape: "{ envelopeId: documentId }",
+  includesRecipientIdentifiers: false,
+} as const;
+
 export async function resendDocumensoDocument(documentId: string): Promise<DocumensoDocumentResult> {
-  const res = await apiJson<any>("POST", "/envelope/redistribute", { envelopeId: documentId });
+  const res = await apiJson<any>(DOCUMENSO_RESEND_REQUEST_CONTRACT.method, DOCUMENSO_RESEND_REQUEST_CONTRACT.endpoint, { envelopeId: documentId });
   return {
     documentId,
     status: mapDocumensoStatus(res?.status || "PENDING"),
