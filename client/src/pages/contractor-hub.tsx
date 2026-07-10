@@ -4546,13 +4546,25 @@ function ContractDetailPanel({
     onSuccess: (data: any) => {
       refetch();
       const recipients = Array.isArray(data?.recipients) ? data.recipients : [];
+      const accepted = data?.accepted ?? data?.sentCount ?? 0;
+      const requested = data?.requested ?? data?.targetedCount ?? recipients.length ?? 0;
+      const refreshed = data?.refreshed ?? recipients.filter((recipient: any) => recipient.refreshed).length;
       const recipientSummary = recipients.length
-        ? recipients.map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.resendResult || "unknown"}${recipient.reason || recipient.error ? ` (${recipient.reason || recipient.error})` : recipient.documensoStatus ? ` (${recipient.documensoStatus})` : recipient.documensoRecipientId ? " (accepted by Documenso)" : " (Recipient missing remotely)"}`).join("; ")
+        ? recipients
+            .filter((recipient: any) => !data?.success || recipient.reason || recipient.error)
+            .map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.reason || recipient.error || recipient.status || recipient.resendResult || "resent"}`)
+            .join("; ")
         : "No pending signer recipients were targeted.";
+      const title = data?.success
+        ? "Documenso reminders resent"
+        : accepted > 0
+          ? "Documenso resend partially completed"
+          : "Documenso resend needs review";
+      const refreshLine = refreshed > 0 ? " Recipient mappings were refreshed automatically." : "";
       toast({
-        title: data?.success ? "Signing request re-sent" : "Documenso resend needs review",
-        description: `${data?.sentCount ?? 0}/${data?.targetedCount ?? recipients.length ?? 0} recipient(s) accepted by Documenso. ${recipientSummary}`,
-        variant: data?.success ? "default" : "destructive",
+        title,
+        description: `${accepted}/${requested} recipients accepted.${refreshLine} ${recipientSummary}`,
+        variant: data?.success || accepted > 0 ? "default" : "destructive",
       });
       onRefresh();
     },
