@@ -5561,12 +5561,11 @@ function isImmutable(type: string, status: string) {
 function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle }: {
   open: boolean; onClose: () => void; entityType: string; entityId: string; entityTitle: string;
 }) {
-  const supportsVersions = entityType === "contract" || entityType === "proposal";
   const { data: versions = [], isLoading } = useQuery<any[]>({
-    queryKey: [`/api/contractor-${entityType}s/${entityId}/versions`],
-    enabled: open && !!entityId && supportsVersions,
+    queryKey: ["/api/contractor-documents", entityType, entityId, "archived-versions"],
+    enabled: open && !!entityId,
     queryFn: async () => {
-      const r = await fetch(`/api/contractor-${entityType}s/${entityId}/versions`, { credentials: "include" });
+      const r = await fetch(`/api/contractor-documents/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}/archived-versions`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
   });
@@ -5581,13 +5580,7 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
           <p className="text-xs text-muted-foreground truncate">{entityTitle}</p>
         </SheetHeader>
         <ScrollArea className="h-[calc(100vh-120px)] mt-4">
-          {!supportsVersions ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
-              <p className="text-sm font-medium">No version history</p>
-              <p className="text-xs mt-1">{entityType.charAt(0).toUpperCase() + entityType.slice(1)}s are single-revision documents. Each record represents a final artifact.</p>
-            </div>
-          ) : isLoading ? (
+          {isLoading ? (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           ) : versions.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
@@ -5598,15 +5591,35 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
           ) : (
             <div className="space-y-3 pr-2">
               {versions.map((v: any, i: number) => (
-                <div key={v.id || i} className={cn("border rounded-lg p-3", i === 0 ? "border-primary/30 bg-primary/5" : "")}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-semibold">Version {v.version_number ?? v.version ?? (versions.length - i)}</span>
-                    {i === 0 && <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5">Current</span>}
-                    {i > 0 && <span className="text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5">Superseded</span>}
+                <div key={`${v.source || "version"}-${v.id || i}`} className={cn("border rounded-lg p-3", v.current ? "border-primary/40 bg-primary/5" : "bg-muted/10")} data-testid={`row-archived-version-${v.id || i}`}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold truncate">{v.title || entityTitle}</p>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className="text-xs bg-muted rounded px-1.5 py-0.5">{v.versionNumber ? `Version ${v.versionNumber}` : fmtDate(v.createdAt)}</span>
+                        {v.current ? <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5">Current</span> : <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 rounded px-1.5 py-0.5">Archived</span>}
+                        <span className="text-xs bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-300 rounded px-1.5 py-0.5">Read-only</span>
+                      </div>
+                    </div>
+                    <Badge variant="outline" className="capitalize shrink-0">{String(v.status || "unknown").replace(/_/g, " ")}</Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">{fmtDate(v.created_at || v.createdAt)}</p>
-                  {(v.reason || v.change_notes) && <p className="text-xs mt-1 italic text-foreground/70">{v.reason || v.change_notes}</p>}
-                  {v.changed_by && <p className="text-xs text-muted-foreground mt-0.5">By: {v.changed_by}</p>}
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>Created: {fmtDate(v.createdAt || v.created_at)}</span>
+                    <span>Archived: {v.archivedAt || v.archived_at ? fmtDate(v.archivedAt || v.archived_at) : "—"}</span>
+                    <span>Signed/completed: {v.signedAt || v.completedAt ? fmtDate(v.signedAt || v.completedAt) : "—"}</span>
+                    <span>Reason: {v.archiveReason || v.reason || v.change_notes || "—"}</span>
+                  </div>
+                  {(v.proposalId || v.contractId || v.invoiceId) && (
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[10px]">
+                      {v.proposalId && <span className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-2 py-0.5">Proposal {String(v.proposalId).slice(0, 8)}</span>}
+                      {v.contractId && <span className="bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-2 py-0.5">Contract {String(v.contractId).slice(0, 8)}</span>}
+                      {v.invoiceId && <span className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 rounded-full px-2 py-0.5">Invoice {String(v.invoiceId).slice(0, 8)}</span>}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 mt-3">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!v.viewUrl} onClick={() => v.viewUrl && window.open(v.viewUrl, "_blank")} data-testid={`btn-view-archived-version-${v.id || i}`}><ExternalLink className="h-3 w-3 mr-1" /> View</Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!v.downloadUrl} onClick={() => v.downloadUrl && window.open(v.downloadUrl, "_blank")} data-testid={`btn-download-archived-version-${v.id || i}`}><Download className="h-3 w-3 mr-1" /> Download PDF</Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -5859,7 +5872,7 @@ function DocumentsSection() {
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
       status: i.status, date: i.createdAt, amount: i.amount,
-      immutable: isImmutable("invoice", i.status), hasVersions: false,
+      immutable: isImmutable("invoice", i.status), hasVersions: true,
       contractorId: i.contractorId,
       companyId: (i as any).companyId,
       companyName: (i as any).companyName,
@@ -5877,7 +5890,7 @@ function DocumentsSection() {
       id: String(d.id), type: "file",
       title: d.name || d.documentType || "Document",
       status: "on_file", date: d.createdAt || new Date().toISOString(),
-      immutable: true, hasVersions: false,
+      immutable: true, hasVersions: true,
       fileUrl: d.fileUrl || d.file_url,
       documentType: d.documentType || d.document_type,
     })),
@@ -6211,7 +6224,7 @@ function DocumentsSection() {
                   )}
                   {doc.hasVersions && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Version history"
-                      onClick={() => setVersionDrawer({ type: doc.type as "contract"|"proposal", id: doc.id, title: doc.title })}
+                      onClick={() => setVersionDrawer({ type: doc.type === "file" ? "dam" : doc.type as any, id: doc.id, title: doc.title })}
                       data-testid={`btn-history-${doc.id}`}>
                       <History className="h-3.5 w-3.5" />
                     </Button>
