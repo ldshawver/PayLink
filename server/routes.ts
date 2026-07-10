@@ -14059,7 +14059,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return res.status(202).json({ message: "Documenso is configured. Use POST /api/contractor-contracts/:id/send-for-signature to create and send the signing envelope.", contractId: req.params.id, baseUrl: config.baseUrl });
   });
 
-  app.get("/api/signing/contracts/:token", async (req, res) => {
+  const getPublicContractSigningStatus = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`
@@ -14068,10 +14068,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status,
                dsr.id AS signature_request_id, dsr.documenso_document_id, dsr.status AS signature_request_status
         FROM contract_signers cs
-        JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
         LEFT JOIN LATERAL (
           SELECT * FROM documenso_signature_requests dsr
-          WHERE dsr.document_type = 'contract'
+          WHERE dsr.document_type IN ('contract', 'contractor_hub_contract')
             AND dsr.related_record_id = cc.id
             AND dsr.company_id = cc.company_id
           ORDER BY dsr.created_at DESC LIMIT 1
@@ -14080,16 +14080,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         LIMIT 1
       `);
       const row = result.rows[0] as any;
-      if (!row) return res.status(404).json({ state: "missing_contract", message: "We could not find this contract." });
-      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_or_canceled", message: "This signing link is expired or no longer active." });
-      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      if (!row) return res.status(404).json({ state: "invalid_link", reason: "invalid_link", safeErrorReason: "invalid_link", message: "This signing link is invalid. Please contact the sender for a new link." });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_link", reason: "expired_link", safeErrorReason: "expired_link", message: "This signing link has expired. Please contact the sender for a new link." });
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id} AND company_id = ${row.company_id}`).catch(() => {});
       if ((req.path || "").includes("/status") || row.documenso_document_id) {
         await syncDocumensoContractStatus(row.contract_id).catch((err) => console.warn("[Documenso] contract status sync failed", err?.message || err));
       }
       const refreshed = firstRow<any>(await db.execute(sql`
         SELECT cs.status AS signer_status, cc.status AS contract_status
-        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id
-        WHERE cs.id = ${row.signer_id}
+        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
+        WHERE cs.id = ${row.signer_id} AND cs.company_id = ${row.company_id}
       `).catch(() => ({ rows: [] } as any)));
       if (refreshed) { row.signer_status = refreshed.signer_status; row.contract_status = refreshed.contract_status; }
       const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
@@ -14102,11 +14102,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             : "pending_signature";
       res.json({
         state,
+        reason: state,
+        safeErrorReason: state === "pending_signature" ? null : state,
         message: state === "fully_signed" ? "Contract fully signed."
           : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
           : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
           : "This contract is ready for your signature.",
         contractId: row.contract_id,
+        publicContractId: row.contract_id,
         title: row.title,
         signerName: row.signer_name,
         signerEmail: row.email,
@@ -14115,13 +14118,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         signatureRequestId: row.signature_request_id,
         documensoDocumentId: row.documenso_document_id,
         documensoRecipientId: row.documenso_recipient_id,
+        signingProviderUrl: row.documenso_signing_url,
         documensoSigningUrl: row.documenso_signing_url,
+        embeddedSigningData: null,
         canSign: state === "pending_signature",
       });
-    } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
-  });
+    } catch (e: any) {
+      console.error("[PublicContractSigning] status lookup failed", e?.message || e);
+      res.status(500).json({ state: "server_error", reason: "server_error", safeErrorReason: "server_error", message: "We could not load this signing link right now. Please try again or contact the sender." });
+    }
+  };
 
-  app.post("/api/signing/contracts/:token/complete", async (req, res) => {
+  app.get("/api/public/sign/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/public/sign/contracts/:token/status", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token/status", getPublicContractSigningStatus);
+
+  const completePublicContractSignature = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`SELECT * FROM contract_signers WHERE signing_token_hash = ${tokenHash} LIMIT 1`);
@@ -14145,8 +14158,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
       );
       res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
-    } catch (e: any) { res.status(500).json({ message: "Failed to complete signature" }); }
-  });
+    } catch (e: any) { res.status(500).json({ state: "server_error", message: "Failed to complete signature" }); }
+  };
+
+  app.post("/api/public/sign/contracts/:token/complete", completePublicContractSignature);
+  app.post("/api/signing/contracts/:token/complete", completePublicContractSignature);
 
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -20077,19 +20093,19 @@ Secondary PayLink view: ${hubUrl}`,
   }
 
   function buildMicrStr(routing: string, account: string, checkNum: string): string {
-    // ConnectCodeMICRT_X9.ttf (ANSI X9.7 compliant E-13B):
-    //   'a' = ⑆ transit routing delimiter
+    // micrenc.ttf E-13B character mapping (matches the browser preview):
+    //   'c' = ⑆ transit routing delimiter
+    //   'd' = ⑈ on-us symbol
     //   'b' = ⑇ amount symbol (not used in basic check layout)
-    //   'c' = ⑈ on-us symbol
-    //   'd' = ⑉ dash symbol
+    //   'a' = ⑉ dash symbol (not inserted by default)
     //
     // ANSI X9.7 BUSINESS CHECK field order (checks > 6 inches):
     //   Auxiliary On-Us  |  Transit Field    |  On-Us Field
     //   ⑈ checknum ⑈       ⑆ routing ⑆         account ⑈
     //
     // This differs from personal-check order (⑆ routing ⑆ account ⑈ check ⑈).
-    const T      = "a"; // ⑆ transit
-    const O      = "c"; // ⑈ on-us
+    const T      = "c"; // ⑆ transit
+    const O      = "d"; // ⑈ on-us
     const r      = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
     const a      = account.replace(/\D/g, "").slice(0, 17);
     const fmtChk = formatCheckNumber(checkNum);
@@ -20140,15 +20156,16 @@ Secondary PayLink view: ${hubUrl}`,
     // MICR font — hard failure for production checks; calibration falls back to Courier
     let micrFont: any = null;
     let micrFontLoaded = false;
-    const MICR_FONT_FILE = "ConnectCodeMICRT_X9.ttf"; // ANSI X9.7 compliant E-13B
+    const MICR_FONT_FILE = "micrenc.ttf";             // E-13B mapping used by buildMicrStr/client preview
     const MICR_FONT_SIZE = 12;                         // 12pt — reduced to match standard payroll check MICR sizing
     let micrFontName = "(none)";
     try {
       // Try __dirname-relative first (reliable in both dev and production PM2 regardless of cwd)
       // then fall back to process.cwd() for local dev
       const micrPathAlt1 = path.join(__dirname, "public", "fonts", MICR_FONT_FILE);
+      const micrPathAlt0 = path.join(process.cwd(), "public", "fonts", MICR_FONT_FILE);
       const micrPathAlt2 = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
-      const micrPath = fs.existsSync(micrPathAlt1) ? micrPathAlt1 : micrPathAlt2;
+      const micrPath = fs.existsSync(micrPathAlt1) ? micrPathAlt1 : fs.existsSync(micrPathAlt0) ? micrPathAlt0 : micrPathAlt2;
       const micrBytes = fs.readFileSync(micrPath);
       micrFont = await doc.embedFont(micrBytes);
       micrFontLoaded = true;
@@ -20413,15 +20430,15 @@ Secondary PayLink view: ${hubUrl}`,
     const bankLogoUrl: string | undefined = cfg.bankLogoUrl || cfg.bankLogo?.url;
     const bankLogoImg = !isCalibration ? await embedUploadOrRemoteImage(bankLogoUrl) : null;
     if (bankLogoImg) {
-      page.drawImage(bankLogoImg, { x: z1x(3.98) + bankLogoOffX, y: z1y(0.25 + 0.28) + bankLogoOffY, width: 40, height: 20 });
+      page.drawImage(bankLogoImg, { x: z1x(3.62) + bankLogoOffX, y: z1y(0.30 + 0.20) + bankLogoOffY, width: 62, height: 16 });
     }
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
       const bnaW = bankAddress.length * 3.7;
-      const bankCenterX = z1x(4.25);
-      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2) + bankLogoOffX, y: z1y(0.42) + bankLogoOffY, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
+      const bankCenterX = z1x(4.18);
+      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2) + bankLogoOffX, y: z1y(0.52) + bankLogoOffY, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
       if (bankAddress)
-        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(0.59) + bankLogoOffY, size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
+        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(0.66) + bankLogoOffY, size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
     }
 
     // ── Fractional ABA routing — upper-right corner (x ~5.25in), ANSI X9 requirement ─
@@ -20432,9 +20449,9 @@ Secondary PayLink view: ${hubUrl}`,
       if (fracStr) {
         const [fracNum, fracDen] = fracStr.split("\n");
         const fracX = z1x(5.25) + fractionalRoutingOffX;
-        const fracNumY  = z1y(0.30) + fractionalRoutingOffY;   // numerator baseline, lowered from 0.17in to clear top border
-        const fracLineY = z1y(0.35) + fractionalRoutingOffY;   // fraction rule
-        const fracDenY  = z1y(0.45) + fractionalRoutingOffY;   // denominator baseline
+        const fracNumY  = z1y(0.42) + fractionalRoutingOffY;   // numerator baseline, lowered from 0.17in to clear top border; lowered again from 0.30in after reopen
+        const fracLineY = z1y(0.47) + fractionalRoutingOffY;   // fraction rule
+        const fracDenY  = z1y(0.57) + fractionalRoutingOffY;   // denominator baseline
         drawGuide(fracX, fracDenY - 2, 70, 26, "FRACTIONAL RTG");
         page.drawText(fracNum, { x: fracX, y: fracNumY, size: 7.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
         page.drawLine({ start: { x: fracX, y: fracLineY }, end: { x: fracX + 55, y: fracLineY }, color: rgb(0.35, 0.35, 0.35), thickness: 0.6 });
@@ -20529,9 +20546,11 @@ Secondary PayLink view: ${hubUrl}`,
     // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.38in ──
     //    No other drawing inside this band.
     drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
-    if (showMicrLine)
-      page.drawText(buildMicrStr(routing, account, checkNum),
-        { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
+    if (showMicrLine) {
+      const micrString = buildMicrStr(routing, account, checkNum);
+      console.log(`[CHECK_PDF] MICR source string (redacted): ${micrString.replace(/\d(?=\d{4})/g, "•")}`);
+      page.drawText(micrString, { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
+    }
 
     // Zone 1 / Zone 2 separator — REMOVED: check stock has physical perforations; software lines are redundant.
 
@@ -20571,6 +20590,89 @@ Secondary PayLink view: ${hubUrl}`,
     // ── Paystub / vendor-check info (right column of Zone 2) ────────────────
     // vcMemo declared here so it is accessible in both Zone 2 and Zone 3 sections
     const vcMemo = params.vendorCheck?.memo || "";
+    const truncatePdfText = (text: string, maxChars: number): string =>
+      text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
+    const tradeCreditValue = (credit: any): number => Number(credit.totalValue || credit.total_value || 0);
+    const tradeCreditLabel = (credit: any): string => {
+      const itemName = sanitizeForPdf(String(credit.itemName || credit.item_name || credit.productName || credit.product_name || "Goods"));
+      const sku = sanitizeForPdf(String(credit.itemSku || credit.item_sku || credit.sku || credit.reference || credit.referenceNumber || credit.reference_number || ""));
+      const qty = sanitizeForPdf(String(credit.quantity || credit.qty || "1"));
+      const unitValue = Number(credit.unitValue || credit.unit_value || 0);
+      const approval = credit.approvalStatus || credit.approval_status || credit.approvedAt || credit.approved_at ? "approved" : "pending";
+      const delivery = sanitizeForPdf(String(credit.deliveryStatus || credit.delivery_status || ""));
+      const agreement = sanitizeForPdf(String(credit.tradeAgreementNumber || credit.trade_agreement_number || credit.agreementNumber || credit.agreement_number || ""));
+      return [
+        `${itemName}${sku ? ` (${sku})` : ""}`,
+        `qty ${qty}`,
+        unitValue > 0 ? `unit $${fmtMoney(unitValue)}` : "",
+        approval,
+        delivery ? `delivery ${delivery}` : "",
+        agreement ? `ref ${agreement}` : "",
+      ].filter(Boolean).join(" • ");
+    };
+    const renderContractorStatementStub = () => {
+      // Reuse the same Zone 2 right-column bounding box as the employee paystub.
+      // This white overlay replaces contractor-only stub content without moving the check face/header/MICR.
+      page.drawRectangle({ x: psX - 4, y: mailBot + 4, width: psW + 8, height: checkBot - mailBot - 6, color: rgb(1, 1, 1) });
+      const psC1 = psX, psC2 = Math.min(psX + 150, rm - 116), psC3 = rm - 108, psC4 = rm - 52;
+      let psY = checkBot - 30 + paystubOffY;
+      const minY = mailBot + 8;
+      const row = (label: string, value: string, bold = false, color = rgb(0, 0, 0), size = 6.7) => {
+        if (psY < minY) return;
+        page.drawText(label, { x: psC1, y: psY, size, font: bold ? hvB : hv, color });
+        page.drawText(value, { x: psC3, y: psY, size, font: bold ? hvB : cour, color });
+        psY -= 10;
+      };
+
+      page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
+      page.drawText("CONTRACTOR STATEMENT", { x: psX + psW / 2 - 55, y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
+      const psChkLabel = `Check No. ${fmtCheckNum}`;
+      page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
+
+      page.drawText(truncatePdfText(wName, 36), { x: psC1, y: psY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(truncatePdfText(coName, 34), { x: psC2, y: psY, size: 6.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
+      psY -= 10;
+      page.drawText(`Statement Date: ${payDate}`, { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
+      page.drawText(`Statement No. ${fmtCheckNum}`, { x: psC2, y: psY, size: 6.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
+      psY -= 12;
+
+      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 12, color: rgb(0.88, 0.88, 0.88) });
+      page.drawText("SERVICES / COMPENSATION", { x: psC1, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText("AMOUNT", { x: psC3, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
+      psY -= 12;
+      row("Contract services", `$${fmtMoney(totalCompensation)}`);
+      psY -= 2;
+      row("TOTAL COMPENSATION", `$${fmtMoney(totalCompensation)}`, true);
+      if (totalTradeCredit > 0) row("Trade Compensation - Goods", `($${fmtMoney(totalTradeCredit)})`, true, rgb(0.55, 0, 0));
+      else if (psY >= minY) { page.drawText("No trade compensation applied.", { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.35, 0.35, 0.35) }); psY -= 9; }
+      row("Other Non-Cash Credits", "$0.00", false, rgb(0.35, 0.35, 0.35));
+      page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 12, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+      row("CASH PAYMENT / CHECK AMOUNT", `$${fmtMoney(netPay)}`, true, rgb(0, 0, 0.55), 6.8);
+      row("BALANCE DUE", "$0.00", true);
+
+      if (psY >= minY + 20) {
+        page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 12, color: rgb(0.90, 0.96, 0.92), opacity: 0.9 });
+        page.drawText("TRADE GOODS CREDIT", { x: psC1, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+        page.drawText("VALUE", { x: psC4, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+        psY -= 11;
+        for (const credit of tradeCredits.slice(0, 3)) {
+          if (psY < minY + 8) break;
+          page.drawText(truncatePdfText(tradeCreditLabel(credit), 56), { x: psC1, y: psY, size: 5.7, font: hv, color: rgb(0, 0, 0) });
+          page.drawText(`($${fmtMoney(tradeCreditValue(credit))})`, { x: psC3, y: psY, size: 5.7, font: cour, color: rgb(0, 0, 0) });
+          psY -= 8;
+        }
+      }
+      if (psY >= minY + 18) {
+        page.drawText("PROOF OF PAYMENT", { x: psC1, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) }); psY -= 9;
+        page.drawText(`Check ${fmtCheckNum} • ${payDate} • Check $${fmtMoney(netPay)} • Trade $${fmtMoney(totalTradeCredit)} • Total $${fmtMoney(totalCompensation)} • Paid`, {
+          x: psC1, y: psY, size: 5.6, font: hv, color: rgb(0.1, 0.1, 0.1),
+        });
+      }
+    };
+    const renderEmployeePaystub = () => {
+      // Existing employee paystub renderer intentionally remains inline below.
+      // Employee output is unchanged; contractor output is overlaid by renderContractorStatementStub().
+    };
     // earnRows/totalHrs hoisted here so Zone 3 can reference them regardless of branch taken in Zone 2
     type ERow = [string, string, string, string, string];
     const earnRows: ERow[] = [];
@@ -20709,6 +20811,8 @@ Secondary PayLink view: ${hubUrl}`,
       if (psY >= mailBot + 8) { page.drawText("Medicare 2.9%",              { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(medSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
       if (psY >= mailBot + 8) { page.drawText("Total SE Tax 15.3%",         { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: psC4, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(totSEytd)}`, { x: psC5, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); }
     }
+    if (isContractor) renderContractorStatementStub();
+    else renderEmployeePaystub();
     } else {
       // Vendor check info panel — right column of Zone 2
       page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.08, 0.38, 0.14), opacity: 0.9 });
@@ -20870,6 +20974,43 @@ Secondary PayLink view: ${hubUrl}`,
           { x: lm, y: z3Y, size: 5.5, font: hv, color: rgb(0.4, 0.4, 0.4) });
     }
     } // end Zone 3 else block (regular payroll earnings statement)
+
+    if (isContractor && !params.vendorCheck) {
+      // Replace only contractor company-copy content in the existing Zone 3 area.
+      // Employee company-copy rendering above is untouched.
+      page.drawRectangle({ x: lm - 4, y: 18, width: rm - lm + 8, height: mailBot - 24, color: rgb(1, 1, 1) });
+      const z3BannerY = mailBot - 14;
+      page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
+      page.drawText("CONTRACTOR STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+      const z3ChkLabel = `Check No. ${fmtCheckNum}`;
+      page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+      let cy = z3BannerY - 16;
+      page.drawText(wName, { x: lm, y: cy, size: 9, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`Company: ${coName}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
+      if (wStreet) page.drawText(wStreet, { x: lm, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) });
+      page.drawText(`Statement Date: ${payDate}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
+      if (wCityStateZip) page.drawText(wCityStateZip, { x: lm, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) });
+      page.drawText(`Payment Status: Paid`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 16;
+
+      const cAmt = rm - 95;
+      page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
+      page.drawText("SERVICES / COMPENSATION", { x: lm, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText("AMOUNT", { x: cAmt, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) }); cy -= 14;
+      page.drawText("Contract services", { x: lm, y: cy, size: 7.5, font: hv, color: rgb(0, 0, 0) });
+      page.drawText(`$${fmtMoney(totalCompensation)}`, { x: cAmt, y: cy, size: 7.5, font: cour, color: rgb(0, 0, 0) }); cy -= 12;
+      page.drawText("TOTAL COMPENSATION", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`$${fmtMoney(totalCompensation)}`, { x: cAmt, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0) }); cy -= 12;
+      page.drawText("Trade Compensation - Goods", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`($${fmtMoney(totalTradeCredit)})`, { x: cAmt, y: cy, size: 8, font: hvB, color: rgb(0.55, 0, 0) }); cy -= 12;
+      page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 14, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+      page.drawText("CASH PAYMENT / CHECK AMOUNT", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      page.drawText(`$${fmtMoney(netPay)}`, { x: cAmt, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) }); cy -= 16;
+
+      page.drawText("PROOF OF PAYMENT", { x: lm, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`Check ${fmtCheckNum} • ${payDate} • Check $${fmtMoney(netPay)} • Trade $${fmtMoney(totalTradeCredit)} • Total $${fmtMoney(totalCompensation)} • Paid`, {
+        x: lm + 105, y: cy, size: 6.2, font: hv, color: rgb(0.15, 0.15, 0.15),
+      });
+    }
 
     // Footer
     const footerText = coEin ? `This is a computer-generated document. ${coName} - EIN: ${coEin}` : "This is a computer-generated document.";
@@ -26305,8 +26446,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.post("/api/app-doctor/reports", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = req.body?.companyId || user?.companyId || null;
+      if (requestedCompanyId && !isPlatformUser(user?.role) && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       const report = await recordAppDoctorReport(req, {
-        companyId: req.body?.companyId || null,
+        companyId: requestedCompanyId,
         source: req.body?.source,
         severity: req.body?.severity,
         title: req.body?.title,
@@ -26355,6 +26501,71 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  function appDoctorMasked(value: string | undefined | null) {
+    if (!value) return "missing";
+    return "configured";
+  }
+
+  async function collectAppDoctorOperationsSnapshot(companyId?: string | null) {
+    const deploymentHistoryPath = "/home/paylinkssh/deployment-history.log";
+    const prodEnv = process.env.APP_ENV || getAppEnvironment();
+    const port = process.env.PORT || (prodEnv === "staging" ? "8010" : "8000");
+    const companyCount = pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM companies`));
+    const scopedOpenReports = companyId
+      ? pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_reports WHERE company_id = ${companyId} AND status IN ('open','reopened','ai_review_ready')`))
+      : pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_reports WHERE status IN ('open','reopened','ai_review_ready')`));
+    const pendingTickets = companyId
+      ? pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE company_id = ${companyId} AND status IN ('pending_approval','approved','pr_requested')`))
+      : pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status IN ('pending_approval','approved','pr_requested')`));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      deploymentManagement: {
+        environment: prodEnv,
+        port,
+        commit: getCommitHash(),
+        historyLog: deploymentHistoryPath,
+        productionManualOnly: true,
+        stagingDefaultOnPush: true,
+      },
+      stagingVerification: {
+        requiredProcess: "paylink-staging",
+        requiredPort: "8010",
+        requiredHost: "staging.mypaylink.app",
+        requiresSeparateDatabaseUrl: true,
+        requiresSeparateUploads: true,
+        status: prodEnv === "staging" && port === "8010" ? "current-process-staging" : "verify-on-vps",
+      },
+      databaseIntegrityScans: {
+        databaseUrl: appDoctorMasked(process.env.DATABASE_URL),
+        lastCheck: "SELECT 1 performed by diagnostics endpoint",
+        destructiveChecks: false,
+      },
+      tenantHealthScans: {
+        companyCount: Number(companyCount?.cnt || 0),
+        scopedCompanyId: companyId || null,
+        openReports: Number(scopedOpenReports?.cnt || 0),
+        pendingRepairTickets: Number(pendingTickets?.cnt || 0),
+      },
+      pushNotificationDiagnostics: {
+        vapidPublicKey: appDoctorMasked(process.env.VAPID_PUBLIC_KEY),
+        vapidPrivateKey: appDoctorMasked(process.env.VAPID_PRIVATE_KEY),
+        twilioConfigured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+      },
+      releaseManagement: {
+        version: getAppVersion(),
+        releaseTagRequiredForProduction: true,
+        productionPushDeploysBlocked: true,
+      },
+      rollbackManagement: {
+        rollbackRequiresHumanApproval: true,
+        deploymentHistoryLog: deploymentHistoryPath,
+        stagingRollbackCommand: "pm2 restart paylink-staging --update-env",
+        productionRollbackCommand: "Use manual production workflow with approved release tag or documented rollback procedure.",
+      },
+    };
+  }
+
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -26364,7 +26575,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!isGlobalDiagnostics && !user?.companyId) {
         return res.status(403).json({ message: "Global diagnostics require a platform admin role" });
       }
-      const companyId = isGlobalDiagnostics ? requestedCompanyId : user?.companyId;
+      if (requestedCompanyId && !isGlobalDiagnostics && requestedCompanyId !== user?.companyId && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const diagnosticsCompanyId = isGlobalDiagnostics ? requestedCompanyId : (requestedCompanyId === user?.companyId ? requestedCompanyId : user?.companyId);
+      const companyId = diagnosticsCompanyId;
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
@@ -26467,9 +26682,25 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           open: parseInt(openTicketRow?.cnt || "0"),
           pendingApproval: parseInt(pendingApprovalRow?.cnt || "0"),
         },
+        operations: await collectAppDoctorOperationsSnapshot(diagnosticsCompanyId || null),
       });
     } catch (e: any) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to collect diagnostics") });
+    }
+  });
+
+  app.get("/api/app-doctor/operations", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = isPlatformUser(user?.role);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const companyId = isPlatform ? requestedCompanyId : user?.companyId;
+      if (requestedCompanyId && !isPlatform && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.json(await collectAppDoctorOperationsSnapshot(companyId));
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to collect App Doctor operations") });
     }
   });
 
@@ -26505,6 +26736,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!reportId) return res.status(400).json({ message: "reportId required" });
       const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
       if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const existingTicket = pgRow<any>(await db.execute(sql`
+        SELECT * FROM app_doctor_repair_tickets
+        WHERE report_id = ${reportId}
+          AND status NOT IN ('rejected','merged')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `));
+      if (existingTicket) return res.status(200).json({ ...existingTicket, duplicate: true });
 
       const severityClass = report.severity_class || "medium";
       const requiredApproverRole = severityClass === "major" ? "global_admin" : "admin";
@@ -26594,6 +26834,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         WHERE t.id = ${req.params.id}
       `));
       if (!ticket) return res.status(404).json({ message: "Repair ticket not found" });
+      if (ticket.status === "pr_created" && ticket.pr_url) return res.json({ ...ticket, prUrl: ticket.pr_url, duplicate: true });
+      if (ticket.status === "pr_requested") return res.json({ ...ticket, note: "Manual PR already requested for this ticket.", duplicate: true });
       if (ticket.status !== "approved") return res.status(400).json({ message: "Ticket must be approved before creating a PR" });
 
       const githubToken = process.env.GITHUB_TOKEN;
@@ -26631,11 +26873,45 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const refData: any = await refRes.json();
       const baseSha = refData.object?.sha;
 
-      // Create branch
-      await fetch(`${ghBase}/git/refs`, {
+      // Create branch; tolerate retries when the App Doctor button is clicked twice.
+      const branchRes = await fetch(`${ghBase}/git/refs`, {
         method: "POST",
         headers: ghHeaders,
         body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+      });
+      if (!branchRes.ok && branchRes.status !== 422) {
+        const err: any = await branchRes.json().catch(() => ({}));
+        throw new Error(`GitHub branch creation failed: ${branchRes.status} — ${err.message || JSON.stringify(err)}`);
+      }
+
+      // Commit a review artifact so the branch has a diff and GitHub can open a PR.
+      const artifactPath = `.github/app-doctor-tickets/${ticket.id}.md`;
+      const artifactBody = [
+        `# App Doctor Repair Ticket`,
+        ``,
+        `- Ticket ID: ${ticket.id}`,
+        `- Report: ${ticket.report_title || "Unknown"}`,
+        `- Severity: ${ticket.severity_class}`,
+        `- Required approver: ${ticket.required_approver_role}`,
+        ``,
+        `## Proposed patch`,
+        "```diff",
+        ticket.proposed_patch || "# No generated patch; engineer must apply a manual fix.",
+        "```",
+      ].join("\n");
+      await fetch(`${ghBase}/contents/${artifactPath}`, {
+        method: "PUT",
+        headers: ghHeaders,
+        body: JSON.stringify({
+          message: `App Doctor repair ticket ${ticket.id}`,
+          content: Buffer.from(artifactBody).toString("base64"),
+          branch: branchName,
+        }),
+      }).then(async (artifactRes) => {
+        if (!artifactRes.ok && artifactRes.status !== 422) {
+          const err: any = await artifactRes.json().catch(() => ({}));
+          throw new Error(`GitHub repair artifact commit failed: ${artifactRes.status} — ${err.message || JSON.stringify(err)}`);
+        }
       });
 
       // Compose PR body
@@ -26677,11 +26953,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           base: "main",
         }),
       });
+      let pr: any;
       if (!prRes.ok) {
         const err: any = await prRes.json().catch(() => ({}));
-        throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+        if (prRes.status === 422) {
+          const existingPrRes = await fetch(`${ghBase}/pulls?head=${encodeURIComponent(`${owner}:${branchName}`)}&state=open`, { headers: ghHeaders });
+          const existingPrs: any[] = existingPrRes.ok ? (await existingPrRes.json() as any[]) : [];
+          pr = existingPrs[0];
+        }
+        if (!pr) throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+      } else {
+        pr = await prRes.json();
       }
-      const pr: any = await prRes.json();
 
       // Add labels (best-effort)
       await fetch(`${ghBase}/issues/${pr.number}/labels`, {

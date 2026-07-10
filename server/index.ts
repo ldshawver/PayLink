@@ -45,7 +45,7 @@ const CAPACITOR_ORIGINS = [
  */
 app.use((req, res, next) => {
   const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString().split(':')[0];
-  const isPublicSigningRoute = req.path === '/sign' || req.path.startsWith('/sign/') || req.path.startsWith('/api/signing/');
+  const isPublicSigningRoute = req.path === '/sign' || req.path.startsWith('/sign/') || req.path.startsWith('/api/signing/') || req.path.startsWith('/api/public/sign/');
   if (host === 'app.mypaylink.app' && !isPublicSigningRoute) {
     return res.redirect(301, `https://mypaylink.app${req.originalUrl}`);
   }

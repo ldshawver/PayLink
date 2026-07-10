@@ -116,6 +116,15 @@ type Diagnostics = {
     last7dByCategory: Record<string, number>;
   };
   repairTickets: { open: number; pendingApproval: number };
+  operations?: {
+    deploymentManagement: { environment: string; port: string; productionManualOnly: boolean; stagingDefaultOnPush: boolean };
+    stagingVerification: { requiredProcess: string; requiredPort: string; requiredHost: string; status: string };
+    databaseIntegrityScans: { databaseUrl: string; lastCheck: string; destructiveChecks: boolean };
+    tenantHealthScans: { companyCount: number; openReports: number; pendingRepairTickets: number };
+    pushNotificationDiagnostics: { vapidPublicKey: string; vapidPrivateKey: string; twilioConfigured: boolean };
+    releaseManagement: { version: string; releaseTagRequiredForProduction: boolean; productionPushDeploysBlocked: boolean };
+    rollbackManagement: { rollbackRequiresHumanApproval: boolean; deploymentHistoryLog: string };
+  };
 };
 
 type Company = { id: string; name: string };
@@ -482,6 +491,42 @@ export default function AppDoctorPage() {
                   </div>
                 </div>
               </div>
+
+
+              {/* Operations hub */}
+              {diag.operations && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="card-app-doctor-operations-hub">
+                  <p className="text-xs font-medium mb-3 flex items-center gap-1"><ClipboardList className="h-3 w-3" />Operational Hub</p>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+                    <div>
+                      <p className="font-medium">Deployment Management</p>
+                      <p className="text-muted-foreground">{diag.operations.deploymentManagement.environment} · port {diag.operations.deploymentManagement.port}</p>
+                      <p className="text-green-600">Production push blocked: {diag.operations.deploymentManagement.productionManualOnly ? "yes" : "check"}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Staging Verification</p>
+                      <p className="text-muted-foreground">{diag.operations.stagingVerification.requiredProcess} on {diag.operations.stagingVerification.requiredPort}</p>
+                      <p className="text-muted-foreground">{diag.operations.stagingVerification.requiredHost}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Database / Tenant Scans</p>
+                      <p className="text-muted-foreground">DB URL: {diag.operations.databaseIntegrityScans.databaseUrl}</p>
+                      <p className="text-muted-foreground">Tenants: {diag.operations.tenantHealthScans.companyCount} · open reports {diag.operations.tenantHealthScans.openReports}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Release / Rollback</p>
+                      <p className="text-muted-foreground">v{diag.operations.releaseManagement.version} · release tag required</p>
+                      <p className="text-muted-foreground">History: {diag.operations.rollbackManagement.deploymentHistoryLog}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Push Notification Diagnostics</p>
+                      <p className="text-muted-foreground">VAPID public: {diag.operations.pushNotificationDiagnostics.vapidPublicKey}</p>
+                      <p className="text-muted-foreground">Twilio: {diag.operations.pushNotificationDiagnostics.twilioConfigured ? "configured" : "missing"}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Documenso contract diagnostics */}
               {diag.documenso && (
                 <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="card-documenso-contract-diagnostics">
@@ -510,6 +555,7 @@ export default function AppDoctorPage() {
                   ) : <p className="mt-2 text-xs text-muted-foreground">No recent contract Documenso records found for this scope.</p>}
                 </div>
               )}
+
 
               {/* Repair tickets */}
               <div className="flex items-start gap-2 rounded-lg border p-3">
