@@ -14089,13 +14089,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `).catch(() => ({ rows: [] } as any)));
       if (refreshed) { row.signer_status = refreshed.signer_status; row.contract_status = refreshed.contract_status; }
       const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
+      const documensoMissingSigningUrl = !!row.documenso_document_id && !row.documenso_signing_url && !["signed", "fully_signed", "completed", "active"].includes(String(row.signer_status || row.contract_status));
       const state = ["fully_signed", "completed", "active"].includes(String(row.contract_status))
         ? "fully_signed"
         : inactiveSignerStatuses.includes(String(row.signer_status || row.signature_request_status || row.contract_status))
           ? "expired_or_canceled"
           : row.signer_status === "signed"
             ? "already_signed"
-            : "pending_signature";
+            : documensoMissingSigningUrl
+              ? "documenso_unavailable"
+              : "pending_signature";
       res.json({
         state,
         reason: state,
@@ -14103,6 +14106,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         message: state === "fully_signed" ? "Contract fully signed."
           : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
           : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
+          : state === "documenso_unavailable" ? "The signing provider is temporarily unavailable for this link. Please contact the sender or try again later."
           : "This contract is ready for your signature.",
         contractId: row.contract_id,
         publicContractId: row.contract_id,
@@ -14118,6 +14122,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         documensoSigningUrl: row.documenso_signing_url,
         embeddedSigningData: null,
         canSign: state === "pending_signature",
+        isDocumensoUnavailable: state === "documenso_unavailable",
       });
     } catch (e: any) {
       console.error("[PublicContractSigning] status lookup failed", e?.message || e);
@@ -14153,6 +14158,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${signer.contract_id}`
         : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
       );
+      if (pendingCount === 0 && signer.contract_id) {
+        try {
+          const contractRow = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${signer.contract_id}`));
+          if (contractRow?.proposal_id) {
+            const prop = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contractRow.proposal_id} AND company_id = ${contractRow.company_id}`));
+            if (prop && !prop.converted_to_invoice_id) {
+              await autoCreateProposalBackedInvoice(contractRow, prop, {
+                countInvoicesForContractor: async (contractorId: string) => Number((firstRow<any>(await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contractRow.company_id}`))?.c) || 0),
+                createInvoice: async (values: Record<string, unknown>) => firstRow<any>(await db.execute(sql`
+                  INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
+                  VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
+                  RETURNING id
+                `)),
+                markProposalConverted: async (proposalId: string, invoiceId: string) => { await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW() WHERE id = ${proposalId} AND company_id = ${contractRow.company_id} AND converted_to_invoice_id IS NULL`); },
+              });
+            }
+          }
+        } catch (invoiceErr) { console.warn("[PublicContractSigning] auto-invoice creation failed", invoiceErr); }
+      }
       res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
     } catch (e: any) { res.status(500).json({ state: "server_error", message: "Failed to complete signature" }); }
   };
@@ -15595,19 +15619,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { sendGenericNotificationEmail } = await import("./notifications.js");
       for (const link of signingLinks) {
         const email = normalizeSignerEmail(link.email);
-        if (!email || !link.signingUrl) continue;
+        if (!email) continue;
         const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
-        const hubUrl = `${appBaseUrl}/app/contractor-hub?section=contracts&id=${contractId}`;
+        const myPayLinkSigningUrl = recipientMetadata.find((r) => normalizeSignerEmail(r.email) === email)?.myPayLinkSigningUrl || buildContractSigningUrl(appBaseUrl, signerTokens.get(email)?.token || contractId);
         await sendGenericNotificationEmail({
           recipientName: matchingSigner?.name || link.email || "Signer",
           email,
           title: `Please sign: ${contract.title || "Contract"}`,
-          body: `Please sign this contract in Documenso.
+          body: `Please sign this contract using the secure MyPayLink signing page. The page will open the exact Documenso session for your signer record.
 
-Documenso signing link: ${link.signingUrl}
+Signing page: ${myPayLinkSigningUrl}
 
-Secondary PayLink view: ${hubUrl}`,
-          actionUrl: link.signingUrl,
+If Documenso is unavailable, MyPayLink will show a controlled status instead of a blank page.`,
+          actionUrl: myPayLinkSigningUrl,
         }).catch((err) => console.warn("[Documenso] PayLink signer email failed", err?.message || err));
       }
 
@@ -15819,6 +15843,125 @@ Secondary PayLink view: ${hubUrl}`,
     return res.status(307).setHeader("Location", "/api/dam-documents").json({ message: "Use /api/dam-documents for upload-compatible Document Hub assets." });
   });
 
+
+  app.get("/api/contractor-documents/:entityType/:id/archived-versions", requireAuth, async (req, res) => {
+    try {
+      const entityType = String(req.params.entityType || "").toLowerCase();
+      const entityId = req.params.id;
+      if (!["proposal", "contract", "invoice", "dam", "file"].includes(entityType)) return res.status(400).json({ message: "Unsupported document type" });
+      const user = await storage.getUser(req.session.userId!);
+      const workerRes = await db.execute(sql`SELECT worker_id, company_id FROM users WHERE id = ${req.session.userId} LIMIT 1`);
+      const workerId = (workerRes.rows[0] as any)?.worker_id || null;
+      const sessionCompanyId = (workerRes.rows[0] as any)?.company_id || user?.companyId || null;
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isCompanyRep = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || (user?.role || "").startsWith("tenant_") || isPlatform;
+
+      const assertEntityAccess = async () => {
+        if (entityType === "proposal") {
+          const row = firstRow<any>(await db.execute(sql`SELECT id, company_id, contractor_id, title, proposal_number, status, created_at, updated_at, archived_at, archive_reason, archived_document_id, converted_to_contract_id, converted_to_invoice_id FROM contractor_proposals WHERE id = ${entityId} AND deleted_at IS NULL`));
+          if (!row) return null;
+          if (!isCompanyRep && row.contractor_id !== workerId) return null;
+          if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, row.company_id))) return null;
+          return row;
+        }
+        if (entityType === "contract") {
+          const row = firstRow<any>(await db.execute(sql`SELECT id, company_id, contractor_id, proposal_id, title, contract_number, status, created_at, updated_at, fully_signed_at, archived_to_documents_at, archived_document_id FROM contractor_contracts WHERE id = ${entityId}`));
+          if (!row) return null;
+          if (!isCompanyRep && row.contractor_id !== workerId) return null;
+          if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, row.company_id))) return null;
+          return row;
+        }
+        if (entityType === "invoice") {
+          const row = firstRow<any>(await db.execute(sql`SELECT id, company_id, contractor_id, proposal_id, contract_id, title, invoice_number, status, created_at, updated_at, paid_at, archived_at, archived_document_id, duplicate_of_invoice_id FROM contractor_invoices WHERE id = ${entityId}`));
+          if (!row) return null;
+          if (!isCompanyRep && row.contractor_id !== workerId) return null;
+          if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, row.company_id))) return null;
+          return row;
+        }
+        const doc = firstRow<any>(await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${entityId} AND deleted_at IS NULL`));
+        if (!doc) return null;
+        if (!isCompanyRep && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return null;
+        if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return null;
+        return doc;
+      };
+
+      const entity = await assertEntityAccess();
+      if (!entity) return res.status(404).json({ message: "Document not found or access denied" });
+      const companyId = entity.company_id || null;
+      const contractorId = entity.contractor_id || entity.worker_id || entity.related_contractor_id || null;
+      const rows: any[] = [];
+      const title = entity.title || entity.proposal_number || entity.contract_number || entity.invoice_number || entity.file_name || "Document";
+      rows.push({
+        id: entity.id,
+        source: entityType === "file" ? "dam" : entityType,
+        title,
+        versionNumber: entity.version_number || 1,
+        status: entity.status || "current",
+        createdAt: entity.created_at,
+        signedAt: entity.fully_signed_at || entity.signed_at || null,
+        completedAt: entity.fully_signed_at || entity.paid_at || null,
+        archivedAt: entity.archived_at || entity.archived_to_documents_at || null,
+        archiveReason: entity.archive_reason || null,
+        proposalId: entity.proposal_id || (entityType === "proposal" ? entity.id : null),
+        contractId: entity.contract_id || (entityType === "contract" ? entity.id : null),
+        invoiceId: entity.invoice_id || (entityType === "invoice" ? entity.id : null),
+        current: true,
+        readOnly: ["approved", "converted_to_contract", "fully_signed", "completed", "active", "paid", "closed", "archived"].includes(String(entity.status || "")) || !!entity.archived_at,
+        viewUrl: entityType === "proposal" ? `/api/contractor-proposals/${entity.id}/pdf` : entityType === "contract" ? `/api/contractor-contracts/${entity.id}/download` : entityType === "invoice" ? `/api/contractor-invoices/${entity.id}/download` : `/api/dam-documents/${entity.id}/download`,
+        downloadUrl: entityType === "proposal" ? `/api/contractor-proposals/${entity.id}/pdf` : entityType === "contract" ? `/api/contractor-contracts/${entity.id}/download` : entityType === "invoice" ? `/api/contractor-invoices/${entity.id}/download` : `/api/dam-documents/${entity.id}/download`,
+      });
+
+      if (entityType === "proposal") {
+        const versions = (await db.execute(sql`SELECT id, version, snapshot_json, change_notes, created_at FROM proposal_versions WHERE proposal_id = ${entityId} ORDER BY version DESC`).catch(() => ({ rows: [] } as any))).rows as any[];
+        rows.push(...versions.map(v => ({ id: v.id, source: "proposal_version", title, versionNumber: v.version, status: "version_snapshot", createdAt: v.created_at, archivedAt: v.created_at, archiveReason: v.change_notes, proposalId: entityId, contractId: entity.converted_to_contract_id || null, invoiceId: entity.converted_to_invoice_id || null, current: false, readOnly: true, viewUrl: null, downloadUrl: null })));
+      }
+      if (entityType === "contract") {
+        const versions = (await db.execute(sql`SELECT id, version, reason, created_at FROM contract_versions WHERE contract_id = ${entityId} ORDER BY version DESC`).catch(() => ({ rows: [] } as any))).rows as any[];
+        rows.push(...versions.map(v => ({ id: v.id, source: "contract_version", title, versionNumber: v.version, status: "version_snapshot", createdAt: v.created_at, archivedAt: v.created_at, archiveReason: v.reason, proposalId: entity.proposal_id || null, contractId: entityId, invoiceId: null, current: false, readOnly: true, viewUrl: null, downloadUrl: null })));
+      }
+
+      const damRows = (await db.execute(sql`
+        SELECT * FROM dam_documents
+        WHERE deleted_at IS NULL
+          AND (${companyId}::text IS NULL OR company_id = ${companyId})
+          AND (${contractorId}::text IS NULL OR worker_id = ${contractorId} OR related_contractor_id = ${contractorId})
+          AND (
+            ${entityType === "proposal" ? sql`proposal_id = ${entityId} OR (linked_entity_type = 'proposal' AND linked_entity_id = ${entityId})` : sql`FALSE`}
+            OR ${entityType === "contract" ? sql`contract_id = ${entityId} OR (linked_entity_type = 'contract' AND linked_entity_id = ${entityId})` : sql`FALSE`}
+            OR ${entityType === "invoice" ? sql`invoice_id = ${entityId} OR (linked_entity_type = 'invoice' AND linked_entity_id = ${entityId})` : sql`FALSE`}
+            OR ${(entityType === "dam" || entityType === "file") ? sql`id = ${entityId} OR superseded_by_document_id = ${entityId}` : sql`FALSE`}
+          )
+        ORDER BY COALESCE(is_archived, FALSE) ASC, created_at DESC
+      `).catch(() => ({ rows: [] } as any))).rows as any[];
+      for (const d of damRows) {
+        if (rows.some(r => r.source === "dam" && r.id === d.id)) continue;
+        rows.push({
+          id: d.id,
+          source: "dam",
+          title: d.title || d.file_name || title,
+          versionNumber: d.version_number || null,
+          status: d.status || d.lifecycle_status || (d.is_archived ? "archived" : "active"),
+          createdAt: d.created_at,
+          signedAt: d.signed_at || null,
+          completedAt: d.finalized_at || d.paid_at || d.signed_at || null,
+          archivedAt: d.archived_at || null,
+          archiveReason: d.deleted_reason || d.lifecycle_status || null,
+          proposalId: d.proposal_id || entity.proposal_id || (entityType === "proposal" ? entityId : null),
+          contractId: d.contract_id || entity.contract_id || (entityType === "contract" ? entityId : null),
+          invoiceId: d.invoice_id || entity.invoice_id || (entityType === "invoice" ? entityId : null),
+          current: !d.is_archived && d.id === entity.archived_document_id,
+          readOnly: true,
+          viewUrl: `/api/dam-documents/${d.id}/download`,
+          downloadUrl: `/api/dam-documents/${d.id}/download`,
+        });
+      }
+      rows.sort((a, b) => Number(b.current) - Number(a.current) || new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: "Failed to fetch archived versions" });
+    }
+  });
+
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -15889,8 +16032,8 @@ Secondary PayLink view: ${hubUrl}`,
       if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = result.rows[0] as any;
       // Ownership: admin sees company docs; contractor sees own
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'view')`).catch(() => {});
       res.json(doc);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch document" }); }
@@ -15936,8 +16079,8 @@ Secondary PayLink view: ${hubUrl}`,
       const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = result.rows[0] as any;
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'download')`).catch(() => {});
 
       // Stream the file directly so the browser receives the PDF/binary
@@ -15967,9 +16110,10 @@ Secondary PayLink view: ${hubUrl}`,
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = existing.rows[0] as any;
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      // Cross-tenant guard: admin must belong to same company (unless platform)
-      if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Cross-tenant guard: admins use the shared canAccessCompany helper rather than raw company equality.
+      if (isAdmin && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
+      if (doc.is_archived) return res.status(409).json({ message: "Archived document versions are read-only" });
       const { title, description, tags, isArchived, isPublic, linkedEntityType, linkedEntityId } = req.body;
       const result = await db.execute(sql`
         UPDATE dam_documents SET
@@ -15998,9 +16142,9 @@ Secondary PayLink view: ${hubUrl}`,
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = existing.rows[0] as any;
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      // Cross-tenant guard: admin must belong to same company (unless platform)
-      if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Cross-tenant guard: admins use the shared canAccessCompany helper rather than raw company equality.
+      if (isAdmin && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
@@ -16015,46 +16159,48 @@ Secondary PayLink view: ${hubUrl}`,
     const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
     if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
     const doc = result.rows[0] as any;
-    if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-    if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+    if (isAdmin && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
     res.json(doc);
   });
   app.get("/api/document-hub/assets/:id/download", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download" }));
   app.get("/api/document-hub/assets/:id/print", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download for inline print rendering" }));
   app.patch("/api/document-hub/assets/:id/metadata", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
+    if (doc.is_archived) return res.status(409).json({ message: "Archived document versions are read-only" });
     await db.execute(sql`INSERT INTO document_asset_metadata (document_asset_id, metadata_key, metadata_value, metadata_type, is_editable_by_user) VALUES (${req.params.id}, ${req.body?.metadataKey || "metadata"}, ${req.body?.metadataValue || null}, ${req.body?.metadataType || "text"}, TRUE)`);
     await db.execute(sql`INSERT INTO document_asset_audit_logs (document_asset_id, actor_user_id, action, after_json, ip_address, user_agent) VALUES (${req.params.id}, ${req.session.userId || null}, 'metadata.updated', ${JSON.stringify(req.body || {})}, ${req.ip || null}, ${req.headers["user-agent"] || null})`).catch(() => {});
     res.json({ success: true });
   });
   app.post("/api/document-hub/assets/:id/versions", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
+    if (doc.is_archived) return res.status(409).json({ message: "Archived document versions are read-only" });
     await db.execute(sql`INSERT INTO document_asset_versions (document_asset_id, version_number, storage_key, file_name, file_mime_type, file_size, created_by_user_id, change_summary) VALUES (${req.params.id}, ${req.body?.versionNumber || 1}, ${req.body?.storageKey || null}, ${req.body?.fileName || null}, ${req.body?.fileMimeType || null}, ${req.body?.fileSize || null}, ${req.session.userId || null}, ${req.body?.changeSummary || null})`);
     res.status(201).json({ success: true });
   });
   app.post("/api/document-hub/assets/:id/archive", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
     await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, archived_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
     res.json({ success: true });
   });
   app.get("/api/document-hub/assets/:id/audit", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
     const logs = await db.execute(sql`SELECT * FROM dam_document_access_logs WHERE document_id = ${req.params.id} ORDER BY created_at DESC`);
     res.json(logs.rows);
   });
