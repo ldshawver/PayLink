@@ -14,3 +14,6 @@ attached_assets/*
 !attached_assets/Gen-4_5_Create_a_cinematic_animated_background_video_for_a_mod_1774400668621.mp4
 tests/.tmp/
 uploads/
+artifacts/check-pdf-audit/*
+!artifacts/check-pdf-audit/AUDIT.md
+*.bbox.html

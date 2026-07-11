@@ -20414,6 +20414,12 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
     // ABA fractional prefix — ABA city/state geographic code (e.g. "11" for San Francisco area).
     // Configured per check template (cfg.abaPrefix). Not derivable from routing alone.
     const cfgAbaPrefix: string | undefined = cfg.abaPrefix ? String(cfg.abaPrefix) : undefined;
+    type CheckStockMode = "preprinted" | "blank_security";
+    const checkStockMode: CheckStockMode = cfg.checkStockMode === "blank_security" ? "blank_security" : "preprinted";
+    const bankBrandingEnabled = cfg.bankBrandingEnabled !== false;
+    const normalizeBrandName = (value: unknown): string => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const isAdikenTenant = normalizeBrandName((company as any)?.name || cfg.tenantSlug || cfg.companySlug) === "adiken" || String(cfg.tenantSlug || cfg.companySlug || "").toLowerCase() === "adiken";
+    const allowBuiltInAdikenLogo = isAdikenTenant && cfg.allowBuiltInAdikenLogo === true;
 
     // Per-field position overrides from check_templates.layoutConfig.positions
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
@@ -20451,7 +20457,15 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
     const bankLogoOffX = clampCheckFaceOffsetPt(bankLogoOffset.x);
     const bankLogoOffY = clampCheckFaceOffsetPt(bankLogoOffset.y);
     const fractionalRoutingOffX = clampCheckFaceOffsetPt(fractionalRoutingOffset.x);
-    const fractionalRoutingOffY = clampCheckFaceOffsetPt(fractionalRoutingOffset.y ?? cfg.fractionalRoutingOffsetY);
+    // fractionalRoutingOffsetY is a per-company downward inch offset for the grouped
+    // fractional ABA element. Safe default is +0.125in downward so the fraction clears
+    // the top check border; nested point calibration can still override for legacy templates.
+    const fractionalRoutingDefaultDownIn = 0.125;
+    const fractionalRoutingConfigDownIn = Number(cfg.fractionalRoutingOffsetY ?? fractionalRoutingDefaultDownIn);
+    const fractionalRoutingDefaultDownPt = -72 * Math.max(0, Math.min(0.30, Number.isFinite(fractionalRoutingConfigDownIn) ? fractionalRoutingConfigDownIn : fractionalRoutingDefaultDownIn));
+    const fractionalRoutingOffY = fractionalRoutingOffset.y !== undefined
+      ? clampCheckFaceOffsetPt(fractionalRoutingOffset.y)
+      : clampCheckFaceOffsetPt(fractionalRoutingDefaultDownPt);
     const paystubOffX      = Number(cfg.paystubOffsetX      ?? 72);  // default +1in right (envelope window safety)
     const paystubOffY      = Number(cfg.paystubOffsetY      ?? -18); // default -0.25in (down, envelope window safety)
 
@@ -20516,8 +20530,9 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
     const isContractor  = isCalibration ? true : isIndependentContractorWorker(worker);
-    const statementLabel = isContractor ? "CONTRACTOR STATEMENT" : "PAYSTUB";
-    const statementTitle = isContractor ? "Contractor Statement" : "Paystub";
+    const statementLabel = isContractor ? "CONTRACTOR STATEMENT" : "EMPLOYEE EARNINGS STATEMENT";
+    const statementTitle = isContractor ? "Contractor Statement" : "Employee Earnings Statement";
+    const companyCopyHeading = isContractor ? "Company Copy - Contractor Payment Statement" : "Company Copy - Employee Paystub";
 
     // Company fields
     const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
@@ -20593,6 +20608,20 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
     const z1x = (inches: number) => Math.round(inches * 72 + gOL);
     const z1y = (inches: number) => Math.round(H + gOT - inches * 72);
 
+    // Check stock background: existing tenants default to preprinted stock to avoid double-printing
+    // a security pattern over physical check stock. Blank-security mode draws a vector-only
+    // non-scanned background layer and preserves the 612 x 792 point page size.
+    if (checkStockMode === "blank_security") {
+      page.drawRectangle({ x: 0, y: checkBot, width: W, height: checkH, color: rgb(0.90, 0.96, 1.0), opacity: 0.55 });
+      for (let sx = -W; sx < W * 2; sx += 24) {
+        page.drawLine({ start: { x: sx, y: checkBot }, end: { x: sx + checkH, y: H }, color: rgb(0.66, 0.84, 0.96), thickness: 0.25, opacity: 0.30 });
+      }
+      for (let sx = 0; sx < W; sx += 54) {
+        page.drawText("PAYLINK SECURITY", { x: sx, y: checkBot + 96, size: 5.5, font: hvB, color: rgb(0.72, 0.86, 0.96), opacity: 0.42, rotate: degrees(25) });
+        page.drawText("VOID", { x: sx + 12, y: checkBot + 156, size: 5, font: hvB, color: rgb(0.72, 0.86, 0.96), opacity: 0.35, rotate: degrees(25) });
+      }
+    }
+
     // VOID watermark only — REPRINT is a UI label only, never printed on PDF
     if (isVoid)
       page.drawText("VOID", { x: z1x(1.5), y: z1y(2.0), size: 80, font: hvB,
@@ -20618,8 +20647,13 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
     }
 
     if (!logoEmbedded) {
-      // Calibration: draw a labeled placeholder box; production: reserved space only
-      if (isCalibration) {
+      // Company branding hierarchy: tenant-uploaded logo, then explicitly enabled Adiken-only
+      // vector fallback, then text company name. Never print Adiken branding globally.
+      if (!isCalibration && allowBuiltInAdikenLogo) {
+        page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH, color: rgb(0.05, 0.24, 0.50), opacity: 0.95 });
+        page.drawText("A", { x: logoX + 7, y: logoBot + 5, size: 18, font: hvB, color: rgb(1, 1, 1) });
+        logoEmbedded = true;
+      } else if (isCalibration) {
         page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH,
           borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
         page.drawText("LOGO", { x: logoX + 4, y: logoBot + 4, size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
@@ -20640,12 +20674,19 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
 
     // ── Bank block — top-center (center x 4.25in) ────────────────────────
     // Bank name: template config takes priority; fall back to remittance source institution field.
-    const bankName    = isCalibration ? "Bank of America"                           : sanitizeForPdf(cfg.bankName || (remittanceSource as any)?.bankName || (remittanceSource as any)?.institution || "");
-    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || "");
+    const bankName    = isCalibration ? "Bank of America" : sanitizeForPdf(cfg.bankName || (remittanceSource as any)?.bankName || (remittanceSource as any)?.institution || "");
+    // Bank address is configuration-only. Do not hardcode production addresses.
+    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || (remittanceSource as any)?.bankAddress || "");
     const bankLogoUrl: string | undefined = cfg.bankLogoUrl || cfg.bankLogo?.url;
+    const normalizedBankName = normalizeBrandName(bankName);
     const bankLogoImg = !isCalibration ? await embedUploadOrRemoteImage(bankLogoUrl) : null;
     if (bankLogoImg) {
-      page.drawImage(bankLogoImg, { x: z1x(3.62) + bankLogoOffX, y: z1y(0.30 + 0.20) + bankLogoOffY, width: 62, height: 16 });
+      page.drawImage(bankLogoImg, { x: z1x(3.45) + bankLogoOffX, y: z1y(0.46) + bankLogoOffY, width: 86, height: 20 });
+    } else if (bankBrandingEnabled && normalizedBankName === "bank of america") {
+      const bx = z1x(3.45) + bankLogoOffX, by = z1y(0.46) + bankLogoOffY;
+      page.drawRectangle({ x: bx, y: by, width: 86, height: 20, color: rgb(0.0, 0.12, 0.40), opacity: 0.95 });
+      page.drawRectangle({ x: bx + 43, y: by, width: 43, height: 20, color: rgb(0.76, 0.02, 0.08), opacity: 0.95 });
+      page.drawText("Bank of America", { x: bx + 5, y: by + 6, size: 6.5, font: hvB, color: rgb(1, 1, 1) });
     }
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
@@ -21074,6 +21115,7 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
     const z3BannerY = mailBot - 14;
     page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
     page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(companyCopyHeading, { x: lm, y: z3BannerY - 13, size: 6.5, font: hvB, color: rgb(0.25, 0.25, 0.25) });
     const z3ChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
 
@@ -21197,6 +21239,7 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
       const z3BannerY = mailBot - 14;
       page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
       page.drawText("CONTRACTOR STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+      page.drawText(companyCopyHeading, { x: lm, y: z3BannerY - 13, size: 6.5, font: hvB, color: rgb(0.25, 0.25, 0.25) });
       const z3ChkLabel = `Check No. ${fmtCheckNum}`;
       page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
       let cy = z3BannerY - 16;
