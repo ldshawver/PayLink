@@ -13,7 +13,7 @@ const screenshotScenario = {
     { email: " LUKE@ADIKENPROPERTIES.COM", oldRecipientId: "stale-recipient-b", newRecipientId: "live-recipient-b" },
   ],
   firstProviderResult: "Recipient not found",
-  retry: "none_document_level",
+  retry: "once_after_refresh",
 };
 
 function ok(name: string, condition: boolean) {
@@ -26,11 +26,11 @@ ok("recipient email normalization helper trims and lowercases", routes.includes(
 ok("live recipient id resolution prefers token then id then recipientId", routes.includes("r?.token ?? r?.id ?? r?.recipientId"));
 ok("self-heal helper updates both tables transactionally", routes.includes("async function refreshDocumensoRecipientMappings") && routes.includes("await db.transaction") && routes.includes("UPDATE documenso_signature_requests") && routes.includes("UPDATE contract_signers"));
 ok("self-heal helper is tenant scoped", routes.includes("company_id = ${companyId}") && routes.includes("AND company_id = ${companyId}"));
-ok("document-level resend records no misleading retry", routes.includes("retryAttempted: false") && routes.includes("retryCount: 0") && routes.includes("Documenso /envelope/redistribute is document-level"));
-ok("duplicate live email match requires manual review", routes.includes("Multiple live Documenso recipients match this email; manual review required."));
-ok("blocked document and recipient states have explicit reasons", routes.includes("Document is already completed; no reminder can be sent.") && routes.includes("Recipient has already signed.") && routes.includes("Recipient is not present on the live Documenso document."));
+ok("stale recipient self-heal retries once after refresh", routes.includes("retriedAfterRefresh = true") && routes.includes("retryCount: retriedAfterRefresh ? 1 : 0"));
+ok("duplicate live email match requires manual review", routes.includes("Duplicate recipient email in Documenso; manual review required"));
+ok("blocked document and recipient states have explicit reasons", routes.includes("Completed document") && routes.includes("Already signed") && routes.includes("Recipient missing remotely"));
 ok("response includes requested accepted refreshed retried and per-recipient results", routes.includes("requested: recipients.length") && routes.includes("accepted: acceptedRecipients.length") && routes.includes("refreshed: recipients.filter") && routes.includes("results: recipients.map"));
 ok("audit actions are written only after transaction succeeds", routes.indexOf("await db.transaction") < routes.indexOf('actionType: "documenso_recipient_refresh"') && routes.includes('actionType: "documenso_metadata_updated"'));
 ok("Contractor Hub success toast handles repaired resend without red failure", hub.includes("Documenso reminders resent") && hub.includes("Recipient mappings were refreshed automatically") && hub.includes('variant: data?.success || accepted > 0 ? "default" : "destructive"'));
 
-ok("exact screenshot scenario is represented with two stale Luke recipients", screenshotScenario.local.length === 2 && screenshotScenario.local.every((r) => r.oldRecipientId.startsWith("stale-") && r.newRecipientId.startsWith("live-")) && screenshotScenario.firstProviderResult === "Recipient not found" && screenshotScenario.retry === "none_document_level");
+ok("exact screenshot scenario is represented with two stale Luke recipients", screenshotScenario.local.length === 2 && screenshotScenario.local.every((r) => r.oldRecipientId.startsWith("stale-") && r.newRecipientId.startsWith("live-")) && screenshotScenario.firstProviderResult === "Recipient not found" && screenshotScenario.retry === "once_after_refresh");

@@ -14174,6 +14174,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             if (prop && !prop.converted_to_invoice_id) {
               await autoCreateProposalBackedInvoice(contractRow, prop, {
                 countInvoicesForContractor: async (contractorId: string) => Number((firstRow<any>(await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contractRow.company_id}`))?.c) || 0),
+                findExistingInvoice: async (contractForInvoice, proposalForInvoice) => firstRow<any>(await db.execute(sql`
+                  SELECT id FROM contractor_invoices
+                  WHERE company_id = ${contractRow.company_id}
+                    AND (contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id})
+                  ORDER BY created_at ASC LIMIT 1
+                `)),
                 createInvoice: async (values: Record<string, unknown>) => firstRow<any>(await db.execute(sql`
                   INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
                   VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
@@ -14966,13 +14972,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   function getDocumensoResendBlockReason(documentStatus: unknown, recipientStatus?: unknown, recipientFound = true): string | null {
     const docStatus = normalizeDocumensoRecipientStatus(documentStatus);
     const recStatus = normalizeDocumensoRecipientStatus(recipientStatus);
-    if (["completed", "signed"].includes(docStatus)) return "Document is already completed; no reminder can be sent.";
-    if (["voided", "canceled", "cancelled"].includes(docStatus)) return "Document voided/cancelled; no reminder can be sent.";
-    if (["archived", "deleted"].includes(docStatus)) return "Document archived/deleted; no reminder can be sent.";
-    if (!recipientFound) return "Recipient is not present on the live Documenso document.";
-    if (recStatus === "signed") return "Recipient has already signed.";
-    if (recStatus === "declined") return "Recipient declined.";
-    if (["canceled", "cancelled", "voided"].includes(recStatus)) return "Recipient cancelled.";
+    if (["completed", "signed"].includes(docStatus)) return "Completed document";
+    if (["voided", "canceled", "cancelled"].includes(docStatus)) return "Document voided";
+    if (docStatus === "archived") return "Document archived";
+    if (docStatus === "deleted") return "Document not found";
+    if (!recipientFound) return "Recipient missing remotely";
+    if (recStatus === "signed") return "Already signed";
+    if (recStatus === "declined") return "Recipient declined";
+    if (["canceled", "cancelled", "voided"].includes(recStatus)) return "Recipient cancelled";
     return null;
   }
 
@@ -15275,7 +15282,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const pending = (await db.execute(sql`
       SELECT * FROM contract_signers
       WHERE contract_id = ${req.params.id}
-        AND status IN ('pending','sent','viewed','unsent')
+        AND status IN ('pending','sent','viewed','unsent','signed','declined','canceled','cancelled','failed','draft')
         AND email IS NOT NULL
       ORDER BY COALESCE(signing_order, "order", 1) ASC
     `)).rows as any[];
@@ -15326,7 +15333,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (docBlock) {
           documensoError = { errorMessage: docBlock, responseBody: remote.rawResponse || remote, timestamp: new Date().toISOString() };
         } else {
-          documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+          try {
+            documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+          } catch (firstResendError: any) {
+            documensoError = serializeDocumensoError(firstResendError);
+            refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_provider_rejected_after_metadata_check" });
+            remoteRecipients = refreshInfo.recipients;
+            if ((refreshInfo.refreshedCount || 0) > 0) {
+              retriedAfterRefresh = true;
+              try {
+                documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+                documensoError = null;
+              } catch (retryProviderErr: any) {
+                documensoError = serializeDocumensoError(retryProviderErr);
+              }
+            }
+          }
         }
       } catch (e: any) {
         documensoError = serializeDocumensoError(e);
@@ -15334,9 +15356,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           try {
             refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
             remoteRecipients = refreshInfo.recipients;
-            // Documenso /envelope/redistribute is document-level ({ envelopeId }) and cannot use repaired recipient IDs.
-            // Do not issue a second identical provider request; return reconciled per-recipient interpretation instead.
-            retriedAfterRefresh = false;
+            if ((refreshInfo.refreshedCount || 0) > 0) {
+              retriedAfterRefresh = true;
+              try {
+                documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+                documensoError = null;
+              } catch (retryProviderErr: any) {
+                documensoError = serializeDocumensoError(retryProviderErr);
+              }
+            }
           } catch (retryErr: any) {
             documensoError = serializeDocumensoError(retryErr);
           }
@@ -15360,9 +15388,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const remoteRecipient: any = matches.length === 1 ? matches[0] : undefined;
       const localToken = email ? tokenByEmail.get(email) : undefined;
       const refreshRow: any = refreshBySignerId.get(signer.id);
-      const duplicateReason = matches.length > 1 ? "Multiple live Documenso recipients match this email; manual review required." : null;
-      const reason = duplicateReason || refreshRow?.reason || getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
-      const resultStatus = duplicateReason ? "manual_review" : reason === "Recipient is not present on the live Documenso document." ? "missing" : reason === "Recipient has already signed." ? "signed" : reason ? "skipped" : "resent";
+      const duplicateReason = matches.length > 1 ? "Duplicate recipient email in Documenso; manual review required" : null;
+      const localSignerStatus = String(signer.status || "").toLowerCase();
+      const localBlockReason = localSignerStatus === "signed" ? "Already signed"
+        : localSignerStatus === "declined" ? "Recipient declined"
+          : ["canceled", "cancelled"].includes(localSignerStatus) ? "Recipient cancelled"
+            : null;
+      const reason = duplicateReason || localBlockReason || refreshRow?.reason || getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
+      const resultStatus = duplicateReason ? "manual_review" : reason === "Recipient missing remotely" ? "missing" : reason === "Already signed" ? "signed" : reason ? "skipped" : "resent";
       const accepted = !!documensoResult && !!remoteRecipient && !reason;
       return {
         signerId: signer.id, name: signer.name || null, email, role: signer.role || signer.signer_role || remoteRecipient?.role || null,
@@ -15395,17 +15428,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       UPDATE documenso_signature_requests SET documenso_signing_url = COALESCE(${acceptedRecipients.find((r) => r.documensoSigningUrl)?.documensoSigningUrl || null}, documenso_signing_url),
         documenso_recipient_ids = ${JSON.stringify(recipientMetadata)}::jsonb,
         status = ${acceptedRecipients.length ? "sent_for_signature" : "resend_failed"}, sent_at = COALESCE(sent_at, NOW()),
-        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, refreshAttempted: !!refreshInfo, retryAttempted: false, retryCount: 0, duplicateEmails, possibleIdentityMismatches })}::jsonb,
+        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, duplicateEmails, possibleIdentityMismatches })}::jsonb,
         updated_at = NOW() WHERE id = ${sigReq.id}
     `).catch(() => {});
 
     const actionType = acceptedRecipients.length === recipients.length && recipients.length ? "documenso_resend_requested" : (acceptedRecipients.length ? "documenso_resend_skipped" : "documenso_resend_failed");
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, refreshAttempted: !!refreshInfo, retryAttempted: false, retryCount: 0, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
 
     res.status(200).json({
       success: recipients.length > 0 && acceptedRecipients.length === recipients.length,
       documensoResult: documensoError ? "errored" : (acceptedRecipients.length ? "accepted" : "skipped"),
-      requested: recipients.length, accepted: acceptedRecipients.length, partial: acceptedRecipients.length > 0 && acceptedRecipients.length < recipients.length, refreshed: recipients.filter((r: any) => r.refreshed).length, refreshAttempted: !!refreshInfo, retryAttempted: false, retryCount: 0, retried: 0,
+      requested: recipients.length, accepted: acceptedRecipients.length, partial: acceptedRecipients.length > 0 && acceptedRecipients.length < recipients.length, refreshed: recipients.filter((r: any) => r.refreshed).length, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, retried: retriedAfterRefresh ? 1 : 0,
       targetedCount: recipients.length, sentCount: acceptedRecipients.length, failedCount: recipients.length - acceptedRecipients.length,
       results: recipients.map((r: any) => ({ email: r.email, status: r.status, refreshed: r.refreshed, retried: r.retried, reason: r.reason })), recipients, documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null,
       duplicateEmails, possibleIdentityMismatches, documensoError, retriedAfterRefresh,
@@ -25403,6 +25436,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                       const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}`);
                       return Number((cntRes.rows[0] as any)?.c ?? 0);
                     },
+                    findExistingInvoice: async (contractForInvoice, proposalForInvoice) => firstRow<any>(await db.execute(sql`
+                      SELECT id FROM contractor_invoices
+                      WHERE company_id = ${contract.company_id}
+                        AND (contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id})
+                      ORDER BY created_at ASC LIMIT 1
+                    `)),
                     createInvoice: async (values: Record<string, unknown>) => {
                       const invRes = await db.execute(sql`
                         INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
@@ -26824,6 +26863,132 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     };
   }
 
+
+
+  async function collectContractorLifecycleAudit(companyId?: string | null) {
+    const scoped = (column = "company_id") => companyId ? sql`AND ${sql.raw(column)} = ${companyId}` : sql``;
+    const limited = 50;
+    const queries = {
+      approvedProposalsWithNoContract: sql`
+        SELECT p.id AS proposal_id, p.company_id, p.contractor_id, p.status, p.updated_at
+        FROM contractor_proposals p
+        WHERE p.status = 'approved'
+          ${scoped("p.company_id")}
+          AND NOT EXISTS (
+            SELECT 1 FROM contractor_contracts c
+            WHERE c.proposal_id = p.id AND c.company_id = p.company_id
+              AND COALESCE(c.is_archived, FALSE) = FALSE
+              AND COALESCE(c.status, '') NOT IN ('void','voided','terminated','replaced')
+          )
+        ORDER BY p.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      contractsAwaitingSignatures: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status, dsr.documenso_document_id, dsr.status AS documenso_status,
+               jsonb_agg(jsonb_build_object('email', cs.email, 'status', cs.status, 'recipientId', cs.documenso_recipient_id, 'signingUrlPresent', cs.documenso_signing_url IS NOT NULL) ORDER BY COALESCE(cs.signing_order, cs."order", 1)) FILTER (WHERE cs.id IS NOT NULL) AS signers
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        LEFT JOIN contract_signers cs ON cs.contract_id = c.id AND cs.company_id = c.company_id AND cs.status NOT IN ('replaced')
+        WHERE c.status IN ('awaiting_signatures','sent','partially_signed') ${scoped("c.company_id")}
+        GROUP BY c.id, c.proposal_id, c.company_id, c.status, dsr.documenso_document_id, dsr.status, c.updated_at
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      duplicateSignerMappings: sql`
+        SELECT contract_id, company_id, lower(trim(email)) AS signer_email, COUNT(*)::int AS count, array_agg(id) AS signer_ids, array_agg(status) AS statuses
+        FROM contract_signers
+        WHERE email IS NOT NULL AND status NOT IN ('canceled','cancelled','replaced') ${scoped("company_id")}
+        GROUP BY contract_id, company_id, lower(trim(email)) HAVING COUNT(*) > 1
+        ORDER BY count DESC
+        LIMIT ${limited}
+      `,
+      brokenPublicSigningLinks: sql`
+        SELECT cs.contract_id, cs.company_id, cs.email AS signer_email, cs.status AS signer_status, cs.documenso_recipient_id, cs.documenso_signing_url, dsr.documenso_document_id
+        FROM contract_signers cs
+        JOIN contractor_contracts c ON c.id = cs.contract_id AND c.company_id = cs.company_id
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        WHERE cs.status IN ('pending','sent','viewed','unsent') ${scoped("cs.company_id")}
+          AND (cs.signing_token_hash IS NULL OR (dsr.documenso_document_id IS NOT NULL AND cs.documenso_signing_url IS NULL))
+        ORDER BY cs.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      completedDocumensoEnvelopesNotCompleteLocally: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status AS local_contract_status, dsr.documenso_document_id, dsr.status AS documenso_status
+        FROM documenso_signature_requests dsr
+        JOIN contractor_contracts c ON c.id = dsr.related_record_id AND c.company_id = dsr.company_id
+        WHERE dsr.document_type IN ('contract','contractor_hub_contract') ${scoped("dsr.company_id")}
+          AND dsr.status IN ('completed','signed','fully_signed')
+          AND c.status NOT IN ('fully_signed','completed')
+        ORDER BY dsr.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      completedContractsWithNoInvoice: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status, dsr.documenso_document_id
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        WHERE c.status IN ('fully_signed','completed') ${scoped("c.company_id")}
+          AND c.proposal_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM contractor_invoices i WHERE i.company_id = c.company_id AND (i.contract_id = c.id OR i.proposal_id = c.proposal_id))
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      duplicateInvoices: sql`
+        SELECT company_id, proposal_id, contract_id, COUNT(*)::int AS count, array_agg(id ORDER BY created_at) AS invoice_ids
+        FROM contractor_invoices
+        WHERE (proposal_id IS NOT NULL OR contract_id IS NOT NULL) ${scoped("company_id")}
+        GROUP BY company_id, proposal_id, contract_id HAVING COUNT(*) > 1
+        ORDER BY count DESC
+        LIMIT ${limited}
+      `,
+      outdatedVisibleVersions: sql`
+        SELECT proposal_id, company_id, COUNT(*)::int AS visible_contract_count, array_agg(id ORDER BY created_at DESC) AS visible_contract_ids
+        FROM contractor_contracts
+        WHERE proposal_id IS NOT NULL ${scoped("company_id")}
+          AND COALESCE(is_archived, FALSE) = FALSE
+          AND COALESCE(status, '') NOT IN ('void','voided','terminated','replaced')
+        GROUP BY proposal_id, company_id HAVING COUNT(*) > 1
+        ORDER BY visible_contract_count DESC
+        LIMIT ${limited}
+      `,
+      missingFinalSignedPdfs: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status, c.archived_document_id, dsr.documenso_document_id
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        WHERE c.status IN ('fully_signed','completed') ${scoped("c.company_id")}
+          AND c.archived_document_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM dam_documents d
+            WHERE d.company_id = c.company_id AND d.contract_id = c.id
+              AND d.document_type = 'contractor_signed_agreement_packet'
+          )
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      missingProposalToContractReferences: sql`
+        SELECT c.id AS contract_id, c.company_id, c.proposal_id, c.status
+        FROM contractor_contracts c
+        LEFT JOIN contractor_proposals p ON p.id = c.proposal_id AND p.company_id = c.company_id
+        WHERE (${companyId}::text IS NULL OR c.company_id = ${companyId})
+          AND (c.proposal_id IS NULL OR p.id IS NULL)
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+    };
+    const entries = await Promise.all(Object.entries(queries).map(async ([key, query]) => [key, pgRows<any>(await db.execute(query).catch(() => ({ rows: [] } as any)))]));
+    const categories = Object.fromEntries(entries);
+    return {
+      generatedAt: new Date().toISOString(),
+      scopedCompanyId: companyId || null,
+      mode: "report_only_no_production_mutation",
+      categories,
+      summary: Object.fromEntries(Object.entries(categories).map(([key, rows]) => [key, Array.isArray(rows) ? rows.length : 0])),
+      requiredLiveValidation: [
+        "real_documenso_send", "actual_email_receipt", "signing_page_render", "all_required_signers_complete", "webhook_validated", "invoice_generation", "webhook_replay_idempotency", "paid_document_visibility",
+      ],
+    };
+  }
+
+
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -26941,6 +27106,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           pendingApproval: parseInt(pendingApprovalRow?.cnt || "0"),
         },
         operations: await collectAppDoctorOperationsSnapshot(diagnosticsCompanyId || null),
+        contractorLifecycleAudit: await collectContractorLifecycleAudit(diagnosticsCompanyId || null),
       });
     } catch (e: any) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to collect diagnostics") });
