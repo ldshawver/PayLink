@@ -50,6 +50,17 @@ assert.deepEqual(markedProposal, { proposalId: "proposal-1", invoiceId: "invoice
 const duplicate = await autoCreateProposalBackedInvoice(contract, proposal, deps, new Date("2026-06-16T12:01:00Z"));
 assert.equal(duplicate, null, "duplicate Documenso completion is idempotent");
 assert.equal(invoices.length, 1, "duplicate webhook does not create duplicate invoices");
+
+const unmarkedProposal = { ...proposal, converted_to_invoice_id: null };
+let remappedExistingInvoice: any = null;
+const duplicateByContract = await autoCreateProposalBackedInvoice(contract, unmarkedProposal, {
+  ...deps,
+  findExistingInvoice: async () => invoices[0],
+  markProposalConverted: async (proposalId: string, invoiceId: string) => { remappedExistingInvoice = { proposalId, invoiceId }; },
+}, new Date("2026-06-16T12:02:00Z"));
+assert.equal(duplicateByContract, null, "existing contract/proposal invoice blocks duplicate creation even before proposal is marked converted");
+assert.deepEqual(remappedExistingInvoice, { proposalId: "proposal-1", invoiceId: "invoice-1" }, "existing invoice is linked back to the proposal during idempotency repair");
+assert.equal(invoices.length, 1, "existing-invoice idempotency repair does not create another invoice");
 console.log("PASS: completed contract invoice creation and idempotency");
 
 assert.equal(await autoCreateProposalBackedInvoice({ ...contract, id: "missing-contract", proposal_id: undefined }, proposal, deps), null, "missing contract proposal link does not mutate");

@@ -55,6 +55,7 @@ export interface ContractForInvoice {
 
 export interface AutoInvoiceDeps<TInvoice = { id: string }> {
   countInvoicesForContractor(contractorId: string): Promise<number>;
+  findExistingInvoice?(contract: ContractForInvoice, proposal: ProposalForInvoice): Promise<TInvoice | null | undefined>;
   createInvoice(values: Record<string, unknown>): Promise<TInvoice>;
   markProposalConverted(proposalId: string, invoiceId: string): Promise<void>;
 }
@@ -67,6 +68,11 @@ export async function autoCreateProposalBackedInvoice<TInvoice extends { id?: st
 ): Promise<TInvoice | null> {
   if (!contract.proposal_id || !proposal || proposal.id !== contract.proposal_id) return null;
   if (proposal.converted_to_invoice_id) return null;
+  const existingInvoice = await deps.findExistingInvoice?.(contract, proposal);
+  if (existingInvoice?.id) {
+    await deps.markProposalConverted(proposal.id, existingInvoice.id);
+    return null;
+  }
 
   const invCount = await deps.countInvoicesForContractor(proposal.contractor_id);
   const invoiceNumber = `INV-${String(proposal.contractor_id ?? "").slice(-4).toUpperCase()}-${String(invCount + 1).padStart(4, "0")}`;
