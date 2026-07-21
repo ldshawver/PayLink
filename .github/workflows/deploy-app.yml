@@ -138,20 +138,8 @@ jobs:
               exit 1
             fi
             echo "Waiting for staging app on 127.0.0.1:$STAGING_PORT..."
-            STAGING_HEALTH_PASSED=0
-            for attempt in $(seq 1 30); do
-              if curl -fs "$LOCAL_HEALTH_URL" >/tmp/paylink-staging-health.json; then
-                echo "Staging local health check passed on attempt ${attempt}"
-                cat /tmp/paylink-staging-health.json
-                STAGING_HEALTH_PASSED=1
-                break
-              fi
-
-              echo "Attempt ${attempt}/30 failed; waiting 2 seconds..."
-              sleep 2
-            done
-
-            if [ "$STAGING_HEALTH_PASSED" != "1" ]; then
+            if ! curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+              http://127.0.0.1:8010/health >/tmp/paylink-staging-health.json; then
               echo "Staging failed to become healthy on 127.0.0.1:$STAGING_PORT" >&2
               pm2 list || true
               pm2 logs "$PM2_PROCESS" --lines 100 --nostream || true
@@ -161,6 +149,8 @@ jobs:
               curl -i --max-time 5 "$LOCAL_VERSION_URL" || true
               exit 1
             fi
+            echo "Staging local health check passed"
+            cat /tmp/paylink-staging-health.json
             echo "storage connectivity"
             curl -fs "$LOCAL_READY_URL" | grep -q '"database":"connected"'
             curl -fs "$LOCAL_VERSION_URL" | grep -q "\"commit\":\"$NEW_COMMIT\""
