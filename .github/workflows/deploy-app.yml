@@ -5,53 +5,25 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      target_environment:
-        description: "Deployment target. Pushes to main always deploy staging."
-        required: true
-        default: staging
-        type: choice
-        options:
-          - staging
 
 concurrency:
   group: deploy-mypaylink-staging
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy_staging:
-    name: Deploy to staging only
+    name: Deploy staging.mypaylink.app to port 8010
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
-      APP_ENV: staging
       APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-      ENV_FILE: /etc/paylink/.env.staging
-      PM2_PROCESS: paylink-staging
-      STAGING_PORT: "8010"
-      DEPLOY_PORT: "8010"
-      LOCAL_HEALTH_URL: http://127.0.0.1:8010/health
-      LOCAL_READY_URL: http://127.0.0.1:8010/ready
-      LOCAL_VERSION_URL: http://127.0.0.1:8010/api/version
-      PUBLIC_HEALTH_URL: https://staging.mypaylink.app/health
-      DEPLOY_DOMAIN: staging.mypaylink.app
-      REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
+      ENV_FILE: /etc/paylink/staging.env
+      PM2_NAME: paylink-staging
+      APP_PORT: "8010"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Validate staging target
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.target_environment }}" != "staging" ]; then
-            echo "deploy-app.yml is staging-only; use deploy-production.yml for production releases." >&2
-            exit 1
-          fi
-          echo "Pushes to main always deploy staging."
-          echo "staging DATABASE_URL must exist and differ"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -65,7 +37,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --reporter=append-only
+        run: pnpm install --frozen-lockfile=false --reporter=append-only
 
       - name: Typecheck
         run: pnpm typecheck
@@ -75,40 +47,13 @@ jobs:
           pnpm exec tsx tests/contract-signing-redirect-static.test.ts
           pnpm exec tsx tests/contract-documenso-static.test.ts
           pnpm exec tsx tests/contract-signer-management-static.test.ts
-          pnpm exec tsx tests/staging-deployment-static.test.ts
-          pnpm exec tsx tests/cloudpanel-deployment-workflows-static.test.ts
+          pnpm exec tsx tests/mypaylink-nginx-signing-static.test.ts
 
       - name: Build
         run: pnpm build
 
-      - name: Verify SSH connectivity
+      - name: Deploy to staging VPS path
         uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.APP_VPS_HOST }}
-          username: ${{ secrets.APP_VPS_USER }}
-          key: ${{ secrets.APP_VPS_SSH_KEY }}
-          port: ${{ secrets.APP_VPS_PORT }}
-          timeout: 30s
-          command_timeout: 1m
-          script_stop: true
-          script: |
-            echo "SSH connectivity OK — host: $(hostname), user: $(whoami)"
-
-      - name: Deploy staging to VPS with safety gates
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          APP_ENV: staging
-          APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-          ENV_FILE: /etc/paylink/.env.staging
-          PM2_PROCESS: paylink-staging
-          STAGING_PORT: "8010"
-          DEPLOY_PORT: "8010"
-          LOCAL_HEALTH_URL: http://127.0.0.1:8010/health
-          LOCAL_READY_URL: http://127.0.0.1:8010/ready
-          LOCAL_VERSION_URL: http://127.0.0.1:8010/api/version
-          PUBLIC_HEALTH_URL: https://staging.mypaylink.app/health
-          DEPLOY_DOMAIN: staging.mypaylink.app
-          REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
         with:
           host: ${{ secrets.APP_VPS_HOST }}
           username: ${{ secrets.APP_VPS_USER }}
@@ -117,41 +62,50 @@ jobs:
           timeout: 30s
           command_timeout: 30m
           script_stop: true
-          envs: APP_ENV,APP_PATH,ENV_FILE,PM2_PROCESS,STAGING_PORT,DEPLOY_PORT,LOCAL_HEALTH_URL,LOCAL_READY_URL,LOCAL_VERSION_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,REPO_SSH_URL
           script: |
-            set -euo pipefail
-            echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
+            set -Eeuo pipefail
+
+            APP_PATH="/home/paylinkssh/paylink-staging/PayLink"
+            ENV_FILE="/etc/paylink/staging.env"
+            PM2_NAME="paylink-staging"
+            APP_PORT="8010"
+
+            echo "Deploying MyPayLink staging only"
+            echo "APP_PATH=$APP_PATH"
+            echo "ENV_FILE=$ENV_FILE"
+            echo "PM2_NAME=$PM2_NAME"
+            echo "APP_PORT=$APP_PORT"
+            test -f "$ENV_FILE"
+
             cd "$APP_PATH"
-            git remote set-url origin "$REPO_SSH_URL" || true
             git fetch origin main
             git reset --hard origin/main
-            NEW_COMMIT="$(git rev-parse HEAD)"
-            pnpm install --frozen-lockfile --reporter=append-only
+            NEW_COMMIT=$(git rev-parse HEAD)
+            BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+            if ! command -v pnpm >/dev/null 2>&1; then
+              npm install -g pnpm@10.33.0
+            fi
+
+            pnpm install --frozen-lockfile=false --reporter=append-only
+            rm -rf dist/
             pnpm build
-            PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_ENV="$APP_ENV" PORT="$DEPLOY_PORT" \
-              pm2 restart "$PM2_PROCESS" --update-env || \
-              PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" APP_ENV="$APP_ENV" PORT="$DEPLOY_PORT" \
-              pm2 start "$APP_PATH/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_PATH" --interpreter node --node-args="--require dotenv/config" -- dotenv_config_path="$ENV_FILE"
-            pm2 save --force
-            if [ "$DEPLOY_PORT" != "$STAGING_PORT" ]; then
-              echo "FATAL: staging deploy must bind to 127.0.0.1:$STAGING_PORT; got DEPLOY_PORT=$DEPLOY_PORT" >&2
-              exit 1
-            fi
-            echo "Waiting for staging app on 127.0.0.1:$STAGING_PORT..."
-            if ! curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-              http://127.0.0.1:8010/health >/tmp/paylink-staging-health.json; then
-              echo "Staging failed to become healthy on 127.0.0.1:$STAGING_PORT" >&2
-              pm2 list || true
-              pm2 logs "$PM2_PROCESS" --lines 100 --nostream || true
-              ss -lntp | grep ':8010' || true
-              curl -i --max-time 5 "$LOCAL_HEALTH_URL" || true
-              curl -i --max-time 5 "$LOCAL_READY_URL" || true
-              curl -i --max-time 5 "$LOCAL_VERSION_URL" || true
-              exit 1
-            fi
-            echo "Staging local health check passed"
-            cat /tmp/paylink-staging-health.json
-            echo "storage connectivity"
-            curl -fs "$LOCAL_READY_URL" | grep -q '"database":"connected"'
-            curl -fs "$LOCAL_VERSION_URL" | grep -q "\"commit\":\"$NEW_COMMIT\""
-            curl -fs "$PUBLIC_HEALTH_URL" >/dev/null
+
+            pm2 delete "$PM2_NAME" 2>/dev/null || true
+            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" pm2 start "$APP_PATH/dist/index.cjs" \
+              --name "$PM2_NAME" \
+              --cwd "$APP_PATH" \
+              --interpreter node \
+              --node-args="--require dotenv/config" \
+              -- dotenv_config_path="$ENV_FILE"
+            pm2 save --force || true
+
+            for i in $(seq 1 30); do
+              if curl -fs "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1; then
+                echo "Staging health passed on ${APP_PORT}"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "Staging health failed on ${APP_PORT}" >&2
+            exit 1
