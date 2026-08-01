@@ -4491,6 +4491,8 @@ function ContractDetailPanel({
   const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [editingSigner, setEditingSigner] = useState<Signer | null>(null);
   const [reminderMessage, setReminderMessage] = useState("Please sign this contract when you have a moment.");
+  const [signerMismatchInfo, setSignerMismatchInfo] = useState<{ missingRemotely: string[]; unexpectedRemotely: string[] } | null>(null);
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
 
   const { data: contract, refetch } = useQuery<Contract>({
     queryKey: ["/api/contractor-contracts", initialContract.id],
@@ -4513,6 +4515,12 @@ function ContractDetailPanel({
   const invoiceId = (contract as any).invoiceId || (contract as any).invoice_id;
   const invoiceStatus = (contract as any).invoiceStatus || (contract as any).invoice_status;
   const documensoSigningUrl = (contract as any).documensoSigningUrl || (contract as any).documenso_signing_url || (contract as any).signingUrl || (contract as any).signing_url;
+  const signerSigningUrl = (s: any): string | null => s?.documensoSigningUrl || s?.documenso_signing_url || null;
+  // Documenso signing URLs are per-recipient (distinct token per signer). A single contract-level
+  // link is only unambiguous when there's exactly one signer — for 2+ signers this is always null,
+  // even if a top-level URL happens to be present, since it can't be attributed to one signer.
+  // Per-signer actions (below) are the only signing-link affordance for multi-signer contracts.
+  const contractLevelSigningUrl = signers.length === 1 ? (documensoSigningUrl || signerSigningUrl(signers[0])) : null;
   const signedDocumentUrl = (contract as any).signedDocumentUrl || (contract as any).signed_document_url || (contract as any).archivedDocumentUrl || ((contract as any).archivedDocumentId ? `/api/dam-documents/${(contract as any).archivedDocumentId}/download` : null);
   const usesDocumenso = !!documensoSigningUrl || !!(contract as any).documensoDocumentId || signers.some(s => !!(s as any).documensoSigningUrl || !!(s as any).documenso_signing_url || !!(s as any).documensoRecipientId || !!(s as any).documenso_recipient_id);
   const terminalSigningStatuses = ["fully_signed", "completed", "void", "terminated", "expired", "canceled", "cancelled"];
@@ -4585,11 +4593,54 @@ function ContractDetailPanel({
 
   const sendViaDocumensoMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/contractor-contracts/${contract.id}/send-for-signature`, {});
-      return response.json();
+      // Raw fetch (not apiRequest) so a 409 signer-set-mismatch response body can be read — apiRequest
+      // throws on any non-2xx before the body is available.
+      const res = await fetch(`/api/contractor-contracts/${contract.id}/send-for-signature`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body?.code === "documenso_signer_set_mismatch") {
+        return { mismatch: true, missingRemotely: body.missingRemotely || [], unexpectedRemotely: body.unexpectedRemotely || [] };
+      }
+      if (!res.ok) throw new Error(body?.message || `Request failed (${res.status})`);
+      return { mismatch: false, ...body };
     },
-    onSuccess: () => { refetch(); toast({ title: "Sent via Documenso", description: "Signing request sent. Signers will receive an email with the signing link." }); onRefresh(); },
+    onSuccess: (data: any) => {
+      if (data?.mismatch) {
+        setSignerMismatchInfo({ missingRemotely: data.missingRemotely, unexpectedRemotely: data.unexpectedRemotely });
+        toast({
+          title: "Signer list changed",
+          description: "The signer list changed after this signing request was created. Create a replacement signing request to include the current signers.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setSignerMismatchInfo(null);
+      refetch();
+      toast({ title: "Sent via Documenso", description: "Signing request sent. Signers will receive an email with the signing link." });
+      onRefresh();
+    },
     onError: (e: any) => toast({ title: "Documenso send failed", description: e?.message || "Unable to send for signature", variant: "destructive" }),
+  });
+
+  const replaceSigningRequestMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/contractor-contracts/${contract.id}/replace-signing-request`, { confirm: true })).json(),
+    onSuccess: (data: any) => {
+      setSignerMismatchInfo(null);
+      setReplaceConfirmOpen(false);
+      refetch();
+      toast({
+        title: data?.alreadyReplaced ? "Already up to date" : "Replacement signing request created",
+        description: data?.alreadyReplaced
+          ? "The current signing request already matches the active signer set."
+          : "A new Documenso envelope was created for the current signers.",
+      });
+      onRefresh();
+    },
+    onError: (e: any) => { toast({ title: e?.message || "Failed to create replacement signing request", variant: "destructive" }); setReplaceConfirmOpen(false); },
   });
 
   const activateMutation = useMutation({
@@ -4648,7 +4699,7 @@ function ContractDetailPanel({
   const canSign = canShowSignatureActions && !usesDocumenso;
   const canCreateInvoice = ["active", "fully_signed", "completed"].includes(contract.status) && !invoiceId;
   const canResendSigningRequest = canShowSignatureActions && !terminalSigningStatuses.includes(contract.status) && ["sent", "awaiting_signatures", "partially_signed", "pending"].includes(contract.status) && signers.some(s => ["pending", "sent", "viewed", "unsent", "draft"].includes(s.status));
-  const canShowDocumensoLaunch = !!documensoSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
+  const canShowDocumensoLaunch = !!contractLevelSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
 
   return (
     <Sheet open onOpenChange={v => !v && onClose()}>
@@ -4703,7 +4754,7 @@ function ContractDetailPanel({
                 </Button>
               )}
               {canShowDocumensoLaunch && (
-                <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="link-sign-with-documenso">
+                <a href={contractLevelSigningUrl || undefined} target="_blank" rel="noreferrer" data-testid="link-sign-with-documenso">
                   <Button size="sm" variant="outline" className="border-teal-300 text-teal-700">
                     <ExternalLink className="h-3.5 w-3.5 mr-1" /> Sign with Documenso
                   </Button>
@@ -4741,7 +4792,7 @@ function ContractDetailPanel({
               {hasUnsignedSigners && ["sent","partially_signed"].includes(contract.status) && (
                 <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center gap-2">
                   <Clock className="h-4 w-4 text-amber-600 shrink-0" />
-                  <p className="text-sm text-amber-700 dark:text-amber-400">Awaiting signatures from {signers.filter(s => s.status === "pending").length} signer(s).</p>
+                  <p className="text-sm text-amber-700 dark:text-amber-400">Awaiting signatures from {signers.filter(s => ["pending", "sent", "viewed"].includes(s.status)).length} signer(s).</p>
                 </div>
               )}
 
@@ -4799,6 +4850,24 @@ function ContractDetailPanel({
                 </div>
               )}
 
+              {signerMismatchInfo && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg space-y-2 text-sm" data-testid="alert-documenso-signer-mismatch">
+                  <p className="text-red-700 dark:text-red-400 font-medium">The signer list changed after this signing request was created. Create a replacement signing request to include the current signers.</p>
+                  {signerMismatchInfo.missingRemotely.length > 0 && <p className="text-xs text-red-600">Missing remotely: {signerMismatchInfo.missingRemotely.join(", ")}</p>}
+                  {signerMismatchInfo.unexpectedRemotely.length > 0 && <p className="text-xs text-red-600">Unexpected remotely: {signerMismatchInfo.unexpectedRemotely.join(", ")}</p>}
+                  {canSendViaDocumenso && !replaceConfirmOpen && (
+                    <Button size="sm" variant="destructive" onClick={() => setReplaceConfirmOpen(true)} data-testid="btn-create-replacement-signing-request">Create Replacement Signing Request</Button>
+                  )}
+                  {canSendViaDocumenso && replaceConfirmOpen && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-red-700 dark:text-red-400">This creates a new Documenso envelope for the current signers; any prior signing link becomes invalid. Continue?</span>
+                      <Button size="sm" variant="destructive" onClick={() => replaceSigningRequestMutation.mutate()} disabled={replaceSigningRequestMutation.isPending} data-testid="btn-confirm-replacement-signing-request">Confirm &amp; Create</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setReplaceConfirmOpen(false)} data-testid="btn-cancel-replacement-signing-request">Cancel</Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="p-4 border rounded-lg space-y-3" data-testid="panel-documenso-signing-workflow">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -4809,13 +4878,30 @@ function ContractDetailPanel({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button size="sm" onClick={() => sendViaDocumensoMutation.mutate()} disabled={!canSendViaDocumenso || sendViaDocumensoMutation.isPending || !!documensoDisabledReason} data-testid="btn-documenso-panel-send">Send via Documenso</Button>
-                  {canShowDocumensoLaunch && <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="btn-documenso-panel-launch"><Button size="sm" variant="outline">Sign with Documenso</Button></a>}
+                  {canShowDocumensoLaunch && <a href={contractLevelSigningUrl || undefined} target="_blank" rel="noreferrer" data-testid="btn-documenso-panel-launch"><Button size="sm" variant="outline">Sign with Documenso</Button></a>}
                   <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={!canResendSigningRequest || resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-documenso-panel-resend" title={!canResendSigningRequest ? "Reminders stop after signature, completion, cancellation, or when no active Documenso document exists." : "Re-send through Documenso"}>Re-send signing request</Button>
-                  <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(documensoSigningUrl || window.location.href)} disabled={!documensoSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
+                  {signers.length <= 1 && (
+                    <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(contractLevelSigningUrl || window.location.href)} disabled={!contractLevelSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
+                  )}
                   {signedDocumentUrl && <a href={signedDocumentUrl} target="_blank" rel="noreferrer" data-testid="link-view-signed-document"><Button size="sm" variant="outline">View signed document</Button></a>}
                 </div>
                 <div className="space-y-1">
-                  {signers.map(s => <div key={s.id} className="flex items-center justify-between text-xs" data-testid={`documenso-signer-status-${s.id}`}><span>{s.name || s.email} {s.email ? `• ${s.email}` : ""} • {(s.role || "signer").replace(/_/g, " ")}</span><span className="capitalize">{s.status}{s.signedAt ? ` • signed ${fmtDate(s.signedAt)}` : ""}</span></div>)}
+                  {signers.map(s => {
+                    const url = signerSigningUrl(s);
+                    return (
+                      <div key={s.id} className="flex items-center justify-between text-xs" data-testid={`documenso-signer-status-${s.id}`}>
+                        <span>{s.name || s.email} {s.email ? `• ${s.email}` : ""} • {(s.role || "signer").replace(/_/g, " ")}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="capitalize">{s.status}{s.signedAt ? ` • signed ${fmtDate(s.signedAt)}` : ""}</span>
+                          {signers.length > 1 && (
+                            <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => url && navigator.clipboard?.writeText(url)} disabled={!url} data-testid={`btn-copy-signing-link-${s.id}`} title="Copy this signer's signing link">
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

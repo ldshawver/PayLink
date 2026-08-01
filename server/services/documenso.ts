@@ -143,7 +143,7 @@ export interface CreateDocumensoDocumentOptions {
 export interface DocumensoDocumentResult {
   documentId: string;
   status: string;
-  signingLinks: Array<{ name: string; email: string; signingUrl?: string; token?: string; status?: string }>;
+  signingLinks: Array<{ id?: string | null; name: string; email: string; signingUrl?: string; token?: string; status?: string }>;
   auditUrl?: string;
   rawResponse: any;
 }
@@ -229,9 +229,10 @@ export async function createDocumensoDocument({
     documentId,
     status: mapDocumensoStatus(distributed?.status || distributed?.envelope?.status || "PENDING"),
     signingLinks: (distributed?.recipients || []).map((r: any) => ({
+      id: r.id != null ? String(r.id) : null,
       name: r.name || "",
       email: r.email || "",
-      signingUrl: r.signingUrl,
+      signingUrl: r.signingUrl || (r.token ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}` : undefined),
       token: r.token,
       status: r.signingStatus || r.status,
     })),
@@ -247,12 +248,17 @@ export async function getDocumensoDocument(documentId: string) {
     status: mapDocumensoStatus(doc?.status),
     recipients: (doc?.recipients || []).map((r: any) => ({
       id: r.id,
+      token: r.token,
       name: r.name || "",
       email: r.email || "",
       role: r.role,
       status: r.signingStatus || r.status || "pending",
       signedAt: r.signedAt || r.signed_at,
-      signingUrl: r.signingUrl,
+      signingUrl:
+        r.signingUrl ??
+        (r.token
+          ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}`
+          : undefined),
     })),
     envelopeItems: doc?.envelopeItems || [],
     rawResponse: doc,
@@ -295,7 +301,18 @@ export async function resendDocumensoDocument(documentId: string): Promise<Docum
   return {
     documentId,
     status: mapDocumensoStatus(res?.status || "PENDING"),
-    signingLinks: (res?.recipients || []).map((r: any) => ({ name: r.name || "", email: r.email || "", signingUrl: r.signingUrl, token: r.token || r.id || r.recipientId, status: r.signingStatus || r.status })),
+    signingLinks: (res?.recipients || []).map((r: any) => ({
+      id: r.id != null ? String(r.id) : null,
+      name: r.name || "",
+      email: r.email || "",
+      signingUrl:
+        r.signingUrl ??
+        (r.token
+          ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}`
+          : undefined),
+      token: r.token || null,
+      status: r.signingStatus || r.status,
+    })),
     auditUrl: `${getBaseUrl()}/envelope/${documentId}/audit-log`,
     rawResponse: res,
   };
