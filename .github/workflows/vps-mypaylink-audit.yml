@@ -23,8 +23,7 @@ jobs:
             whoami
             cat /etc/os-release || true
 
-            APP_DIR="/home/paylinkssh/paylink-app/PayLink"
-            cd "$APP_DIR"
+            cd "${{ secrets.APP_DIR }}"
 
             echo "Current directory:"
             pwd
@@ -33,13 +32,11 @@ jobs:
             ls -la
 
             echo "PM2 status:"
-            pm2 status paylink || true
+            pm2 status || true
 
             echo "Recent app logs:"
             pm2 logs paylink --lines 150 --nostream || true
 
-            echo "Nginx config check:"
-            nginx -t || true
 
             echo "Check signing route:"
             curl -I https://app.mypaylink.app/app/contractor-hub/contracts/735551c2-ec6c-41e6-976d-1eef4e13bfa5/sign || true

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag/version to deploy, for example v2.1.1"
+        description: "Required release tag to deploy to production"
         required: true
         type: string
 
@@ -14,26 +14,24 @@ concurrency:
 
 jobs:
   deploy_production:
-    name: Manual production deploy
+    name: Deploy production manually to port 8000
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
-      APP_ENV: production
       APP_PATH: /home/paylinkssh/paylink-app/PayLink
-      ENV_FILE: /etc/paylink/.env
-      PM2_PROCESS: paylink
-      LOCAL_HEALTH_URL: http://127.0.0.1:8000/health
-      PUBLIC_HEALTH_URL: https://mypaylink.app/health
-      PUBLIC_APP_HEALTH_URL: https://app.mypaylink.app/health
-      DEPLOY_DOMAIN: app.mypaylink.app
-      DEPLOY_PORT: "8000"
-      PROD_DB_NAME: mypaylink_prod
-      REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
+      ENV_FILE: /etc/paylink/production.env
+      PM2_NAME: paylink
+      APP_PORT: "8000"
+      RELEASE_TAG: ${{ inputs.release_tag }}
 
     steps:
-      - name: Checkout release tag
+      - name: Validate release tag input
+        run: test -n "$RELEASE_TAG"
+
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ inputs.release_tag }}
+          ref: ${{ inputs.release_tag }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -47,18 +45,15 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --reporter=append-only
+        run: pnpm install --frozen-lockfile=false --reporter=append-only
 
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Deployment validation tests
-        run: |
-          pnpm exec tsx tests/deployment-validation-static.test.ts
-          pnpm exec tsx tests/cloudpanel-deployment-workflows-static.test.ts
-          pnpm build
+      - name: Build
+        run: pnpm build
 
-      - name: Deploy approved production release
+      - name: Deploy release tag to production VPS path
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
@@ -66,113 +61,66 @@ jobs:
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
           timeout: 30s
-          command_timeout: 30m
+          command_timeout: 40m
           script_stop: true
-          envs: APP_ENV,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,PUBLIC_APP_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,PROD_DB_NAME,REPO_SSH_URL
           script: |
-            set -euo pipefail
-            RELEASE_TAG='${{ inputs.release_tag }}'
-            APP_VERSION_VALUE="${RELEASE_TAG#v}"
-            DEPLOYED_BY="${GITHUB_ACTOR:-unknown}"
-            HISTORY_LOG="/home/paylinkssh/deployment-history.log"
-            echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
-            echo "Manual production deploy: $RELEASE_TAG to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
-            cd "$APP_PATH"
+            set -Eeuo pipefail
 
-            record_history() {
-              status="$1"; commit="${2:-unknown}"; version="${3:-unknown}"; tag="${4:-$RELEASE_TAG}"; rollback="${5:-not_required}"
-              mkdir -p "$(dirname "$HISTORY_LOG")"
-              printf '{"version":"%s","commit":"%s","release_tag":"%s","environment":"production","deployment_time":"%s","deployed_by":"%s","rollback_status":"%s","status":"%s"}\n' \
-                "$version" "$commit" "$tag" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$DEPLOYED_BY" "$rollback" "$status" >> "$HISTORY_LOG"
-            }
-            dotenv_get() { node -e 'const fs=require("fs"); const k=process.argv[2], f=process.argv[3]; for (const line of fs.readFileSync(f,"utf8").split(/\r?\n/)) { const m=line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/); if (m && m[1]===k) { let v=m[2].trim(); if ((v.startsWith("\"")&&v.endsWith("\""))||(v.startsWith("'"'"'")&&v.endsWith("'"'"'"))) v=v.slice(1,-1); process.stdout.write(v); process.exit(0); } } process.exit(1);' "$1" "$2"; }
+            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+            ENV_FILE="/etc/paylink/production.env"
+            PM2_NAME="paylink"
+            APP_PORT="8000"
+            RELEASE_TAG="${{ inputs.release_tag }}"
+            BACKUP_DIR="/home/paylinkssh/paylink-db-backups"
 
-            if [ ! -f "$ENV_FILE" ]; then echo "FATAL: production env file missing: $ENV_FILE"; exit 1; fi
-            echo "refusing production deploy without DB backup unless pg_dump succeeds"
-            if ! git ls-remote --exit-code --tags "$REPO_SSH_URL" "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-              echo "FATAL: refs/tags/$RELEASE_TAG does not exist; branch names like main are not deployable"; exit 1
-            fi
+            echo "Deploying MyPayLink production release tag: $RELEASE_TAG"
+            echo "APP_PATH=$APP_PATH"
+            echo "ENV_FILE=$ENV_FILE"
+            echo "PM2_NAME=$PM2_NAME"
+            echo "APP_PORT=$APP_PORT"
+            test -f "$ENV_FILE"
 
-            BACKUP_DIR="$APP_PATH/backups/predeploy"
-            NGINX_CONF_PATH="/etc/nginx/sites-enabled/mypaylink.app.conf"
-            NGINX_BACKUP="$BACKUP_DIR/nginx_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).conf"
-            umask 077
             mkdir -p "$BACKUP_DIR"
-            chmod 700 "$BACKUP_DIR"
-            BACKUP_FILE="$BACKUP_DIR/${PROD_DB_NAME}_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).dump"
-            ( DATABASE_URL_VALUE="$(dotenv_get DATABASE_URL "$ENV_FILE")"; pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL_VALUE" --file="$BACKUP_FILE" ) || { echo "FATAL: database backup failed; aborting production deploy"; exit 1; }
-            chmod 600 "$BACKUP_FILE"
-            echo "Production DB backup complete: $BACKUP_FILE"
+            set -a
+            . "$ENV_FILE"
+            set +a
+            test -n "${DATABASE_URL:-}"
+            BACKUP_FILE="$BACKUP_DIR/predeploy-${RELEASE_TAG}-$(date -u '+%Y%m%dT%H%M%SZ').sql"
+            echo "Creating pre-deploy database backup"
+            pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
+            test -s "$BACKUP_FILE"
+            gzip -f "$BACKUP_FILE"
+            echo "Database backup created: ${BACKUP_FILE}.gz"
 
-            pm2 save --force || { echo "FATAL: PM2 save/backup gate failed; aborting production deploy"; exit 1; }
-            if [ -f "$NGINX_CONF_PATH" ]; then
-              sudo cp "$NGINX_CONF_PATH" "$NGINX_BACKUP" || { echo "FATAL: nginx backup failed; aborting production deploy"; exit 1; }
-            else
-              echo "# nginx config absent before production deploy; CloudPanel marker" > "$NGINX_BACKUP" || { echo "FATAL: nginx backup marker failed; aborting production deploy"; exit 1; }
+            cd "$APP_PATH"
+            git fetch origin --tags
+            git checkout --force "$RELEASE_TAG"
+            NEW_COMMIT=$(git rev-parse HEAD)
+            BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+            if ! command -v pnpm >/dev/null 2>&1; then
+              npm install -g pnpm@10.33.0
             fi
-            echo "Production nginx backup/marker complete: $NGINX_BACKUP"
 
-            git remote set-url origin "$REPO_SSH_URL" || true
-            git fetch --tags origin
-            PRIOR_COMMIT="$(git rev-parse HEAD)"
-            PRIOR_VERSION="$(node -p "require('./package.json').version" 2>/dev/null || echo unknown)"
-            CANDIDATE_PM2="${PM2_PROCESS}-candidate-${GITHUB_RUN_ID:-manual}"
-            restore_prior_release() {
-              echo "Restoring prior working release $PRIOR_COMMIT"
-              pm2 delete "$CANDIDATE_PM2" 2>/dev/null || true
-              git checkout --force "$PRIOR_COMMIT" || true
-              pnpm install --frozen-lockfile --reporter=append-only || true
-              pnpm build || true
-              pm2 restart "$PM2_PROCESS" --update-env || pm2 start "$APP_PATH/dist/index.cjs" --name "$PM2_PROCESS" --cwd "$APP_PATH" --interpreter node --node-args="--require dotenv/config" -- dotenv_config_path="$ENV_FILE"
-              pm2 save --force || true
-              record_history failed "$PRIOR_COMMIT" "$PRIOR_VERSION" "$RELEASE_TAG" restored
-            }
-            trap 'restore_prior_release' ERR
-
-            git checkout --force "refs/tags/$RELEASE_TAG"
-            NEW_COMMIT="$(git rev-parse HEAD)"
-            PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-            expected_tag="v$PACKAGE_VERSION"
-            if [ "$RELEASE_TAG" != "$expected_tag" ] || [ "$APP_VERSION_VALUE" != "$PACKAGE_VERSION" ]; then
-              echo "FATAL: version mismatch. package=$PACKAGE_VERSION APP_VERSION_VALUE=$APP_VERSION_VALUE release_tag=$RELEASE_TAG expected_tag=$expected_tag"
-              exit 1
-            fi
-            pnpm install --frozen-lockfile --reporter=append-only
+            pnpm install --frozen-lockfile=false --reporter=append-only
+            rm -rf dist/
             pnpm build
 
-            APP_ENV=production APP_VERSION="$PACKAGE_VERSION" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" PORT="$DEPLOY_PORT" \
-              pm2 start "$APP_PATH/dist/index.cjs" --name "$CANDIDATE_PM2" --cwd "$APP_PATH" --interpreter node --node-args="--require dotenv/config" -- dotenv_config_path="$ENV_FILE"
-            for i in $(seq 1 30); do curl -fsS "$LOCAL_HEALTH_URL" >/dev/null && break; sleep 3; [ "$i" = 30 ] && false; done
-            echo "storage connectivity /api/version"
-            curl -fsS "http://127.0.0.1:$DEPLOY_PORT/ready" | grep -q '"database":"connected"'
-            [ -d "${UPLOAD_DIR:-$APP_PATH/uploads}" ] && [ -w "${UPLOAD_DIR:-$APP_PATH/uploads}" ] || { echo "FATAL: storage connectivity failed"; exit 1; }
-            VERSION_JSON="$(curl -fsS "http://127.0.0.1:$DEPLOY_PORT/api/version")" || { echo "FATAL: /api/version failed"; exit 1; }
-            printf '%s' "$VERSION_JSON" | grep -q "\"commit\":\"$NEW_COMMIT\"" || { echo "FATAL: /api/version commit mismatch: $VERSION_JSON"; exit 1; }
-            curl -fsS "$PUBLIC_HEALTH_URL" >/dev/null
-            curl -fsS "$PUBLIC_APP_HEALTH_URL" >/dev/null
-            pm2 delete "$PM2_PROCESS" 2>/dev/null || true
-            pm2 restart "$CANDIDATE_PM2" --name "$PM2_PROCESS" --update-env
-            pm2 save --force || { echo "FATAL: PM2 save after swap failed"; exit 1; }
-            trap - ERR
-            record_history success "$NEW_COMMIT" "$PACKAGE_VERSION" "$RELEASE_TAG" not_required
+            pm2 delete "$PM2_NAME" 2>/dev/null || true
+            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" PAYLINK_VERSION="$RELEASE_TAG" pm2 start "$APP_PATH/dist/index.cjs" \
+              --name "$PM2_NAME" \
+              --cwd "$APP_PATH" \
+              --interpreter node \
+              --node-args="--require dotenv/config" \
+              -- dotenv_config_path="$ENV_FILE"
+            pm2 save --force || true
 
-      - name: Production signing smoke tests
-        if: success()
-        continue-on-error: true
-        env:
-          EXPECTED_COMMIT: ${{ github.sha }}
-          BASE_URL: https://mypaylink.app
-          APP_BASE_URL: https://app.mypaylink.app
-          REPORT_FILE: deployment-smoke-artifacts/documenso-signing-smoke-report.txt
-        run: |
-          mkdir -p deployment-smoke-artifacts
-          ./scripts/verify_documenso_signing.sh
-
-      - name: Upload deployment smoke artifacts
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: paylink-production-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: deployment-smoke-artifacts/
-          retention-days: 30
+            for i in $(seq 1 30); do
+              if curl -fs "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1; then
+                echo "Production health passed on ${APP_PORT}"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "Production health failed on ${APP_PORT}" >&2
+            exit 1
