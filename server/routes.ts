@@ -14989,14 +14989,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : Array.isArray(remote?.rawResponse?.recipients) ? remote.rawResponse.recipients
       : Array.isArray(remote?.rawResponse?.data?.recipients) ? remote.rawResponse.data.recipients
       : fallback;
-    return raw.map((r: any) => ({
-      id: String(r?.token ?? r?.id ?? r?.recipientId ?? r?.recipient_id ?? "") || null,
-      name: r?.name || null,
-      email: normalizeSignerEmail(r?.email || r?.recipientEmail || r?.recipient_email),
-      role: r?.role || r?.type || null,
-      status: normalizeDocumensoRecipientStatus(r?.status || r?.signingStatus || r?.readStatus),
-      signingUrl: r?.signingUrl || r?.signing_url || null,
-    }));
+    return raw.map((r: any) => {
+      const signingToken = r?.token ?? null;
+
+      return {
+        id:
+          r?.id != null
+            ? String(r.id)
+            : r?.recipientId != null
+              ? String(r.recipientId)
+              : null,
+        signingToken,
+        name: r?.name || null,
+        email: normalizeSignerEmail(
+          r?.email || r?.recipientEmail || r?.recipient_email,
+        ),
+        role: r?.role || r?.type || null,
+        status: normalizeDocumensoRecipientStatus(
+          r?.status || r?.signingStatus || r?.readStatus,
+        ),
+        signingUrl:
+          r?.signingUrl ??
+          r?.signing_url ??
+          (signingToken
+            ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${signingToken}`
+            : null),
+      };
+    });
   }
 
   function maskAuditEmail(email: string | null | undefined): string | null {
@@ -15102,6 +15121,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : Array.isArray((remote as any)?.rawResponse?.recipients) ? (remote as any).rawResponse.recipients
       : Array.isArray((remote as any)?.rawResponse?.data?.recipients) ? (remote as any).rawResponse.data.recipients
       : [];
+    const canonicalRecipients = extractDocumensoRecipients(remote);
     const normalizeRecipientStatus = (value: any) => {
       const v = String(value || "").toLowerCase();
       if (["completed", "complete", "signed", "document.signed", "recipient.signed"].includes(v)) return "signed";
@@ -15113,8 +15133,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       return null;
     };
     let signersUpdated = 0;
-    for (const recipient of rawRecipients) {
-      const recipientId = String(recipient?.id || recipient?.token || recipient?.recipientId || recipient?.recipient_id || "") || null;
+    for (const [recipientIdx, recipient] of rawRecipients.entries()) {
+      const recipientId = canonicalRecipients[recipientIdx]?.id ?? null;
       const email = normalizeSignerEmail(recipient?.email || recipient?.recipientEmail || recipient?.recipient_email);
       const status = normalizeRecipientStatus(recipient?.status || recipient?.signingStatus || recipient?.readStatus);
       if (!status || (!recipientId && !email)) continue;
@@ -15522,10 +15542,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const resendResult = await resendDocumensoDocument(sigReq.documenso_document_id).catch(() => null);
       const matchingLink = resendResult?.signingLinks?.find((link: any) => normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email));
       latestDocumensoSigningUrl = matchingLink?.signingUrl || resendResult?.signingLinks?.find((link: any) => link.signingUrl)?.signingUrl || latestDocumensoSigningUrl;
-      latestRecipientId = matchingLink?.token || latestRecipientId;
+      latestRecipientId = matchingLink?.id || latestRecipientId;
       const updatedRecipientMetadata = resendResult?.signingLinks?.map((link: any) => ({
         email: normalizeSignerEmail(link.email),
-        recipientId: link.token || null,
+        recipientId: link.id || null,
         signingUrl: link.signingUrl || null,
         myPayLinkSigningUrl: normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email) ? buildContractSigningUrl(getAppBaseUrl(req), token) : null,
         status: link.status || null,
@@ -15608,7 +15628,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND related_record_id = ${contractId}
           AND company_id = ${contract.company_id}
           AND documenso_document_id IS NOT NULL
-          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error')
+          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error','superseded')
         ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
         LIMIT 1
       `);
@@ -15616,10 +15636,71 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const { sendDocumentForSignature, getDocumensoDocument } = await import("./services/documenso.js");
       const appBaseUrl = getAppBaseUrl(req);
+      const isReusingExistingEnvelope = !!existingReq?.documenso_document_id;
+
+      // Fix A: before reusing an existing envelope, confirm its live recipient set still matches
+      // the contract's current signer set. Fails CLOSED: if the live GET throws, or succeeds but
+      // returns no usable recipient list, we return immediately — no send, resend, token rotation,
+      // mapping update, or email may proceed on unverified data. Compared against ALL non-removed
+      // local signers (not just the currently-pending ones) so a signer who already completed
+      // signing — expected to remain on the envelope — is never mistaken for an "unexpected"
+      // remote recipient.
+      let existingEnvelopeRemote: any = null;
+      if (isReusingExistingEnvelope) {
+        try {
+          existingEnvelopeRemote = await getDocumensoDocument(existingReq.documenso_document_id);
+        } catch (err: any) {
+          return res.status(502).json({
+            code: "documenso_envelope_verification_failed",
+            message: "Could not verify the existing Documenso envelope before reuse. No signing request was sent, resent, or modified.",
+          });
+        }
+        const remoteRecipientsList = Array.isArray(existingEnvelopeRemote?.recipients) ? existingEnvelopeRemote.recipients : null;
+        if (!remoteRecipientsList || remoteRecipientsList.length === 0) {
+          return res.status(503).json({
+            code: "documenso_envelope_verification_unavailable",
+            message: "The existing Documenso envelope's recipient list could not be verified. No signing request was sent, resent, or modified.",
+          });
+        }
+        const allLocalSignersRes = await db.execute(sql`
+          SELECT DISTINCT lower(trim(email)) AS email
+          FROM contract_signers
+          WHERE contract_id = ${contractId}
+            AND email IS NOT NULL
+            AND status NOT IN ('replaced', 'canceled', 'cancelled', 'voided', 'void', 'declined')
+        `);
+        const localEmailSet = new Set(allLocalSignersRes.rows.map((r: any) => r.email).filter(Boolean));
+        const remoteEmailSet = new Set(
+          remoteRecipientsList.map((r: any) => normalizeSignerEmail(r.email)).filter(Boolean),
+        );
+        const missingRemotely = [...localEmailSet].filter((e) => !remoteEmailSet.has(e)).sort();
+        const unexpectedRemotely = [...remoteEmailSet].filter((e) => !localEmailSet.has(e)).sort();
+        if (missingRemotely.length > 0 || unexpectedRemotely.length > 0) {
+          return res.status(409).json({
+            code: "documenso_signer_set_mismatch",
+            message: "The contract signer list has changed since this Documenso envelope was created. A replacement signing request is required.",
+            missingRemotely,
+            unexpectedRemotely,
+            replacementRequired: true,
+          });
+        }
+      }
+
       const signerTokens = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
       for (const signer of signers) {
         const email = normalizeSignerEmail(signer.email);
         if (!email || signerTokens.has(email)) continue;
+        // Reusing an existing, still-live envelope: don't mint a new MyPayLink token (and don't
+        // touch signing_token_hash/signing_token_expires_at) for a signer whose current token is
+        // valid and unexpired — that preserves their already-delivered signing link instead of
+        // silently invalidating it. Expired, null/revoked (cancel/replace nulls the hash), or
+        // missing tokens still mint fresh, as does every signer on a fresh envelope send.
+        if (isReusingExistingEnvelope) {
+          const hasValidExistingToken = !!signer.signing_token_hash
+            && !!signer.signing_token_expires_at
+            && new Date(signer.signing_token_expires_at).getTime() > Date.now();
+          if (hasValidExistingToken) continue;
+        }
         const token = crypto.randomBytes(32).toString("base64url");
         signerTokens.set(email, {
           token,
@@ -15636,18 +15717,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let externalSendSucceeded = false;
       if (existingReq?.documenso_document_id) {
         reusedExistingDocumensoRequest = true;
-        const remote = await getDocumensoDocument(existingReq.documenso_document_id).catch(() => null);
+        const remote = existingEnvelopeRemote; // already fetched and verified above; avoid a second GET
         const storedRecipients = Array.isArray(existingReq.documenso_recipient_ids) ? existingReq.documenso_recipient_ids : [];
         docResult = {
           documentId: existingReq.documenso_document_id,
           status: remote?.status || existingReq.status || "sent",
-          signingLinks: (remote?.recipients?.length ? remote.recipients : storedRecipients).map((r: any) => ({
-            name: r.name || "",
-            email: r.email || "",
-            signingUrl: r.signingUrl || r.signing_url || null,
-            token: r.id || r.token || r.recipientId || null,
-            status: r.status || r.documensoStatus || null,
-          })),
+          signingLinks: (remote?.recipients?.length ? remote.recipients : storedRecipients).map((r: any) => {
+            const signingToken = r.token ?? null;
+            return {
+              id:
+                r.id != null
+                  ? String(r.id)
+                  : r.recipientId != null
+                    ? String(r.recipientId)
+                    : null,
+              name: r.name || "",
+              email: r.email || "",
+              signingUrl:
+                r.signingUrl ??
+                r.signing_url ??
+                (signingToken
+                  ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${signingToken}`
+                  : null),
+              token: signingToken,
+              status: r.status || r.documensoStatus || null,
+            };
+          }),
           rawResponse: { reusedExistingDocumensoRequest: true, existingRequestId: existingReq.id, remote: remote?.rawResponse || null },
         };
       } else {
@@ -15667,14 +15762,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Persist the Documenso request and signer metadata.
       const primarySigner = recipients[0];
-      const signingLinks = (docResult.signingLinks || []) as Array<{ email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
+      const signingLinks = (docResult.signingLinks || []) as Array<{ id?: string | null; email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
       const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
       const recipientMetadata = signingLinks.map((link) => {
         const email = normalizeSignerEmail(link.email);
         const localToken = email ? signerTokens.get(email) : undefined;
         return {
           email,
-          recipientId: link.token || null,
+          recipientId: link.id || null,
           signingUrl: link.signingUrl || null,
           myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null,
           status: link.status || null,
@@ -15707,7 +15802,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         await db.execute(sql`
           UPDATE contract_signers
           SET status = CASE WHEN status IN ('pending','unsent','draft','failed') THEN 'sent' ELSE status END,
-              documenso_recipient_id = COALESCE(${link.token || null}, documenso_recipient_id),
+              documenso_recipient_id = COALESCE(${link.id || null}, documenso_recipient_id),
               documenso_signing_url = COALESCE(${link.signingUrl || null}, documenso_signing_url),
               signing_token_hash = COALESCE(${signerTokens.get(email)?.token ? hashSigningToken(signerTokens.get(email)!.token) : null}, signing_token_hash),
               signing_token_expires_at = COALESCE(${signerTokens.get(email)?.expires || null}, signing_token_expires_at),
@@ -15726,8 +15821,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       for (const link of signingLinks) {
         const email = normalizeSignerEmail(link.email);
         if (!email) continue;
+        // No fresh MyPayLink token was minted for this signer this call (their existing one was
+        // preserved as valid/unexpired) — they already have a working signing email from before.
+        // Skip re-sending rather than falling back to a broken URL built from the raw contract ID.
+        if (!signerTokens.has(email)) continue;
         const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
-        const myPayLinkSigningUrl = recipientMetadata.find((r) => normalizeSignerEmail(r.email) === email)?.myPayLinkSigningUrl || buildContractSigningUrl(appBaseUrl, signerTokens.get(email)?.token || contractId);
+        // signerTokens.has(email) was just verified above, so a freshly minted token is guaranteed
+        // here — no raw-contract-ID fallback is needed or used.
+        const myPayLinkSigningUrl = signerTokens.get(email)!.myPayLinkSigningUrl;
         await sendGenericNotificationEmail({
           recipientName: matchingSigner?.name || link.email || "Signer",
           email,
@@ -15763,6 +15864,199 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
         return res.status(503).json({ message: "Documenso rejected the configured API token. Please verify DOCUMENSO_API_KEY in Replit Secrets and try again." });
       }
       res.status(500).json({ message: "Failed to send for signature: " + msg });
+    }
+  });
+
+  // ── Fix B: explicit, authorized replacement of a mismatched Documenso envelope ──
+  // Creates a brand-new envelope for the contract's current signer set. Never voids or otherwise
+  // mutates the old Documenso envelope (no safe void operation exists in this integration); the
+  // old local documenso_signature_requests row is preserved and marked 'superseded' for audit
+  // history, never deleted.
+  app.post("/api/contractor-contracts/:id/replace-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contractId = req.params.id;
+      const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (!req.body?.confirm) {
+        return res.status(400).json({
+          code: "confirmation_required",
+          message: "Explicit confirmation is required to create a replacement signing request.",
+        });
+      }
+      if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) {
+        return res.status(400).json({ message: `Cannot replace the signing request for a contract in '${contract.status}' status` });
+      }
+
+      const signersRes = await db.execute(sql`
+        SELECT * FROM contract_signers
+        WHERE contract_id = ${contractId}
+          AND status NOT IN ('replaced','canceled','cancelled','voided','void','declined')
+          AND email IS NOT NULL
+        ORDER BY "order" ASC
+      `);
+      const signers = signersRes.rows as any[];
+      const seenEmails = new Set<string>();
+      const recipients = signers.filter(s => {
+        const email = normalizeSignerEmail(s.email);
+        if (!email || seenEmails.has(email)) return false;
+        seenEmails.add(email);
+        return true;
+      }).map((s, i) => ({ name: s.name as string, email: normalizeSignerEmail(s.email) || s.email as string, role: "SIGNER" as const, routingOrder: i + 1 }));
+      if (recipients.length === 0) {
+        return res.status(400).json({ message: "Add at least one signer with an email address before creating a replacement signing request." });
+      }
+
+      const { sendDocumentForSignature, getDocumensoDocument } = await import("./services/documenso.js");
+
+      const existingReqRes = await db.execute(sql`
+        SELECT * FROM documenso_signature_requests
+        WHERE document_type IN ('contract', 'contractor_hub_contract')
+          AND related_record_id = ${contractId}
+          AND company_id = ${contract.company_id}
+          AND documenso_document_id IS NOT NULL
+          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error','superseded')
+        ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
+        LIMIT 1
+      `);
+      const existingReq = existingReqRes.rows[0] as any;
+
+      // Idempotency: if the current active envelope already matches the current signer set, a
+      // prior replacement call already fixed this — don't mint a second new envelope, don't send
+      // duplicate emails, don't rotate tokens again.
+      if (existingReq?.documenso_document_id) {
+        const remote = await getDocumensoDocument(existingReq.documenso_document_id).catch(() => null);
+        if (remote && Array.isArray(remote.recipients) && remote.recipients.length > 0) {
+          const localEmailSet = new Set(recipients.map(r => r.email));
+          const remoteEmailSet = new Set(
+            remote.recipients.map((r: any) => normalizeSignerEmail(r.email)).filter((e: string | null): e is string => !!e),
+          );
+          const missingRemotely = [...localEmailSet].filter(e => !remoteEmailSet.has(e));
+          const unexpectedRemotely = [...remoteEmailSet].filter(e => !localEmailSet.has(e));
+          if (missingRemotely.length === 0 && unexpectedRemotely.length === 0) {
+            return res.json({
+              success: true,
+              alreadyReplaced: true,
+              documensoDocumentId: existingReq.documenso_document_id,
+              message: "The current signing request already matches the active signer set; no replacement was necessary.",
+            });
+          }
+        }
+      }
+
+      const appBaseUrl = getAppBaseUrl(req);
+      const signerTokens = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
+      for (const signer of signers) {
+        const email = normalizeSignerEmail(signer.email);
+        if (!email || signerTokens.has(email)) continue;
+        const token = crypto.randomBytes(32).toString("base64url");
+        signerTokens.set(email, {
+          token,
+          expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14),
+          myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token),
+        });
+      }
+      const primarySignerToken = signerTokens.get(normalizeSignerEmail(recipients[0]?.email) || "")?.token;
+      const primaryReturnUrl = primarySignerToken
+        ? buildContractDocumensoReturnUrl(appBaseUrl, primarySignerToken)
+        : buildContractDocumensoReturnUrl(appBaseUrl, contractId);
+
+      const pdfBuffer = await generateContractPdf(contractId);
+      if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for the replacement signing request" });
+
+      const docResult = await sendDocumentForSignature({
+        title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
+        pdfBuffer,
+        recipients,
+        metadata: { externalId: contractId, contractId, companyId: contract.company_id },
+        subject: `Please sign: ${contract.title}`,
+        message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+        returnUrl: primaryReturnUrl,
+      });
+
+      // Preserve the old request row for audit history — never delete it, only mark superseded.
+      if (existingReq?.id) {
+        await db.execute(sql`UPDATE documenso_signature_requests SET status = 'superseded', updated_at = NOW() WHERE id = ${existingReq.id}`);
+      }
+
+      const primarySigner = recipients[0];
+      const signingLinks = (docResult.signingLinks || []) as Array<{ id?: string | null; email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
+      const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
+      const recipientMetadata = signingLinks.map((link) => {
+        const email = normalizeSignerEmail(link.email);
+        const localToken = email ? signerTokens.get(email) : undefined;
+        return {
+          email,
+          recipientId: link.id || null,
+          signingUrl: link.signingUrl || null,
+          myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null,
+          status: link.status || null,
+        };
+      });
+
+      await db.execute(sql`
+        INSERT INTO documenso_signature_requests
+          (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
+        VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
+                ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
+        ON CONFLICT DO NOTHING
+      `);
+
+      for (const link of signingLinks) {
+        const email = normalizeSignerEmail(link.email);
+        if (!email) continue;
+        await db.execute(sql`
+          UPDATE contract_signers
+          SET status = CASE WHEN status IN ('pending','unsent','draft','failed') THEN 'sent' ELSE status END,
+              documenso_recipient_id = ${link.id || null},
+              documenso_signing_url = ${link.signingUrl || null},
+              signing_token_hash = ${signerTokens.get(email)?.token ? hashSigningToken(signerTokens.get(email)!.token) : null},
+              signing_token_expires_at = ${signerTokens.get(email)?.expires || null},
+              last_sent_at = NOW(),
+              sent_at = COALESCE(sent_at, NOW()),
+              updated_at = NOW()
+          WHERE contract_id = ${contractId} AND lower(trim(email)) = ${email}
+        `);
+      }
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_contract",
+        objectId: contractId,
+        actionType: "documenso_envelope_replaced",
+        actorUserId: req.session.userId,
+        companyId: contract.company_id,
+        metadataJson: JSON.stringify({
+          oldDocumentId: existingReq?.documenso_document_id || null,
+          newDocumentId: docResult.documentId,
+          reason: "signer_set_mismatch",
+        }),
+      }).catch(() => {});
+
+      const { sendGenericNotificationEmail } = await import("./notifications.js");
+      for (const link of signingLinks) {
+        const email = normalizeSignerEmail(link.email);
+        if (!email || !signerTokens.has(email)) continue;
+        const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
+        const myPayLinkSigningUrl = signerTokens.get(email)!.myPayLinkSigningUrl;
+        await sendGenericNotificationEmail({
+          recipientName: matchingSigner?.name || link.email || "Signer",
+          email,
+          title: `Please sign: ${contract.title || "Contract"}`,
+          body: `Please sign this contract using the secure MyPayLink signing page. This is a replacement signing request; any prior signing link for this contract is no longer valid.
+
+Signing page: ${myPayLinkSigningUrl}`,
+          actionUrl: myPayLinkSigningUrl,
+        }).catch((err) => console.warn("[Documenso] replacement signer email failed", err?.message || err));
+      }
+
+      res.json({
+        success: true,
+        alreadyReplaced: false,
+        documensoDocumentId: docResult.documentId,
+        oldDocumentId: existingReq?.documenso_document_id || null,
+        signingLinks: recipientMetadata,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: "Failed to create replacement signing request: " + (e?.message || "unknown error") });
     }
   });
 
