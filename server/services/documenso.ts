@@ -143,7 +143,7 @@ export interface CreateDocumensoDocumentOptions {
 export interface DocumensoDocumentResult {
   documentId: string;
   status: string;
-  signingLinks: Array<{ id?: string | null; name: string; email: string; signingUrl?: string; token?: string; status?: string }>;
+  signingLinks: Array<{ id?: string | null; name: string; email: string; role?: string | null; signingUrl?: string; token?: string; status?: string }>;
   auditUrl?: string;
   rawResponse: any;
 }
@@ -216,14 +216,16 @@ export async function createDocumensoDocument({
     const err = await parseResponse(createRes).catch(() => "");
     throw new Error(`Documenso create failed with ${createRes.status}: ${typeof err === "string" ? err : JSON.stringify(err)}`);
   }
-  const created = await parseResponse(createRes);
+  const createdRaw = await parseResponse(createRes);
+  const created = unwrapDocumensoEnvelope(createdRaw);
   const documentId = String(created?.id || created?.envelopeId || created?.documentId || "");
-  if (!documentId) throw new Error(`Documenso returned no document id: ${JSON.stringify(created)}`);
+  if (!documentId) throw new Error(`Documenso returned no document id: ${JSON.stringify(createdRaw)}`);
 
-  const distributed = await apiJson<any>("POST", "/envelope/distribute", {
+  const distributedRaw = await apiJson<any>("POST", "/envelope/distribute", {
     envelopeId: documentId,
     meta: payload.meta,
   });
+  const distributed = unwrapDocumensoEnvelope(distributedRaw);
 
   return {
     documentId,
@@ -232,21 +234,87 @@ export async function createDocumensoDocument({
       id: r.id != null ? String(r.id) : null,
       name: r.name || "",
       email: r.email || "",
+      role: r.role ?? null,
       signingUrl: r.signingUrl || (r.token ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}` : undefined),
       token: r.token,
       status: r.signingStatus || r.status,
     })),
     auditUrl: `${getBaseUrl()}/envelope/${documentId}/audit-log`,
-    rawResponse: { created, distributed },
+    rawResponse: { created: createdRaw, distributed: distributedRaw },
   };
+}
+
+/**
+ * Unwrap a possible `{ data: {...} }` envelope wrapper. A prior fix attempt
+ * (see the dead `remote?.rawResponse?.data?.recipients` fallback branch this
+ * repair removes the need for, in routes.ts's extractDocumensoRecipients)
+ * already suspected the live API wraps responses this way, but patched the
+ * wrong layer — the actual unwrapped array never reached that fallback,
+ * because this function always returned an array (possibly empty) for
+ * `.recipients`, which made `Array.isArray(remote.recipients)` always true
+ * upstream and short-circuited before the fallback could ever run. Fixing it
+ * here, at the source, is the smallest complete repair.
+ */
+function unwrapDocumensoEnvelope(doc: any): any {
+  return doc?.data && typeof doc.data === "object" ? doc.data : doc;
+}
+
+/**
+ * Merge additional recipient pages if the response signals more exist than
+ * were returned on this page. Follows a conventional cursor shape
+ * (`nextCursor`/`next_cursor` at the top level or under `pagination`/`meta`).
+ * No-ops safely (returns the single page as-is) when no such signal is
+ * present, so this can never introduce a new failure mode for the common
+ * (non-paginated) case.
+ */
+async function fetchAllDocumensoRecipientPages(documentId: string, firstPageEnvelope: any): Promise<any[]> {
+  const recipientsFromPage = (envelope: any): any[] =>
+    Array.isArray(envelope?.recipients) ? envelope.recipients : [];
+  const nextCursorOf = (envelope: any): string | null =>
+    envelope?.nextCursor || envelope?.next_cursor || envelope?.pagination?.nextCursor || envelope?.meta?.nextCursor || null;
+
+  // Keyed by recipient id (falling back to array position for recipients
+  // without one) so a repeated/non-advancing cursor that re-returns the same
+  // page can never produce duplicate entries.
+  const merged = new Map<string, any>();
+  const addPage = (recipients: any[]) => {
+    recipients.forEach((r, i) => merged.set(r?.id != null ? String(r.id) : `__idx_${merged.size + i}`, r));
+  };
+
+  addPage(recipientsFromPage(firstPageEnvelope));
+  let cursor = nextCursorOf(firstPageEnvelope);
+  let pagesFetched = 1;
+  const MAX_PAGES = 20; // hard cap — never loop forever on a malformed/cyclical cursor
+  while (cursor && pagesFetched < MAX_PAGES) {
+    let page: any;
+    try {
+      page = await apiJson<any>("GET", `/envelope/${encodeURIComponent(documentId)}?cursor=${encodeURIComponent(cursor)}`);
+    } catch {
+      break; // a failed subsequent page fetch must not discard the pages already collected
+    }
+    const envelope = unwrapDocumensoEnvelope(page);
+    const next = nextCursorOf(envelope);
+    if (!next || next === cursor) {
+      // Non-advancing/cyclical cursor — this is the last usable page; merge
+      // it (by id, so a repeated page can't duplicate) and stop.
+      addPage(recipientsFromPage(envelope));
+      break;
+    }
+    addPage(recipientsFromPage(envelope));
+    cursor = next;
+    pagesFetched++;
+  }
+  return [...merged.values()];
 }
 
 export async function getDocumensoDocument(documentId: string) {
   const doc = await apiJson<any>("GET", `/envelope/${encodeURIComponent(documentId)}`);
+  const envelope = unwrapDocumensoEnvelope(doc);
+  const allRecipients = await fetchAllDocumensoRecipientPages(documentId, envelope);
   return {
-    id: String(doc?.id || documentId),
-    status: mapDocumensoStatus(doc?.status),
-    recipients: (doc?.recipients || []).map((r: any) => ({
+    id: String(envelope?.id || doc?.id || documentId),
+    status: mapDocumensoStatus(envelope?.status || doc?.status),
+    recipients: allRecipients.map((r: any) => ({
       id: r.id,
       token: r.token,
       name: r.name || "",
@@ -260,7 +328,7 @@ export async function getDocumensoDocument(documentId: string) {
           ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}`
           : undefined),
     })),
-    envelopeItems: doc?.envelopeItems || [],
+    envelopeItems: envelope?.envelopeItems || doc?.envelopeItems || [],
     rawResponse: doc,
   };
 }
@@ -298,13 +366,15 @@ export const DOCUMENSO_RESEND_REQUEST_CONTRACT = {
 
 export async function resendDocumensoDocument(documentId: string): Promise<DocumensoDocumentResult> {
   const res = await apiJson<any>(DOCUMENSO_RESEND_REQUEST_CONTRACT.method, DOCUMENSO_RESEND_REQUEST_CONTRACT.endpoint, { envelopeId: documentId });
+  const envelope = unwrapDocumensoEnvelope(res);
   return {
     documentId,
-    status: mapDocumensoStatus(res?.status || "PENDING"),
-    signingLinks: (res?.recipients || []).map((r: any) => ({
+    status: mapDocumensoStatus(envelope?.status || res?.status || "PENDING"),
+    signingLinks: (envelope?.recipients || []).map((r: any) => ({
       id: r.id != null ? String(r.id) : null,
       name: r.name || "",
       email: r.email || "",
+      role: r.role ?? null,
       signingUrl:
         r.signingUrl ??
         (r.token

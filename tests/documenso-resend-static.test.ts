@@ -15,9 +15,15 @@ function ok(name: string, condition: boolean) {
 ok("pending signer resend still calls Documenso redistribute", routes.includes("documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id)"));
 ok("signed signer resend is blocked before Documenso", routes.includes('if (signer.status === "signed") return res.status(400).json({ message: "Signed signers cannot be resent" })'));
 ok("completed document resend is blocked with user-safe message", routes.includes('"This contract has already been completed."') && routes.includes("getDocumensoResendBlockReason(remote.status"));
-ok("missing recipient id refreshes local metadata", routes.includes("refreshDocumensoRecipientMappings") && routes.includes("documenso_recipient_id = CASE WHEN ${r.newRecipientId}"));
-ok("stale recipient refresh retries resend once", routes.includes("retriedAfterRefresh = true") && routes.includes("retryCount: retriedAfterRefresh ? 1 : 0") && routes.includes("documenso_recipient_refresh"));
-ok("wrong email cannot be accepted as resent", routes.includes("linkGroupsByEmail.get(email)") && routes.includes("Recipient missing remotely"));
+ok("refreshDocumensoRecipientMappings (used by syncDocumensoContractStatus) still self-heals recipient id metadata", routes.includes("refreshDocumensoRecipientMappings") && routes.includes("documenso_recipient_id = CASE WHEN ${r.newRecipientId}") && routes.includes("documenso_recipient_refresh"));
+// The old "retry resend once after refreshing mappings mid-verification" behavior
+// was removed: retrying meant writing recipient-mapping repairs during Phase A
+// (verification), which violates the mutation-free-verification requirement
+// (verification failures — including a first resend attempt that fails before
+// Phase C — must cause zero operational writes). The resend handler is now
+// idempotent and safe to click again instead of auto-retrying internally.
+ok("resend handler no longer auto-retries mid-verification (removed in favor of mutation-free verification)", !routes.includes("retriedAfterRefresh = true"));
+ok("wrong email cannot be accepted as resent", routes.includes("matchDocumensoRecipientForSigner") && routes.includes("Recipient missing remotely"));
 ok("duplicate signer records are detected", routes.includes("duplicateEmails") && routes.includes("HAVING COUNT(*) > 1"));
 ok("duplicate identity email mismatches are detected", routes.includes("possibleIdentityMismatches") && routes.includes("COUNT(DISTINCT lower(trim(email))) > 1"));
 ok("actual Documenso errors are serialized", documenso.includes("serializeDocumensoError") && documenso.includes("httpStatus") && documenso.includes("responseBody") && documenso.includes("requestId"));

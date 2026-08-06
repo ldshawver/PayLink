@@ -14969,6 +14969,44 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return v;
   }
 
+  // Distinguishes why a live Documenso verification/API call failed, instead of
+  // collapsing document-not-found, account/credential mismatch, and transient
+  // network/5xx errors into one generic message. DocumensoApiError already
+  // carries the HTTP status (server/services/documenso.ts); a non-Documenso
+  // error (thrown before any response, e.g. DNS/timeout, or Documenso not
+  // configured at all) has no .status and is treated as temporary/config-level.
+  function classifyDocumensoVerificationFailure(err: any): { code: string; message: string; httpStatus: number } {
+    const status = err?.status;
+    if (status === 404) {
+      return {
+        code: "documenso_document_not_found",
+        httpStatus: 502,
+        message: "The stored Documenso document could not be found remotely (it may have been deleted, or created under a different Documenso account/environment). No signing request was sent, resent, or modified.",
+      };
+    }
+    if (status === 401 || status === 403) {
+      return {
+        code: "documenso_account_mismatch",
+        httpStatus: 502,
+        message: "Documenso rejected access to this document as unauthorized — the configured credentials may not have access to it (possible account/environment mismatch). No signing request was sent, resent, or modified.",
+      };
+    }
+    return {
+      code: "documenso_temporary_failure",
+      httpStatus: 503,
+      message: "A temporary error occurred while verifying the existing Documenso envelope. No signing request was sent, resent, or modified. Please retry.",
+    };
+  }
+
+  // Same idea as serializeDocumensoError, but with the errorMessage/code
+  // enhanced to distinguish document-not-found / account-mismatch /
+  // temporary-failure instead of a single generic string.
+  function serializeDocumensoErrorClassified(err: any) {
+    const serialized = serializeDocumensoError(err);
+    const classified = classifyDocumensoVerificationFailure(err);
+    return { ...serialized, errorMessage: classified.message, code: classified.code };
+  }
+
   function getDocumensoResendBlockReason(documentStatus: unknown, recipientStatus?: unknown, recipientFound = true): string | null {
     const docStatus = normalizeDocumensoRecipientStatus(documentStatus);
     const recStatus = normalizeDocumensoRecipientStatus(recipientStatus);
@@ -14981,6 +15019,77 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (recStatus === "declined") return "Recipient declined";
     if (["canceled", "cancelled", "voided"].includes(recStatus)) return "Recipient cancelled";
     return null;
+  }
+
+  // Documenso's recipient role vocabulary (SIGNER/VIEWER/APPROVER/CC) describes
+  // signing ACTION TYPE. It is NOT the same vocabulary as this app's local
+  // contract_signers.role (contractor/company_rep/witness/notary), which
+  // describes local PARTY TYPE — there is no 1:1 mapping between them, and we
+  // never fabricate one. What IS true and verifiable: every recipient this
+  // app ever sends to Documenso is created with role: "SIGNER" (all 3 call
+  // sites that build a recipients[] payload use this literal), regardless of
+  // the local signer's own party-type role. So the only honest, evidence-
+  // backed compatibility check available is: does the remote recipient's
+  // role literally say SIGNER? A candidate whose remote role is
+  // VIEWER/APPROVER/CC is provably a different kind of recipient, not this
+  // local signer under a different name — email match alone is not enough.
+  function isCompatibleDocumensoRecipientRole(remoteRole: unknown): boolean {
+    return String(remoteRole || "").trim().toUpperCase() === "SIGNER";
+  }
+
+  /**
+   * Centralized recipient matching — the single implementation used by both
+   * refreshDocumensoRecipientMappings and the resend handler's own
+   * reconciliation, so the ID-first / role-aware / no-substring-match rules
+   * can never drift between the two call sites.
+   *
+   * Precedence:
+   *   1. A stored, previously-verified documenso_recipient_id is
+   *      authoritative. If it no longer resolves remotely, that is itself a
+   *      "missing remotely" signal — it never falls back to email (falling
+   *      back could silently re-attach the signer to a different remote
+   *      recipient that merely happens to share an email).
+   *   2. Legacy records with no stored ID: normalized exact email AND a
+   *      compatible role. Any email collision (2+ remote recipients sharing
+   *      that email, regardless of whether their roles match each other) is
+   *      rejected as ambiguous outright — never resolved by preferring the
+   *      role-compatible one. An email appearing more than once among
+   *      remote recipients is itself an anomaly worth a manual look.
+   *   3. Never substring/fuzzy: always exact equality on the normalized
+   *      email string and the exact recipient id string.
+   */
+  function matchDocumensoRecipientForSigner(
+    signer: { email: string; documenso_recipient_id?: string | null },
+    remoteRecipients: any[],
+  ): { live: any | null; matchedById: boolean; blockReason: string | null } {
+    const storedId = signer.documenso_recipient_id ? String(signer.documenso_recipient_id) : null;
+
+    if (storedId) {
+      const idMatches = remoteRecipients.filter((r) => r?.id != null && String(r.id) === storedId);
+      if (idMatches.length > 1) {
+        return { live: null, matchedById: true, blockReason: "Multiple live Documenso recipients share this recipient ID; manual review required." };
+      }
+      return { live: idMatches[0] || null, matchedById: true, blockReason: null };
+    }
+
+    const signerEmail = normalizeSignerEmail(signer.email);
+    const emailMatches = signerEmail ? remoteRecipients.filter((r) => normalizeSignerEmail(r?.email) === signerEmail) : [];
+
+    if (emailMatches.length === 0) {
+      return { live: null, matchedById: false, blockReason: null };
+    }
+    if (emailMatches.length > 1) {
+      return { live: null, matchedById: false, blockReason: "Multiple live Documenso recipients share this email; manual review required." };
+    }
+
+    const candidate = emailMatches[0];
+    if (!isCompatibleDocumensoRecipientRole(candidate.role)) {
+      if (candidate.role == null || candidate.role === "") {
+        return { live: null, matchedById: false, blockReason: "Recipient role could not be verified remotely; email match alone is not sufficient to confirm identity." };
+      }
+      return { live: null, matchedById: false, blockReason: `Remote recipient's role ('${candidate.role}') is not a signer role; email match rejected.` };
+    }
+    return { live: candidate, matchedById: false, blockReason: null };
   }
 
   function extractDocumensoRecipients(remote: any, fallback: any[] = []) {
@@ -15040,13 +15149,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const liveDocumentId = String(remote?.documentId || remote?.id || remote?.envelopeId || remote?.rawResponse?.id || remote?.rawResponse?.envelopeId || documensoDocumentId);
     if (liveDocumentId && liveDocumentId !== String(documensoDocumentId)) throw new Error("Documenso document mismatch for this contract.");
     const recipients = extractDocumensoRecipients(remote);
-    const byEmail = new Map<string, any[]>();
-    for (const recipient of recipients) {
-      if (!recipient.email) continue;
-      const list = byEmail.get(recipient.email) || [];
-      list.push(recipient);
-      byEmail.set(recipient.email, list);
-    }
     const signers = (await db.execute(sql`
       SELECT * FROM contract_signers
       WHERE contract_id = ${contractId}
@@ -15057,10 +15159,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     `)).rows as any[];
     const results = signers.map((signer) => {
       const email = normalizeSignerEmail(signer.email);
-      const matches = email ? (byEmail.get(email) || []) : [];
-      const live = matches.length === 1 ? matches[0] : null;
-      const blockReason = matches.length > 1 ? "Multiple live Documenso recipients match this email; manual review required." : getDocumensoResendBlockReason(remote?.status, live?.status, !!live);
-      return { signer, email, live, oldRecipientId: signer.documenso_recipient_id || null, newRecipientId: live?.id || null, signingUrl: live?.signingUrl || null, refreshed: !!(live?.id && live.id !== signer.documenso_recipient_id), reason: blockReason };
+      const match = matchDocumensoRecipientForSigner(signer, recipients);
+      const live = match.live;
+      const blockReason = match.blockReason || getDocumensoResendBlockReason(remote?.status, live?.status, !!live);
+      return { signer, email, live, matchedById: match.matchedById, oldRecipientId: signer.documenso_recipient_id || null, newRecipientId: live?.id || null, signingUrl: live?.signingUrl || null, refreshed: !!(live?.id && live.id !== signer.documenso_recipient_id), reason: blockReason };
     });
     const changed = results.filter((r) => r.refreshed);
     const metadata = recipients.map((r: any) => ({ email: r.email, recipientId: r.id, signingUrl: r.signingUrl, status: r.status, role: r.role }));
@@ -15297,8 +15399,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
     if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
 
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "documenso_resend_requested", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
+    // Safe diagnostic log only — records that the endpoint was invoked, before
+    // any verification has run. Never sets documenso_signature_requests.status
+    // or contract_signers state, so this is allowed before verification runs
+    // (see Phase A/B/C below). Deliberately a distinct actionType from the
+    // terminal "documenso_resend_requested" recorded after Phase C (which
+    // means "every targeted recipient was actually accepted by Documenso") —
+    // reusing that string here would make the two indistinguishable in the
+    // audit trail, letting a mere click look identical to a confirmed
+    // full-success resend.
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "documenso_resend_endpoint_invoked", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
 
+    // ══════════════════════ PHASE A — VERIFICATION ONLY ══════════════════════
+    // Everything in this phase is read-only. No UPDATE/INSERT touches
+    // contract_signers or documenso_signature_requests until Phase C, and
+    // Phase C only runs after Phase B has actually been attempted.
     const pending = (await db.execute(sql`
       SELECT * FROM contract_signers
       WHERE contract_id = ${req.params.id}
@@ -15335,133 +15450,209 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     const tokenByEmail = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
 
+    // Returns a fully-formed, HTTP-200 response for any verification-phase
+    // outcome — no resend attempted, no operational write performed. Kept at
+    // HTTP 200 (not the distinct HTTP statuses send-for-signature uses) to
+    // preserve the existing client contract (client always parses the body's
+    // `code`/`success` fields for this endpoint), while still surfacing the
+    // now-distinct classification precisely.
+    function verificationOnlyResult(code: string, message: string, extra: Record<string, any> = {}) {
+      const results = pending.map((s) => ({ email: normalizeSignerEmail(s.email), status: s.status || null, refreshed: false, retried: false, reason: message }));
+      return res.status(200).json({
+        success: false, documensoResult: "not_attempted", code,
+        requested: pending.length, accepted: 0, partial: false,
+        refreshed: 0, refreshAttempted: false, retryAttempted: false, retryCount: 0, retried: 0,
+        targetedCount: pending.length, sentCount: 0, failedCount: pending.length,
+        results, recipients: results,
+        documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: extra.documentStatus ?? null,
+        duplicateEmails, possibleIdentityMismatches,
+        documensoError: { errorMessage: message, timestamp: new Date().toISOString(), code },
+        retriedAfterRefresh: false,
+        message,
+      });
+    }
 
-    let remote: any = null;
-    let remoteRecipients: any[] = [];
-    let documensoResult: Awaited<ReturnType<typeof resendDocumensoDocument>> | null = null;
-    let documensoError: any = null;
-    let retriedAfterRefresh = false;
-    let refreshInfo: Awaited<ReturnType<typeof refreshDocumensoRecipientMappings>> | null = null;
     if (!sigReq?.documenso_document_id) {
-      documensoError = { errorMessage: "No Documenso signature request/document id exists for this contract.", timestamp: new Date().toISOString() };
-    } else {
-      try {
-        remote = await getDocumensoDocument(sigReq.documenso_document_id);
-        refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
-        remoteRecipients = refreshInfo.recipients;
-        const docBlock = getDocumensoResendBlockReason(remote.status, undefined, true);
-        if (docBlock) {
-          documensoError = { errorMessage: docBlock, responseBody: remote.rawResponse || remote, timestamp: new Date().toISOString() };
-        } else {
-          try {
-            documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
-          } catch (firstResendError: any) {
-            documensoError = serializeDocumensoError(firstResendError);
-            refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_provider_rejected_after_metadata_check" });
-            remoteRecipients = refreshInfo.recipients;
-            if ((refreshInfo.refreshedCount || 0) > 0) {
-              retriedAfterRefresh = true;
-              try {
-                documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
-                documensoError = null;
-              } catch (retryProviderErr: any) {
-                documensoError = serializeDocumensoError(retryProviderErr);
-              }
-            }
-          }
-        }
-      } catch (e: any) {
-        documensoError = serializeDocumensoError(e);
-        if (remote) {
-          try {
-            refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
-            remoteRecipients = refreshInfo.recipients;
-            if ((refreshInfo.refreshedCount || 0) > 0) {
-              retriedAfterRefresh = true;
-              try {
-                documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
-                documensoError = null;
-              } catch (retryProviderErr: any) {
-                documensoError = serializeDocumensoError(retryProviderErr);
-              }
-            }
-          } catch (retryErr: any) {
-            documensoError = serializeDocumensoError(retryErr);
-          }
-        }
-      }
+      return verificationOnlyResult("documenso_no_signature_request", "No Documenso signature request/document id exists for this contract.");
     }
 
-    const extractedLinks = extractDocumensoRecipients(documensoResult, remoteRecipients);
-    const linkGroupsByEmail = new Map<string, any[]>();
-    for (const link of extractedLinks) {
-      const email = normalizeSignerEmail(link.email);
-      if (!email) continue;
-      const list = linkGroupsByEmail.get(email) || [];
-      list.push(link);
-      linkGroupsByEmail.set(email, list);
+    let remote: any;
+    try {
+      remote = await getDocumensoDocument(sigReq.documenso_document_id);
+    } catch (err: any) {
+      const classified = classifyDocumensoVerificationFailure(err);
+      return verificationOnlyResult(classified.code, classified.message);
     }
-    const refreshBySignerId = new Map((refreshInfo?.results || []).map((r: any) => [r.signer.id, r]));
-    const recipients = pending.map((signer) => {
+
+    const docBlock = getDocumensoResendBlockReason(remote.status, undefined, true);
+    if (docBlock) {
+      return verificationOnlyResult("documenso_document_not_resendable", docBlock, { documentStatus: remote.status });
+    }
+
+    const remoteRecipients = extractDocumensoRecipients(remote);
+    if (remoteRecipients.length === 0) {
+      return verificationOnlyResult(
+        "documenso_document_has_no_recipients",
+        "The Documenso document has zero recipients on it remotely — there is nothing to resend. No signing request was sent, resent, or modified.",
+        { documentStatus: remote.status },
+      );
+    }
+
+    // Match every pending local signer against the verified remote recipient
+    // set — pure computation, no writes. This is the same centralized,
+    // ID-first / role-aware matcher used by refreshDocumensoRecipientMappings,
+    // so the rules can never drift between the two call sites.
+    const matchResults = pending.map((signer) => {
       const email = normalizeSignerEmail(signer.email);
-      const matches = email ? (linkGroupsByEmail.get(email) || []) : [];
-      const remoteRecipient: any = matches.length === 1 ? matches[0] : undefined;
-      const localToken = email ? tokenByEmail.get(email) : undefined;
-      const refreshRow: any = refreshBySignerId.get(signer.id);
-      const duplicateReason = matches.length > 1 ? "Duplicate recipient email in Documenso; manual review required" : null;
+      const match = matchDocumensoRecipientForSigner(signer, remoteRecipients);
+      const live = match.live;
       const localSignerStatus = String(signer.status || "").toLowerCase();
       const localBlockReason = localSignerStatus === "signed" ? "Already signed"
         : localSignerStatus === "declined" ? "Recipient declined"
           : ["canceled", "cancelled"].includes(localSignerStatus) ? "Recipient cancelled"
             : null;
-      const reason = duplicateReason || localBlockReason || refreshRow?.reason || getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
-      const resultStatus = duplicateReason ? "manual_review" : reason === "Recipient missing remotely" ? "missing" : reason === "Already signed" ? "signed" : reason ? "skipped" : "resent";
+      const reason = match.blockReason || localBlockReason || getDocumensoResendBlockReason(remote.status, live?.status, !!live);
+      return { signer, email, live, matchedById: match.matchedById, reason };
+    });
+
+    const eligibleCount = matchResults.filter((r) => r.live && !r.reason).length;
+    if (eligibleCount === 0) {
+      // Every pending signer is already blocked (missing/ambiguous/wrong-role/
+      // already-signed/declined/etc.) — calling Documenso would accomplish
+      // nothing. No resend call, no operational write.
+      const results = matchResults.map((r) => ({ email: r.email, status: r.signer.status || null, refreshed: false, retried: false, reason: r.reason || "Recipient missing remotely" }));
+      return res.status(200).json({
+        success: false, documensoResult: "not_attempted", code: "documenso_no_eligible_recipients",
+        requested: pending.length, accepted: 0, partial: false,
+        refreshed: 0, refreshAttempted: false, retryAttempted: false, retryCount: 0, retried: 0,
+        targetedCount: pending.length, sentCount: 0, failedCount: pending.length,
+        results, recipients: results,
+        documensoDocumentId: sigReq.documenso_document_id, documentStatus: remote.status,
+        duplicateEmails, possibleIdentityMismatches,
+        documensoError: null, retriedAfterRefresh: false,
+        message: "No pending signer is eligible for resend — all are missing, ambiguous, or already resolved. No signing request was sent, resent, or modified.",
+      });
+    }
+
+    // ══════════════════════ PHASE B — REMOTE RESEND ══════════════════════
+    // Only reached after every verification check above has passed.
+    let documensoResult: Awaited<ReturnType<typeof resendDocumensoDocument>> | null = null;
+    let documensoError: any = null;
+    try {
+      documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+    } catch (err: any) {
+      documensoError = serializeDocumensoErrorClassified(err);
+    }
+
+    // ══════════════════ PHASE C — LOCAL SUCCESS TRANSACTION ══════════════════
+    // Reached only because Phase B was actually attempted — so persisting an
+    // operational record here (even one describing a failure Documenso itself
+    // returned) is legitimate: a real resend attempt occurred, unlike the
+    // verification-only branches above, which never call Documenso at all.
+    const extractedLinks = extractDocumensoRecipients(documensoResult, remoteRecipients);
+    const recipients = pending.map((signer) => {
+      const matchRow = matchResults.find((r) => r.signer.id === signer.id)!;
+      const email = matchRow.email;
+      // Prefer the post-resend extracted link for the same signer (freshest),
+      // falling back to the pre-resend verified match.
+      const postResendMatch = matchDocumensoRecipientForSigner(signer, extractedLinks);
+      const remoteRecipient: any = postResendMatch.live ?? matchRow.live;
+      const localToken = email ? tokenByEmail.get(email) : undefined;
+      const reason = matchRow.reason;
+      const resultStatus = reason === "Recipient missing remotely" ? "missing" : reason === "Already signed" ? "signed" : reason ? "skipped" : "resent";
       const accepted = !!documensoResult && !!remoteRecipient && !reason;
+      const refreshed = !!(remoteRecipient?.id && String(remoteRecipient.id) !== String(signer.documenso_recipient_id || ""));
       return {
         signerId: signer.id, name: signer.name || null, email, role: signer.role || signer.signer_role || remoteRecipient?.role || null,
-        signerRowExists: true, documensoDocumentId: sigReq?.documenso_document_id || null,
+        signerRowExists: true, documensoDocumentId: sigReq.documenso_document_id,
         localSignerStatus: signer.status || null, documensoStatus: remoteRecipient?.status || null,
-        documensoRecipientId: remoteRecipient?.id || refreshRow?.newRecipientId || signer.documenso_recipient_id || null,
+        documensoRecipientId: remoteRecipient?.id || signer.documenso_recipient_id || null,
         documensoSigningUrl: remoteRecipient?.signingUrl || signer.documenso_signing_url || null,
         myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null, sentAt: signer.sent_at || null,
         resentAt: accepted ? new Date().toISOString() : null,
-        resendResult: accepted ? "accepted" : "skipped", status: accepted ? "resent" : resultStatus, refreshed: !!refreshRow?.refreshed, retried: false, reason: accepted && refreshRow?.refreshed ? "Recipient mapping refreshed and reminder resent." : (accepted ? null : reason),
+        resendResult: accepted ? "accepted" : "skipped", status: accepted ? "resent" : resultStatus, refreshed, retried: false,
+        reason: accepted && refreshed ? "Recipient mapping refreshed and reminder resent." : (accepted ? null : reason),
         error: accepted ? null : reason,
       };
     });
 
     const acceptedRecipients = recipients.filter((r) => r.resendResult === "accepted");
-    for (const recipient of acceptedRecipients) {
-      const localToken = recipient.email ? tokenByEmail.get(recipient.email) : undefined;
-      await db.execute(sql`
-        UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(),
-          signing_token_hash = COALESCE(${localToken?.token ? hashSigningToken(localToken.token) : null}, signing_token_hash),
-          signing_token_expires_at = COALESCE(${localToken?.expires || null}, signing_token_expires_at),
-          documenso_recipient_id = COALESCE(${recipient.documensoRecipientId}, documenso_recipient_id),
-          documenso_signing_url = COALESCE(${recipient.documensoSigningUrl}, documenso_signing_url), updated_at = NOW()
-        WHERE id = ${recipient.signerId} AND contract_id = ${req.params.id}
-      `).catch(() => {});
+    try {
+      await db.transaction(async (tx) => {
+        for (const recipient of acceptedRecipients) {
+          const localToken = recipient.email ? tokenByEmail.get(recipient.email) : undefined;
+          await tx.execute(sql`
+            UPDATE contract_signers SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), last_sent_at = NOW(),
+              signing_token_hash = COALESCE(${localToken?.token ? hashSigningToken(localToken.token) : null}, signing_token_hash),
+              signing_token_expires_at = COALESCE(${localToken?.expires || null}, signing_token_expires_at),
+              documenso_recipient_id = COALESCE(${recipient.documensoRecipientId}, documenso_recipient_id),
+              documenso_signing_url = COALESCE(${recipient.documensoSigningUrl}, documenso_signing_url), updated_at = NOW()
+            WHERE id = ${recipient.signerId} AND contract_id = ${req.params.id}
+          `);
+        }
+        // Also persist recipient-ID/signing-URL repairs for signers who matched
+        // (via email/role, since they had no prior ID) but weren't necessarily
+        // "accepted" this round (e.g. they already signed) — same self-healing
+        // intent as the old refreshDocumensoRecipientMappings, now deferred
+        // until after a real Phase B attempt instead of during verification.
+        const refreshOnly = recipients.filter((r) => r.resendResult !== "accepted" && r.documensoRecipientId && r.refreshed);
+        for (const recipient of refreshOnly) {
+          await tx.execute(sql`
+            UPDATE contract_signers SET documenso_recipient_id = ${recipient.documensoRecipientId}, documenso_signing_url = COALESCE(${recipient.documensoSigningUrl}, documenso_signing_url), updated_at = NOW()
+            WHERE id = ${recipient.signerId} AND contract_id = ${req.params.id}
+          `);
+        }
+        const recipientMetadata = recipients.map(({ signerId, name, email, role, documensoRecipientId, documensoSigningUrl, myPayLinkSigningUrl, documensoStatus, resendResult, reason, error }) => ({ signerId, name, email, role, recipientId: documensoRecipientId, signingUrl: documensoSigningUrl, myPayLinkSigningUrl, status: documensoStatus, resendResult, reason, error }));
+        await tx.execute(sql`
+          UPDATE documenso_signature_requests SET documenso_signing_url = COALESCE(${acceptedRecipients.find((r) => r.documensoSigningUrl)?.documensoSigningUrl || null}, documenso_signing_url),
+            documenso_recipient_ids = ${JSON.stringify(recipientMetadata)}::jsonb,
+            status = ${acceptedRecipients.length ? "sent_for_signature" : "resend_failed"}, sent_at = COALESCE(sent_at, NOW()),
+            raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, duplicateEmails, possibleIdentityMismatches })}::jsonb,
+            updated_at = NOW() WHERE id = ${sigReq.id}
+        `);
+      });
+    } catch (persistErr: any) {
+      // Phase B (the real remote call) has already been attempted by this point — a failure
+      // here is a LOCAL persistence failure, not a signal that nothing was sent. If
+      // documensoResult is set, Documenso genuinely processed the resend; only MyPayLink's own
+      // bookkeeping failed to save it. Without this catch, an uncaught throw here would escape
+      // the handler entirely and (since this app registers no global Express error middleware)
+      // fall through to Express's default error page instead of this endpoint's documented
+      // JSON `code`/`success` contract — and could include a stack trace outside production.
+      console.error(`[documenso-resend] Phase C local persistence failed for contract ${req.params.id} after Phase B was attempted (documensoResult=${documensoResult ? "succeeded" : "failed"}):`, persistErr);
+      return res.status(200).json({
+        success: false,
+        documensoResult: documensoResult ? "accepted_but_not_persisted" : "errored",
+        code: "documenso_resend_local_persist_failed",
+        requested: recipients.length, accepted: 0, partial: false,
+        refreshed: 0, refreshAttempted: true, retryAttempted: false, retryCount: 0, retried: 0,
+        targetedCount: recipients.length, sentCount: 0, failedCount: recipients.length,
+        results: recipients.map((r) => ({ email: r.email, status: r.localSignerStatus, refreshed: false, retried: false, reason: "Local persistence failed after the resend attempt." })),
+        recipients: [], documensoDocumentId: sigReq.documenso_document_id, documentStatus: remote.status,
+        duplicateEmails, possibleIdentityMismatches,
+        documensoError: {
+          errorMessage: documensoResult
+            ? "Documenso accepted the resend, but MyPayLink could not save the updated status locally. Verify the document status in Documenso before retrying, to avoid sending a duplicate resend."
+            : "The resend attempt failed and MyPayLink could not save the failure state locally. Please retry.",
+          timestamp: new Date().toISOString(),
+          code: "documenso_resend_local_persist_failed",
+        },
+        retriedAfterRefresh: false,
+        message: "The resend could not be safely completed due to a local persistence failure.",
+      });
     }
 
-    const recipientMetadata = recipients.map(({ signerId, name, email, role, documensoRecipientId, documensoSigningUrl, myPayLinkSigningUrl, documensoStatus, resendResult, reason, error }) => ({ signerId, name, email, role, recipientId: documensoRecipientId, signingUrl: documensoSigningUrl, myPayLinkSigningUrl, status: documensoStatus, resendResult, reason, error }));
-    if (sigReq?.id) await db.execute(sql`
-      UPDATE documenso_signature_requests SET documenso_signing_url = COALESCE(${acceptedRecipients.find((r) => r.documensoSigningUrl)?.documensoSigningUrl || null}, documenso_signing_url),
-        documenso_recipient_ids = ${JSON.stringify(recipientMetadata)}::jsonb,
-        status = ${acceptedRecipients.length ? "sent_for_signature" : "resend_failed"}, sent_at = COALESCE(sent_at, NOW()),
-        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, duplicateEmails, possibleIdentityMismatches })}::jsonb,
-        updated_at = NOW() WHERE id = ${sigReq.id}
-    `).catch(() => {});
-
     const actionType = acceptedRecipients.length === recipients.length && recipients.length ? "documenso_resend_requested" : (acceptedRecipients.length ? "documenso_resend_skipped" : "documenso_resend_failed");
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, documentStatus: remote.status, recipients, documensoError, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
 
     res.status(200).json({
       success: recipients.length > 0 && acceptedRecipients.length === recipients.length,
       documensoResult: documensoError ? "errored" : (acceptedRecipients.length ? "accepted" : "skipped"),
-      requested: recipients.length, accepted: acceptedRecipients.length, partial: acceptedRecipients.length > 0 && acceptedRecipients.length < recipients.length, refreshed: recipients.filter((r: any) => r.refreshed).length, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, retried: retriedAfterRefresh ? 1 : 0,
+      requested: recipients.length, accepted: acceptedRecipients.length, partial: acceptedRecipients.length > 0 && acceptedRecipients.length < recipients.length,
+      refreshed: recipients.filter((r: any) => r.refreshed).length, refreshAttempted: true, retryAttempted: false, retryCount: 0, retried: 0,
       targetedCount: recipients.length, sentCount: acceptedRecipients.length, failedCount: recipients.length - acceptedRecipients.length,
-      results: recipients.map((r: any) => ({ email: r.email, status: r.status, refreshed: r.refreshed, retried: r.retried, reason: r.reason })), recipients, documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null,
-      duplicateEmails, possibleIdentityMismatches, documensoError, retriedAfterRefresh,
+      results: recipients.map((r: any) => ({ email: r.email, status: r.status, refreshed: r.refreshed, retried: r.retried, reason: r.reason })), recipients, documensoDocumentId: sigReq.documenso_document_id, documentStatus: remote.status,
+      duplicateEmails, possibleIdentityMismatches, documensoError, retriedAfterRefresh: false,
       message: documensoError?.errorMessage || `${acceptedRecipients.length} of ${recipients.length} pending signer(s) accepted by Documenso for resend.`,
     });
   });
@@ -15650,10 +15841,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         try {
           existingEnvelopeRemote = await getDocumensoDocument(existingReq.documenso_document_id);
         } catch (err: any) {
-          return res.status(502).json({
-            code: "documenso_envelope_verification_failed",
-            message: "Could not verify the existing Documenso envelope before reuse. No signing request was sent, resent, or modified.",
-          });
+          const classified = classifyDocumensoVerificationFailure(err);
+          return res.status(classified.httpStatus).json({ code: classified.code, message: classified.message });
         }
         const remoteRecipientsList = Array.isArray(existingEnvelopeRemote?.recipients) ? existingEnvelopeRemote.recipients : null;
         if (!remoteRecipientsList || remoteRecipientsList.length === 0) {

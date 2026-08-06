@@ -44,18 +44,27 @@ function compareSignerSets(localEmailsRaw: string[], remoteEmailsRaw: string[]) 
   return { missingRemotely, unexpectedRemotely, matches: missingRemotely.length === 0 && unexpectedRemotely.length === 0 };
 }
 
+/** Mirrors classifyDocumensoVerificationFailure from server/routes.ts. */
+function classifyDocumensoVerificationFailure(errStatus: number | undefined): { code: string; httpStatus: number } {
+  if (errStatus === 404) return { code: "documenso_document_not_found", httpStatus: 502 };
+  if (errStatus === 401 || errStatus === 403) return { code: "documenso_account_mismatch", httpStatus: 502 };
+  return { code: "documenso_temporary_failure", httpStatus: 503 };
+}
+
 /** Mirrors the fail-closed /send-for-signature reuse-verification control flow end to end. */
 type MintedState = { mutated: boolean; response: any };
 function runSendForSignature(opts: {
   isReusingExistingEnvelope: boolean;
   remoteGetThrows?: boolean;
+  remoteGetThrowsStatus?: number; // undefined => network/timeout (no HTTP status at all)
   remoteRecipients?: Array<{ email: string }> | null; // null/undefined => malformed/no recipients
   localEmails: string[];
 }): MintedState {
   let mutated = false;
   if (opts.isReusingExistingEnvelope) {
     if (opts.remoteGetThrows) {
-      return { mutated, response: { status: 502, code: "documenso_envelope_verification_failed" } };
+      const classified = classifyDocumensoVerificationFailure(opts.remoteGetThrowsStatus);
+      return { mutated, response: { status: classified.httpStatus, code: classified.code } };
     }
     const remoteRecipientsList = Array.isArray(opts.remoteRecipients) ? opts.remoteRecipients : null;
     if (!remoteRecipientsList || remoteRecipientsList.length === 0) {
@@ -114,10 +123,22 @@ console.log("=== Documenso signer-set mismatch: Fix A + Fix B ===\n");
   ok("unexpected remote recipient: performs no mutation", result.mutated === false);
 }
 
-// ── Fix A behavioral: fail closed on GET throwing ──
+// ── Fix A behavioral: fail closed on GET throwing, with distinct classification per failure type ──
 {
-  const result = runSendForSignature({ isReusingExistingEnvelope: true, remoteGetThrows: true, localEmails: ["a@example.com"] });
-  ok("remote GET throws: returns 502, no mutation", result.response.status === 502 && result.mutated === false);
+  const notFound = runSendForSignature({ isReusingExistingEnvelope: true, remoteGetThrows: true, remoteGetThrowsStatus: 404, localEmails: ["a@example.com"] });
+  ok("remote GET throws (404): returns 502 with documenso_document_not_found, no mutation", notFound.response.status === 502 && notFound.response.code === "documenso_document_not_found" && notFound.mutated === false);
+
+  const accountMismatch401 = runSendForSignature({ isReusingExistingEnvelope: true, remoteGetThrows: true, remoteGetThrowsStatus: 401, localEmails: ["a@example.com"] });
+  ok("remote GET throws (401): returns 502 with documenso_account_mismatch, no mutation", accountMismatch401.response.status === 502 && accountMismatch401.response.code === "documenso_account_mismatch" && accountMismatch401.mutated === false);
+
+  const accountMismatch403 = runSendForSignature({ isReusingExistingEnvelope: true, remoteGetThrows: true, remoteGetThrowsStatus: 403, localEmails: ["a@example.com"] });
+  ok("remote GET throws (403): also classified as documenso_account_mismatch", accountMismatch403.response.code === "documenso_account_mismatch");
+
+  const temporary = runSendForSignature({ isReusingExistingEnvelope: true, remoteGetThrows: true, remoteGetThrowsStatus: undefined, localEmails: ["a@example.com"] });
+  ok("remote GET throws (no HTTP status, e.g. network timeout): returns 503 with documenso_temporary_failure, no mutation", temporary.response.status === 503 && temporary.response.code === "documenso_temporary_failure" && temporary.mutated === false);
+
+  const codes = new Set([notFound.response.code, accountMismatch401.response.code, temporary.response.code]);
+  ok("all three verification-failure classifications are mutually distinct", codes.size === 3);
 }
 
 // ── Fix A behavioral: fail closed on no usable recipient list ──
@@ -181,11 +202,28 @@ const mintLoopMarker = routes.indexOf("const signerTokens = new Map", sendForSig
 const preMintSlice = sendForSigStart >= 0 && mintLoopMarker > sendForSigStart ? routes.slice(sendForSigStart, mintLoopMarker) : "";
 
 ok("send-for-signature: handler and mint-loop markers both found for static slicing", sendForSigStart >= 0 && mintLoopMarker > sendForSigStart);
+// The verification-failure classification (documenso_document_not_found /
+// documenso_account_mismatch / documenso_temporary_failure) was factored out
+// into a shared classifyDocumensoVerificationFailure() helper, so the literal
+// code strings no longer appear inline in the handler body — only the call
+// to that helper does. Check the call site here, and check the helper's own
+// body (found separately below) for the three literal codes.
 ok(
-  "send-for-signature: all three fail-closed/mismatch responses occur before token minting begins",
-  preMintSlice.includes("documenso_envelope_verification_failed") &&
+  "send-for-signature: verification-failure classification, envelope-unavailable, and signer-set-mismatch responses all occur before token minting begins",
+  preMintSlice.includes("classifyDocumensoVerificationFailure(err)") &&
     preMintSlice.includes("documenso_envelope_verification_unavailable") &&
     preMintSlice.includes("documenso_signer_set_mismatch"),
+);
+
+const classifierStart = routes.indexOf("function classifyDocumensoVerificationFailure");
+const classifierEnd = classifierStart >= 0 ? routes.indexOf("\n  }\n", classifierStart) : -1;
+const classifierBody = classifierStart >= 0 && classifierEnd > classifierStart ? routes.slice(classifierStart, classifierEnd) : "";
+ok(
+  "classifyDocumensoVerificationFailure distinguishes not-found, account-mismatch, and temporary-failure as three distinct literal codes",
+  classifierBody.includes("documenso_document_not_found") &&
+    classifierBody.includes("documenso_account_mismatch") &&
+    classifierBody.includes("documenso_temporary_failure") &&
+    !classifierBody.includes("documenso_envelope_verification_failed"),
 );
 ok(
   "send-for-signature: no INSERT/UPDATE statement occurs before the mismatch checks resolve",
