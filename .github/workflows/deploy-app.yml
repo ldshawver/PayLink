@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 30
     env:
       APP_PATH: /home/paylinkssh/paylink-staging/PayLink
-      ENV_FILE: /etc/paylink/staging.env
+      ENV_FILE: /etc/paylink/.env.staging
       PM2_NAME: paylink-staging
       APP_PORT: "8010"
 
@@ -66,7 +66,7 @@ jobs:
             set -Eeuo pipefail
 
             APP_PATH="/home/paylinkssh/paylink-staging/PayLink"
-            ENV_FILE="/etc/paylink/staging.env"
+            ENV_FILE="/etc/paylink/.env.staging"
             PM2_NAME="paylink-staging"
             APP_PORT="8010"
 
