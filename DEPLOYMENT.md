@@ -11,29 +11,35 @@ Do not deploy PayLink from `/root/lux-email-bot`, `/root/PayLink`, or any `luxit
 
 ## Deployment policy
 
-- Pushes to `main` deploy **staging only**.
-- Production deployments are **manual only** via `.github/workflows/deploy-app.yml`.
-- Production deployments must provide a Git release tag such as `v2.1.1`.
+See `docs/deployment/staging-production-architecture.md` for the full environment/isolation architecture, the GitHub Actions promotion path (feature branch → PR → `main` → staging, then a separate explicit dispatch → production), required repository secrets, and version-reporting behavior. Summary:
+
+- Pushes to `main` deploy **staging only**, via `.github/workflows/deploy-app.yml`. Pushing a feature branch never triggers a deploy.
+- Production deployments are **manual only**, via `.github/workflows/deploy-production.yml` (`workflow_dispatch`, no `push` trigger).
+- Production deployments must provide a Git release tag such as `v2.1.1`, and that tag's commit must be the exact commit that passed staging acceptance below — never a later `main` tip.
 - Production never deploys directly from `main`; it checks out and deploys the requested release tag.
-- Before production deploys, `package.json` `version`, `APP_VERSION` from `/etc/paylink/.env`, and the release tag without the `v` prefix must all match.
+- Before production deploys, the workflow computes `package.json` `version` from the checked-out release and rejects the deploy if the release tag does not match it (`v$PACKAGE_VERSION`); `scripts/deploy-paylink.sh` performs the same check independently for manual deploys.
 - Before staging deploys, `/etc/paylink/.env` and `/etc/paylink/.env.staging` must both contain `DATABASE_URL`, and those values must differ.
 
 ## Mandatory pre-deployment gate
 
-Every deploy aborts unless all safety gate steps succeed:
+`scripts/deploy-paylink.sh` (manual deploys) aborts unless all safety gate steps succeed:
 
 1. PostgreSQL backup using the selected target `DATABASE_URL`.
 2. `pm2 save --force` succeeds.
 3. Nginx config backup or explicit backup marker is written.
 4. Current Git commit and package version are recorded.
 
+The GitHub Actions production workflow performs step 1 only (`pg_dump` + gzip before touching PM2); it does not back up Nginx config or PM2 state. Steer emergency/manual deploys through `scripts/deploy-paylink.sh` when the full gate matters.
+
 ## Rollback and deployment history
 
-If build, restart, Nginx apply, or health validation fails, deployment automatically rolls back to the previously recorded commit and restarts the target PM2 process. The deploy script appends JSON lines to `/home/paylinkssh/deployment-history.log` with version, commit, release tag, environment, deployment time, deployed by, migration status, rollback status, and final status.
+**Manual deploys via `scripts/deploy-paylink.sh`** automatically roll back: if build, restart, Nginx apply, or health validation fails, the script's `trap ... EXIT` restores the previously recorded commit/version and restarts the target PM2 process. It appends JSON lines to `/home/paylinkssh/deployment-history.log` with version, commit, release tag, environment, deployment time, deployed by, migration status, rollback status, and final status.
+
+**GitHub Actions deploys** (`deploy-app.yml`, `deploy-production.yml`) do **not** currently have this automatic rollback — a failed post-deploy health check fails the job but leaves the new release in place; recovery is a manual rollback per the "Rollback checklist" in `docs/deployment/staging-production-architecture.md` (roll back code to the previous tag/commit, restart PM2, verify health). Production deploys via GitHub Actions do take a `pg_dump` backup before touching PM2, so a database restore is always available if a rollback requires it.
 
 ## Health validation
 
-The deploy script validates all of the following before recording success:
+`scripts/deploy-paylink.sh` validates all of the following before recording success (the GitHub Actions workflows only poll `/health`):
 
 - `/health`
 - `/ready` with database connectivity

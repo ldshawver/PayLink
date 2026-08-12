@@ -33,7 +33,7 @@ import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contracto
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
-import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
+import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
 import { assertContractorTradeCreditsPrintable, calculateContractorTradeSettlement } from "./contractor-trade-compensation";
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -11551,23 +11551,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       for (const c of orphanContracts.rows as any[]) {
         try {
-          const countRes = await db.execute(sql`SELECT COUNT(*) FROM contractor_invoices WHERE contractor_id = ${c.contractor_id} AND company_id = ${c.company_id}`);
-          const count = parseInt((countRes.rows[0] as any).count || "0");
-          const suffix = String(count + 1).padStart(4, "0");
-          const contractorSuffix = (c.contractor_id || "").slice(-4).toUpperCase();
-          const invNumber = `INV-${contractorSuffix}-${suffix}`;
-          const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
-          const invRes = await db.execute(sql`
-            INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_type, invoice_date, due_date, amount, status, proposal_id, contract_id)
-            VALUES (${c.company_id}, ${c.contractor_id}, ${invNumber}, 'standard', NOW(), ${dueDate.toISOString().slice(0, 10)},
-              ${c.total_value || c.proposal_amount || 0}, 'submitted', ${c.proposal_id}, ${c.id})
-            RETURNING id
-          `);
-          const invId = (invRes.rows[0] as any)?.id;
-          if (invId) {
-            await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invId} WHERE id = ${c.proposal_id} AND converted_to_invoice_id IS NULL`);
-            const invRow = (await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invId}`)).rows[0] as any;
-            if (invRow) await generateInvoicePdf(invId, invRow, req.session.userId!).catch(() => {});
+          const invoice = await autoCreateContractInvoiceExactlyOnce(c.id);
+          if (invoice?.id) {
+            await generateInvoicePdf(invoice.id, invoice, req.session.userId!).catch(() => {});
             results.orphanInvoices++;
           }
         } catch { results.errors++; }
@@ -13948,6 +13934,47 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return pendingCount === 0 && signedCount > 0 ? "fully_signed" : pendingCount > 0 && signedCount > 0 ? "partially_signed" : null;
   }
 
+  async function autoCreateContractInvoiceExactlyOnce(contractId: string) {
+    return db.transaction(async (tx) => {
+      const contract = firstRow<any>(await tx.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`));
+      if (!contract?.proposal_id) return null;
+      const proposal = firstRow<any>(await tx.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE id = ${contract.proposal_id} AND company_id = ${contract.company_id}
+        FOR UPDATE
+      `));
+      if (!proposal) return null;
+      const standardInvoiceTemplate = firstRow<any>(await tx.execute(sql`
+        SELECT id FROM contractor_templates
+        WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice'
+        LIMIT 1
+      `));
+      return autoCreateProposalBackedInvoice(contract, proposal, {
+        countInvoicesForContractor: async (contractorId: string) => Number((firstRow<any>(await tx.execute(sql`
+          SELECT COUNT(*) AS c FROM contractor_invoices
+          WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}
+        `))?.c) || 0),
+        findExistingInvoice: async (contractForInvoice, proposalForInvoice) => firstRow<any>(await tx.execute(sql`
+          SELECT * FROM contractor_invoices
+          WHERE company_id = ${contract.company_id}
+            AND (contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id})
+          ORDER BY created_at ASC LIMIT 1
+        `)),
+        createInvoice: async (values: Record<string, unknown>) => firstRow<any>(await tx.execute(sql`
+          INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id, template_id)
+          VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id}, ${standardInvoiceTemplate?.id || null})
+          RETURNING *
+        `)),
+        markProposalConverted: async (proposalId: string, invoiceId: string) => {
+          await tx.execute(sql`
+            UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW()
+            WHERE id = ${proposalId} AND company_id = ${contract.company_id} AND converted_to_invoice_id IS NULL
+          `);
+        },
+      });
+    });
+  }
+
   // Auto-snapshot the current contract state into contract_versions before a mutation.
   // Returns the version number created.
   async function autoSnapshotContract(contractId: string, sessionUserId: string | null, reason: string): Promise<number> {
@@ -14168,27 +14195,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       );
       if (pendingCount === 0 && signer.contract_id) {
         try {
-          const contractRow = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${signer.contract_id}`));
-          if (contractRow?.proposal_id) {
-            const prop = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contractRow.proposal_id} AND company_id = ${contractRow.company_id}`));
-            if (prop && !prop.converted_to_invoice_id) {
-              await autoCreateProposalBackedInvoice(contractRow, prop, {
-                countInvoicesForContractor: async (contractorId: string) => Number((firstRow<any>(await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contractRow.company_id}`))?.c) || 0),
-                findExistingInvoice: async (contractForInvoice, proposalForInvoice) => firstRow<any>(await db.execute(sql`
-                  SELECT id FROM contractor_invoices
-                  WHERE company_id = ${contractRow.company_id}
-                    AND (contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id})
-                  ORDER BY created_at ASC LIMIT 1
-                `)),
-                createInvoice: async (values: Record<string, unknown>) => firstRow<any>(await db.execute(sql`
-                  INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
-                  VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
-                  RETURNING id
-                `)),
-                markProposalConverted: async (proposalId: string, invoiceId: string) => { await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW() WHERE id = ${proposalId} AND company_id = ${contractRow.company_id} AND converted_to_invoice_id IS NULL`); },
-              });
-            }
-          }
+          await autoCreateContractInvoiceExactlyOnce(signer.contract_id);
         } catch (invoiceErr) { console.warn("[PublicContractSigning] auto-invoice creation failed", invoiceErr); }
       }
       res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
@@ -14532,46 +14539,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // ── Auto-create invoice after all required parties have signed ────────────
       if (newStatus === "fully_signed" && contractData?.proposal_id) {
         try {
-          const propCheck = await db.execute(sql`
-            SELECT id, converted_to_invoice_id, company_id, contractor_id, amount,
-                   description, title, proposal_number, expiration_date, line_items,
-                   notes, job_id, cost_center_id, branding_id, currency,
-                   archived_document_id AS prop_dam_id
-            FROM contractor_proposals WHERE id = ${contractData.proposal_id}
-          `);
-          const prop = propCheck.rows[0] as any;
-          if (prop && !prop.converted_to_invoice_id) {
-            const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${prop.contractor_id}`);
-            const invCount = Number((cntRes.rows[0] as any)?.c ?? 0);
-            const autoInvoiceNumber = `INV-${String(prop.contractor_id ?? "").slice(-4).toUpperCase()}-${String(invCount + 1).padStart(4, "0")}`;
-            const today = new Date().toISOString().split("T")[0];
-            let invTemplateId: string | null = null;
-            try {
-              const stdRes = await db.execute(sql`SELECT id FROM contractor_templates WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice' LIMIT 1`);
-              invTemplateId = (stdRes.rows[0] as any)?.id || null;
-            } catch { /* ok */ }
-
-            const autoInvRes = await db.execute(sql`
-              INSERT INTO contractor_invoices (
-                company_id, contractor_id, invoice_number, invoice_date, due_date,
-                amount, description, proposal_id, contract_id, proposal_reference,
-                line_items, notes, status, is_1099_reportable,
-                job_id, cost_center_id, branding_id, template_id
-              ) VALUES (
-                ${contractData.company_id}, ${prop.contractor_id}, ${autoInvoiceNumber},
-                ${today}, ${prop.expiration_date || null},
-                ${prop.amount || 0}, ${prop.description || prop.title || null},
-                ${prop.id}, ${req.params.id}, ${prop.proposal_number || null},
-                ${prop.line_items || null}, ${prop.notes || null},
-                'submitted', TRUE,
-                ${prop.job_id || null}, ${prop.cost_center_id || null},
-                ${prop.branding_id || null}, ${invTemplateId || null}
-              ) RETURNING *
+          const autoInvoice = await autoCreateContractInvoiceExactlyOnce(req.params.id);
+          if (autoInvoice?.id) {
+            const propCheck = await db.execute(sql`
+              SELECT *, archived_document_id AS prop_dam_id
+              FROM contractor_proposals
+              WHERE id = ${contractData.proposal_id} AND company_id = ${contractData.company_id}
             `);
-            const autoInvoice = autoInvRes.rows[0] as any;
-
-            if (autoInvoice?.id) {
-              await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${autoInvoice.id}, updated_at = NOW() WHERE id = ${prop.id}`).catch(() => {});
+            const prop = propCheck.rows[0] as any;
+            if (prop) {
+              const autoInvoiceNumber = autoInvoice.invoice_number;
 
               // Archive invoice PDF to DAM
               try {
@@ -15220,13 +15197,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`);
     const signers = pending.rows as any[];
     const { sendGenericNotificationEmail } = await import("./notifications.js");
-    const baseUrl = process.env.APP_BASE_URL || "";
+    const senderUser = actorUserId ? await storage.getUser(actorUserId) : null;
+    const senderWorker = senderUser?.workerId ? await storage.getWorker(senderUser.workerId) : null;
+    const senderCompany = await storage.getCompany(contract.company_id);
+    const senderIdentity = resolveDocumensoSenderIdentity({ user: senderUser, worker: senderWorker, company: senderCompany });
     let sentCount = 0;
     const failures: Array<{ signerId: string; email: string; error: string }> = [];
     for (const signer of signers) {
-      const signingUrl = `${baseUrl}/app/contractor-hub?section=contracts&id=${contractId}`;
+      const signingUrl = signer.documenso_signing_url || null;
+      if (!signingUrl) {
+        failures.push({ signerId: signer.id, email: signer.email, error: "missing_signer_specific_documenso_url" });
+        await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status, error_message) VALUES ('contract', ${contractId}, 'email', ${signer.email}, 'contract_signing_reminder', ${"Reminder skipped"}, ${""}, 'failed', ${"missing_signer_specific_documenso_url"})`).catch(() => {});
+        continue;
+      }
       const subject = `Reminder: please sign ${contract.title || contract.contract_number || "contract"}`;
-      const body = `${message}\n\nContract: ${contract.title || contract.contract_number || contractId}\nOpen signing: ${signingUrl}`;
+      const body = `${senderIdentity.name} has requested that you review and sign this contract.\n\n${message}\n\nContract: ${contract.title || contract.contract_number || contractId}\nOpen signing: ${signingUrl}`;
       try {
         const result = await sendGenericNotificationEmail({ recipientName: signer.name || "Signer", email: signer.email, title: subject, body, actionUrl: signingUrl });
         const ok = (result as any)?.sent !== false;
@@ -15540,8 +15525,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     `)).rows[0] as any;
     if (sigReq?.documenso_document_id) {
       const resendResult = await resendDocumensoDocument(sigReq.documenso_document_id).catch(() => null);
-      const matchingLink = resendResult?.signingLinks?.find((link: any) => normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email));
-      latestDocumensoSigningUrl = matchingLink?.signingUrl || resendResult?.signingLinks?.find((link: any) => link.signingUrl)?.signingUrl || latestDocumensoSigningUrl;
+      const matchingLink = findSignerSpecificDocumensoLink(resendResult?.signingLinks || [], { email: signer.email, recipientId: signer.documenso_recipient_id });
+      latestDocumensoSigningUrl = matchingLink?.signingUrl || latestDocumensoSigningUrl;
       latestRecipientId = matchingLink?.id || latestRecipientId;
       const updatedRecipientMetadata = resendResult?.signingLinks?.map((link: any) => ({
         email: normalizeSignerEmail(link.email),
@@ -15612,6 +15597,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent','draft','failed') ORDER BY "order" ASC`);
       const signers = signersRes.rows as any[];
       const seenEmails = new Set<string>();
+      const senderUser = await storage.getUser(req.session.userId!);
+      const senderWorker = senderUser?.workerId ? await storage.getWorker(senderUser.workerId) : null;
+      const senderCompany = await storage.getCompany(contract.company_id);
+      const senderIdentity = resolveDocumensoSenderIdentity({ user: senderUser, worker: senderWorker, company: senderCompany });
+      if (senderIdentity.source === "fallback") {
+        return res.status(400).json({ message: "Cannot send for signature: no valid sender identity (worker, user, or company) is configured for this company. Configure a sender before sending." });
+      }
       const recipients = signers.filter(s => {
         const email = normalizeSignerEmail(s.email);
         if (!email || seenEmails.has(email)) return false;
@@ -15752,9 +15744,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
           pdfBuffer,
           recipients,
-          metadata: { externalId: contractId, contractId, companyId: contract.company_id },
+          metadata: { externalId: contractId, contractId, companyId: contract.company_id, senderName: senderIdentity.name, ...(senderIdentity.email ? { senderEmail: senderIdentity.email } : {}) },
           subject: `Please sign: ${contract.title}`,
-          message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+          message: `${senderIdentity.name} has requested that you review and sign contract "${contract.title}". Please open the link below to sign.`,
           returnUrl: primaryReturnUrl,
         });
         externalSendSucceeded = true;
@@ -15780,7 +15772,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           INSERT INTO documenso_signature_requests
             (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
           VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
-                  ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
+                  ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify({ provider: docResult.rawResponse, sender: senderIdentity })}, ${req.session.userId})
           ON CONFLICT DO NOTHING
         `);
       } catch (persistError: any) {
@@ -25721,34 +25713,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
               }
               const packetResult = await fileDocumensoFinalAgreementPacket({ ...contract, status: 'fully_signed', fully_signed_at: contract.fully_signed_at || new Date().toISOString() }, documensoDocumentId, webhookEventId).catch((err) => ({ error: err?.message || String(err) }));
               await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contract.id, actionType: "documenso_completion_packet_filed", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId, webhookEventId, packetResult }) }).catch(() => {});
-              if (!wasAlreadyFullySigned && contract.proposal_id) {
-                const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contract.proposal_id}`);
-                const prop = firstRow<any>(propRes);
-                if (prop && !prop.converted_to_invoice_id) {
-                  await autoCreateProposalBackedInvoice(contract, prop, {
-                    countInvoicesForContractor: async (contractorId: string) => {
-                      const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}`);
-                      return Number((cntRes.rows[0] as any)?.c ?? 0);
-                    },
-                    findExistingInvoice: async (contractForInvoice, proposalForInvoice) => firstRow<any>(await db.execute(sql`
-                      SELECT id FROM contractor_invoices
-                      WHERE company_id = ${contract.company_id}
-                        AND (contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id})
-                      ORDER BY created_at ASC LIMIT 1
-                    `)),
-                    createInvoice: async (values: Record<string, unknown>) => {
-                      const invRes = await db.execute(sql`
-                        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
-                        VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
-                        RETURNING id
-                      `);
-                      return firstRow<any>(invRes);
-                    },
-                    markProposalConverted: async (proposalId: string, invoiceId: string) => {
-                      await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW() WHERE id = ${proposalId} AND company_id = ${contract.company_id}`);
-                    },
-                  });
-                }
+              if (contract.proposal_id) {
+                await autoCreateContractInvoiceExactlyOnce(contract.id);
               }
             }
           }
