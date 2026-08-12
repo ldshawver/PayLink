@@ -7,6 +7,8 @@ import {
   autoCreateProposalBackedInvoice,
   buildContractDocumensoReturnUrl,
   canSignContract,
+  findSignerSpecificDocumensoLink,
+  resolveDocumensoSenderIdentity,
 } from "../server/contract-signing-flow.js";
 
 console.log("=== contract signing flow runtime regression ===\n");
@@ -22,6 +24,22 @@ assert.equal(returnUrl, "https://mypaylink.app/sign/contracts/contract%201%2F%3F
 assert.ok(!returnUrl.startsWith("https://evil.example"), "return URL is not an open redirect");
 assert.ok(!returnUrl.includes("/app/contractor-hub/contracts/"), "return URL does not use the old authenticated contract signing route");
 console.log("PASS: public token return URL is not open redirectable");
+
+assert.deepEqual(
+  resolveDocumensoSenderIdentity({
+    user: { username: "admin-only", email: "ADMIN@example.com" },
+    company: { name: "Tenant Co", email: "contracts@example.com" },
+  }),
+  { name: "admin-only", email: "admin@example.com", source: "user" },
+  "admin without a worker record resolves as the sender",
+);
+const recipientLinks = [
+  { email: "one@example.com", token: "recipient-1", signingUrl: "https://documenso.test/sign/one" },
+  { email: "two@example.com", token: "recipient-2", signingUrl: "https://documenso.test/sign/two" },
+];
+assert.equal(findSignerSpecificDocumensoLink(recipientLinks, { recipientId: "recipient-2", email: "one@example.com" })?.signingUrl, "https://documenso.test/sign/two", "recipient id takes precedence for signer URL resolution");
+assert.equal(findSignerSpecificDocumensoLink(recipientLinks, { email: "unknown@example.com" }), null, "unknown signer cannot receive another recipient's signing URL");
+console.log("PASS: sender identity and signer-specific Documenso URL resolution");
 
 const contract = { id: "contract-1", company_id: "company-a", proposal_id: "proposal-1", status: "sent" };
 const proposal = { id: "proposal-1", contractor_id: "worker-a", amount: "125.00", title: "Approved work", proposal_number: "PROP-1", converted_to_invoice_id: null };

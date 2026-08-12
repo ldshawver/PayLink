@@ -97,6 +97,13 @@ jobs:
             git checkout --force "$RELEASE_TAG"
             NEW_COMMIT=$(git rev-parse HEAD)
             BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+            PACKAGE_VERSION=$(node -p "require('./package.json').version")
+            EXPECTED_TAG="v$PACKAGE_VERSION"
+
+            if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ] && [ "$RELEASE_TAG" != "$PACKAGE_VERSION" ]; then
+              echo "ERROR: version mismatch. package.json version=$PACKAGE_VERSION release_tag=$RELEASE_TAG expected_tag=$EXPECTED_TAG" >&2
+              exit 1
+            fi
 
             if ! command -v pnpm >/dev/null 2>&1; then
               npm install -g pnpm@10.33.0
@@ -107,7 +114,7 @@ jobs:
             pnpm build
 
             pm2 delete "$PM2_NAME" 2>/dev/null || true
-            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" PAYLINK_VERSION="$RELEASE_TAG" pm2 start "$APP_PATH/dist/index.cjs" \
+            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" PAYLINK_VERSION="$RELEASE_TAG" APP_VERSION="$PACKAGE_VERSION" pm2 start "$APP_PATH/dist/index.cjs" \
               --name "$PM2_NAME" \
               --cwd "$APP_PATH" \
               --interpreter node \

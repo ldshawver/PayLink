@@ -7,7 +7,10 @@ const migration = fs.readFileSync("migrations/20260709_contractor_hub_document_l
 assert(routes.includes('state === "documenso_unavailable"'), "public signing route exposes controlled Documenso unavailable state");
 assert(routes.includes('actionUrl: myPayLinkSigningUrl'), "Documenso signing email CTA uses public MyPayLink signing URL");
 assert(routes.includes('Signing page: ${myPayLinkSigningUrl}'), "signing email body includes public signing URL");
-assert(routes.includes('autoCreateProposalBackedInvoice(contractRow, prop'), "public completion path auto-generates proposal-backed invoice");
+assert(routes.includes('autoCreateContractInvoiceExactlyOnce(signer.contract_id)'), "public completion path uses the serialized proposal-backed invoice helper");
+assert(routes.includes('FOR UPDATE') && routes.includes('autoCreateContractInvoiceExactlyOnce(contract.id)'), "Documenso completion serializes invoice creation and reuses the same helper");
+assert(routes.includes('findSignerSpecificDocumensoLink(resendResult?.signingLinks || []'), "single-signer resend cannot fall back to another recipient URL");
+assert(routes.includes('resolveDocumensoSenderIdentity({ user: senderUser, worker: senderWorker, company: senderCompany })'), "Documenso sender identity resolves from tenant-scoped records");
 assert(routes.includes('converted_to_invoice_id IS NULL'), "auto invoice marking remains idempotent");
 assert(migration.includes('PRE-RUN BACKUP STEP'), "repair SQL documents required backup step");
 assert(migration.includes('Safe staging rerun statement') && migration.includes('CREATE INDEX IF NOT EXISTS') && migration.includes('IS DISTINCT FROM'), "repair SQL documents and uses idempotent rerun safeguards");

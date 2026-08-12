@@ -29,6 +29,73 @@ export function buildContractDocumensoReturnUrl(baseUrl: string, tokenOrContract
   return `${safeBase}/sign/contracts/${encodeURIComponent(tokenOrContractId)}/status`;
 }
 
+export interface DocumensoSenderIdentityInput {
+  user?: { firstName?: string | null; lastName?: string | null; username?: string | null; email?: string | null } | null;
+  worker?: { firstName?: string | null; lastName?: string | null; email?: string | null; workEmail?: string | null } | null;
+  company?: { name?: string | null; email?: string | null } | null;
+}
+
+export interface DocumensoSenderIdentity {
+  name: string;
+  email: string | null;
+  source: "worker" | "user" | "company" | "fallback";
+}
+
+function joinedName(firstName?: string | null, lastName?: string | null): string {
+  return [firstName, lastName].map(value => String(value || "").trim()).filter(Boolean).join(" ");
+}
+
+function normalizedEmail(value?: string | null): string | null {
+  const email = String(value || "").trim().toLowerCase();
+  return email && email.includes("@") ? email : null;
+}
+
+export function resolveDocumensoSenderIdentity(input: DocumensoSenderIdentityInput): DocumensoSenderIdentity {
+  const workerName = joinedName(input.worker?.firstName, input.worker?.lastName);
+  const workerEmail = normalizedEmail(input.worker?.workEmail) || normalizedEmail(input.worker?.email);
+  if (workerName || workerEmail) {
+    return { name: workerName || input.company?.name?.trim() || "MyPayLink sender", email: workerEmail || normalizedEmail(input.user?.email) || normalizedEmail(input.company?.email), source: "worker" };
+  }
+
+  const userName = joinedName(input.user?.firstName, input.user?.lastName) || String(input.user?.username || "").trim();
+  const userEmail = normalizedEmail(input.user?.email);
+  if (userName || userEmail) {
+    return { name: userName || input.company?.name?.trim() || "MyPayLink sender", email: userEmail || normalizedEmail(input.company?.email), source: "user" };
+  }
+
+  const companyName = String(input.company?.name || "").trim();
+  const companyEmail = normalizedEmail(input.company?.email);
+  if (companyName || companyEmail) {
+    return { name: companyName || "MyPayLink sender", email: companyEmail, source: "company" };
+  }
+
+  return { name: "MyPayLink sender", email: null, source: "fallback" };
+}
+
+export interface DocumensoSigningLink {
+  email?: string | null;
+  token?: string | null;
+  recipientId?: string | null;
+  signingUrl?: string | null;
+}
+
+export function findSignerSpecificDocumensoLink<T extends DocumensoSigningLink>(
+  links: readonly T[],
+  signer: { email?: string | null; recipientId?: string | null },
+): T | null {
+  const recipientId = String(signer.recipientId || "").trim();
+  if (recipientId) {
+    const matches = links.filter(link => String(link.token || link.recipientId || "").trim() === recipientId);
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return null;
+  }
+
+  const email = normalizedEmail(signer.email);
+  if (!email) return null;
+  const matches = links.filter(link => normalizedEmail(link.email) === email);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export interface ProposalForInvoice {
   id: string;
   contractor_id: string;

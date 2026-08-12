@@ -27,6 +27,7 @@ for (const category of [
 assert(routes.includes("contractorLifecycleAudit: await collectContractorLifecycleAudit"), "diagnostics response includes lifecycle audit report");
 assert(routes.includes("real_documenso_send") && routes.includes("webhook_replay_idempotency"), "live acceptance gates are included in diagnostics report");
 assert(signingFlow.includes("findExistingInvoice?") && signingFlow.includes("await deps.findExistingInvoice?.(contract, proposal)"), "auto invoice creation checks existing proposal/contract invoice before insert");
-assert(routes.includes("SELECT id FROM contractor_invoices") && routes.includes("contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id}"), "webhook invoice creation supplies contract/proposal idempotency lookup");
+assert(routes.includes("SELECT * FROM contractor_invoices") && routes.includes("contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id}"), "webhook invoice creation supplies contract/proposal idempotency lookup");
+assert(routes.includes("async function autoCreateContractInvoiceExactlyOnce") && routes.includes("FOR UPDATE"), "exactly-once invoice creation is serialized behind a row lock");
 
 console.log("PASS: contractor lifecycle audit static checks");
