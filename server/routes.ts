@@ -13961,8 +13961,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ORDER BY created_at ASC LIMIT 1
         `)),
         createInvoice: async (values: Record<string, unknown>) => firstRow<any>(await tx.execute(sql`
-          INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id, template_id)
-          VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id}, ${standardInvoiceTemplate?.id || null})
+          INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id, template_id, documenso_completion_idempotency_key)
+          VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id}, ${standardInvoiceTemplate?.id || null}, ${values.documenso_completion_idempotency_key})
           RETURNING *
         `)),
         markProposalConverted: async (proposalId: string, invoiceId: string) => {

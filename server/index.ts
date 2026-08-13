@@ -384,6 +384,9 @@ app.use((req, res, next) => {
     await run("contract_signers.documenso_signing_url", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
     await run("contract_signers.last_sent_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS last_sent_at TIMESTAMPTZ`);
     await run("documenso_signature_requests contract index", sql`CREATE INDEX IF NOT EXISTS idx_documenso_signature_requests_contract_sent_at ON documenso_signature_requests(document_type, related_record_id, company_id, sent_at)`);
+    // Exactly-once backstop for Documenso-completion auto-invoice creation (see migrations/0014_contractor_invoice_exactly_once.sql)
+    await run("contractor_invoices.documenso_completion_idempotency_key", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS documenso_completion_idempotency_key TEXT`);
+    await run("contractor_invoices auto-invoice unique index", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_invoices_auto_invoice_key ON contractor_invoices (company_id, documenso_completion_idempotency_key) WHERE documenso_completion_idempotency_key IS NOT NULL`);
     // time_punches additions
     await run("time_punches.approval_status", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
     await run("time_punches.approved_by", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approved_by VARCHAR`);
