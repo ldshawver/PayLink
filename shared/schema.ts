@@ -1895,6 +1895,12 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   aiExtractedJson: text("ai_extracted_json"),
   aiConfidenceScore: numeric("ai_confidence_score"),
   duplicateHash: text("duplicate_hash"),
+  // Set only by the Documenso-completion exactly-once auto-invoice path (never by
+  // manual invoice submission, which may legitimately create multiple invoices per
+  // contract for deposit/progress/final/change-order billing). Backed by a partial
+  // unique index on (company_id, documenso_completion_idempotency_key) — see
+  // migrations/0014_contractor_invoice_exactly_once.sql.
+  documensoCompletionIdempotencyKey: text("documenso_completion_idempotency_key"),
   notes: text("notes"),
   isArchived: boolean("is_archived").default(false),
   archivedAt: timestamp("archived_at"),
