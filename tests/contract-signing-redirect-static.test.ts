@@ -30,7 +30,7 @@ const documensoReturnUrl = buildContractDocumensoReturnUrl("https://app.mypaylin
 assert.equal(documensoReturnUrl, "https://app.mypaylink.app/sign/contracts/signer-token-not-contract-uuid/status", "Documenso return URL targets public MyPayLink signing status route");
 assert(!documensoReturnUrl.includes("/app/contractor-hub/contracts/") && !documensoReturnUrl.endsWith("/sign"), "generated Documenso return URL does not target the old authenticated signing route");
 assert(routes.includes("status IN ('pending','sent','viewed','unsent','draft')") && routes.includes("COALESCE(is_required, TRUE) = TRUE"), "completion keeps pending signers pending and fully signs only after active required signers complete");
-assert(routes.includes('const wasAlreadyFullySigned = contract.status === "fully_signed"'), "Documenso webhook remains idempotent for already completed contracts");
+assert(routes.includes("WHERE id = ${contract.id} AND status NOT IN ('active','completed','void','terminated')"), "Documenso webhook remains idempotent for already completed contracts (atomic WHERE guard against replay)");
 assert(routes.includes("newStatus === \"fully_signed\" && contractData?.proposal_id"), "invoice creation remains gated to fully signed contracts");
 
 console.log("PASS: contractor signing redirect static checks passed");

@@ -5,10 +5,12 @@ const routes = fs.readFileSync("server/routes.ts", "utf8");
 const migration = fs.readFileSync("migrations/20260709_contractor_hub_document_lifecycle_repair.sql", "utf8");
 
 assert(routes.includes('state === "documenso_unavailable"'), "public signing route exposes controlled Documenso unavailable state");
-assert(routes.includes('actionUrl: myPayLinkSigningUrl'), "Documenso signing email CTA uses public MyPayLink signing URL");
-assert(routes.includes('Signing page: ${myPayLinkSigningUrl}'), "signing email body includes public signing URL");
+// MyPayLink no longer sends its own duplicate "Please sign" email alongside Documenso's native
+// one (see tests/documenso-single-notification-static.test.ts) — but the per-recipient MyPayLink
+// signing token/URL is still generated and persisted for the post-sign redirect and in-app use.
+assert(routes.includes('myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null'), "MyPayLink signing URL is still persisted per recipient even though it is no longer separately emailed");
 assert(routes.includes('autoCreateContractInvoiceExactlyOnce(signer.contract_id)'), "public completion path uses the serialized proposal-backed invoice helper");
-assert(routes.includes('FOR UPDATE') && routes.includes('autoCreateContractInvoiceExactlyOnce(contract.id)'), "Documenso completion serializes invoice creation and reuses the same helper");
+assert(routes.includes('FOR UPDATE') && routes.includes('autoCreateContractInvoiceExactlyOnce(activated.id)'), "Documenso completion serializes invoice creation and reuses the same exactly-once helper");
 assert(routes.includes('findSignerSpecificDocumensoLink(resendResult?.signingLinks || []'), "single-signer resend cannot fall back to another recipient URL");
 assert(routes.includes('resolveDocumensoSenderIdentity({ user: senderUser, worker: senderWorker, company: senderCompany })'), "Documenso sender identity resolves from tenant-scoped records");
 assert(routes.includes('converted_to_invoice_id IS NULL'), "auto invoice marking remains idempotent");

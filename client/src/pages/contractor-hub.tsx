@@ -33,7 +33,7 @@ import {
   UserCheck
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { canShowContractSignatureActions, getDocumensoDisabledReason, buildContractorHubProposalRoute, buildContractorHubInvoiceRoute } from "@/lib/contractSignatureActions";
+import { canShowContractSignatureActions, getDocumensoDisabledReason, buildContractorHubProposalRoute, buildContractorHubInvoiceRoute, isDocumensoManagedContract, canManuallyActivateContract } from "@/lib/contractSignatureActions";
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 class ProposalErrorBoundary extends Component<
@@ -4484,6 +4484,10 @@ function ContractDetailPanel({
   const [signerName, setSignerName] = useState("");
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
+  const [activateOpen, setActivateOpen] = useState(false);
+  const [activateReason, setActivateReason] = useState("");
+  const [legacySendOpen, setLegacySendOpen] = useState(false);
+  const [legacySendReason, setLegacySendReason] = useState("");
   const [addSignerOpen, setAddSignerOpen] = useState(false);
   const [newSignerName, setNewSignerName] = useState("");
   const [newSignerEmail, setNewSignerEmail] = useState("");
@@ -4523,7 +4527,7 @@ function ContractDetailPanel({
   const contractLevelSigningUrl = signers.length === 1 ? (documensoSigningUrl || signerSigningUrl(signers[0])) : null;
   const signedDocumentUrl = (contract as any).signedDocumentUrl || (contract as any).signed_document_url || (contract as any).archivedDocumentUrl || ((contract as any).archivedDocumentId ? `/api/dam-documents/${(contract as any).archivedDocumentId}/download` : null);
   const usesDocumenso = !!documensoSigningUrl || !!(contract as any).documensoDocumentId || signers.some(s => !!(s as any).documensoSigningUrl || !!(s as any).documenso_signing_url || !!(s as any).documensoRecipientId || !!(s as any).documenso_recipient_id);
-  const terminalSigningStatuses = ["fully_signed", "completed", "void", "terminated", "expired", "canceled", "cancelled"];
+  const terminalSigningStatuses = ["active", "fully_signed", "completed", "void", "terminated", "expired", "canceled", "cancelled"];
 
   const daysUntilExpiry = contract?.endDate
     ? Math.round((new Date(contract.endDate).getTime() - Date.now()) / 86400000)
@@ -4544,8 +4548,8 @@ function ContractDetailPanel({
   });
 
   const sendMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/send`, {}),
-    onSuccess: () => { refetch(); toast({ title: "Contract sent for signing" }); onRefresh(); },
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/send`, { reason: legacySendReason }),
+    onSuccess: () => { refetch(); setLegacySendOpen(false); setLegacySendReason(""); toast({ title: "Contract sent for signing" }); onRefresh(); },
     onError: (e: any) => toast({ title: e?.message || "Failed to send", variant: "destructive" }),
   });
 
@@ -4644,8 +4648,8 @@ function ContractDetailPanel({
   });
 
   const activateMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/activate`, {}),
-    onSuccess: () => { refetch(); toast({ title: "Contract activated" }); onRefresh(); },
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/activate`, { reason: activateReason }),
+    onSuccess: () => { refetch(); setActivateOpen(false); setActivateReason(""); toast({ title: "Contract activated" }); onRefresh(); },
     onError: (e: any) => toast({ title: e?.message || "Failed to activate", variant: "destructive" }),
   });
 
@@ -4694,11 +4698,19 @@ function ContractDetailPanel({
     signerEmailCount,
     isPending: sendViaDocumensoMutation.isPending,
   });
-  const canActivate = isAdmin && ["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status);
+  // Manual Activate is reserved for imported/manual (non-Documenso) contracts — a Documenso-backed
+  // contract activates automatically once signing is verified (see activateContractAfterVerifiedCompletion
+  // server-side). Offering manual Activate here as a "stuck" workaround was the root cause of one of
+  // the live sync defects, so it is hidden entirely once usesDocumenso is true.
+  const canActivate = canManuallyActivateContract({ role: currentUserRole, status: contract.status, documensoManaged: usesDocumenso });
   const canVoid = isAdmin && !["void", "terminated"].includes(contract.status);
   const canSign = canShowSignatureActions && !usesDocumenso;
   const canCreateInvoice = ["active", "fully_signed", "completed"].includes(contract.status) && !invoiceId;
   const canResendSigningRequest = canShowSignatureActions && !terminalSigningStatuses.includes(contract.status) && ["sent", "awaiting_signatures", "partially_signed", "pending"].includes(contract.status) && signers.some(s => ["pending", "sent", "viewed", "unsent", "draft"].includes(s.status));
+  // Legacy/manual actions (non-Documenso "Send for Signing" and "Sign Internally") are only ever
+  // relevant for contracts with no Documenso data at all — once Documenso is in play, "Send via
+  // Documenso" is the single normal signing action.
+  const showLegacyActionsMenu = isAdmin && !usesDocumenso && (canSend || canSign);
   const canShowDocumensoLaunch = !!contractLevelSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
 
   return (
@@ -4715,42 +4727,27 @@ function ContractDetailPanel({
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-              {canSign && (
-                <Button size="sm" className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => setSignOpen(true)} data-testid="btn-sign-contract">
-                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign Internally (legacy/manual)
-                </Button>
-              )}
-              {canSend && (
-                <Button size="sm" onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending} data-testid="btn-send-contract">
-                  <Send className="h-3.5 w-3.5 mr-1" /> Send for Signing
-                </Button>
-              )}
-              {canActivate && (
-                <Button size="sm" variant="outline" className="border-green-300 text-green-700" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending} data-testid="btn-activate-contract">
-                  <CheckCircle className="h-3.5 w-3.5 mr-1" /> Activate
-                </Button>
-              )}
-              {canCreateInvoice && (
-                <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-invoice-from-contract">
-                  <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
-                </Button>
-              )}
-              {canVoid && (
-                <Button size="sm" variant="outline" className="border-red-300 text-red-700" onClick={() => setVoidOpen(true)} data-testid="btn-void-contract">
-                  <XCircle className="h-3.5 w-3.5 mr-1" /> Void
-                </Button>
-              )}
+              {/* Single primary signing action. */}
               {canSendViaDocumenso && (
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400"
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
                   onClick={() => sendViaDocumensoMutation.mutate()}
                   disabled={sendViaDocumensoMutation.isPending || !!documensoDisabledReason}
                   data-testid="btn-send-via-documenso"
                   title={documensoDisabledReason || "Email this contract for signature via Documenso"}
                 >
                   <PenLine className="h-3.5 w-3.5 mr-1" /> {sendViaDocumensoMutation.isPending ? "Sending…" : "Send via Documenso"}
+                </Button>
+              )}
+              {canActivate && (
+                <Button size="sm" variant="outline" className="border-green-300 text-green-700" onClick={() => setActivateOpen(true)} data-testid="btn-activate-contract">
+                  <CheckCircle className="h-3.5 w-3.5 mr-1" /> Activate
+                </Button>
+              )}
+              {canCreateInvoice && (
+                <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-invoice-from-contract">
+                  <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
                 </Button>
               )}
               {canShowDocumensoLaunch && (
@@ -4770,6 +4767,31 @@ function ContractDetailPanel({
                   <Download className="h-3.5 w-3.5 mr-1" /> Download PDF
                 </Button>
               </a>
+              {/* Overflow: legacy/manual actions (non-Documenso contracts only) and destructive Void. */}
+              {(showLegacyActionsMenu || canVoid) && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="ghost" data-testid="btn-contract-more-actions"><MoreHorizontal className="h-3.5 w-3.5" /></Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {showLegacyActionsMenu && canSend && (
+                      <DropdownMenuItem data-testid="btn-send-contract" onClick={() => setLegacySendOpen(true)}>
+                        <Send className="h-3.5 w-3.5 mr-2" /> Send for Signing (legacy/manual)
+                      </DropdownMenuItem>
+                    )}
+                    {showLegacyActionsMenu && canSign && (
+                      <DropdownMenuItem data-testid="btn-sign-contract" onClick={() => setSignOpen(true)}>
+                        <CheckSquare className="h-3.5 w-3.5 mr-2" /> Sign Internally (legacy/manual)
+                      </DropdownMenuItem>
+                    )}
+                    {canVoid && (
+                      <DropdownMenuItem data-testid="btn-void-contract" className="text-red-600 focus:text-red-600" onClick={() => setVoidOpen(true)}>
+                        <XCircle className="h-3.5 w-3.5 mr-2" /> Void
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </div>
         </SheetHeader>
@@ -4872,14 +4894,11 @@ function ContractDetailPanel({
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold flex items-center gap-2"><PenLine className="h-4 w-4" /> Documenso signing</h3>
-                    <p className="text-xs text-muted-foreground">View status, launch in-app signing, copy links, or re-send pending requests.</p>
+                    <p className="text-xs text-muted-foreground">Progress and status only — use the header action bar above to send, sign, or re-send.</p>
                   </div>
                   <Badge variant="outline" data-testid="badge-documenso-status">{contract.status}</Badge>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => sendViaDocumensoMutation.mutate()} disabled={!canSendViaDocumenso || sendViaDocumensoMutation.isPending || !!documensoDisabledReason} data-testid="btn-documenso-panel-send">Send via Documenso</Button>
-                  {canShowDocumensoLaunch && <a href={contractLevelSigningUrl || undefined} target="_blank" rel="noreferrer" data-testid="btn-documenso-panel-launch"><Button size="sm" variant="outline">Sign with Documenso</Button></a>}
-                  <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={!canResendSigningRequest || resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-documenso-panel-resend" title={!canResendSigningRequest ? "Reminders stop after signature, completion, cancellation, or when no active Documenso document exists." : "Re-send through Documenso"}>Re-send signing request</Button>
                   {signers.length <= 1 && (
                     <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(contractLevelSigningUrl || window.location.href)} disabled={!contractLevelSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
                   )}
@@ -5034,13 +5053,8 @@ function ContractDetailPanel({
                 </div>
               )}
 
-              {canSign && (
-                <div className="pt-2 border-t">
-                  <Button onClick={() => setSignOpen(true)} className="w-full bg-teal-600 hover:bg-teal-700 text-white" data-testid="btn-sign-contract-tab">
-                    <CheckSquare className="h-4 w-4 mr-2" /> Sign This Contract (legacy/manual)
-                  </Button>
-                </div>
-              )}
+              {/* "Sign Internally (legacy/manual)" lives only in the header overflow menu now —
+                  this tab no longer duplicates it (see Overlap #6 in the action-location audit). */}
             </TabsContent>
 
             <TabsContent value="terms" className="m-0 p-6 space-y-4">
@@ -5110,6 +5124,42 @@ function ContractDetailPanel({
               <Button variant="destructive" onClick={() => voidMutation.mutate()} disabled={voidMutation.isPending || !voidReason.trim()} data-testid="btn-confirm-void">
                 {voidMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
                 Void Contract
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Activate Dialog (imported/manual contracts only — Documenso contracts activate automatically) */}
+        <Dialog open={activateOpen} onOpenChange={v => !v && setActivateOpen(false)}>
+          <DialogContent data-testid="dialog-activate-contract">
+            <DialogHeader><DialogTitle>Activate Contract</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-muted-foreground">This contract has no Documenso signing data. Provide a reason confirming the required signing evidence is already recorded before activating manually.</p>
+              <Textarea value={activateReason} onChange={e => setActivateReason(e.target.value)} placeholder="Reason for manual activation..." rows={3} data-testid="textarea-activate-reason" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setActivateOpen(false)}>Cancel</Button>
+              <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending || !activateReason.trim()} data-testid="btn-confirm-activate">
+                {activateMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                Activate Contract
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Legacy Send Dialog (non-Documenso contracts only) */}
+        <Dialog open={legacySendOpen} onOpenChange={v => !v && setLegacySendOpen(false)}>
+          <DialogContent data-testid="dialog-legacy-send-contract">
+            <DialogHeader><DialogTitle>Send for Signing (legacy/manual)</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-muted-foreground">This bypasses Documenso. Provide a reason this contract is being sent through the legacy/manual path instead of Send via Documenso.</p>
+              <Textarea value={legacySendReason} onChange={e => setLegacySendReason(e.target.value)} placeholder="Reason for using legacy send..." rows={3} data-testid="textarea-legacy-send-reason" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setLegacySendOpen(false)}>Cancel</Button>
+              <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending || !legacySendReason.trim()} data-testid="btn-confirm-legacy-send">
+                {sendMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                Send for Signing
               </Button>
             </DialogFooter>
           </DialogContent>

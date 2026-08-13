@@ -3,12 +3,17 @@
  * signing tokens when /send-for-signature reuses an existing Documenso
  * envelope, instead of unconditionally minting a new one for every signer.
  *
- * The mint loop and notification-email loop live inside the non-exported
- * /send-for-signature Express handler in server/routes.ts, so this harness
- * mirrors that exact control flow (same pattern as
- * tests/documenso-resend-behavior.test.ts) — it is NOT a full integration
- * test of the Express handler — paired with static source assertions that
- * tie the harness back to the real implementation.
+ * The mint loop lives inside the non-exported /send-for-signature Express
+ * handler in server/routes.ts, so this harness mirrors that exact control
+ * flow (same pattern as tests/documenso-resend-behavior.test.ts) — it is NOT
+ * a full integration test of the Express handler — paired with static source
+ * assertions that tie the harness back to the real implementation.
+ *
+ * The MyPayLink notification-email loop this file used to also cover was
+ * removed entirely (it duplicated Documenso's own native email — see
+ * tests/documenso-single-notification-static.test.ts for that fix's
+ * coverage). Token minting/preservation itself is unrelated to that removal
+ * and is still exercised by every scenario below.
  *
  * Run: npx tsx tests/send-for-signature-token-preservation.test.ts
  */
@@ -75,77 +80,47 @@ function persistedTokenColumns(signer: Signer, signerTokens: Map<string, TokenEn
   };
 }
 
-/**
- * Mirrors the notification-email loop (post-fix): skip when no token was
- * minted this call. Matching production now that the raw-contract-ID
- * fallback has been deleted entirely, the action URL is read directly and
- * only from signerTokens — there is no fallback expression at all.
- */
-function notificationEmailsSent(signingLinks: Array<{ email: string; signingUrl: string }>, signerTokens: Map<string, TokenEntry>) {
-  const sent: Array<{ email: string; actionUrl: string }> = [];
-  for (const link of signingLinks) {
-    const email = normalizeSignerEmail(link.email);
-    if (!email) continue;
-    if (!signerTokens.has(email)) continue; // Fix 3, edit 2
-    const myPayLinkSigningUrl = signerTokens.get(email)!.myPayLinkSigningUrl; // no `|| contractId` fallback exists in production anymore
-    sent.push({ email, actionUrl: myPayLinkSigningUrl });
-  }
-  return sent;
-}
-
 console.log("=== Fix 3: Preserve valid MyPayLink tokens on envelope reuse ===\n");
 
-// ── Scenario 1 & 2: valid unexpired token on reuse → preserved, no email ──
+// ── Scenario 1 & 2: valid unexpired token on reuse → preserved, not re-minted ──
 // Fixture emails use mixed case/whitespace to exercise the same normalization production applies.
 {
   const signers: Signer[] = [{ email: "  Signer-A@Example.com ", signing_token_hash: "existing-hash-a", signing_token_expires_at: new Date(now + 1000 * 60 * 60 * 24) }];
-  const signingLinks = [{ email: "SIGNER-A@example.com", signingUrl: "https://document.luxit.app/sign/abc" }];
   const tokens = mintSignerTokens(signers, true);
   const persisted = persistedTokenColumns(signers[0], tokens);
-  const emailsSent = notificationEmailsSent(signingLinks, tokens);
 
   ok("valid unexpired token: not re-minted", !tokens.has("signer-a@example.com"));
   ok("valid unexpired token: signing_token_hash preserved unchanged", persisted.signing_token_hash === "existing-hash-a");
   ok("valid unexpired token: signing_token_expires_at preserved unchanged", persisted.signing_token_expires_at === signers[0].signing_token_expires_at);
-  ok("valid unexpired token: signer does not receive a replacement email", emailsSent.length === 0);
 }
 
-// ── Scenario 3: expired token → new token minted, email sent ──
+// ── Scenario 3: expired token → new token minted ──
 {
   const signers: Signer[] = [{ email: "Signer-B@Example.com", signing_token_hash: "existing-hash-b", signing_token_expires_at: new Date(now - 1000) }];
-  const signingLinks = [{ email: " signer-b@example.com ", signingUrl: "https://document.luxit.app/sign/def" }];
   const tokens = mintSignerTokens(signers, true);
   const persisted = persistedTokenColumns(signers[0], tokens);
-  const emailsSent = notificationEmailsSent(signingLinks, tokens);
 
   ok("expired token: fresh token minted", tokens.has("signer-b@example.com"));
   ok("expired token: signing_token_hash overwritten", persisted.signing_token_hash === "hash(fresh-token-for-signer-b@example.com)");
-  ok("expired token: signer receives a new email", emailsSent.length === 1 && emailsSent[0].email === "signer-b@example.com");
 }
 
-// ── Scenario 4: null/revoked token → new token minted, email sent ──
+// ── Scenario 4: null/revoked token → new token minted ──
 {
   const signers: Signer[] = [{ email: "Signer-C@Example.com", signing_token_hash: null, signing_token_expires_at: null }];
-  const signingLinks = [{ email: "signer-c@example.com", signingUrl: "https://document.luxit.app/sign/ghi" }];
   const tokens = mintSignerTokens(signers, true);
-  const emailsSent = notificationEmailsSent(signingLinks, tokens);
 
   ok("null/revoked token: fresh token minted", tokens.has("signer-c@example.com"));
-  ok("null/revoked token: signer receives a new email", emailsSent.length === 1);
 }
 
-// ── Scenario 5: fresh envelope (no existing request) → all signers minted + emailed ──
+// ── Scenario 5: fresh envelope (no existing request) → all signers minted ──
 {
   const signers: Signer[] = [
     { email: "Signer-D@Example.com", signing_token_hash: "old-hash-d", signing_token_expires_at: new Date(now + 1000 * 60 * 60 * 24) }, // would be preserved on reuse, but this is a fresh envelope
     { email: "signer-e@example.com", signing_token_hash: null, signing_token_expires_at: null },
   ];
-  const signingLinks = signers.map((s) => ({ email: s.email, signingUrl: `https://document.luxit.app/sign/${normalizeSignerEmail(s.email)}` }));
   const tokens = mintSignerTokens(signers, false); // isReusingExistingEnvelope = false
-  const emailsSent = notificationEmailsSent(signingLinks, tokens);
 
   ok("fresh envelope: every signer gets a fresh token, including one with a still-valid prior hash", tokens.size === 2);
-  ok("fresh envelope: every signer receives an email", emailsSent.length === 2);
 }
 
 // ── Scenario 6: skipped (preserved) signers still appear in signingLinks and still get metadata refresh ──
@@ -158,12 +133,10 @@ console.log("=== Fix 3: Preserve valid MyPayLink tokens on envelope reuse ===\n"
     { email: "signer-f@example.com", signingUrl: "https://document.luxit.app/sign/live-f" },
     { email: "SIGNER-G@example.com", signingUrl: "https://document.luxit.app/sign/live-g" },
   ];
-  const tokens = mintSignerTokens(signers, true);
+  mintSignerTokens(signers, true);
 
   ok("skipped signer still present in signingLinks (Documenso-driven, independent of signerTokens)", signingLinks.some((l) => normalizeSignerEmail(l.email) === "signer-f@example.com"));
   ok("skipped signer still gets a fresh documenso_signing_url from live Documenso data", signingLinks.find((l) => normalizeSignerEmail(l.email) === "signer-f@example.com")?.signingUrl === "https://document.luxit.app/sign/live-f");
-  const emailsSent = notificationEmailsSent(signingLinks, tokens);
-  ok("skipped signer excluded from notification emails; non-skipped signer included", !emailsSent.some((e) => e.email === "signer-f@example.com") && emailsSent.some((e) => e.email === "signer-g@example.com"));
 }
 
 // ── Static: prove the raw-contract-ID fallback is ABSENT from source, not merely unreachable ──
@@ -176,16 +149,12 @@ ok(
     routes.includes("if (hasValidExistingToken) continue;"),
 );
 ok(
-  "routes.ts: notification-email loop skips signers with no minted token this call",
-  /const email = normalizeSignerEmail\(link\.email\);\s*\n\s*if \(!email\) continue;\s*\n\s*\/\/ No fresh MyPayLink token was minted[\s\S]*?if \(!signerTokens\.has\(email\)\) continue;/.test(routes),
-);
-ok(
   "routes.ts: the raw-contract-ID URL fallback is completely absent from source (not just unreachable)",
   !routes.includes("|| contractId)") && !/buildContractSigningUrl\([^)]*contractId/.test(routes),
 );
 ok(
-  "routes.ts: myPayLinkSigningUrl in the email loop is read directly from signerTokens with no fallback expression",
-  routes.includes("const myPayLinkSigningUrl = signerTokens.get(email)!.myPayLinkSigningUrl;"),
+  "routes.ts: myPayLinkSigningUrl is still persisted per recipient (post-sign redirect / in-app use) even though it is no longer separately emailed",
+  routes.includes("myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null"),
 );
 ok(
   "routes.ts: fresh-envelope path (isReusingExistingEnvelope false) is untouched — mint always proceeds outside the reuse branch",
