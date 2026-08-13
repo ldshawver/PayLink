@@ -14258,9 +14258,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (contract.status !== "draft") return res.status(400).json({ message: "Only draft contracts can be sent" });
-      await autoSnapshotContract(req.params.id, req.session.userId!, "pre-send snapshot");
+      // Legacy/manual send is only for contracts never connected to Documenso — never a bypass path
+      // once a Documenso envelope exists for this contract.
+      const documensoBacked = firstRow<any>(await db.execute(sql`SELECT id FROM documenso_signature_requests WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id} AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL LIMIT 1`).catch(() => ({ rows: [] } as any)));
+      if (documensoBacked?.id) return res.status(400).json({ message: "This contract is connected to Documenso. Use Send via Documenso instead of the legacy send path." });
+      const { reason } = req.body;
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required to use the legacy/manual send path." });
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-send snapshot: ${reason}`);
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "contract_legacy_send", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ reason }) }).catch(() => {});
       createContractorNotification({ workerId: contract.contractor_id, notificationType: "contract_sent", title: `Contract Ready for Signature: ${contract.title || req.params.id}`, body: "A contract has been sent to you for review and signature.", entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
       // Notify contractor
       try {
@@ -14612,9 +14619,52 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (["void", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: `Contract is already ${contract.status}` });
       const { reason } = req.body;
-      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot${reason ? ": " + reason : ""}`);
-      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required to void a contract." });
+
+      // Block once irreversible downstream financial activity exists — route those cases to an
+      // explicit reversal/cancellation workflow instead of allowing Void to paper over them.
+      const downstreamInvoice = firstRow<any>(await db.execute(sql`
+        SELECT id, status FROM contractor_invoices
+        WHERE contract_id = ${req.params.id} AND company_id = ${contract.company_id}
+          AND (paid_at IS NOT NULL OR COALESCE(amount_paid, 0)::numeric > 0 OR export_status IN ('exported', 'posted'))
+        LIMIT 1
+      `).catch(() => ({ rows: [] } as any)));
+      if (downstreamInvoice?.id) {
+        return res.status(400).json({ message: "This contract cannot be voided: a related invoice has already been paid, has a recorded payment, or has been posted to accounting. Use the invoice reversal/cancellation workflow instead.", downstreamInvoiceId: downstreamInvoice.id });
+      }
+
+      // Best-effort remote cancellation — only attempted while the envelope is still in a
+      // cancellable state, and never allowed to block the local void either way.
+      const sigReq = firstRow<any>(await db.execute(sql`
+        SELECT documenso_document_id, status FROM documenso_signature_requests
+        WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id}
+          AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1
+      `).catch(() => ({ rows: [] } as any)));
+      const cancellableRemoteStatuses = ["draft", "pending", "sent", "partially_signed"];
+      let remoteVoidResult: { attempted: boolean; success: boolean; error?: string } = { attempted: false, success: false };
+      if (sigReq?.documenso_document_id && cancellableRemoteStatuses.includes(String(sigReq.status || "").toLowerCase())) {
+        remoteVoidResult.attempted = true;
+        try {
+          const { voidDocumensoDocument } = await import("./services/documenso.js");
+          await voidDocumensoDocument(sigReq.documenso_document_id);
+          remoteVoidResult.success = true;
+        } catch (remoteErr: any) {
+          remoteVoidResult.error = remoteErr?.message || String(remoteErr);
+        }
+      }
+
+      const priorStatus = contract.status;
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot: ${reason}`);
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason}, updated_at = NOW() WHERE id = ${req.params.id} AND company_id = ${contract.company_id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_contract", objectId: req.params.id, actionType: "contract_voided",
+        actorUserId: req.session.userId, companyId: contract.company_id,
+        metadataJson: JSON.stringify({ reason, priorStatus, documensoDocumentId: sigReq?.documenso_document_id || null, remoteVoidResult }),
+      }).catch(() => {});
+
       // Notify contractor of void
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
@@ -14622,11 +14672,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const wRes = await db.execute(sql`SELECT u.email, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
         const recipient = wRes.rows[0] as any;
         if (recipient?.email) {
-          sendContractEventEmail({ event: "contract_voided" as any, recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: reason || "Contract has been voided.", actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+          sendContractEventEmail({ event: "contract_voided" as any, recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: reason, actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
         }
-        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_voided', ${"Contract Voided: " + contract.title}, ${reason || "This contract has been voided."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_voided', ${"Contract Voided: " + contract.title}, ${reason}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
       } catch (notifErr) { console.error("[Contract] Notify void failed:", notifErr); }
-      res.json(result.rows[0]);
+      res.json({ ...result.rows[0], remoteVoidResult });
     } catch (e: any) { res.status(500).json({ message: "Failed to void contract: " + e.message }); }
   });
 
@@ -14667,12 +14717,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      // Documenso-backed contracts activate automatically once signing is verified (webhook or
+      // reconciliation) via activateContractAfterVerifiedCompletion. Manual Activate is reserved for
+      // imported/manual contracts whose required evidence is recorded outside Documenso — offering it
+      // as a workaround for a Documenso contract that looks "stuck" would bypass verification instead
+      // of fixing the underlying sync gap.
+      const documensoBacked = firstRow<any>(await db.execute(sql`
+        SELECT id FROM documenso_signature_requests
+        WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id}
+          AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL
+        LIMIT 1
+      `).catch(() => ({ rows: [] } as any)));
+      if (documensoBacked?.id) {
+        return res.status(400).json({ message: "This contract is managed by Documenso and activates automatically once signing is verified. If it looks stuck, reconcile status instead of activating manually." });
+      }
       if (!["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status)) {
         return res.status(400).json({ message: "Contract cannot be activated from current status" });
       }
-      await autoSnapshotContract(req.params.id, req.session.userId!, "pre-activate snapshot");
-      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'active', updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      const { reason } = req.body;
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required to manually activate a contract." });
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-activate snapshot: ${reason}`);
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'active', updated_at = NOW() WHERE id = ${req.params.id} AND company_id = ${contract.company_id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "contract_manually_activated", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ reason, priorStatus: contract.status }) }).catch(() => {});
       // Create DAM document record for the activated contract
       try {
         const baseUrl = process.env.APP_BASE_URL || "";
@@ -15142,14 +15209,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const remoteStatus = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus((remote as any)?.status || (remote as any)?.rawResponse?.status || sigReq.status));
     const allSigned = activeRequired > 0 && signedRequired >= activeRequired;
     const nextStatus = allSigned || remoteStatus === "completed" ? "fully_signed" : signedRequired > 0 ? "partially_signed" : contract.status;
-    if (["partially_signed", "fully_signed"].includes(nextStatus) && contract.status !== nextStatus && contract.status !== "completed") {
+    // Never move a contract backward: only advance from a non-terminal, non-active status. This
+    // makes reconciliation safe to call repeatedly (including racing a webhook) without regressing
+    // an already-active/void/terminated contract back toward pending/partially_signed.
+    const lockedStatuses = ["active", "completed", "void", "terminated"];
+    let effectiveStatus = contract.status;
+    if (["partially_signed", "fully_signed"].includes(nextStatus) && contract.status !== nextStatus && !lockedStatuses.includes(contract.status)) {
       await db.execute(nextStatus === "fully_signed"
-        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`
-        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${contractId}`);
+        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contractId} AND status NOT IN ('active','completed','void','terminated')`
+        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${contractId} AND status NOT IN ('active','completed','void','terminated')`);
+      effectiveStatus = nextStatus;
     }
     await db.execute(sql`UPDATE documenso_signature_requests SET status = ${remoteStatus}, raw_response = COALESCE(${remote ? JSON.stringify((remote as any).rawResponse || remote) : null}, raw_response), updated_at = NOW() WHERE id = ${sigReq.id}`).catch(() => {});
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_status_synced", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, status: nextStatus, signersUpdated }) }).catch(() => {});
-    return { contractId, status: nextStatus, documensoDocumentId: sigReq.documenso_document_id, signersUpdated, remoteStatus };
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_status_synced", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, status: effectiveStatus, signersUpdated }) }).catch(() => {});
+
+    // Authoritative remote reconciliation reaching "fully signed" must converge on the same
+    // verified-completion transition the webhook uses — this is what previously left contracts
+    // stuck at fully_signed (needing a manual Activate click) whenever the webhook never fired.
+    if (effectiveStatus === "fully_signed") {
+      const activated = await activateContractAfterVerifiedCompletion(contractId, "reconciliation");
+      if (activated) effectiveStatus = "active";
+    }
+    return { contractId, status: effectiveStatus, documensoDocumentId: sigReq.documenso_document_id, signersUpdated, remoteStatus };
   }
 
   async function fileDocumensoFinalAgreementPacket(contract: any, documensoDocumentId: string, completionEventId?: string | null) {
@@ -15182,8 +15263,45 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       RETURNING id
     `);
     const documentId = firstRow<any>(inserted)?.id || null;
-    await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = COALESCE(${documentId}, archived_document_id), status = CASE WHEN status = 'fully_signed' THEN 'completed' ELSE status END, updated_at = NOW() WHERE id = ${contract.id}`).catch(() => {});
+    // Archival only — status transitions (fully_signed -> active) are owned exclusively by
+    // activateContractAfterVerifiedCompletion, so this function never regresses/skips lifecycle state.
+    await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = COALESCE(${documentId}, archived_document_id), updated_at = NOW() WHERE id = ${contract.id}`).catch(() => {});
     return { documentId, created: true };
+  }
+
+  // Single authoritative transition for "signing is verified complete" — called from both the
+  // Documenso webhook and syncDocumensoContractStatus (authoritative remote reconciliation), so a
+  // replayed/out-of-order webhook and a manual "reconcile status" action behave identically and
+  // neither can regress an already-active/completed/void contract. Exactly-once by construction:
+  // the UPDATE only matches a row still in 'fully_signed', so a second call (replay, or reconciliation
+  // racing the webhook) is a no-op that neither re-creates the invoice nor re-touches status.
+  async function activateContractAfterVerifiedCompletion(contractId: string, source: string) {
+    const activated = firstRow<any>(await db.execute(sql`
+      UPDATE contractor_contracts
+      SET status = 'active', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW()
+      WHERE id = ${contractId} AND status = 'fully_signed'
+      RETURNING *
+    `));
+    if (!activated) return null;
+
+    if (activated.proposal_id) {
+      await autoCreateContractInvoiceExactlyOnce(activated.id).catch((err) => console.error("[Contract] exactly-once invoice creation failed:", err?.message || err));
+    }
+
+    // Best-effort archival — must never block or unwind the activation above.
+    const sigReq = firstRow<any>(await db.execute(sql`
+      SELECT documenso_document_id FROM documenso_signature_requests
+      WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${contractId}
+        AND company_id = ${activated.company_id} AND documenso_document_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `).catch(() => ({ rows: [] } as any)));
+    if (sigReq?.documenso_document_id) {
+      const packetResult = await fileDocumensoFinalAgreementPacket(activated, sigReq.documenso_document_id, null).catch((err) => ({ error: err?.message || String(err) }));
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_completion_packet_filed", companyId: activated.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, source, packetResult }) }).catch(() => {});
+    }
+
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "contract_activated_verified_completion", companyId: activated.company_id, metadataJson: JSON.stringify({ source }) }).catch(() => {});
+    return activated;
   }
 
   async function sendContractSigningReminderNow(contract: any, contractId: string, actorUserId: string | undefined, message: string, selectedSignerId?: string | null) {
@@ -15278,9 +15396,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/contractor-contracts/:id/resend-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    let contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
+    const blockedResendStatuses = ["fully_signed", "active", "completed", "void", "terminated"];
+    if (blockedResendStatuses.includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
+
+    // Reconcile authoritative remote status BEFORE deciding who is actually pending. Without this,
+    // a signer who already completed remotely but whose local row was still 'sent'/'viewed' would be
+    // incorrectly targeted for resend and reported as "missing remotely" by Documenso.
+    await syncDocumensoContractStatus(req.params.id).catch(() => null);
+    const reconciled = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    if (reconciled) contract = reconciled;
+    if (blockedResendStatuses.includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
 
     await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "documenso_resend_requested", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
 
@@ -15808,31 +15935,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Update contract status
       await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`);
 
-      // Send PayLink email with the direct Documenso signing URL as the primary CTA.
-      const { sendGenericNotificationEmail } = await import("./notifications.js");
-      for (const link of signingLinks) {
-        const email = normalizeSignerEmail(link.email);
-        if (!email) continue;
-        // No fresh MyPayLink token was minted for this signer this call (their existing one was
-        // preserved as valid/unexpired) — they already have a working signing email from before.
-        // Skip re-sending rather than falling back to a broken URL built from the raw contract ID.
-        if (!signerTokens.has(email)) continue;
-        const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
-        // signerTokens.has(email) was just verified above, so a freshly minted token is guaranteed
-        // here — no raw-contract-ID fallback is needed or used.
-        const myPayLinkSigningUrl = signerTokens.get(email)!.myPayLinkSigningUrl;
-        await sendGenericNotificationEmail({
-          recipientName: matchingSigner?.name || link.email || "Signer",
-          email,
-          title: `Please sign: ${contract.title || "Contract"}`,
-          body: `Please sign this contract using the secure MyPayLink signing page. The page will open the exact Documenso session for your signer record.
-
-Signing page: ${myPayLinkSigningUrl}
-
-If Documenso is unavailable, MyPayLink will show a controlled status instead of a blank page.`,
-          actionUrl: myPayLinkSigningUrl,
-        }).catch((err) => console.warn("[Documenso] PayLink signer email failed", err?.message || err));
-      }
+      // Documenso's own /envelope/distribute call (inside sendDocumentForSignature above) already
+      // emailed each recipient a native "Please sign" message with a working signing link. Do NOT
+      // also send a second MyPayLink-branded "Please sign" email here — Documenso's public API does
+      // not document a way to reliably suppress its native send, and per policy a second email is
+      // only sent when suppression is verified. Sending both was the source of the duplicate-email
+      // defect (one from Documenso, one from MyPayLink, same subject, to the same recipient).
+      // See ONE_SIGNING_EMAIL_PER_RECIPIENT in tests/documenso-single-notification-static.test.ts.
 
       // Notify signers in-app
       createContractorNotification({
@@ -16023,22 +16132,8 @@ If Documenso is unavailable, MyPayLink will show a controlled status instead of 
         }),
       }).catch(() => {});
 
-      const { sendGenericNotificationEmail } = await import("./notifications.js");
-      for (const link of signingLinks) {
-        const email = normalizeSignerEmail(link.email);
-        if (!email || !signerTokens.has(email)) continue;
-        const matchingSigner = signers.find((s) => normalizeSignerEmail(s.email) === email);
-        const myPayLinkSigningUrl = signerTokens.get(email)!.myPayLinkSigningUrl;
-        await sendGenericNotificationEmail({
-          recipientName: matchingSigner?.name || link.email || "Signer",
-          email,
-          title: `Please sign: ${contract.title || "Contract"}`,
-          body: `Please sign this contract using the secure MyPayLink signing page. This is a replacement signing request; any prior signing link for this contract is no longer valid.
-
-Signing page: ${myPayLinkSigningUrl}`,
-          actionUrl: myPayLinkSigningUrl,
-        }).catch((err) => console.warn("[Documenso] replacement signer email failed", err?.message || err));
-      }
+      // See the identical note in /send-for-signature: Documenso's own distribute call already
+      // emailed each recipient. Do not also send a second MyPayLink "Please sign" email here.
 
       res.json({
         success: true,
@@ -25706,16 +25801,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractSig.related_record_id}`);
             const contract = firstRow<any>(contractRes);
             if (contract) {
-              const wasAlreadyFullySigned = contract.status === "fully_signed";
-              if (!wasAlreadyFullySigned) {
-                await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id}`);
-                await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status IN ('pending','sent','viewed')`).catch(() => {});
-              }
-              const packetResult = await fileDocumensoFinalAgreementPacket({ ...contract, status: 'fully_signed', fully_signed_at: contract.fully_signed_at || new Date().toISOString() }, documensoDocumentId, webhookEventId).catch((err) => ({ error: err?.message || String(err) }));
-              await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contract.id, actionType: "documenso_completion_packet_filed", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId, webhookEventId, packetResult }) }).catch(() => {});
-              if (contract.proposal_id) {
-                await autoCreateContractInvoiceExactlyOnce(contract.id);
-              }
+              // Guard against backward transitions from a replayed/out-of-order webhook: only ever
+              // move a contract INTO fully_signed from a non-terminal, non-active status.
+              await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id} AND status NOT IN ('active','completed','void','terminated')`);
+              // Reconcile stale per-signer state even on replay — this is what previously left
+              // signers stuck at 'viewed'/'sent' after the remote side actually completed.
+              await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status IN ('pending','sent','viewed')`).catch(() => {});
+              // Single authoritative verified-completion transition (fully_signed -> active),
+              // exactly-once invoice creation, and archival — shared with reconciliation below.
+              await activateContractAfterVerifiedCompletion(contract.id, `webhook:${webhookEventId || "unknown"}`);
             }
           }
           if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'processed', processed_at = NOW() WHERE id = ${webhookEventId}`);

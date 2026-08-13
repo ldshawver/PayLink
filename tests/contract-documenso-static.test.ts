@@ -23,8 +23,8 @@ const contractMutationIndex = routes.indexOf("UPDATE contractor_contracts SET st
 ok("Documenso webhook validates signature before event insert", verifyIndex >= 0 && webhookInsertIndex > verifyIndex);
 ok("Documenso webhook validates signature before contract mutation", verifyIndex >= 0 && contractMutationIndex > verifyIndex);
 ok("Documenso contract invoice count is company-scoped", routes.includes("WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}"));
-ok("Documenso duplicate already-signed contracts do not re-run status/signer side effects", routes.includes("const wasAlreadyFullySigned = contract.status === \"fully_signed\"") && routes.includes("if (!wasAlreadyFullySigned) {"));
-ok("Documenso webhook completion always routes invoice creation through the exactly-once helper (idempotent even on replay)", routes.includes("if (contract.proposal_id) {\n                await autoCreateContractInvoiceExactlyOnce(contract.id);"));
+ok("Documenso duplicate/replayed completion cannot regress an already active/completed/void/terminated contract (atomic WHERE guard, not a check-then-update race)", routes.includes("WHERE id = ${contract.id} AND status NOT IN ('active','completed','void','terminated')"));
+ok("Documenso webhook completion always routes invoice creation through the single exactly-once verified-completion helper (idempotent even on replay)", routes.includes("await activateContractAfterVerifiedCompletion(contract.id, `webhook:") && routes.includes("autoCreateContractInvoiceExactlyOnce(activated.id)"));
 
 ok("public signing endpoint exposes Documenso metadata", routes.includes("documensoSigningUrl: row.documenso_signing_url") && routes.includes("documensoRecipientId: row.documenso_recipient_id"));
 ok("resend refreshes persisted Documenso signer metadata", routes.includes("await refreshDocumensoRecipientMappings") && routes.includes("documenso_recipient_ids ="));

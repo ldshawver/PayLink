@@ -33,9 +33,13 @@ async function okAsync(name: string, fn: () => Promise<void>) {
 }
 
 // ── The Documenso completion flow invokes the exactly-once helper ──────────
+// Invoice creation on webhook completion is now routed through the single shared
+// activateContractAfterVerifiedCompletion transition (see tests/documenso-sync-lifecycle-static.test.ts),
+// which itself calls autoCreateContractInvoiceExactlyOnce — rather than being inlined in the webhook.
 ok(
   "Documenso webhook completion routes invoice creation through the exactly-once helper",
-  routes.includes("if (contract.proposal_id) {\n                await autoCreateContractInvoiceExactlyOnce(contract.id);")
+  routes.includes("await activateContractAfterVerifiedCompletion(contract.id, `webhook:") &&
+    /async function activateContractAfterVerifiedCompletion[\s\S]{0,800}autoCreateContractInvoiceExactlyOnce\(activated\.id\)/.test(routes)
 );
 ok(
   "the exactly-once helper is also reused by the public signing completion and admin fully-signed paths (single implementation, not duplicated)",
@@ -159,7 +163,7 @@ ok(
 {
   const verifyIndex = routes.indexOf("const signatureValid = verifyWebhookSecret");
   const rejectIndex = routes.indexOf('return res.status(401).json({ message: "Invalid Documenso webhook secret" });', verifyIndex);
-  const invoiceCallIndex = routes.indexOf("await autoCreateContractInvoiceExactlyOnce(contract.id);", verifyIndex);
+  const invoiceCallIndex = routes.indexOf("await activateContractAfterVerifiedCompletion(contract.id, `webhook:", verifyIndex);
   ok(
     "an invalid signature returns 401 before any code path can reach invoice creation",
     verifyIndex >= 0 && rejectIndex > verifyIndex && rejectIndex < invoiceCallIndex
