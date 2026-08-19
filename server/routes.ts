@@ -12834,9 +12834,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
       const proposal = auth.proposal;
       const oldStatus = proposal.status;
+      // Idempotency guard: /send performs the pre-send -> sent transition
+      // exactly once. A second call (double-click, retried request, a second
+      // browser tab) must not re-email the client or write a duplicate audit
+      // event — /resend-email is the explicit, deliberate way to resend.
+      const PRE_SEND_STATUSES = ["draft", "internal_review", "submitted"];
+      if (!PRE_SEND_STATUSES.includes(oldStatus)) {
+        return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
+      }
       // Generate a share token if one doesn't exist yet
       const shareToken = proposal.share_token || crypto.randomBytes(32).toString("hex");
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken} WHERE id = ${req.params.id}`);
+      // The WHERE clause repeats the pre-send-status check so the transition
+      // is atomic: if two requests race past the read-time guard above, only
+      // one UPDATE can actually match and flip the status.
+      const transitionResult = await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken}
+        WHERE id = ${req.params.id} AND status = ANY(${PRE_SEND_STATUSES})
+      `);
+      if (!transitionResult.rowCount) {
+        return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
+      }
 
       // Send email to client if a client email is stored on the proposal
       let emailStatus: "sent" | "failed" | "skipped_no_client_email" = "skipped_no_client_email";

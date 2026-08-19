@@ -64,6 +64,8 @@ ok(
     const body = sendHandlerMatch[0];
     ok("every Portal: note construction in /send is passed through redactDiagnosticText", (body.match(/Portal: \$\{redactDiagnosticText\(portalUrl\)\}/g) || []).length === 4);
     ok("no raw, unredacted Portal: ${portalUrl} remains in /send", !/Portal: \$\{portalUrl\}/.test(body));
+    ok("the status transition is gated to pre-send statuses only (duplicate-send guard)", /WHERE id = \$\{req\.params\.id\} AND status = ANY\(\$\{PRE_SEND_STATUSES\}\)/.test(body));
+    ok("a no-op transition (already sent) short-circuits before emailing/logging", /if \(!transitionResult\.rowCount\)/.test(body));
   }
 }
 {

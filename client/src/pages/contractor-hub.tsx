@@ -2582,15 +2582,25 @@ function ProposalBuilder({
     onSuccess: (saved: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
       if (isNew) {
+        // Show the authoritative, server-persisted identity — not just what
+        // was selected in the form — so a mismatch between what was picked
+        // and what was actually saved is impossible to miss.
         const savedContractorId = saved?.contractor_id ?? saved?.contractorId;
-        const contractorName = contractorDisplayName(contractorWorkers.find((w: any) => w.id === savedContractorId));
+        const savedContractor = contractorWorkers.find((w: any) => w.id === savedContractorId);
+        const contractorName = contractorDisplayName(savedContractor);
+        const contractorEmail = savedContractor?.email;
         const companyName = companies.find((c: any) => c.id === (saved?.company_id ?? saved?.companyId))?.name;
         const proposalNumber = saved?.proposal_number ?? saved?.proposalNumber;
         const savedId = saved?.id as string | undefined;
         toast({
           title: "Proposal created",
-          description: [proposalNumber, `Contractor: ${contractorName || "unknown"}`, companyName ? `Company: ${companyName}` : null, savedId ? `ID: ${savedId.slice(0, 8)}…` : null]
-            .filter(Boolean).join(" · "),
+          description: [
+            proposalNumber,
+            `Contractor: ${contractorName || "unknown"}${contractorEmail ? ` <${contractorEmail}>` : ""}`,
+            companyName ? `Company: ${companyName}` : null,
+            savedContractorId ? `Contractor ID: ${String(savedContractorId).slice(0, 8)}…` : null,
+            savedId ? `Proposal ID: ${savedId.slice(0, 8)}…` : null,
+          ].filter(Boolean).join(" · "),
         });
         onClose();
       } else {
@@ -3122,7 +3132,17 @@ function ProposalBuilder({
                     <Label>Client / Company <span className="text-destructive">*</span></Label>
                     <Select
                       value={selectedCompanyId}
-                      onValueChange={v => setForm(f => ({ ...f, companyId: v, contractorId: "" }))}
+                      onValueChange={v => setForm(f => ({
+                        ...f,
+                        companyId: v,
+                        // Clear contractor + recipient state together — a
+                        // contractor (and any client name/email typed against
+                        // the old company) must never silently carry over
+                        // into a different company's proposal.
+                        contractorId: "",
+                        clientName: "",
+                        clientEmail: "",
+                      }))}
                       disabled={!canEdit}
                     >
                       <SelectTrigger data-testid="select-proposal-company"><SelectValue placeholder="Select company" /></SelectTrigger>
