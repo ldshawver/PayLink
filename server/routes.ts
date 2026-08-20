@@ -31,7 +31,7 @@ import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUuid } from "./contractor-proposal-identity";
-import { normalizeWorkerPayRate } from "./worker-pay-rate";
+import { normalizeWorkerPayRate, isValidWorkerType, isValidContractorType } from "@shared/worker-pay-rate-rules";
 import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
@@ -2268,7 +2268,10 @@ function hashSigningToken(token: string): string {
       if (isTenant && req.body.companyId !== actingUser!.companyId) {
         return res.status(403).json({ message: "Forbidden: cannot create a worker in a different company" });
       }
-      if (req.body.contractorType && !["hourly", "invoice"].includes(req.body.contractorType)) {
+      if (req.body.workerType && !isValidWorkerType(req.body.workerType)) {
+        return res.status(400).json({ message: "Worker type must be 'employee' or 'contractor'" });
+      }
+      if (req.body.contractorType && !isValidContractorType(req.body.contractorType)) {
         return res.status(400).json({ message: "Contractor type must be 'hourly' or 'invoice'" });
       }
       if (req.body.workerType === "employee") {
