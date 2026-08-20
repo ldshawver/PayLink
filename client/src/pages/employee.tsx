@@ -4,6 +4,7 @@ import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { buildWorkerCreatedConfirmation } from "@/lib/worker-created-confirmation";
 import type {
   Worker, Company, EmployeeContact, PayMethod,
   EmployeeTitle, EmployeeGroup, WageHistory, NewHireDefault,
@@ -172,11 +173,16 @@ function EmployeeTab() {
       if (emergencyContactName && newWorker?.id) {
         await saveEmergencyContact(newWorker.id, data);
       }
+      return newWorker as Worker;
     },
-    onSuccess: () => {
+    onSuccess: (newWorker) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/employee-contacts"] });
-      toast({ title: "Employee added successfully" });
+      // Confirmation is built only from the server's persisted response
+      // (real UUID, real companyId) and the authoritative /api/companies
+      // list — never from the client-side draft form.
+      const { title, description } = buildWorkerCreatedConfirmation(newWorker, companiesQuery.data ?? []);
+      toast({ title, description });
       setAddOpen(false);
       resetForm();
     },
