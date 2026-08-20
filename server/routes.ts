@@ -31,6 +31,7 @@ import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUuid } from "./contractor-proposal-identity";
+import { normalizeWorkerPayRate } from "./worker-pay-rate";
 import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
@@ -2273,14 +2274,11 @@ function hashSigningToken(token: string): string {
       if (req.body.workerType === "employee") {
         req.body.contractorType = null;
       }
-      // pay_rate is NOT NULL at the DB layer (with a "0" column default for
-      // workers who have no fixed rate, e.g. invoiced contractors). An
-      // explicit null/blank value in the INSERT bypasses that column default
-      // entirely, so a blank Pay Rate field must be normalized here rather
-      // than left for Postgres to reject.
-      if (req.body.payRate === null || req.body.payRate === undefined || req.body.payRate === "") {
-        req.body.payRate = "0";
+      const payRateResult = normalizeWorkerPayRate(req.body);
+      if (!payRateResult.ok) {
+        return res.status(400).json({ message: payRateResult.message });
       }
+      req.body.payRate = payRateResult.payRate;
       // Auto-generate employee number if not provided
       if (!req.body.employeeNumber) {
         const allWorkers = await storage.getWorkers();
