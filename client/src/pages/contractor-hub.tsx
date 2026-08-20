@@ -259,6 +259,7 @@ interface Contract {
   contractType?: string;
   contractorId: string;
   contractorName?: string;
+  contractorEmail?: string;
   companyId?: string;
   companyName?: string;
   proposalId?: string;
@@ -2458,6 +2459,15 @@ function TemplateTabContent({
 
 // ─── Proposal Builder ─────────────────────────────────────────────────────────
 
+function contractorDisplayName(w: any): string {
+  if (!w) return "";
+  return (
+    w.fullName || w.full_name ||
+    `${w.firstName || w.first_name || ""} ${w.lastName || w.last_name || ""}`.trim() ||
+    (w.id ? String(w.id).slice(0, 8) : "")
+  );
+}
+
 function ProposalBuilder({
   open, onClose, proposal, isAdmin
 }: {
@@ -2535,11 +2545,19 @@ function ProposalBuilder({
     },
     enabled: isAdmin && isNew,
   });
-  const contractorWorkers = allWorkers.filter((w: any) =>
-    (w.workerType || w.worker_type) === "contractor"
-  );
-
   const current = { ...proposal, ...form };
+
+  // Scoped to the selected company: a contractor from a different company must
+  // never be selectable here, even though /api/workers can return contractors
+  // across every company this admin can see. This is what previously let a
+  // proposal silently resolve to an unrelated contractor (e.g. "LUX
+  // Contractor") that had nothing to do with the company shown in the form.
+  const selectedCompanyId = form.companyId ?? current.companyId ?? "";
+  const contractorWorkers = allWorkers.filter((w: any) =>
+    (w.workerType || w.worker_type) === "contractor" &&
+    (!selectedCompanyId || (w.companyId || w.company_id) === selectedCompanyId)
+  );
+  const selectedContractorIsValid = !!form.contractorId && contractorWorkers.some((w: any) => w.id === form.contractorId);
 
   function handleBuilderTabChange(nextTab: string) {
     setTab(nextTab);
@@ -2548,13 +2566,46 @@ function ProposalBuilder({
 
   const saveMutation = useMutation({
     mutationFn: async (data: any) => {
-      if (isNew) return apiRequest("POST", "/api/contractor-proposals", data);
-      return apiRequest("PATCH", `/api/contractor-proposals/${proposalId}`, data);
+      if (isNew && isAdmin) {
+        // Revalidate immediately before send — the contractor must still be a
+        // valid, in-scope-for-the-selected-company selection at submit time,
+        // not just whenever it was originally picked.
+        if (!data.contractorId || !contractorWorkers.some((w: any) => w.id === data.contractorId)) {
+          throw new Error("Select a contractor that belongs to the chosen company before saving.");
+        }
+      }
+      const res = isNew
+        ? await apiRequest("POST", "/api/contractor-proposals", data)
+        : await apiRequest("PATCH", `/api/contractor-proposals/${proposalId}`, data);
+      return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (saved: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
-      toast({ title: isNew ? "Proposal created" : "Proposal saved" });
-      if (isNew) onClose();
+      if (isNew) {
+        // Show the authoritative, server-persisted identity — not just what
+        // was selected in the form — so a mismatch between what was picked
+        // and what was actually saved is impossible to miss.
+        const savedContractorId = saved?.contractor_id ?? saved?.contractorId;
+        const savedContractor = contractorWorkers.find((w: any) => w.id === savedContractorId);
+        const contractorName = contractorDisplayName(savedContractor);
+        const contractorEmail = savedContractor?.email;
+        const companyName = companies.find((c: any) => c.id === (saved?.company_id ?? saved?.companyId))?.name;
+        const proposalNumber = saved?.proposal_number ?? saved?.proposalNumber;
+        const savedId = saved?.id as string | undefined;
+        toast({
+          title: "Proposal created",
+          description: [
+            proposalNumber,
+            `Contractor: ${contractorName || "unknown"}${contractorEmail ? ` <${contractorEmail}>` : ""}`,
+            companyName ? `Company: ${companyName}` : null,
+            savedContractorId ? `Contractor ID: ${String(savedContractorId).slice(0, 8)}…` : null,
+            savedId ? `Proposal ID: ${savedId.slice(0, 8)}…` : null,
+          ].filter(Boolean).join(" · "),
+        });
+        onClose();
+      } else {
+        toast({ title: "Proposal saved" });
+      }
     },
     onError: (e: any) => toast({ title: e?.message || "Save failed", variant: "destructive" }),
   });
@@ -2815,13 +2866,23 @@ function ProposalBuilder({
             <div className="flex items-center gap-2 shrink-0">
               {canEdit && (() => {
                 const isDraftOrNew = isNew || !proposal?.status || proposal.status === "draft";
+                // A new admin-created proposal cannot be saved without an
+                // authoritative, in-scope contractor selection — no silent
+                // fallback to whatever contractor happened to be selected.
+                const blockedByMissingContractor = isNew && isAdmin && !selectedContractorIsValid;
                 return (
-                  <Button size="sm" onClick={() => saveMutation.mutate({
-                    ...form,
-                    ...(isDraftOrNew ? { status: "draft" } : {}),
-                    issueDate: form.issueDate || current.issueDate || new Date().toISOString().split("T")[0],
-                    companyId: form.companyId || current.companyId,
-                  })} disabled={saveMutation.isPending} data-testid="btn-save-proposal">
+                  <Button
+                    size="sm"
+                    onClick={() => saveMutation.mutate({
+                      ...form,
+                      ...(isDraftOrNew ? { status: "draft" } : {}),
+                      issueDate: form.issueDate || current.issueDate || new Date().toISOString().split("T")[0],
+                      companyId: form.companyId || current.companyId,
+                    })}
+                    disabled={saveMutation.isPending || blockedByMissingContractor}
+                    title={blockedByMissingContractor ? "Select a company and a contractor that belongs to it first" : undefined}
+                    data-testid="btn-save-proposal"
+                  >
                     {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                     {isDraftOrNew ? "Save Draft" : "Save"}
                   </Button>
@@ -3068,37 +3129,49 @@ function ProposalBuilder({
                 </div>
                 {isAdmin && isNew && (
                   <div className="col-span-2">
-                    <Label>Contractor <span className="text-destructive">*</span></Label>
+                    <Label>Client / Company <span className="text-destructive">*</span></Label>
                     <Select
-                      value={form.contractorId ?? ""}
-                      onValueChange={v => setForm(f => ({ ...f, contractorId: v }))}
+                      value={selectedCompanyId}
+                      onValueChange={v => setForm(f => ({
+                        ...f,
+                        companyId: v,
+                        // Clear contractor + recipient state together — a
+                        // contractor (and any client name/email typed against
+                        // the old company) must never silently carry over
+                        // into a different company's proposal.
+                        contractorId: "",
+                        clientName: "",
+                        clientEmail: "",
+                      }))}
                       disabled={!canEdit}
                     >
-                      <SelectTrigger data-testid="select-proposal-contractor">
-                        <SelectValue placeholder="Select contractor to create on behalf of…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {contractorWorkers.length === 0
-                          ? <SelectItem value="_none" disabled>No contractors found</SelectItem>
-                          : contractorWorkers.map((w: any) => {
-                              const name = w.fullName || w.full_name ||
-                                `${w.firstName || w.first_name || ""} ${w.lastName || w.last_name || ""}`.trim() ||
-                                w.id.slice(0, 8);
-                              return <SelectItem key={w.id} value={w.id}>{name}</SelectItem>;
-                            })
-                        }
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">Select the contractor this proposal will be created on behalf of.</p>
-                  </div>
-                )}
-                {isNew && (
-                  <div className="col-span-2">
-                    <Label>Client / Company</Label>
-                    <Select value={form.companyId ?? current.companyId ?? ""} onValueChange={v => setForm(f => ({ ...f, companyId: v }))} disabled={!canEdit}>
                       <SelectTrigger data-testid="select-proposal-company"><SelectValue placeholder="Select company" /></SelectTrigger>
                       <SelectContent>{companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
                     </Select>
+                    <p className="text-xs text-muted-foreground mt-1">Changing company clears the contractor selection below.</p>
+                  </div>
+                )}
+                {isAdmin && isNew && (
+                  <div className="col-span-2">
+                    <Label>Contractor <span className="text-destructive">*</span></Label>
+                    <Select
+                      value={selectedContractorIsValid ? (form.contractorId as string) : ""}
+                      onValueChange={v => setForm(f => ({ ...f, contractorId: v }))}
+                      disabled={!canEdit || !selectedCompanyId}
+                    >
+                      <SelectTrigger data-testid="select-proposal-contractor">
+                        <SelectValue placeholder={selectedCompanyId ? "Select contractor to create on behalf of…" : "Select a company first…"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {contractorWorkers.length === 0
+                          ? <SelectItem value="_none" disabled>No contractors found for this company</SelectItem>
+                          : contractorWorkers.map((w: any) => (
+                              <SelectItem key={w.id} value={w.id}>{contractorDisplayName(w)}</SelectItem>
+                            ))
+                        }
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">Only contractors belonging to the selected company are shown. Select the contractor this proposal will be created on behalf of.</p>
                   </div>
                 )}
                 <div>
@@ -4677,8 +4750,17 @@ function ContractDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Failed to replace signer", variant: "destructive" }),
   });
 
+  // For the "contractor" role, identity always comes from the contract's own
+  // contractor profile — never from the free-text fields below. The server
+  // independently enforces this too; this just keeps the UI from offering an
+  // input that would only ever be rejected.
+  const contractContractorName = contract?.contractorName || "";
+  const contractContractorEmail = contract?.contractorEmail || "";
+  const isContractorRoleSigner = newSignerRole === "contractor";
   const addSignerMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers`, { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers`, isContractorRoleSigner
+      ? { name: contractContractorName, email: contractContractorEmail, role: newSignerRole, workerId: contract.contractorId }
+      : { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
     onSuccess: () => { refetch(); setAddSignerOpen(false); setNewSignerName(""); setNewSignerEmail(""); toast({ title: "Signer added" }); },
     onError: (e: any) => toast({ title: e?.message || "Failed to add signer", variant: "destructive" }),
   });
@@ -5171,15 +5253,6 @@ function ContractDetailPanel({
             <DialogHeader><DialogTitle>Add Signer</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div className="space-y-1.5">
-                <Label>Full Name</Label>
-                <Input value={newSignerName} onChange={e => setNewSignerName(e.target.value)} placeholder="John Doe" data-testid="input-new-signer-name" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Email</Label>
-                <Input type="email" value={newSignerEmail} onChange={e => setNewSignerEmail(e.target.value)} placeholder="john@example.com" data-testid="input-new-signer-email" />
-                {hasDuplicateSignerEmail(newSignerEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
-              </div>
-              <div className="space-y-1.5">
                 <Label>Role</Label>
                 <Select value={newSignerRole} onValueChange={setNewSignerRole}>
                   <SelectTrigger data-testid="select-new-signer-role"><SelectValue /></SelectTrigger>
@@ -5191,10 +5264,42 @@ function ContractDetailPanel({
                   </SelectContent>
                 </Select>
               </div>
+              {isContractorRoleSigner ? (
+                <div className="rounded-md border bg-muted/30 p-3 space-y-1" data-testid="text-contractor-signer-derived">
+                  <p className="text-xs font-medium text-muted-foreground">Derived from the contractor record — cannot be changed here</p>
+                  <p className="text-sm font-medium">{contractContractorName || "Unknown contractor"}</p>
+                  <p className="text-sm text-muted-foreground">{contractContractorEmail || "No email on file"}</p>
+                  {!contractContractorEmail && (
+                    <p className="text-xs text-red-600">This contractor has no email on file. Add one to the contractor's profile before requesting a signature.</p>
+                  )}
+                  {hasDuplicateSignerEmail(contractContractorEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>Full Name</Label>
+                    <Input value={newSignerName} onChange={e => setNewSignerName(e.target.value)} placeholder="John Doe" data-testid="input-new-signer-name" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Email</Label>
+                    <Input type="email" value={newSignerEmail} onChange={e => setNewSignerEmail(e.target.value)} placeholder="john@example.com" data-testid="input-new-signer-email" />
+                    {hasDuplicateSignerEmail(newSignerEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
+                  </div>
+                </>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setAddSignerOpen(false)}>Cancel</Button>
-              <Button onClick={() => addSignerMutation.mutate()} disabled={addSignerMutation.isPending || !newSignerName.trim() || hasDuplicateSignerEmail(newSignerEmail)} data-testid="btn-confirm-add-signer">
+              <Button
+                onClick={() => addSignerMutation.mutate()}
+                disabled={
+                  addSignerMutation.isPending ||
+                  (isContractorRoleSigner
+                    ? !contractContractorEmail || hasDuplicateSignerEmail(contractContractorEmail)
+                    : !newSignerName.trim() || hasDuplicateSignerEmail(newSignerEmail))
+                }
+                data-testid="btn-confirm-add-signer"
+              >
                 {addSignerMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
                 Add Signer
               </Button>
@@ -9119,6 +9224,12 @@ export default function ContractorHubPage() {
       {/* Proposal Builder Sheet */}
       {builderOpen && (
         <ProposalBuilder
+          // Force a fresh mount (fresh internal form state) whenever we switch
+          // which proposal is open, including edit -> new-proposal without an
+          // intervening close. Without this, a stale contractorId/companyId
+          // from whatever was previously open in this same dialog instance
+          // could silently carry over into a new proposal.
+          key={newProposal ? "new" : editingProposal?.id ?? "new"}
           open={builderOpen}
           onClose={() => { setBuilderOpen(false); setEditingProposal(null); setNewProposal(false); }}
           proposal={newProposal ? null : editingProposal}

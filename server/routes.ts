@@ -30,6 +30,8 @@ import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUti
 import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
+import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUuid } from "./contractor-proposal-identity";
+import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
@@ -11694,14 +11696,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let workerId: string;
       let effectiveCompanyId: string | null = null;
       if (isAdminUser && req.body.contractorId) {
-        // Admin path: create a proposal on behalf of a contractor
-        const targetWorker = await storage.getWorker(req.body.contractorId);
-        if (!targetWorker) return res.status(404).json({ message: "Contractor not found" });
-        if (targetWorker.workerType !== "contractor") return res.status(400).json({ message: "Target worker is not a contractor" });
-        if (!user || !(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
-        workerId = targetWorker.id;
-        // Derive company from validated context — do not trust client-supplied companyId
-        effectiveCompanyId = targetWorker.companyId ?? null;
+        // Admin path: create a proposal on behalf of a contractor.
+        // Only look the worker up once we know the id is a well-formed UUID.
+        const targetWorker = isValidUuid(req.body.contractorId)
+          ? await storage.getWorker(req.body.contractorId)
+          : undefined;
+        // Derive company from the validated contractor record — never trust a
+        // client-supplied companyId. But if the client DID send one (e.g. the
+        // "Client / Company" selector in the proposal builder), it must agree
+        // with the contractor's real company, or reject outright — silently
+        // overriding a mismatched selection is what let a proposal resolve to
+        // an unrelated contractor in a different company than the UI showed.
+        const reconciled = reconcileProposalContractor(req.body.contractorId, req.body.companyId, targetWorker);
+        if (!reconciled.ok) return res.status(reconciled.status).json({ message: reconciled.message });
+        if (!user || !(await canAccessCompany(user, reconciled.companyId))) return res.status(403).json({ message: "Access denied" });
+        workerId = reconciled.workerId;
+        effectiveCompanyId = reconciled.companyId;
       } else {
         const selfWorkerId = user?.workerId;
         if (!selfWorkerId) return res.status(403).json({ message: "Must be linked to a worker account" });
@@ -12824,9 +12834,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
       const proposal = auth.proposal;
       const oldStatus = proposal.status;
+      // Idempotency guard: /send performs the pre-send -> sent transition
+      // exactly once. A second call (double-click, retried request, a second
+      // browser tab) must not re-email the client or write a duplicate audit
+      // event — /resend-email is the explicit, deliberate way to resend.
+      const PRE_SEND_STATUSES = ["draft", "internal_review", "submitted"];
+      if (!PRE_SEND_STATUSES.includes(oldStatus)) {
+        return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
+      }
       // Generate a share token if one doesn't exist yet
       const shareToken = proposal.share_token || crypto.randomBytes(32).toString("hex");
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken} WHERE id = ${req.params.id}`);
+      // The WHERE clause repeats the pre-send-status check so the transition
+      // is atomic: if two requests race past the read-time guard above, only
+      // one UPDATE can actually match and flip the status.
+      const transitionResult = await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken}
+        WHERE id = ${req.params.id} AND status = ANY(${PRE_SEND_STATUSES})
+      `);
+      if (!transitionResult.rowCount) {
+        return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
+      }
 
       // Send email to client if a client email is stored on the proposal
       let emailStatus: "sent" | "failed" | "skipped_no_client_email" = "skipped_no_client_email";
@@ -12860,23 +12887,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (emailResult.sent) {
             console.log(`[Proposals] Client notification email sent to ${proposal.client_email} for proposal ${req.params.id}`);
             emailStatus = "sent";
-            sentEventNotes = `Email sent to ${proposal.client_email} | Portal: ${portalUrl}`;
+            sentEventNotes = `Email sent to ${proposal.client_email} | Portal: ${redactDiagnosticText(portalUrl)}`;
           } else {
             console.error(`[Proposals] Email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
             emailStatus = "failed";
-            sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+            sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${redactDiagnosticText(portalUrl)}`;
           }
         } catch (emailErr: any) {
           console.error(`[Proposals] Failed to send client email for proposal ${req.params.id}:`, emailErr.message);
           emailStatus = "failed";
-          sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+          sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${redactDiagnosticText(portalUrl)}`;
         }
       } else {
-        sentEventNotes = `No client email on file | Portal: ${portalUrl}`;
+        sentEventNotes = `No client email on file | Portal: ${redactDiagnosticText(portalUrl)}`;
       }
       await logProposalEvent(req.params.id, "sent", oldStatus, "sent", req, undefined, undefined, sentEventNotes);
 
-      res.json({ message: "Proposal marked as sent", shareToken, emailStatus });
+      // Note: the raw share token is intentionally not included in this response.
+      // Nothing on the client consumes it from here — the dedicated
+      // /share-token endpoint is the only supported way to retrieve it.
+      res.json({ message: "Proposal marked as sent", emailStatus });
     } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }
   });
 
@@ -12928,19 +12958,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (emailResult.sent) {
             console.log(`[Proposals] Resent client notification email to ${proposal.client_email} for proposal ${req.params.id}`);
             emailStatus = "sent";
-            eventNotes = `Email sent to ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
+            eventNotes = `Email sent to ${proposal.client_email} (retry) | Portal: ${redactDiagnosticText(portalUrl)}`;
           } else {
             console.error(`[Proposals] Resend email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
             emailStatus = "failed";
-            eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
+            eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${redactDiagnosticText(portalUrl)}`;
           }
         } catch (emailErr: any) {
           console.error(`[Proposals] Failed to resend client email for proposal ${req.params.id}:`, emailErr.message);
           emailStatus = "failed";
-          eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
+          eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${redactDiagnosticText(portalUrl)}`;
         }
       } else {
-        eventNotes = `No client email on file | Portal: ${portalUrl}`;
+        eventNotes = `No client email on file | Portal: ${redactDiagnosticText(portalUrl)}`;
       }
 
       // Log as 'sent' so last_sent_event_notes (queried by event_type='sent') stays current and the badge reflects the latest outcome
@@ -13799,7 +13829,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
-      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
+      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, COALESCE(w.email, w.work_email) AS contractor_email FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
       const contract = result.rows[0] as any;
       // Ownership check: admin sees company contracts; contractor sees own
@@ -14771,16 +14801,42 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contract = await assertContractSignerManageAccess(contractId, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (["void", "fully_signed", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to a contract in " + contract.status + " status" });
-      const { name, email, role, workerId, userId, isRequired = true } = req.body;
+      let { name, email, workerId } = req.body;
+      const { role, userId, isRequired = true } = req.body;
+      // Validate role: must be one of the accepted signer roles
+      const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
+      const signerRole = validRoles.includes(role) ? role : "contractor";
+      // A "contractor" role signer must always be the contract's own contractor —
+      // name/email are derived from that worker's profile, never taken from free
+      // client input, and there is no authorized-override workflow for this yet,
+      // so any mismatch is blocked outright (see contractor-proposal-identity.ts).
+      if (signerRole === "contractor") {
+        const contractorProfile = contract.contractor_id ? await storage.getWorker(contract.contractor_id) : undefined;
+        const resolved = resolveContractorSignerIdentity(
+          contract.contractor_id,
+          workerId || null,
+          email || null,
+          contractorProfile
+            ? {
+                id: contractorProfile.id,
+                firstName: contractorProfile.firstName,
+                lastName: contractorProfile.lastName,
+                email: contractorProfile.email,
+                workEmail: contractorProfile.workEmail,
+              }
+            : undefined,
+        );
+        if (!resolved.ok) return res.status(resolved.status).json({ message: resolved.message });
+        name = resolved.name;
+        email = resolved.email;
+        workerId = resolved.workerId;
+      }
       if (!name) return res.status(400).json({ message: "Signer name is required" });
       const normalizedEmail = normalizeSignerEmail(email);
       if (normalizedEmail && await hasDuplicateActiveContractSigner(contractId, normalizedEmail)) return res.status(409).json({ message: "This signer is already assigned to this contract." });
       // Validate that userId/workerId belongs to the same company as the contract (prevent cross-company notification leak)
       const scopeError = await validateContractSignerCompanyScope(contract, workerId, userId);
       if (scopeError) return res.status(403).json({ message: scopeError });
-      // Validate role: must be one of the accepted signer roles
-      const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
-      const signerRole = validRoles.includes(role) ? role : "contractor";
       const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${contractId}`);
       const order = parseInt((count.rows[0] as any).count) + 1;
       const token = crypto.randomBytes(32).toString("base64url");
