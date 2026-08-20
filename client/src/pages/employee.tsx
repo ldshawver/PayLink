@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { buildWorkerCreatedConfirmation } from "@/lib/worker-created-confirmation";
+import { normalizeWorkerPayRate } from "@shared/worker-pay-rate-rules";
 import type {
   Worker, Company, EmployeeContact, PayMethod,
   EmployeeTitle, EmployeeGroup, WageHistory, NewHireDefault,
@@ -694,6 +695,16 @@ function EmployeeTab() {
             if (isEdit && editWorker) {
               updateMutation.mutate({ id: editWorker.id, data: submitData });
             } else {
+              // Same rule the server enforces (shared/worker-pay-rate-rules.ts):
+              // only an Invoiced Contractor (1099) may leave Pay Rate blank.
+              // Checking it here avoids an unnecessary round trip and gives
+              // an immediate, type-specific message instead of a generic
+              // server error.
+              const payRateCheck = normalizeWorkerPayRate(submitData);
+              if (!payRateCheck.ok) {
+                toast({ title: "Error", description: payRateCheck.message, variant: "destructive" });
+                return;
+              }
               createMutation.mutate(submitData);
             }
           }}
