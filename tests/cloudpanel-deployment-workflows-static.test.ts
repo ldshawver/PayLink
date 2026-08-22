@@ -10,7 +10,11 @@ const versionLabel = fs.readFileSync("client/src/components/app-version-label.ts
 
 assert(stagingWorkflow.includes("Deploy MyPayLink Staging"), "staging workflow is the automatic deploy workflow");
 assert(stagingWorkflow.includes("staging.mypaylink.app"), "staging workflow uses staging.mypaylink.app");
-assert(stagingWorkflow.includes("http://127.0.0.1:8010/health") && stagingWorkflow.includes('DEPLOY_PORT: "8010"') && stagingWorkflow.includes('STAGING_PORT: "8010"') && !stagingWorkflow.includes("|| '8000'"), "staging workflow checks local port 8010 health without production selection logic");
+// NOTE (Phase 0.5-A, 2026-08-22): DEPLOY_PORT/STAGING_PORT were renamed to a single
+// APP_PORT env var in .github/workflows/deploy-app.yml; the safety property this
+// assertion checks (staging health-checks itself locally on 8010, with no production
+// port fallback) is unchanged — verified directly against current deploy-app.yml.
+assert(stagingWorkflow.includes('http://127.0.0.1:${APP_PORT}/health') && stagingWorkflow.includes('APP_PORT: "8010"') && !stagingWorkflow.includes("|| '8000'"), "staging workflow checks local port 8010 health without production selection logic");
 assert(stagingWorkflow.includes("https://staging.mypaylink.app/health"), "staging workflow checks public staging health");
 assert(stagingWorkflow.includes("/etc/paylink/.env.staging") && stagingWorkflow.includes("paylink-staging") && stagingWorkflow.includes("/home/paylinkssh/paylink-staging/PayLink"), "staging workflow uses staging env and service");
 

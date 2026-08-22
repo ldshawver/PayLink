@@ -1,0 +1,112 @@
+{
+  "$comment": "Phase 0.5-A CI/test-baseline manifest. Machine-readable companion to docs/saas-readiness/phase-0.5-a-ci-baseline-manifest.md. Each suite lists exactly the files that satisfy its category's safety contract today. Files are added to a suite only after being individually classified \u2014 see the Markdown manifest for full evidence per file.",
+  "suites": {
+    "required": {
+      "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
+      "blocksMerge": true,
+      "prerequisites": [],
+      "fileCount": 57,
+      "files": [
+        "server/__tests__/api-json-guard.test.ts",
+        "server/__tests__/auth-guard.test.ts",
+        "server/__tests__/schedule-access-guard.test.ts",
+        "server/__tests__/schedule-copy-week.test.ts",
+        "server/__tests__/user-provisioning-guard.test.ts",
+        "tests/app-doctor-operational-hub-static.test.ts",
+        "tests/check-pdf-micr-font-inspection.test.ts",
+        "tests/check-pdf-rendering-audit-artifacts.test.ts",
+        "tests/contract-documenso-static.test.ts",
+        "tests/contract-email.test.ts",
+        "tests/contractor-archived-versions-static.test.ts",
+        "tests/contractor-hub-action-consolidation-static.test.ts",
+        "tests/contractor-hub-documenso-button-static.test.ts",
+        "tests/contractor-hub-lifecycle-static.test.ts",
+        "tests/contractor-invoice-exactly-once-static.test.ts",
+        "tests/contractor-lifecycle-audit-static.test.ts",
+        "tests/contractor-proposal-identity.test.ts",
+        "tests/contractor-proposal-identity-wiring-static.test.ts",
+        "tests/contractor-trade-compensation-static.test.ts",
+        "tests/contract-signature-actions.test.ts",
+        "tests/contract-signer-management-static.test.ts",
+        "tests/contract-signing-flow.test.ts",
+        "tests/contract-signing-redirect-static.test.ts",
+        "tests/contract-signing-reminders-static.test.ts",
+        "tests/dam-paths.test.ts",
+        "tests/delete-test-workers-static.test.ts",
+        "tests/deploy-app-workflow-static.test.ts",
+        "tests/deployment-validation-static.test.ts",
+        "tests/deploy-version-propagation-static.test.ts",
+        "tests/diagnostics-safety-static.test.ts",
+        "tests/documenso-incident-static.test.ts",
+        "tests/documenso-log-redaction.test.ts",
+        "tests/documenso-recipient-canonical.test.ts",
+        "tests/documenso-resend-behavior.test.ts",
+        "tests/documenso-resend-static.test.ts",
+        "tests/documenso-service.test.ts",
+        "tests/documenso-signer-set-mismatch.test.ts",
+        "tests/documenso-single-notification-static.test.ts",
+        "tests/documenso-sync-lifecycle-static.test.ts",
+        "tests/feedback-hr-security-static.test.ts",
+        "tests/mypaylink-nginx-signing-static.test.ts",
+        "tests/paycheck-header-logo-calibration-static.test.ts",
+        "tests/payroll-calculator.test.ts",
+        "tests/proposal-contract-workflow-static.test.ts",
+        "tests/public-contract-signing-static.test.ts",
+        "tests/schedule-publish-alerts-static.test.ts",
+        "tests/send-for-signature-token-preservation.test.ts",
+        "tests/sms-non-contractor-regression.test.ts",
+        "tests/sms-safety.test.ts",
+        "tests/staging-deployment-static.test.ts",
+        "tests/tiktok-oauth-callback-static.test.ts",
+        "tests/twilio-sms-webhooks.integration.test.ts",
+        "tests/twilio-sms-webhooks-static.test.ts",
+        "tests/urgent-production-fixes-static.test.ts",
+        "tests/worker-created-confirmation.test.ts",
+        "tests/worker-pay-rate-rules-wiring-static.test.ts",
+        "tests/worker-pay-rate-validation.test.ts"
+      ]
+    },
+    "db": {
+      "description": "Disposable-PostgreSQL integration tests. Require TEST_DATABASE_URL pointing at a throwaway database; each file independently verifies current_database(), refuses production/staging-shaped names, and skips explicitly (exit 0, visible message) when TEST_DATABASE_URL is unset. Never included in required CI until a Postgres service container is added to the workflow \u2014 see manifest for why.",
+      "blocksMerge": false,
+      "prerequisites": [
+        "TEST_DATABASE_URL (disposable database only)"
+      ],
+      "fileCount": 5,
+      "files": [
+        "tests/contractor-invoice-exactly-once-db.test.ts",
+        "tests/worker-create-payrate-null-db.test.ts",
+        "tests/contractor-contract-email-projection-db.test.ts",
+        "tests/proposal-send-idempotency-db.test.ts",
+        "tests/worker-create-invoiced-contractor-http.test.ts"
+      ]
+    },
+    "e2e": {
+      "description": "Browser/end-to-end tests. No Playwright/Cypress/Puppeteer dependency exists in package.json today, so this suite has no files yet. Defined now so future e2e work has a named, documented home instead of landing ad hoc.",
+      "blocksMerge": false,
+      "prerequisites": [
+        "none defined yet"
+      ],
+      "fileCount": 0,
+      "files": []
+    },
+    "external": {
+      "description": "Tests requiring a real external service (Twilio, Documenso, Stripe, SMTP) with no safe mock/sandbox. None of the 70 existing test files were found to make live external calls after direct inspection \u2014 the one \".integration.test.ts\"-named file is fully self-contained (mocks all I/O, boots its own ephemeral local HTTP server) and lives in the required suite instead. Defined now for future tests that do need a real sandbox account.",
+      "blocksMerge": false,
+      "prerequisites": [
+        "service-specific sandbox credentials, never included in ordinary PR CI"
+      ],
+      "fileCount": 0,
+      "files": []
+    },
+    "live": {
+      "description": "Live-environment/manual acceptance checks against a real staging or production deployment. No automated files today \u2014 the deploy/staging/production \"-static\"-suffixed tests are static source-file assertions (they read workflow YAML/nginx config/docs from disk) and live in the required suite. This suite is reserved for genuine live-endpoint acceptance checks, run manually, never in ordinary PR CI.",
+      "blocksMerge": false,
+      "prerequisites": [
+        "explicit manual invocation only"
+      ],
+      "fileCount": 0,
+      "files": []
+    }
+  }
+}
