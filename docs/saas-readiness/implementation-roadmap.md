@@ -13,7 +13,7 @@ Phase 0 (this doc set)
    │
    ▼
 Phase 1: Control-plane foundation ──────────────────────────────┐
-   │  1.1 Reconcile platform-role model (T2)                     │
+   │  1.1 Reconcile platform-role model (T2, PT2)                 │
    │  1.2 Authoritative tenant status enum (BL4)                 │
    │  1.3 subscription_plans / plan_features catalog (BL3)       │
    │  1.4 Entitlement-resolution service (wires feature_registry/│
@@ -21,6 +21,10 @@ Phase 1: Control-plane foundation ───────────────�
    │  1.5 platform_audit_events consolidation                    │
    │  1.6 Tenant-isolation audit tooling + CI-gate existing tests │
    │      (B6, T4, T5)                                            │
+   │  1.7 Internal/complimentary subscription model (PT1)        │
+   │  1.8 Platform-owner/tenant-owner permission boundary (PT2)  │
+   │  1.9 Existing-production inventory + read-only tenant       │
+   │      mapping report — no migration execution (PT3)          │
    └───────────────────────────────────────────────────────────┬─┘
                                                                  │
         ┌────────────────────────────────────────────────────────┴────────────────────┐
@@ -79,6 +83,9 @@ Phase 4 (demo) has no hard dependency on Phase 2/3 and can run in parallel with 
 | 1e | Consolidate audit logging: pick one authoritative `platform_audit_events` shape; migrate/alias `authorization_audit_log`, `tenant_provisioning_audit_logs`, `feature_activation_log` writers onto it (or document why they remain separate). | `server/routes.ts`, `server/provisioning/TenantProvisioningService.ts`, `server/billingLifecycle.ts` | Write-path test per caller |
 | 1f | Wire `tests/security.test.ts` and the 4 untested `server/__tests__/*` files into `ci.yml`; add 2-3 more cross-tenant IDOR cases (invoices, proposals) using the same pattern as `testTenantIsolation()`. | `.github/workflows/ci.yml` | Itself is the test work |
 | 1g | Initial platform-console tenant list/detail wiring to the reconciled status model (extends existing `platform-tenants.tsx`, does not rebuild it). | `client/src/pages/platform-tenants.tsx`, `/api/tenants*` | Component/integration test |
+| 1h | Internal/complimentary subscription model: add `billing_mode` (`standard` \| `internal_complimentary`), `grantor`, `reason`, `effective_date`, `review_date`/`expiration_date` to the tenant/subscription record (Drizzle-tracked); complimentary tenants remain fully subject to entitlement/license enforcement (1c/1d) and are excluded from MRR/ARR aggregation (feeds Phase 3.6) while their plan-equivalent value is recorded separately, never via hardcoded company IDs/names/emails. Resolves PT1. | `shared/schema.ts`, new `server/billing/internalSubscription.ts` | Unit tests: complimentary tenant still entitlement-gated; excluded from MRR calc; included in "estimated value" report |
+| 1i | Fix `platform_owner`'s tenant-admin bypass in `expandRoleForGuard` (T1/PT2): require the same audited, time-boxed impersonation mechanism (built in full in 7b) for the platform owner accessing any tenant that is not their own internal/complimentary tenant; document and enforce the identity separation between platform-owner and tenant-owner/tenant-admin roles. Add `platform_owner` to `requirePlatformRole()`'s allowlist consistently (T2). | `server/routes.ts:260-334` | Regression test: platform_owner denied silent tenant-admin access outside impersonation; console access confirmed |
+| 1j | Existing-production tenant inventory: read-only report enumerating current `companies` rows and a **proposed** company→tenant mapping for operator review. No automatic merge on shared owner/email/address (explicit program rule); no migration execution in this PR — output is a report only. Preflight-count query included for later reconciliation. Resolves PT3 (inventory half only). | new `server/provisioning/tenantMappingReport.ts` (read-only queries) | Test against a synthetic multi-company fixture, not production data |
 
 ## Phase 2 — Signup, onboarding, trial
 
@@ -151,6 +158,18 @@ Phase 4 (demo) has no hard dependency on Phase 2/3 and can run in parallel with 
 | 7d | Backup/restore drill, tenant-deletion/data-export workflow (California privacy considerations), Terms/Privacy/Trial disclosure review. |
 | 7e | CSRF/session/cookie flag confirmation, rate-limit confirmation across login/signup/demo/billing endpoints (resolves T6). |
 | 7f | Staging acceptance sign-off, production release plan document — **actual production deployment requires a separate explicit approval outside this program's scope**, per program rule 8. |
+
+## Existing-production tenant migration — separate explicit-approval gate
+
+This is **not** a numbered phase PR — it is a distinct, owner-approved execution step that only becomes eligible after Phase 1's inventory/mapping report (1j) exists and Phase 7's isolation/backup work has landed. Per program rules it requires, in order, before any row is touched:
+
+1. The read-only inventory + proposed company→tenant mapping from 1j, reviewed by the owner — no automatic merging on shared owner/email/address.
+2. Preservation confirmed for users, payroll, workers, contractors, proposals, contracts, invoices, documents, and audit history — the migration is additive/backward-compatible schema only (new `tenant_companies` links), never a destructive rewrite of `companies`/dependent tables.
+3. Identification of any records lacking tenant/company scope (orphaned rows), surfaced in the same report, not silently dropped or auto-assigned.
+4. Preflight row counts per table, captured before migration, for post-migration reconciliation.
+5. Verified, tested backups taken immediately before execution, with a documented rollback procedure.
+6. A rehearsal against a production-shaped **synthetic** staging dataset (never real owner-business or customer data copied into staging/demo — per program rule, real data must never move into dev/staging/demo).
+7. Explicit, separate owner approval to execute — distinct from, and after, Phase 7's general "production release" approval, since this specifically touches the owner's own live business data.
 
 ---
 

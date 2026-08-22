@@ -9,6 +9,7 @@ A risk-ranked backlog. Nothing on this list is done in Phase 0 — this is the g
 - [ ] **Initial plan catalog**: confirm placeholder-plan pricing is acceptable for Phase 1/2, with an explicit owner approval gate before enabling live billing (per program rule under BILLING AND 14-DAY TRIAL / LICENSING sections). (BL3)
 - [ ] **Authoritative tenant-status source**: `companies.subscription_status` or `tenants.status`/`tenant_commercial_gates.lifecycleState`? Two systems currently disagree (BL4). Pick one, migrate the other.
 - [ ] **Demo cleanup architecture**: cascade the remaining 147 FKs, or move demo tenants to a separate schema/database so teardown is a drop rather than a cascade? This is a foundational Phase 4 design choice, not a bug fix (B1).
+- [ ] **Internal/complimentary subscription policy**: confirm the shape of `billing_mode`/grantor/reason/effective-review-date fields (PT1) and who may grant/review complimentary status, before Phase 1h is built.
 
 ## BLOCKER — must close before any real (non-test-mode) billing or public demo access
 
@@ -18,21 +19,30 @@ A risk-ranked backlog. Nothing on this list is done in Phase 0 — this is the g
 - [ ] Fix the no-op `LIMIT 0` branch in `findCompanyByStripeCustomerId` and implement real Stripe Customer/Subscription creation on trial start — today there is no working path from signup to a real Stripe subscription at all. (B4 → Phase 3b/3c)
 - [ ] Add email verification before a tenant/user is treated as fully active. (B5 → Phase 2a)
 - [ ] Wire the existing 65+4 untested files (including the one real cross-tenant IDOR test, `tests/security.test.ts`) into CI; no phase's "add tests" claim is enforced until this lands. (B6 → Phase 1f)
+- [ ] Close the platform-owner tenant-data bypass: `platform_owner`/`platform_super_admin`/`platform_admin` currently get silent, unaudited, unbannered tenant-admin-equivalent access to every tenant's payroll/financial/document data via `expandRoleForGuard`. (PT2 → Phase 1i, extends T1/7b)
 
 ## HIGH — must close before scaling past a handful of paying tenants
 
 - [ ] Replace the implicit platform-role tenant-admin bypass (`expandRoleForGuard`) with an explicit, audited, time-boxed impersonation flow (reason, expiry, banner, audit event). (T1 → Phase 7b)
 - [ ] Reconcile the three inconsistent platform-role allowlists (`requirePlatformRole`, `requireSuperAdmin`, `diagnostics.ts`'s `DIAGNOSTIC_ROLES`) into one model. (T2 → Phase 1a)
 - [ ] Expand cross-tenant IDOR regression coverage beyond the single `workers` resource test to invoices, proposals, contracts, documents, payroll runs, and the new tenant CRUD routes. (T4 → Phase 1f)
-- [ ] Perform the full route-by-route tenant-scoping audit across `server/routes.ts` that Phase 0 explicitly did not attempt (only a 5-route sample was checked). (T5 → Phase 7a)
+- [ ] Perform the full route-by-route tenant-scoping audit across `server/routes.ts` that Phase 0 explicitly did not attempt (only a 5-route sample was checked). (T5 → Phase 7a) — **Phase 0 conclusion: no live cross-tenant IDOR was tested or found; this is an open audit item, not a closed pass/fail result.** Full write-up in `gap-analysis.md §9`.
 - [ ] Resolve the two-tenant-status-machine split (`companies.subscription_status` vs. `tenants.status`) so nothing can be simultaneously active on one and suspended on the other. (BL4 → Phase 1d/3)
 - [ ] Product decision + implementation on payment-method-at-signup (BL2 → Phase 2c).
 - [ ] Build a real `subscription_plans`/`plan_features` catalog; stop treating `companies.planName` as authoritative free text. (BL3 → Phase 1b)
 
+## Production tenancy — must close before any existing owner-business data is linked into the tenant model
+
+- [ ] Build the internal/complimentary subscription model (`billing_mode`, grantor, reason, effective/review date, dedicated audit event) — no hardcoded company IDs, names, or email checks. (PT1 → Phase 1h)
+- [ ] Fix the platform-owner tenant-data bypass above (PT2 → Phase 1i) before any owner-business tenant is onboarded into the new control plane, since today platform-owner roles have no boundary against tenant payroll/document data.
+- [ ] Produce the read-only existing-production company inventory and proposed company→tenant mapping — no automatic merging on shared owner/email/address. (PT3 → Phase 1j)
+- [ ] Do not execute any production tenant migration until the full separate-approval gate in `implementation-roadmap.md` ("Existing-production tenant migration") is satisfied: preservation confirmed, orphan-scope records identified, preflight counts captured, verified backups taken, synthetic-staging rehearsal completed, and explicit owner approval obtained.
+- [ ] Confirm complimentary/internal tenants are excluded from collected MRR/ARR while their estimated commercial value is still reported separately, once Phase 3's revenue reporting exists. (PT4 → Phase 3.6/5)
+
 ## MEDIUM — should close in the phase that naturally touches the area
 
 - [ ] Confirm (don't assume) `isDemo` isolation at the external-integration layer (Documenso, Twilio, email) — not found in this pass, needs a dedicated check. (Demo gap table → Phase 4c)
-- [ ] Confirm CSRF protection, session-cookie security flags, and rate limiting on login/signup/demo/billing endpoints — status genuinely unconfirmed in Phase 0, not asserted absent. (T6 → Phase 7e)
+- [ ] Add CSRF protection (confirmed absent) and rate limiting on login/signup/demo/billing endpoints (confirmed absent — only diagnostics endpoints are rate-limited today). Session-cookie flags are already correctly configured and need no change. (T6 → Phase 7e)
 - [ ] Confirm whether trial-expiration reminder emails exist (unread code path: `TenantNotificationService.ts`). (BL7 → Phase 3/5)
 - [ ] Confirm what `/api/platform/audit/billing` actually sources before building on top of it in Phase 3. (BL6)
 - [ ] Consolidate the three overlapping audit-log tables (`authorization_audit_log`, `tenant_provisioning_audit_logs`, `feature_activation_log`) into one authoritative `platform_audit_events` shape, or explicitly document why they stay separate. (§7 schema mapping → Phase 1e)
