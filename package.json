@@ -11,7 +11,12 @@
     "typecheck": "tsc --project tsconfig.server.json",
     "db:push": "drizzle-kit push",
     "cleanup:test-workers": "tsx scripts/delete-test-workers.ts",
-    "test:cleanup-guards": "tsx tests/delete-test-workers-static.test.ts"
+    "test:cleanup-guards": "tsx tests/delete-test-workers-static.test.ts",
+    "test:required": "tsx scripts/run-tests.ts required",
+    "test:db": "tsx scripts/run-tests.ts db",
+    "test:e2e": "tsx scripts/run-tests.ts e2e",
+    "test:external": "tsx scripts/run-tests.ts external",
+    "test:live": "tsx scripts/run-tests.ts live"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.0",
