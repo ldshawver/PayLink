@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 59,
+      "fileCount": 60,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -59,6 +59,7 @@
         "tests/sms-non-contractor-regression.test.ts",
         "tests/sms-safety.test.ts",
         "tests/staging-deployment-static.test.ts",
+        "tests/storage-scope-trace-completeness.test.ts",
         "tests/tiktok-oauth-callback-static.test.ts",
         "tests/twilio-sms-webhooks.integration.test.ts",
         "tests/twilio-sms-webhooks-static.test.ts",
