@@ -12,6 +12,8 @@
     "db:push": "drizzle-kit push",
     "cleanup:test-workers": "tsx scripts/delete-test-workers.ts",
     "test:cleanup-guards": "tsx tests/delete-test-workers-static.test.ts",
+    "route-inventory:check": "tsx scripts/route-inventory/classify-routes.ts --check",
+    "route-inventory:generate": "tsx scripts/route-inventory/classify-routes.ts --write",
     "test:required": "tsx scripts/run-tests.ts required",
     "test:db": "tsx scripts/run-tests.ts db",
     "test:e2e": "tsx scripts/run-tests.ts e2e",
