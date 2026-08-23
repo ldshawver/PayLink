@@ -76,7 +76,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 7,
+      "fileCount": 8,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/worker-create-payrate-null-db.test.ts",
@@ -84,7 +84,8 @@
         "tests/proposal-send-idempotency-db.test.ts",
         "tests/worker-create-invoiced-contractor-http.test.ts",
         "tests/cross-tenant-worker-routes-db.test.ts",
-        "tests/cross-tenant-batch-2-routes-db.test.ts"
+        "tests/cross-tenant-batch-2-routes-db.test.ts",
+        "tests/cross-tenant-batch-3-routes-db.test.ts"
       ]
     },
     "e2e": {

@@ -1,0 +1,266 @@
+{
+  "generatedAt": "2026-08-23",
+  "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
+  "summary": {
+    "PASS": 29,
+    "FAIL": 9,
+    "INCONCLUSIVE": 0,
+    "EXPECTED GLOBAL": 0,
+    "N/A": 3
+  },
+  "routes": [
+    {
+      "id": "GET /api/companies/:id/ytd-taxes",
+      "source": "server/routes.ts:7864",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads Tenant A's own company YTD taxes",
+          "disposition": "PASS",
+          "detail": "status=200 entries=3 containsOnlyOwnTenant=true"
+        },
+        {
+          "case": "2. Tenant A admin reads Tenant B's company YTD taxes by ID",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: no comparison of req.params.id to the acting user's own companyId exists anywhere in this handler (server/routes.ts:7864-7879) — storage.getWorkers(companyId) and storage.getEmployeeYTD are both fed the raw path param. status=200, returned 2 Tenant B worker YTD entries to a Tenant A admin."
+        },
+        {
+          "case": "3. Nonexistent company id — no company-existence check exists; storage.getWorkers returns an empty list rather than a 404, but no data is leaked",
+          "disposition": "PASS",
+          "detail": "status=200 entries=0"
+        },
+        {
+          "case": "4. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/check-templates/:id",
+      "source": "server/routes.ts:20708",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads Tenant A's own check template",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin reads Tenant B's check template by ID",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: no company-ownership check of any kind exists in this handler (server/routes.ts:20708-20717), and the route has no requireRole either — any authenticated user of any role in any tenant can read any other tenant's check template. status=200."
+        },
+        {
+          "case": "3. Nonexistent check template id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "4. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only), by design or omission; see finding for severity",
+          "disposition": "N/A",
+          "detail": "no role restriction exists on this route to test"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/check-templates/:id",
+      "source": "server/routes.ts:20738",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates Tenant A's own check template",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates Tenant B's check template by ID",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:20738-20749) — storage.updateCheckTemplate(id, data) applies any field to any check template id with no comparison to the acting user's company. status=200, name changed. Restored immediately after detection."
+        },
+        {
+          "case": "3. Tenant A's own check template ID + Tenant B's companyId in the update body",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: companyId is not immutable through this endpoint — the same defect shape already fixed on PATCH /api/payroll-runs/:id (PR #88). status=200, companyId changed. Restored immediately after detection."
+        },
+        {
+          "case": "4. Nonexistent check template id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "5. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
+          "disposition": "N/A",
+          "detail": "no role restriction exists on this route to test"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/check-templates/:id",
+      "source": "server/routes.ts:20750",
+      "cases": [
+        {
+          "case": "1. Tenant A admin deletes Tenant B's check template by ID",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:20750-20758) — storage.deleteCheckTemplate(id) deletes any check template id with no comparison to the acting user's company. status=200, row no longer exists (was present before this request: true)."
+        },
+        {
+          "case": "2. Nonexistent check template id — storage.deleteCheckTemplate has no existence check, so this always reports success rather than 404; informational, not a leak",
+          "disposition": "PASS",
+          "detail": "status=200 body={\"success\":true}"
+        },
+        {
+          "case": "3. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
+          "disposition": "N/A",
+          "detail": "no role restriction exists on this route to test"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "5. Tenant A admin deletes Tenant A's own check template",
+          "disposition": "PASS",
+          "detail": "status=200"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/contractor-invoices/:id",
+      "source": "server/routes.ts:10608",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates Tenant A's own contractor invoice",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates Tenant B's contractor invoice by ID",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:10608-10627) — the isOwner/isManager check (line 10614-10616) is role-only, never compares existing.companyId to the acting user's company. status=200, notes changed from Tenant B's original value."
+        },
+        {
+          "case": "3. Tenant A's own contractor invoice ID + Tenant B's companyId in the update body",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: companyId is one of this route's own allowedFields (server/routes.ts:10619) with no immutability guard — the same defect shape already fixed on PATCH /api/payroll-runs/:id (PR #88). status=200, companyId changed. Restored immediately after detection."
+        },
+        {
+          "case": "4. Nonexistent contractor invoice id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee, not the invoice's own contractor) — rejected by the route's internal isOwner/isManager check, not requireRole (this route has no requireRole)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/wage-history",
+      "source": "server/routes.ts:18962",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads Tenant A's own worker's wage history",
+          "disposition": "PASS",
+          "detail": "status=200 entries=1"
+        },
+        {
+          "case": "2. Tenant A admin reads Tenant B's worker's wage history via ?workerId=",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: storage.getWageHistory(workerId) (server/storage.ts:2076-2081) is an id-only lookup with no companyId filter or comparison — the route (server/routes.ts:18962-18976) only self-scopes non-manager tenant users, never validates a manager/admin-supplied workerId against their own company. status=200, returned Tenant B wage data to a Tenant A admin."
+        },
+        {
+          "case": "3. Nonexistent worker id — no data returned",
+          "disposition": "PASS",
+          "detail": "status=200 entries=0"
+        },
+        {
+          "case": "4. Same-tenant employee's ?workerId= query param is correctly overridden to their own worker id (server/routes.ts:18966-18969) — cannot view a coworker's wage history even within the same tenant",
+          "disposition": "PASS",
+          "detail": "status=200 entries=0 gotCoworkerData=false"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/payroll-payment-methods/:id",
+      "source": "server/routes.ts:22605",
+      "cases": [
+        {
+          "case": "1. Tenant A admin deletes Tenant B's payroll payment method by ID",
+          "disposition": "FAIL",
+          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:22605-22610) — storage.deletePayrollPaymentMethod(id) deletes any id with no comparison to the acting user's company. status=200, row no longer exists (was present before this request: true)."
+        },
+        {
+          "case": "2. Nonexistent payroll payment method id — storage.deletePayrollPaymentMethod has no existence check, so this always reports success rather than 404; informational, not a leak",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "3. Unauthorized same-tenant role (employee) — requireRole(\"admin\") excludes both employee and manager",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "5. Tenant A admin deletes Tenant A's own payroll payment method",
+          "disposition": "PASS",
+          "detail": "status=200"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/payroll-summary",
+      "source": "server/routes.ts:1907",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads their own payroll summary",
+          "disposition": "PASS",
+          "detail": "status=200 runCount=1 grossPay=3000"
+        },
+        {
+          "case": "2. Tenant A admin explicitly requests ?companyId=<Tenant B> — confirms the isTenantSummaryUser override (server/routes.ts:1914-1917) actually holds under a live attempt, not just from reading the source",
+          "disposition": "PASS",
+          "detail": "status=200 runCount=1 grossPay=3000 (still scoped to Tenant A despite the injection attempt)"
+        },
+        {
+          "case": "3. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    }
+  ]
+}
