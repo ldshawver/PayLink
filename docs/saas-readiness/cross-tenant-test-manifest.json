@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-08-22",
+  "generatedAt": "2026-08-23",
   "version": 1,
   "sourceStorageScopeTraceManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "routesTested": 5,
   "summary": {
-    "PASS": 19,
-    "FAIL": 3,
+    "PASS": 25,
+    "FAIL": 0,
     "INCONCLUSIVE": 0,
     "EXPECTED GLOBAL": 0,
     "N/A": 3
@@ -78,7 +78,7 @@
     {
       "id": "PATCH /api/workers/:id",
       "source": "server/routes.ts:2315",
-      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "storageScopeTraceDisposition": "repaired — companyId immutable through this endpoint",
       "cases": [
         {
           "case": "1. Tenant A admin updates a Tenant A worker",
@@ -86,14 +86,24 @@
           "detail": "status=200"
         },
         {
+          "case": "Omitting companyId preserves the worker's existing company",
+          "disposition": "PASS",
+          "detail": "status=200 companyId=28e3b2a2-aa7a-4c38-9bb2-bbb921d86479 lastNameUpdated=true"
+        },
+        {
+          "case": "Submitting the same (current) companyId succeeds and does not change tenancy",
+          "disposition": "PASS",
+          "detail": "status=200 companyId=28e3b2a2-aa7a-4c38-9bb2-bbb921d86479"
+        },
+        {
           "case": "2. Tenant A admin accesses a Tenant B worker by ID",
           "disposition": "PASS",
           "detail": "Guarded by an inline ownership check (server/routes.ts:2317-2326). status=403 rowUnchanged=true"
         },
         {
-          "case": "4a. Tenant A's own worker ID + Tenant B's companyId in the update body",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: the ownership guard (server/routes.ts:2317-2326) checks the EXISTING row's companyId before the update, but storage.updateWorker(id, req.body) (server/storage.ts:1145-1148) applies req.body verbatim with no field allowlist — a Tenant A admin editing their own worker can include companyId in the PATCH body and reassign that worker to any other tenant. status=200, companyId changed d1f9d51a-8874-4377-a8e6-7ed2959e1337 -> 0e6dc289-10e5-4fb5-8c45-0f43ae31d046, restored immediately after detection."
+          "case": "4a. Tenant A's own worker ID + Tenant B's companyId in the update body — rejected, no partial update",
+          "disposition": "PASS",
+          "detail": "Repaired: companyId is immutable through this endpoint (server/routes.ts:2317-2340) — rejected before any mutation. status=403 companyIdUnchanged=true lastNameUnchanged=true"
         },
         {
           "case": "4b. Tenant B's worker ID + Tenant A's companyId in the update body",
@@ -147,22 +157,27 @@
     {
       "id": "GET /api/workers/:id/ytd-taxes",
       "source": "server/routes.ts:7795",
-      "storageScopeTraceDisposition": "needs-negative-test",
+      "storageScopeTraceDisposition": "repaired — tenant-scoped, admin/manager only",
       "cases": [
         {
-          "case": "1. Tenant A admin reads a Tenant A worker's YTD taxes",
+          "case": "1. Tenant A admin reads a Tenant A worker's YTD taxes (and the aggregation includes no Tenant B data)",
           "disposition": "PASS",
-          "detail": "status=200"
+          "detail": "status=200 grossPay=0"
         },
         {
-          "case": "2. Tenant A admin reads a Tenant B worker's YTD taxes by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no membership/company check exists anywhere in this handler (server/routes.ts:7795-7805) — it fetches the target worker by ID alone, then calls storage.getEmployeeYTD(id, year, worker.companyId), which scopes correctly by the TARGET's own company but never compares it to the CALLER's company. A Tenant A admin received Tenant B's real payroll tax figures for a worker ID they don't own. status=200, response contained a nonzero grossPay for a synthetic Tenant B fixture (redacted here; the manifest also does not record actual amounts)."
+          "case": "2. Tenant A admin reads a Tenant B worker's YTD taxes by ID — rejected",
+          "disposition": "PASS",
+          "detail": "Repaired: tenant ownership is checked before any aggregation (server/routes.ts:7795-7815). status=404 grossPayLeaked=false"
         },
         {
-          "case": "5. Role gate breadth check (employee) — role model allows admin/manager/employee uniformly",
-          "disposition": "FAIL",
-          "detail": "requireRole(\"admin\",\"manager\",\"employee\") accepts every tenant role, so this is not a case of one role being 'unauthorized' relative to another within the same defect — an employee role reproduces the same cross-tenant leak as admin, confirming the gap is a missing company check, not a role-model gap."
+          "case": "Foreign-tenant response is indistinguishable from a genuinely nonexistent worker",
+          "disposition": "PASS",
+          "detail": "foreignTenantStatus=404 nonexistentStatus=404 identicalBody=true"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee) is rejected",
+          "disposition": "PASS",
+          "detail": "Repaired: role gate narrowed to requireRole(\"admin\",\"manager\") to match the sibling GET /api/companies/:id/ytd-taxes route (server/routes.ts:7795, 7812) — a payroll/tax report is not an ordinary self-service view. status=403"
         },
         {
           "case": "6. Missing authentication",

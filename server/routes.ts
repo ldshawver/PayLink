@@ -2314,17 +2314,30 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/workers/:id", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
+      // Load the authoritative worker first — every check below (company
+      // ownership, and the companyId-immutability guard) is against this
+      // row, never against anything the client submitted.
+      const existing = await storage.getWorker(req.params.id as string);
+      if (!existing) return res.status(404).json({ message: "Worker not found" });
+
       // Company ownership guard: tenant users may only update workers in their own company
       const actingUser = await storage.getUser(req.session.userId!);
       const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-      if (isTenant) {
-        const existing = await storage.getWorker(req.params.id as string);
-        if (!existing) return res.status(404).json({ message: "Worker not found" });
-        if (existing.companyId !== actingUser!.companyId) {
-          return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
-        }
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
       }
-      const worker = await storage.updateWorker(req.params.id as string, req.body);
+
+      // companyId is immutable through this general-purpose update endpoint, for every
+      // caller (no platform-owner or hardcoded-tenant exception) — reassigning a worker
+      // to a different tenant is a distinct, explicit, audited platform-console operation,
+      // never a side effect of an ordinary field edit. Reject before any mutation if the
+      // request tries to change it; an absent or matching companyId is a no-op.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a worker's company cannot be changed through this endpoint" });
+      }
+      const updateData = { ...req.body, companyId: existing.companyId };
+
+      const worker = await storage.updateWorker(req.params.id as string, updateData);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
@@ -7792,11 +7805,25 @@ function hashSigningToken(token: string): string {
    * Returns per-employee YTD tax totals from stored payroll_item_taxes.
    * Used by W-2 and Employee Earnings reports.
    */
-  app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
+  app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const year = parseInt(queryStr(req.query.year) || String(new Date().getFullYear()), 10);
       const worker = await storage.getWorker(req.params.id);
-      const ytd = await storage.getEmployeeYTD(req.params.id, year, worker?.companyId ?? undefined);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+
+      // Tenant authorization before any payroll aggregation. A foreign-tenant worker id
+      // returns the exact same 404 as a nonexistent one — this endpoint must not let a
+      // caller distinguish "no such worker" from "exists, but not yours."
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && worker.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Worker not found" });
+      }
+
+      // getEmployeeYTD scopes its aggregation by both workerId and this authoritative
+      // companyId — never a client-supplied value — so even a worker/payroll-run id
+      // collision across tenants can't pull another company's totals into the result.
+      const ytd = await storage.getEmployeeYTD(req.params.id, year, worker.companyId ?? undefined);
       res.json(ytd);
     } catch (error) {
       console.error(error);
