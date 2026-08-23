@@ -155,9 +155,14 @@ async function main() {
     const userAAdmin = crypto.randomUUID();
     const userAEmployee = crypto.randomUUID();
     const userBAdmin = crypto.randomUUID();
+    const userPlatformOwner = crypto.randomUUID();
     const usernameAAdmin = `ct2_a_admin_${suffix}`;
     const usernameAEmployee = `ct2_a_employee_${suffix}`;
     const usernameBAdmin = `ct2_b_admin_${suffix}`;
+    const usernamePlatformOwner = `ct2_platform_owner_${suffix}`;
+    // A random id never inserted into any table — used to test the "nonexistent
+    // resource" case for each route, distinct from a real foreign-tenant id.
+    const nonexistentId = crypto.randomUUID();
 
     // A worker per tenant for the contractor_invoices.contractor_id FK target, plus a
     // distinct worker for the Tenant A employee session — deliberately NOT null and NOT
@@ -179,8 +184,9 @@ async function main() {
       `INSERT INTO users (id, username, password, role, company_id, worker_id, first_name, last_name, is_active) VALUES
        ($1,$2,$3,'admin',$4,NULL,'CT2','AdminA', true),
        ($5,$6,$3,'employee',$4,$7,'CT2','EmployeeA', true),
-       ($8,$9,$3,'admin',$10,NULL,'CT2','AdminB', true)`,
-      [userAAdmin, usernameAAdmin, pwHash, companyA, userAEmployee, usernameAEmployee, workerAEmployeeSelf, userBAdmin, usernameBAdmin, companyB],
+       ($8,$9,$3,'admin',$10,NULL,'CT2','AdminB', true),
+       ($11,$12,$3,'platform_owner',NULL,NULL,'CT2','PlatformOwner', true)`,
+      [userAAdmin, usernameAAdmin, pwHash, companyA, userAEmployee, usernameAEmployee, workerAEmployeeSelf, userBAdmin, usernameBAdmin, companyB, userPlatformOwner, usernamePlatformOwner],
     );
 
     // ── Payroll runs + a summary row per tenant (draft status — mutable, not locked/paid) ──
@@ -244,6 +250,7 @@ async function main() {
 
     const sessionAAdmin: Session = await login(baseUrl, usernameAAdmin, pwPlain);
     const sessionAEmployee: Session = await login(baseUrl, usernameAEmployee, pwPlain);
+    const sessionPlatformOwner: Session = await login(baseUrl, usernamePlatformOwner, pwPlain);
 
     // ══════════════════════ 1. GET /api/payroll-runs/:id/summary ══════════════════════
     {
@@ -267,11 +274,18 @@ async function main() {
           : `status=${r2.status} totalGrossLeaked=${leaked}`,
       });
 
+      const r3 = await apiRequest(baseUrl, "GET", `/api/payroll-runs/${nonexistentId}/summary`, sessionAAdmin);
+      cases.push({
+        case: "3. Nonexistent payroll run id — indistinguishable from a foreign-tenant id (both 404)",
+        disposition: r3.status === 404 && r3.status === r2.status ? "PASS" : "FAIL",
+        detail: `status=${r3.status} (foreign-tenant case status was ${r2.status})`,
+      });
+
       const rEmp = await apiRequest(baseUrl, "GET", `/api/payroll-runs/${runATarget}/summary`, sessionAEmployee);
-      cases.push({ case: "3. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
+      cases.push({ case: "4. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r6 = await apiRequest(baseUrl, "GET", `/api/payroll-runs/${runATarget}/summary`, null);
-      cases.push({ case: "4. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
+      cases.push({ case: "5. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
       record("GET /api/payroll-runs/:id/summary", "server/routes.ts:5714", "needs-runtime-hardening", cases);
     }
@@ -311,11 +325,14 @@ async function main() {
           : `companyId in the request body did not change the row (status=${r3.status}) — reassignment not reproducible.`,
       });
 
+      const rNonexistent = await apiRequest(baseUrl, "PATCH", `/api/payroll-runs/${nonexistentId}`, sessionAAdmin, { periodStart: `${year}-03-05` });
+      cases.push({ case: "4. Nonexistent payroll run id", disposition: rNonexistent.status === 404 ? "PASS" : "FAIL", detail: `status=${rNonexistent.status}` });
+
       const rEmp = await apiRequest(baseUrl, "PATCH", `/api/payroll-runs/${runATarget}`, sessionAEmployee, { periodStart: `${year}-03-03` });
-      cases.push({ case: "4. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
+      cases.push({ case: "5. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r6 = await apiRequest(baseUrl, "PATCH", `/api/payroll-runs/${runATarget}`, null, { periodStart: `${year}-03-04` });
-      cases.push({ case: "5. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
+      cases.push({ case: "6. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
       record("PATCH /api/payroll-runs/:id", "server/routes.ts:8209", "needs-runtime-hardening", cases);
     }
@@ -362,11 +379,14 @@ async function main() {
           : `VERIFIED DEFECT: no company-ownership check of any kind exists in this handler (server/routes.ts:24833-24847) — storage.updateInvoice(id, data) (server/storage.ts:3172-3175) applies the update body to any invoice id with no comparison to the acting user's company at all. status=${r2.status}, notes changed from Tenant B's original value.`,
       });
 
+      const rNonexistent = await apiRequest(baseUrl, "PATCH", `/api/invoices/${nonexistentId}`, sessionAAdmin, { notes: "ct2-nonexistent" });
+      cases.push({ case: "3. Nonexistent invoice id", disposition: rNonexistent.status === 404 ? "PASS" : "FAIL", detail: `status=${rNonexistent.status}` });
+
       const rEmp = await apiRequest(baseUrl, "PATCH", `/api/invoices/${invoiceATarget}`, sessionAEmployee, { notes: "ct2-emp" });
-      cases.push({ case: "3. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
+      cases.push({ case: "4. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r6 = await apiRequest(baseUrl, "PATCH", `/api/invoices/${invoiceATarget}`, null, { notes: "ct2-noauth" });
-      cases.push({ case: "4. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
+      cases.push({ case: "5. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
       record("PATCH /api/invoices/:id", "server/routes.ts:24833", "needs-runtime-hardening", cases);
     }
@@ -385,14 +405,17 @@ async function main() {
           : `VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:24849-24853) — storage.deleteInvoice(id) (server/storage.ts:3176-3179) deletes any invoice id with no comparison to the acting user's company. status=${r1.status}, row no longer exists.`,
       });
 
+      const rNonexistent = await apiRequest(baseUrl, "DELETE", `/api/invoices/${nonexistentId}`, sessionAAdmin);
+      cases.push({ case: "2. Nonexistent invoice id", disposition: rNonexistent.status === 404 ? "PASS" : "FAIL", detail: `status=${rNonexistent.status}` });
+
       const rEmp = await apiRequest(baseUrl, "DELETE", `/api/invoices/${invoiceADelete}`, sessionAEmployee);
-      cases.push({ case: "2. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
+      cases.push({ case: "3. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r6 = await apiRequest(baseUrl, "DELETE", `/api/invoices/${invoiceADelete}`, null);
-      cases.push({ case: "3. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
+      cases.push({ case: "4. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
       const r4 = await apiRequest(baseUrl, "DELETE", `/api/invoices/${invoiceADelete}`, sessionAAdmin);
-      cases.push({ case: "4. Tenant A admin deletes a Tenant A invoice", disposition: r4.status === 200 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
+      cases.push({ case: "5. Tenant A admin deletes a Tenant A invoice", disposition: r4.status === 200 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
 
       record("DELETE /api/invoices/:id", "server/routes.ts:24849", "needs-runtime-hardening", cases);
     }
@@ -415,11 +438,14 @@ async function main() {
           : `VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:10866-10877) — storage.getContractorInvoice (id-only) and storage.updateContractorInvoice apply with no comparison to the acting user's company. A Tenant A admin changed a Tenant B contractor invoice's payment status. status=${r2.status}, statusBefore=${beforeB.status} statusAfter=${afterB.status}.`,
       });
 
+      const rNonexistent = await apiRequest(baseUrl, "POST", `/api/contractor-invoices/${nonexistentId}/mark-paid`, sessionAAdmin, {});
+      cases.push({ case: "3. Nonexistent contractor invoice id", disposition: rNonexistent.status === 404 ? "PASS" : "FAIL", detail: `status=${rNonexistent.status}` });
+
       const rEmp = await apiRequest(baseUrl, "POST", `/api/contractor-invoices/${ctrInvA}/mark-paid`, sessionAEmployee, {});
-      cases.push({ case: "3. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
+      cases.push({ case: "4. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r6 = await apiRequest(baseUrl, "POST", `/api/contractor-invoices/${ctrInvA}/mark-paid`, null, {});
-      cases.push({ case: "4. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
+      cases.push({ case: "5. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
       record("POST /api/contractor-invoices/:id/mark-paid", "server/routes.ts:10866", "needs-runtime-hardening", cases);
     }
@@ -506,11 +532,31 @@ async function main() {
           : `VERIFIED DEFECT: PATCH /api/companies/:id (server/routes.ts:2128) has requireRole("admin","manager") but NO comparison of req.params.id to the acting user's own companyId anywhere in the handler — any tenant admin/manager can target any other company's :id. storage.updateCompany(id, data) (server/storage.ts:1116-1119) applies the body verbatim. status=${r2.status}, Tenant B's company name was changed by a Tenant A admin, restored immediately after detection.`,
       });
 
+      const rNonexistent = await apiRequest(baseUrl, "PATCH", `/api/companies/${nonexistentId}`, sessionAAdmin, { name: "ct2-nonexistent" });
+      cases.push({ case: "3. Nonexistent company id", disposition: rNonexistent.status === 404 ? "PASS" : "FAIL", detail: `status=${rNonexistent.status}` });
+
+      // Tenant-admin vs platform-owner boundary: the same cross-tenant edit that's
+      // correctly forbidden for a Tenant A admin (case 2) must remain available to a
+      // platform-scoped role — platform users are never company-scoped. Restored
+      // immediately after to keep fixture state clean for the rest of this run.
+      const beforePlatform = (await pool.query(`SELECT name FROM companies WHERE id = $1`, [companyB])).rows[0];
+      const rPlatform = await apiRequest(baseUrl, "PATCH", `/api/companies/${companyB}`, sessionPlatformOwner, { name: "ct2-platform-owner-edit" });
+      const afterPlatform = (await pool.query(`SELECT name FROM companies WHERE id = $1`, [companyB])).rows[0];
+      const platformChanged = beforePlatform.name !== afterPlatform.name;
+      if (platformChanged) {
+        await pool.query(`UPDATE companies SET name = $1 WHERE id = $2`, [beforePlatform.name, companyB]);
+      }
+      cases.push({
+        case: "4. Platform-owner updates Tenant B's company directly (tenant-admin vs platform-owner boundary)",
+        disposition: rPlatform.status === 200 && platformChanged ? "PASS" : "FAIL",
+        detail: `status=${rPlatform.status} rowChanged=${platformChanged}`,
+      });
+
       const rEmp = await apiRequest(baseUrl, "PATCH", `/api/companies/${companyA}`, sessionAEmployee, { name: "ct2-emp-attempt" });
-      cases.push({ case: "3. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
+      cases.push({ case: "5. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r6 = await apiRequest(baseUrl, "PATCH", `/api/companies/${companyA}`, null, { name: "ct2-noauth" });
-      cases.push({ case: "4. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
+      cases.push({ case: "6. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
       record("PATCH /api/companies/:id", "server/routes.ts:2128", "needs-runtime-hardening", cases);
     }
