@@ -12,12 +12,17 @@
  * HTTP requests. It is deliberately not a mock — the whole point is to
  * observe what the real route does, not what we assume it does.
  *
- * This is an audit test, not a gate: it is registered in the "db" suite
- * (blocksMerge: false, per scripts/test-suites.json), requires an explicit
- * TEST_DATABASE_URL, and skips cleanly when that is absent. Where it finds a
- * genuine authorization gap, it reports it as a FAIL and preserves the exact
- * minimal repro — it does not fix the route. See
- * docs/saas-readiness/phase-0.5s-cross-tenant-findings.md for the write-up.
+ * Originally an audit test documenting two verified authorization gaps
+ * (PR #84 / docs/saas-readiness/phase-0.5s-cross-tenant-findings.md):
+ * PATCH /api/workers/:id allowed a tenant admin to reassign a worker to
+ * another tenant via companyId in the update body, and
+ * GET /api/workers/:id/ytd-taxes had no tenant ownership check at all. Both
+ * are now repaired (saas/phase0.5-worker-tenant-hardening) and this file
+ * carries forward as their regression coverage — the two matrix cases that
+ * previously FAILed now assert the fixed (safe) behavior instead. It is
+ * registered in the "db" suite (blocksMerge: false, per
+ * scripts/test-suites.json), requires an explicit TEST_DATABASE_URL, and
+ * skips cleanly when that is absent.
  *
  * SAFETY: requires TEST_DATABASE_URL to point at a disposable database,
  * refuses staging/production-shaped names/hosts, aborts if TEST_DATABASE_URL
@@ -247,6 +252,24 @@ async function main() {
       const r1 = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerATarget}`, sessionAAdmin, { lastName: "UpdatedByA" });
       cases.push({ case: "1. Tenant A admin updates a Tenant A worker", disposition: r1.status === 200 ? "PASS" : "FAIL", detail: `status=${r1.status}` });
 
+      // Omitting companyId entirely must preserve the worker's existing company.
+      const rOmit = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerATarget}`, sessionAAdmin, { lastName: "OmitCompanyId" });
+      const afterOmit = (await pool.query(`SELECT company_id, last_name FROM workers WHERE id = $1`, [workerATarget])).rows[0];
+      cases.push({
+        case: "Omitting companyId preserves the worker's existing company",
+        disposition: rOmit.status === 200 && afterOmit.company_id === companyA && afterOmit.last_name === "OmitCompanyId" ? "PASS" : "FAIL",
+        detail: `status=${rOmit.status} companyId=${afterOmit.company_id} lastNameUpdated=${afterOmit.last_name === "OmitCompanyId"}`,
+      });
+
+      // Submitting the SAME companyId is a harmless no-op — it must not be rejected.
+      const rSame = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerATarget}`, sessionAAdmin, { companyId: companyA, lastName: "SameCompanyId" });
+      const afterSame = (await pool.query(`SELECT company_id, last_name FROM workers WHERE id = $1`, [workerATarget])).rows[0];
+      cases.push({
+        case: "Submitting the same (current) companyId succeeds and does not change tenancy",
+        disposition: rSame.status === 200 && afterSame.company_id === companyA && afterSame.last_name === "SameCompanyId" ? "PASS" : "FAIL",
+        detail: `status=${rSame.status} companyId=${afterSame.company_id}`,
+      });
+
       const beforeB = (await pool.query(`SELECT last_name FROM workers WHERE id = $1`, [workerB])).rows[0];
       const r2 = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerB}`, sessionAAdmin, { lastName: "HackedByA" });
       const afterB = (await pool.query(`SELECT last_name FROM workers WHERE id = $1`, [workerB])).rows[0];
@@ -257,25 +280,20 @@ async function main() {
         detail: `Guarded by an inline ownership check (server/routes.ts:2317-2326). status=${r2.status} rowUnchanged=${unchanged}`,
       });
 
-      // 4a. Tenant A's own record ID + Tenant B's companyId in the body.
-      const beforeTargetCompany = (await pool.query(`SELECT company_id FROM workers WHERE id = $1`, [workerATarget])).rows[0].company_id;
-      const r4a = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerATarget}`, sessionAAdmin, { companyId: companyB });
-      const afterTargetCompany = (await pool.query(`SELECT company_id FROM workers WHERE id = $1`, [workerATarget])).rows[0].company_id;
-      const reassigned = beforeTargetCompany !== afterTargetCompany;
-      if (reassigned) {
-        // Restore immediately so the rest of the test run (and cleanup) is not
-        // affected by the very defect being demonstrated.
-        await pool.query(`UPDATE workers SET company_id = $1 WHERE id = $2`, [companyA, workerATarget]);
-      }
+      // 4a. Tenant A's own record ID + Tenant B's companyId, combined with another field
+      // change in the SAME request — proves the whole request is rejected atomically, not
+      // just the companyId field (no partial update).
+      const before4a = (await pool.query(`SELECT company_id, last_name FROM workers WHERE id = $1`, [workerATarget])).rows[0];
+      const r4a = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerATarget}`, sessionAAdmin, { companyId: companyB, lastName: "ShouldNotApply" });
+      const after4a = (await pool.query(`SELECT company_id, last_name FROM workers WHERE id = $1`, [workerATarget])).rows[0];
+      const noPartialUpdate = before4a.company_id === after4a.company_id && before4a.last_name === after4a.last_name;
       cases.push({
-        case: "4a. Tenant A's own worker ID + Tenant B's companyId in the update body",
-        disposition: !reassigned ? "PASS" : "FAIL",
-        detail: reassigned
-          ? `VERIFIED DEFECT: the ownership guard (server/routes.ts:2317-2326) checks the EXISTING row's companyId before the update, but storage.updateWorker(id, req.body) (server/storage.ts:1145-1148) applies req.body verbatim with no field allowlist — a Tenant A admin editing their own worker can include companyId in the PATCH body and reassign that worker to any other tenant. status=${r4a.status}, companyId changed ${beforeTargetCompany} -> ${afterTargetCompany}, restored immediately after detection.`
-          : `companyId in the request body did not change the row (status=${r4a.status}) — reassignment not reproducible.`,
+        case: "4a. Tenant A's own worker ID + Tenant B's companyId in the update body — rejected, no partial update",
+        disposition: r4a.status === 403 && noPartialUpdate ? "PASS" : "FAIL",
+        detail: `Repaired: companyId is immutable through this endpoint (server/routes.ts:2317-2340) — rejected before any mutation. status=${r4a.status} companyIdUnchanged=${before4a.company_id === after4a.company_id} lastNameUnchanged=${before4a.last_name === after4a.last_name}`,
       });
 
-      // 4b. Tenant B's record ID + Tenant A's companyId (should already be blocked by the ownership guard itself).
+      // 4b. Tenant B's record ID + Tenant A's companyId (already blocked by the ownership guard itself).
       const r4b = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerB}`, sessionAAdmin, { companyId: companyA });
       const afterB2 = (await pool.query(`SELECT company_id FROM workers WHERE id = $1`, [workerB])).rows[0].company_id;
       cases.push({
@@ -290,7 +308,7 @@ async function main() {
       const r6 = await apiRequest(baseUrl, "PATCH", `/api/workers/${workerATarget}`, null, { lastName: "NoAuth" });
       cases.push({ case: "6. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
-      record("PATCH /api/workers/:id", "server/routes.ts:2315", "needs-runtime-hardening", cases);
+      record("PATCH /api/workers/:id", "server/routes.ts:2315", "repaired — companyId immutable through this endpoint", cases);
     }
 
     // ══════════════════════ DELETE /api/workers/:id ══════════════════════
@@ -325,34 +343,48 @@ async function main() {
     {
       const cases: CaseResult[] = [];
       const r1 = await apiRequest(baseUrl, "GET", `/api/workers/${workerATarget}/ytd-taxes?year=${year}`, sessionAAdmin);
-      cases.push({ case: "1. Tenant A admin reads a Tenant A worker's YTD taxes", disposition: r1.status === 200 ? "PASS" : "FAIL", detail: `status=${r1.status}` });
+      const grossA = (r1.body as { grossPay?: number } | undefined)?.grossPay;
+      // workerATarget has no payroll fixture of its own — any nonzero figure here could
+      // only have leaked in from Tenant B's fixture, so this also proves the aggregation
+      // itself is company-scoped, not just the route-level authorization check.
+      cases.push({
+        case: "1. Tenant A admin reads a Tenant A worker's YTD taxes (and the aggregation includes no Tenant B data)",
+        disposition: r1.status === 200 && grossA === 0 ? "PASS" : "FAIL",
+        detail: `status=${r1.status} grossPay=${grossA}`,
+      });
 
       const r2 = await apiRequest(baseUrl, "GET", `/api/workers/${workerB}/ytd-taxes?year=${year}`, sessionAAdmin);
       const gross = (r2.body as { grossPay?: number } | undefined)?.grossPay;
       const leakedNonzeroData = r2.status === 200 && typeof gross === "number" && gross > 0;
       cases.push({
-        case: "2. Tenant A admin reads a Tenant B worker's YTD taxes by ID",
-        disposition: leakedNonzeroData ? "FAIL" : r2.status === 403 || r2.status === 404 ? "PASS" : "INCONCLUSIVE",
-        detail: leakedNonzeroData
-          ? `VERIFIED DEFECT: no membership/company check exists anywhere in this handler (server/routes.ts:7795-7805) — it fetches the target worker by ID alone, then calls storage.getEmployeeYTD(id, year, worker.companyId), which scopes correctly by the TARGET's own company but never compares it to the CALLER's company. A Tenant A admin received Tenant B's real payroll tax figures for a worker ID they don't own. status=${r2.status}, response contained a nonzero grossPay for a synthetic Tenant B fixture (redacted here; the manifest also does not record actual amounts).`
-          : `status=${r2.status} grossPayNonzero=${leakedNonzeroData}`,
+        case: "2. Tenant A admin reads a Tenant B worker's YTD taxes by ID — rejected",
+        disposition: !leakedNonzeroData && r2.status === 404 ? "PASS" : "FAIL",
+        detail: `Repaired: tenant ownership is checked before any aggregation (server/routes.ts:7795-7815). status=${r2.status} grossPayLeaked=${leakedNonzeroData}`,
       });
 
-      const rEmpCross = await apiRequest(baseUrl, "GET", `/api/workers/${workerB}/ytd-taxes?year=${year}`, sessionAEmployee);
-      const grossEmp = (rEmpCross.body as { grossPay?: number } | undefined)?.grossPay;
-      const empAlsoLeaks = rEmpCross.status === 200 && typeof grossEmp === "number" && grossEmp > 0;
+      // The rejection for a real-but-foreign-tenant worker id must be byte-for-byte
+      // identical to a genuinely nonexistent id — same status, same body — so this
+      // endpoint can't be used to enumerate which worker ids exist in another tenant.
+      const randomNonexistentId = crypto.randomUUID();
+      const rNonexistent = await apiRequest(baseUrl, "GET", `/api/workers/${randomNonexistentId}/ytd-taxes?year=${year}`, sessionAAdmin);
+      const indistinguishable = r2.status === rNonexistent.status && JSON.stringify(r2.body) === JSON.stringify(rNonexistent.body);
       cases.push({
-        case: "5. Role gate breadth check (employee) — role model allows admin/manager/employee uniformly",
-        disposition: empAlsoLeaks ? "FAIL" : "N/A",
-        detail: empAlsoLeaks
-          ? "requireRole(\"admin\",\"manager\",\"employee\") accepts every tenant role, so this is not a case of one role being 'unauthorized' relative to another within the same defect — an employee role reproduces the same cross-tenant leak as admin, confirming the gap is a missing company check, not a role-model gap."
-          : "no separate unauthorized-role case applies — every tenant role is accepted by this route's role gate.",
+        case: "Foreign-tenant response is indistinguishable from a genuinely nonexistent worker",
+        disposition: rNonexistent.status === 404 && indistinguishable ? "PASS" : "FAIL",
+        detail: `foreignTenantStatus=${r2.status} nonexistentStatus=${rNonexistent.status} identicalBody=${indistinguishable}`,
+      });
+
+      const rEmp = await apiRequest(baseUrl, "GET", `/api/workers/${workerATarget}/ytd-taxes?year=${year}`, sessionAEmployee);
+      cases.push({
+        case: "5. Unauthorized same-tenant role (employee) is rejected",
+        disposition: rEmp.status === 403 ? "PASS" : "FAIL",
+        detail: `Repaired: role gate narrowed to requireRole("admin","manager") to match the sibling GET /api/companies/:id/ytd-taxes route (server/routes.ts:7795, 7812) — a payroll/tax report is not an ordinary self-service view. status=${rEmp.status}`,
       });
 
       const r6 = await apiRequest(baseUrl, "GET", `/api/workers/${workerATarget}/ytd-taxes?year=${year}`, null);
       cases.push({ case: "6. Missing authentication", disposition: r6.status === 401 ? "PASS" : "FAIL", detail: `status=${r6.status}` });
 
-      record("GET /api/workers/:id/ytd-taxes", "server/routes.ts:7795", "needs-negative-test", cases);
+      record("GET /api/workers/:id/ytd-taxes", "server/routes.ts:7795", "repaired — tenant-scoped, admin/manager only", cases);
     }
 
     // ── Write the machine-readable manifest ───────────────────────────────────
@@ -386,8 +418,10 @@ async function main() {
     console.log(`Manifest written to ${MANIFEST_PATH}`);
 
     if (summary.FAIL > 0) {
-      console.error(`\n${summary.FAIL} verified authorization gap(s) found — see ${MANIFEST_PATH} and docs/saas-readiness/phase-0.5s-cross-tenant-findings.md. Not fixed in this branch (audit/test-first phase).`);
+      console.error(`\n${summary.FAIL} case(s) FAILed — either a regression in the two PATCH/ytd-taxes repairs from saas/phase0.5-worker-tenant-hardening, or a new gap. See ${MANIFEST_PATH} and docs/saas-readiness/phase-0.5s-cross-tenant-findings.md.`);
       process.exitCode = 1;
+    } else {
+      console.log(`\nAll cases PASS — the two PATCH /api/workers/:id and GET /api/workers/:id/ytd-taxes defects verified in PR #84 are confirmed repaired.`);
     }
   } catch (e) {
     harnessOk = false;
