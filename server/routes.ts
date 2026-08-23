@@ -2127,25 +2127,40 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/companies/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Load the authoritative company row first — authorization and the timezone-audit
+      // comparison below both need it, and neither may run against anything unverified.
+      const existing = await storage.getCompany(req.params.id as string);
+      if (!existing) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      // Tenant admins/managers may only modify their own company. Platform-scoped roles
+      // (platform_super_admin, platform_admin, etc.) are never company-scoped and are not
+      // restricted here — the same platform-vs-tenant distinction already applied on
+      // GET /api/companies/:id (server/routes.ts:2095). No hardcoded company id or
+      // per-role exception is added beyond that existing distinction.
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && actingUser!.companyId !== req.params.id) {
+        return res.status(403).json({ message: "Forbidden: cannot modify a different company's record" });
+      }
+
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
       if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
       if (data.timezoneConfirmed !== undefined) data.timezoneConfirmed = data.timezoneConfirmed === true || data.timezoneConfirmed === "true";
       // Audit timezone changes — these affect punch dates, OT, and payroll grouping
-      if (data.timezone) {
-        const existing = await storage.getCompany(req.params.id as string);
-        if (existing && existing.timezone !== data.timezone) {
-          await writeAuditLog({
-            actorUserId: req.session.userId!,
-            targetResource: `company:${req.params.id}`,
-            changeType: "timezone_change",
-            beforeValue: existing.timezone || null,
-            afterValue: data.timezone,
-            note: `Timezone changed on company "${existing.name}". Affects: punch date assignment, overtime calculation, schedule comparisons, payroll period grouping.`,
-            companyId: req.params.id as string,
-          });
-        }
+      if (data.timezone && existing.timezone !== data.timezone) {
+        await writeAuditLog({
+          actorUserId: req.session.userId!,
+          targetResource: `company:${req.params.id}`,
+          changeType: "timezone_change",
+          beforeValue: existing.timezone || null,
+          afterValue: data.timezone,
+          note: `Timezone changed on company "${existing.name}". Affects: punch date assignment, overtime calculation, schedule comparisons, payroll period grouping.`,
+          companyId: req.params.id as string,
+        });
       }
       const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
@@ -5715,6 +5730,16 @@ function hashSigningToken(token: string): string {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      // Tenant authorization before any aggregation. A foreign-tenant run id returns the
+      // same 404 as a nonexistent one — matching the already-fixed
+      // GET /api/workers/:id/ytd-taxes pattern (no existence oracle).
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && run.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Payroll run not found" });
+      }
+
       const summary = await storage.getPayrollSummary(run.id);
       if (!summary) return res.status(404).json({ message: "Payroll summary not found" });
       res.json(summary);
@@ -8216,6 +8241,14 @@ function hashSigningToken(token: string): string {
       if (isTenant && existing.companyId !== actingUser!.companyId) {
         return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
       }
+      // companyId is immutable through this general-purpose update endpoint, for every
+      // caller (no platform-owner exception) — reassigning a payroll run to a different
+      // tenant is a distinct, explicit operation, never a side effect of an ordinary field
+      // edit. Reject before any mutation if the request tries to change it; an absent or
+      // matching companyId is a no-op.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a payroll run's company cannot be changed through this endpoint" });
+      }
       // ── Guard: locked runs + paid/submitted runs — only ACH metadata fields allowed ──
       // A run is immutable once locked OR once real money has moved (paid/submitted).
       // Platform super-admins bypass this check (they use the dedicated unlock endpoint).
@@ -8232,7 +8265,8 @@ function hashSigningToken(token: string): string {
           return res.status(409).json({ message: reason, blockedFields: attempted });
         }
       }
-      const run = await storage.updatePayrollRun(req.params.id as string, req.body);
+      const updateData = { ...req.body, companyId: existing.companyId };
+      const run = await storage.updatePayrollRun(req.params.id as string, updateData);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
       res.json(run);
     } catch (error) {
@@ -10867,6 +10901,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
+
+      // Tenant authorization before any payment-state change.
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && inv.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: contractor invoice belongs to a different company" });
+      }
+
       if (inv.status !== "approved") return res.status(400).json({ message: "Only approved invoices can be marked paid" });
 
       const updated = await storage.updateContractorInvoice(req.params.id, {
@@ -24832,6 +24874,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      // Load the authoritative invoice first — authorization is against this row,
+      // never against anything the client submitted.
+      const existing = await storage.getInvoice(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Invoice not found" });
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: invoice belongs to a different company" });
+      }
+
       const { lineItems, ...invoiceData } = req.body;
       const r = await storage.updateInvoice(req.params.id, invoiceData);
       if (!r) return res.status(404).json({ message: "Invoice not found" });
@@ -24848,6 +24900,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      // Load the authoritative invoice first — authorization is against this row,
+      // never against anything the client submitted.
+      const existing = await storage.getInvoice(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Invoice not found" });
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: invoice belongs to a different company" });
+      }
       await storage.deleteInvoice(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete invoice") }); }
