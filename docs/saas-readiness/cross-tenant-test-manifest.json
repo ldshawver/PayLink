@@ -88,12 +88,12 @@
         {
           "case": "Omitting companyId preserves the worker's existing company",
           "disposition": "PASS",
-          "detail": "status=200 companyId=28e3b2a2-aa7a-4c38-9bb2-bbb921d86479 lastNameUpdated=true"
+          "detail": "status=200 companyId=8f2210a3-aca1-4cb8-8722-b9432b573bfa lastNameUpdated=true"
         },
         {
           "case": "Submitting the same (current) companyId succeeds and does not change tenancy",
           "disposition": "PASS",
-          "detail": "status=200 companyId=28e3b2a2-aa7a-4c38-9bb2-bbb921d86479"
+          "detail": "status=200 companyId=8f2210a3-aca1-4cb8-8722-b9432b573bfa"
         },
         {
           "case": "2. Tenant A admin accesses a Tenant B worker by ID",
