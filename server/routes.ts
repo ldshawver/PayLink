@@ -7741,6 +7741,19 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/companies/:id/tax-liability", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Load the target company first and authorize against its persisted id
+      // before aggregating any tax data — never trust req.params.id as
+      // pre-authorized just because it's a route param. A genuinely
+      // nonexistent company id falls through unchanged (storage.getCompanyTaxLiability
+      // returns [], same as before); a company that exists but isn't the
+      // caller's own is rejected before any liability data is fetched.
+      const targetCompany = await storage.getCompany(req.params.id);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (targetCompany && isTenant && targetCompany.id !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: company belongs to a different tenant" });
+      }
+
       const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
       const year = new Date().getFullYear();
       const start = startDate || `${year}-01-01`;
@@ -7760,6 +7773,16 @@ function hashSigningToken(token: string): string {
    */
   app.get("/api/companies/:id/quarterly-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Same authoritative ownership guard as GET /api/companies/:id/tax-liability
+      // above — a nonexistent company id falls through unchanged, a real
+      // foreign-tenant one is rejected before any payroll run is fetched.
+      const targetCompany = await storage.getCompany(req.params.id);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (targetCompany && isTenant && targetCompany.id !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: company belongs to a different tenant" });
+      }
+
       const { year, quarter } = req.query as { year?: string; quarter?: string };
       const targetYear = parseInt(year || String(new Date().getFullYear()), 10);
       const quarterMonths: Record<string, number[]> = { Q1: [0,1,2], Q2: [3,4,5], Q3: [6,7,8], Q4: [9,10,11] };
@@ -9746,7 +9769,14 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/worker-memberships", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = queryStr(req.query.companyId);
+      // All non-platform users are force-scoped to their own company — this
+      // prevents both a ?companyId=<other_company> bypass and the unfiltered
+      // every-company result of omitting companyId entirely.
+      if (!isPlatformUser(user?.role) && user?.companyId) {
+        companyId = user.companyId;
+      }
       const memberships = await storage.getWorkerMemberships(companyId);
       res.json(memberships);
     } catch (error) {
@@ -9755,8 +9785,12 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.post("/api/worker-memberships", requireAuth, async (req, res) => {
+  app.post("/api/worker-memberships", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && req.body.companyId !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: cannot create a membership for a different company" });
+      }
       const membership = await storage.createWorkerMembership(req.body);
       res.status(201).json(membership);
     } catch (error) {
@@ -9765,9 +9799,24 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.patch("/api/worker-memberships/:id", requireAuth, async (req, res) => {
+  app.patch("/api/worker-memberships/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const membership = await storage.updateWorkerMembership(req.params.id, req.body);
+      const existing = await storage.getWorkerMembership(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Membership not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Membership not found" });
+      }
+
+      // companyId is immutable through this endpoint, for every caller — same
+      // guard already applied to the payroll-payment-methods/records routes.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a worker membership's company cannot be changed through this endpoint" });
+      }
+
+      const membership = await storage.updateWorkerMembership(req.params.id, { ...req.body, companyId: existing.companyId });
       if (!membership) return res.status(404).json({ message: "Membership not found" });
       res.json(membership);
     } catch (error) {
@@ -9776,8 +9825,18 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.delete("/api/worker-memberships/:id", requireAuth, async (req, res) => {
+  app.delete("/api/worker-memberships/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const existing = await storage.getWorkerMembership(req.params.id);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: membership belongs to a different company" });
+        }
+      }
+      // A nonexistent id falls through to here unchanged — deleteWorkerMembership
+      // is a no-op and this still reports success, exactly as before.
       await storage.deleteWorkerMembership(req.params.id);
       res.json({ message: "Membership deleted" });
     } catch (error) {
@@ -20737,7 +20796,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/check-templates", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = queryStr(req.query.companyId);
+      // All non-platform users are force-scoped to their own company — this
+      // prevents both a ?companyId=<other_company> bypass and the unfiltered
+      // every-company result of omitting companyId entirely.
+      if (!isPlatformUser(user?.role) && user?.companyId) {
+        companyId = user.companyId;
+      }
       const templates = await storage.getCheckTemplates(companyId);
       res.json(templates);
     } catch (error) {
@@ -20769,6 +20835,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const data = { ...req.body };
       if (!data.companyId || data.companyId === "") {
         return res.status(400).json({ message: "Company is required" });
+      }
+      // Non-platform callers may only create a template owned by their own
+      // company — a client-supplied companyId is never proof of access.
+      const actingUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && data.companyId !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: cannot create a check template for a different company" });
       }
       if (!data.name || data.name.trim() === "") {
         return res.status(400).json({ message: "Template name is required" });
@@ -22672,7 +22744,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-payment-methods/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const r = await storage.updatePayrollPaymentMethod(req.params.id, req.body);
+      const existing = await storage.getPayrollPaymentMethod(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
+      // companyId is immutable through this endpoint, for every caller (no
+      // platform-owner exception) — the same guard already applied to
+      // PATCH /api/check-templates/:id.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a payroll payment method's company cannot be changed through this endpoint" });
+      }
+
+      const r = await storage.updatePayrollPaymentMethod(req.params.id, { ...req.body, companyId: existing.companyId });
       if (!r) return res.status(404).json({ message: "Not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: "Failed to update payment method" }); }
@@ -22827,7 +22915,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-payment-records/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const r = await storage.updatePayrollPaymentRecord(req.params.id, req.body);
+      const existing = await storage.getPayrollPaymentRecord(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
+      // companyId is immutable through this endpoint, for every caller — same
+      // guard already applied to PATCH /api/payroll-payment-methods/:id.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a payroll payment record's company cannot be changed through this endpoint" });
+      }
+
+      const r = await storage.updatePayrollPaymentRecord(req.params.id, { ...req.body, companyId: existing.companyId });
       if (!r) return res.status(404).json({ message: "Not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: "Failed to update payment record" }); }
@@ -22835,6 +22938,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/payroll-payment-records/:id", requireRole("admin"), async (req, res) => {
     try {
+      const existing = await storage.getPayrollPaymentRecord(req.params.id);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: payroll payment record belongs to a different company" });
+        }
+      }
+      // A nonexistent id falls through to here unchanged — deletePayrollPaymentRecord
+      // is a no-op and this still reports success, exactly as before.
       await storage.deletePayrollPaymentRecord(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete payment record" }); }

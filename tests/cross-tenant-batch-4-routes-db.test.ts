@@ -346,8 +346,11 @@ async function main() {
       const leaked2 = r2.status === 200 && list2.some((x) => x.name === "CT4 Template B");
       cases.push({
         case: "2. Tenant A admin lists Tenant B's check templates via ?companyId=",
-        disposition: leaked2 ? "FAIL" : r2.status === 403 || (r2.status === 200 && list2.length === 0) ? "PASS" : "INCONCLUSIVE",
-        detail: leaked2 ? `VERIFIED DEFECT: ?companyId= is applied verbatim with no comparison to the acting user's own companyId (server/routes.ts:20738). status=200, returned Tenant B's check template list.` : `status=${r2.status} count=${list2.length}`,
+        // Fixed: non-platform callers are force-scoped to their own company
+        // regardless of the ?companyId= param, so a 200 response is expected
+        // here too — it just never carries Tenant B's data.
+        disposition: leaked2 ? "FAIL" : r2.status === 403 || r2.status === 200 ? "PASS" : "INCONCLUSIVE",
+        detail: leaked2 ? `VERIFIED DEFECT: ?companyId= is applied verbatim with no comparison to the acting user's own companyId (server/routes.ts:20738). status=200, returned Tenant B's check template list.` : `status=${r2.status} count=${list2.length} (force-scoped to caller's own company; Tenant B not present)`,
       });
 
       const r3 = await apiRequest(baseUrl, "GET", `/api/check-templates`, sessionAAdmin);
@@ -359,7 +362,7 @@ async function main() {
         detail: leaked3 ? `VERIFIED DEFECT: storage.getCheckTemplates() with no argument returns every company's templates unfiltered (server/storage.ts) — a bigger leak than case 2, no companyId guess required. status=200, list included Tenant B's template.` : `status=${r3.status} count=${list3.length}`,
       });
 
-      cases.push({ case: "4. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)", disposition: "N/A", detail: "no requireRole present" });
+      cases.push({ case: "4. Role-gate check — not applicable: this route still has no requireRole (requireAuth only); tenant scoping alone closes the gap without narrowing which authenticated roles may list their own templates", disposition: "N/A", detail: "no requireRole present" });
 
       const r5 = await apiRequest(baseUrl, "GET", `/api/check-templates?companyId=${companyA}`, null);
       cases.push({ case: "5. Missing authentication", disposition: r5.status === 401 ? "PASS" : "FAIL", detail: `status=${r5.status}` });
@@ -381,7 +384,7 @@ async function main() {
         detail: createdForeign ? `VERIFIED DEFECT: companyId from the request body is used verbatim with no comparison to the acting user's own company (server/routes.ts:20767). status=201, created a new row owned by Tenant B.` : `status=${r2.status}`,
       });
 
-      cases.push({ case: "3. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)", disposition: "N/A", detail: "no requireRole present" });
+      cases.push({ case: "3. Role-gate check — not applicable: this route still has no requireRole (requireAuth only); the companyId check above closes the tenant-isolation gap directly", disposition: "N/A", detail: "no requireRole present" });
 
       const r4 = await apiRequest(baseUrl, "POST", `/api/check-templates`, null, { companyId: companyA, name: "x" });
       cases.push({ case: "4. Missing authentication", disposition: r4.status === 401 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
@@ -509,8 +512,11 @@ async function main() {
       const leaked2 = r2.status === 200 && list2.some((x) => x.organization === "CT4 Org B");
       cases.push({
         case: "2. Tenant A admin lists Tenant B's worker memberships via ?companyId=",
-        disposition: leaked2 ? "FAIL" : r2.status === 403 || (r2.status === 200 && list2.length === 0) ? "PASS" : "INCONCLUSIVE",
-        detail: leaked2 ? `VERIFIED DEFECT: no requireRole and no companyId comparison exist on this route (server/routes.ts:9747) — ?companyId= is applied verbatim. status=200, returned Tenant B's worker-membership list to a Tenant A admin.` : `status=${r2.status} count=${list2.length}`,
+        // Fixed: non-platform callers are force-scoped to their own company
+        // regardless of the ?companyId= param, so a 200 response is expected
+        // here too — it just never carries Tenant B's data.
+        disposition: leaked2 ? "FAIL" : r2.status === 403 || r2.status === 200 ? "PASS" : "INCONCLUSIVE",
+        detail: leaked2 ? `VERIFIED DEFECT: no requireRole and no companyId comparison exist on this route (server/routes.ts:9747) — ?companyId= is applied verbatim. status=200, returned Tenant B's worker-membership list to a Tenant A admin.` : `status=${r2.status} count=${list2.length} (force-scoped to caller's own company; Tenant B not present)`,
       });
 
       const r3 = await apiRequest(baseUrl, "GET", `/api/worker-memberships`, sessionAAdmin);
@@ -542,7 +548,10 @@ async function main() {
         detail: createdForeign ? `VERIFIED DEFECT: companyId from the request body is used verbatim with no comparison to the acting user's own company (server/routes.ts:9758). status=201, created a new row owned by Tenant B.` : `status=${r2.status}`,
       });
 
-      cases.push({ case: "3. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)", disposition: "N/A", detail: "no requireRole present" });
+      // Fixed: this route now carries requireRole("admin", "manager"), the
+      // same gate as the sibling /api/workers create route.
+      const rEmp = await apiRequest(baseUrl, "POST", `/api/worker-memberships`, sessionAEmployee, { companyId: companyA, workerId: workerAEmployeeSelf, organization: "x" });
+      cases.push({ case: "3. Unauthorized same-tenant role (employee)", disposition: rEmp.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmp.status}` });
 
       const r4 = await apiRequest(baseUrl, "POST", `/api/worker-memberships`, null, { companyId: companyA, organization: "x" });
       cases.push({ case: "4. Missing authentication", disposition: r4.status === 401 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
@@ -584,7 +593,10 @@ async function main() {
       const r5 = await apiRequest(baseUrl, "PATCH", `/api/worker-memberships/${membershipA}`, null, { organization: "x" });
       cases.push({ case: "5. Missing authentication", disposition: r5.status === 401 ? "PASS" : "FAIL", detail: `status=${r5.status}` });
 
-      cases.push({ case: "6. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)", disposition: "N/A", detail: "no requireRole present" });
+      // Fixed: this route now carries requireRole("admin", "manager"), the
+      // same gate as the sibling PATCH /api/workers/:id route.
+      const rEmpPatch = await apiRequest(baseUrl, "PATCH", `/api/worker-memberships/${membershipA}`, sessionAEmployee, { organization: "x" });
+      cases.push({ case: "6. Unauthorized same-tenant role (employee)", disposition: rEmpPatch.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmpPatch.status}` });
 
       record("PATCH /api/worker-memberships/:id", "server/routes.ts:9768", cases);
     }
@@ -611,7 +623,10 @@ async function main() {
       const r4 = await apiRequest(baseUrl, "DELETE", `/api/worker-memberships/${membershipADelete}`, sessionAAdmin);
       cases.push({ case: "4. Tenant A admin deletes Tenant A's own worker membership", disposition: r4.status === 200 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
 
-      cases.push({ case: "5. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)", disposition: "N/A", detail: "no requireRole present" });
+      // Fixed: this route now carries requireRole("admin"), the same gate as
+      // the sibling DELETE /api/workers/:id route.
+      const rEmpDelete = await apiRequest(baseUrl, "DELETE", `/api/worker-memberships/${membershipA}`, sessionAEmployee);
+      cases.push({ case: "5. Unauthorized same-tenant role (employee)", disposition: rEmpDelete.status === 403 ? "PASS" : "FAIL", detail: `status=${rEmpDelete.status}` });
 
       record("DELETE /api/worker-memberships/:id", "server/routes.ts:9779", cases);
     }
