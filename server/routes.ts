@@ -336,6 +336,42 @@ function requireSuperAdmin() {
   };
 }
 
+/**
+ * Narrower than requirePlatformRole(): admits only platform_super_admin and
+ * platform_admin. Use this — not requirePlatformRole() — for any
+ * platform-console operation that mutates tenant-owned state (commercial
+ * gates, provisioning lifecycle events, billing/subscription status).
+ * requirePlatformRole()'s broader set (platform_sales, platform_implementation,
+ * platform_support, platform_billing, platform_auditor) is appropriate for
+ * platform-console *reads* only — none of those five roles may trigger a
+ * tenant-mutating action through this helper, including platform_auditor
+ * (must remain read-only) and platform_billing (receives only the
+ * explicitly-scoped billing capabilities it already has elsewhere, not
+ * blanket commercial-gate/provisioning control).
+ *
+ * Centralizes what POST /api/feature-registry/activate and
+ * /bulk-activate already checked inline (batch 5 audit,
+ * docs/saas-readiness/phase-0.5-batch-5-cross-tenant-findings.md) so every
+ * platform-mutating route uses the same helper rather than re-deriving the
+ * same two-role list ad hoc.
+ */
+function requirePlatformAdminRole() {
+  const PLATFORM_ADMIN_ROLES = ["platform_super_admin", "platform_admin"];
+  return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+    if (!PLATFORM_ADMIN_ROLES.includes(user.role || "")) {
+      return res.status(403).json({ message: "Platform administrator access required" });
+    }
+    next();
+  };
+}
+
 function blockDemoWrites<P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) {
   if (req.session?.isDemo && req.method !== "GET") {
     return res.status(403).json({ message: "Demo mode is read-only. Sign up for a free trial to make changes." });
@@ -31094,9 +31130,23 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
+      // requireRole("admin", "platform_super_admin") admits more than those
+      // two literal roles — expandRoleForGuard() aliases platform_admin,
+      // platform_support, and platform_implementation to also carry "admin".
+      // Those three are correctly NOT isSuperAdmin, but platform-scoped
+      // accounts are required to have companyId = NULL (enforced at login),
+      // so falling through to `currentUser.companyId` would resolve to
+      // undefined for them — and storage.getAuthorizationAuditLogsFiltered
+      // applies no company filter at all when companyId is falsy, handing
+      // them every tenant's audit log unfiltered (batch 5 audit, verified
+      // defect 10). Only a real tenant-scoped caller (has a companyId) or
+      // platform_super_admin may proceed past this point.
+      if (!isSuperAdmin && !currentUser?.companyId) {
+        return res.status(403).json({ message: "Forbidden: platform_super_admin access required to view cross-tenant audit logs" });
+      }
       const resolvedCompanyId = isSuperAdmin
         ? (companyId as string | undefined)
-        : (currentUser?.companyId ?? undefined);
+        : currentUser!.companyId!;
 
       const result = await storage.getAuthorizationAuditLogsFiltered({
         limit,
@@ -31118,9 +31168,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
+      // Same role-alias fix as GET /api/audit-log above — see the comment
+      // there for the full explanation (batch 5 audit, verified defect 10).
+      if (!isSuperAdmin && !currentUser?.companyId) {
+        return res.status(403).json({ message: "Forbidden: platform_super_admin access required to view cross-tenant audit logs" });
+      }
       const resolvedCompanyId = isSuperAdmin
         ? (companyId as string | undefined)
-        : (currentUser?.companyId ?? undefined);
+        : currentUser!.companyId!;
 
       const result = await storage.getAuthorizationAuditLogsFiltered({
         limit: 10000,
@@ -31403,10 +31458,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Remove a company from a tenant — super_admin only
   app.delete("/api/tenants/:id/companies/:companyId", requireAuth, requireSuperAdmin(), async (req, res) => {
     try {
-      await db.$client.query(
+      const result = await db.$client.query(
         `DELETE FROM tenant_companies WHERE tenant_id = $1 AND company_id = $2`,
         [req.params.id, req.params.companyId]
       );
+      // A tenant/company pair that doesn't actually match any row (wrong
+      // tenant id, wrong company id, or a company that belongs to a
+      // different tenant) must not report the same { ok: true } as a real
+      // deletion, and must not fire the cache-invalidation side effect for
+      // a company whose tenant association never changed (batch 5 audit,
+      // verified defect 9).
+      if (!result.rowCount) {
+        return res.status(404).json({ message: "Tenant-company association not found" });
+      }
       invalidateTenantCache(req.params.companyId);
       res.json({ ok: true });
     } catch (e) {
@@ -31444,16 +31508,30 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
     });
 
-    app.post("/api/provisioning/event", requireAuth, requirePlatformRole(), async (req, res) => {
+    // Every event type this route can fire mutates tenant-owned commercial
+    // state (agreement/fee/subscription/payment-method status, or an
+    // outright suspend/activate) — requirePlatformAdminRole() (not the
+    // broader requirePlatformRole()) so platform_billing/platform_sales/
+    // platform_support/platform_implementation/platform_auditor can no
+    // longer suspend or activate any tenant's subscription through this
+    // endpoint (batch 5 audit, verified defects 4 and 5).
+    app.post("/api/provisioning/event", requireAuth, requirePlatformAdminRole(), async (req, res) => {
       try {
         const { companyId, event, payload } = req.body;
         if (!companyId || !event) return res.status(400).json({ message: "companyId and event are required" });
+        const targetCompany = await storage.getCompany(companyId);
+        if (!targetCompany) return res.status(404).json({ message: "Company not found" });
         const result = await handleProvisioningEvent(companyId, event, payload || {}, "admin");
         res.json(result);
       } catch (e) { res.status(500).json({ message: "Failed to handle provisioning event" }); }
     });
 
-    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requirePlatformRole(), async (req, res) => {
+    // requirePlatformAdminRole() (not requirePlatformRole()) — triggering
+    // provisioning activates billing, creates a tenant-owner user, and
+    // seeds departments/permissions; platform_auditor must remain
+    // read-only and must not be able to trigger this (batch 5 audit,
+    // verified defect 6).
+    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requirePlatformAdminRole(), async (req, res) => {
       try {
         const { companyId } = req.params;
         const gate = await storage.getTenantCommercialGate(companyId);
@@ -31463,9 +31541,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to retry provisioning" }); }
     });
 
-    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requirePlatformRole(), async (req, res) => {
+    // requirePlatformAdminRole() (not requirePlatformRole()) — mutating a
+    // tenant's commercial gates (agreement/fee/subscription/payment-method
+    // status) is a billing-adjacent administrative action, not a general
+    // platform-console capability; platform_billing/platform_sales/
+    // platform_support/platform_implementation/platform_auditor must not be
+    // able to flip these fields for any tenant (batch 5 audit, verified
+    // defect 3).
+    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requirePlatformAdminRole(), async (req, res) => {
       try {
         const { companyId } = req.params;
+        const targetCompany = await storage.getCompany(companyId);
+        if (!targetCompany) return res.status(404).json({ message: "Company not found" });
         const gate = await storage.upsertTenantCommercialGate(companyId, req.body);
         res.json(gate);
       } catch (e) { res.status(500).json({ message: "Failed to update commercial gates" }); }
@@ -33290,12 +33377,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     const { companyId } = req.params;
     const userId = (req as any).user?.id;
     try {
-      await db.execute(sql`
+      const result = await db.execute(sql`
         UPDATE companies
         SET agreement_signed_at = NOW(),
             agreement_signed_by_user_id = ${userId}
         WHERE id = ${companyId}
       `);
+      // A nonexistent companyId matches zero rows — report that truthfully
+      // rather than a blanket { success: true } (batch 5 audit, verified
+      // defect 7: this audit surface's own record of what it did must not
+      // be misleading).
+      if (!(result as any).rowCount) {
+        return res.status(404).json({ message: "Company not found" });
+      }
       res.json({ success: true, signedAt: new Date().toISOString(), signedByUserId: userId });
     } catch (e: any) {
       res.status(500).json({ message: e?.message || "Failed to update agreement" });
@@ -33307,17 +33401,23 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     const { companyId } = req.params;
     const { reason, subscriptionStatus } = req.body;
     try {
+      let result;
       if (subscriptionStatus) {
-        await db.execute(sql`
+        result = await db.execute(sql`
           UPDATE companies
           SET subscription_status = ${subscriptionStatus},
               gate_override_reason = ${reason || null}
           WHERE id = ${companyId}
         `);
       } else {
-        await db.execute(sql`
+        result = await db.execute(sql`
           UPDATE companies SET gate_override_reason = ${reason || null} WHERE id = ${companyId}
         `);
+      }
+      // Same truthful-response fix as POST .../contracts/:companyId/sign
+      // above (batch 5 audit, verified defect 8).
+      if (!(result as any).rowCount) {
+        return res.status(404).json({ message: "Company not found" });
       }
       res.json({ success: true });
     } catch (e: any) {
@@ -35810,13 +35910,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // POST /api/feature-registry/activate — enable or disable a feature for a tenant
-  app.post("/api/feature-registry/activate", requireAuth, requirePlatformRole(), async (req, res) => {
+  // requirePlatformAdminRole() (not requirePlatformRole() with an inline
+  // isPlatformAdmin check) — centralizes the same platform_super_admin/
+  // platform_admin-only decision this route already made ad hoc.
+  app.post("/api/feature-registry/activate", requireAuth, requirePlatformAdminRole(), async (req, res) => {
     try {
       const user = await storage.getUser((req.session as any).userId!);
-      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
-      if (!isPlatformAdmin) {
-        return res.status(403).json({ message: "platform_super_admin or platform_admin role required to activate features" });
-      }
       const { companyId, featureKey, enabled, expiresAt, notes } = req.body as {
         companyId: string; featureKey: string; enabled: boolean; expiresAt?: string; notes?: string;
       };
@@ -35830,9 +35929,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.status(400).json({ message: `Unknown featureKey: ${featureKey}` });
       }
 
-      // Fetch company name for audit log
+      // Validate the target company actually exists before writing a
+      // feature_overrides row for it — feature_overrides.company_id has no
+      // foreign-key constraint, so this was previously a silent no-op write
+      // for a typo'd/nonexistent companyId (batch 5 audit, verified
+      // defect 1).
       const company = await storage.getCompany(companyId);
-      const companyName = company?.name ?? companyId;
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+      const companyName = company.name ?? companyId;
       const performerName = `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.username || "unknown";
 
       // Upsert the override
@@ -35861,13 +35967,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // POST /api/feature-registry/bulk-activate — enable/disable multiple features for a tenant at once
-  app.post("/api/feature-registry/bulk-activate", requireAuth, requirePlatformRole(), async (req, res) => {
+  // requirePlatformAdminRole() — same centralization as .../activate above.
+  app.post("/api/feature-registry/bulk-activate", requireAuth, requirePlatformAdminRole(), async (req, res) => {
     try {
       const user = await storage.getUser((req.session as any).userId!);
-      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
-      if (!isPlatformAdmin) {
-        return res.status(403).json({ message: "platform_super_admin or platform_admin role required" });
-      }
       const { companyId, features, notes } = req.body as {
         companyId: string;
         features: Array<{ featureKey: string; enabled: boolean; expiresAt?: string }>;
@@ -35877,8 +35980,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.status(400).json({ message: "companyId and features[] are required" });
       }
 
+      // Same existence check as POST /api/feature-registry/activate above.
       const company = await storage.getCompany(companyId);
-      const companyName = company?.name ?? companyId;
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+      const companyName = company.name ?? companyId;
       const performerName = `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.username || "unknown";
 
       for (const f of features) {
