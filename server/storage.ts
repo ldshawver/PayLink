@@ -622,6 +622,7 @@ export interface IStorage {
   }>;
 
   getPayrollPaymentMethods(companyId?: string): Promise<PayrollPaymentMethod[]>;
+  getPayrollPaymentMethod(id: string): Promise<PayrollPaymentMethod | undefined>;
   createPayrollPaymentMethod(data: InsertPayrollPaymentMethod): Promise<PayrollPaymentMethod>;
   updatePayrollPaymentMethod(id: string, data: Partial<PayrollPaymentMethod>): Promise<PayrollPaymentMethod | undefined>;
   deletePayrollPaymentMethod(id: string): Promise<void>;
@@ -2728,6 +2729,10 @@ export class DatabaseStorage implements IStorage {
   async getPayrollPaymentMethods(companyId?: string): Promise<PayrollPaymentMethod[]> {
     if (companyId) return db.select().from(payrollPaymentMethods).where(or(eq(payrollPaymentMethods.companyId, companyId), isNull(payrollPaymentMethods.companyId))).orderBy(payrollPaymentMethods.sortOrder);
     return db.select().from(payrollPaymentMethods).orderBy(payrollPaymentMethods.sortOrder);
+  }
+  async getPayrollPaymentMethod(id: string): Promise<PayrollPaymentMethod | undefined> {
+    const [r] = await db.select().from(payrollPaymentMethods).where(eq(payrollPaymentMethods.id, id));
+    return r;
   }
   async createPayrollPaymentMethod(data: InsertPayrollPaymentMethod): Promise<PayrollPaymentMethod> {
     const [r] = await db.insert(payrollPaymentMethods).values(data).returning();
