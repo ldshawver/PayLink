@@ -2,11 +2,11 @@
   "generatedAt": "2026-08-24",
   "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "summary": {
-    "PASS": 34,
-    "FAIL": 16,
+    "PASS": 53,
+    "FAIL": 0,
     "INCONCLUSIVE": 0,
     "EXPECTED GLOBAL": 0,
-    "N/A": 5
+    "N/A": 2
   },
   "routes": [
     {
@@ -20,8 +20,8 @@
         },
         {
           "case": "2. Tenant A admin reads Tenant B's company tax liability by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no comparison of req.params.id to the acting user's own companyId exists anywhere in this handler (server/routes.ts:7742) — storage.getCompanyTaxLiability is fed the raw path param. status=200, returned Tenant B's federal-withholding total ($933.33) to a Tenant A admin."
+          "disposition": "PASS",
+          "detail": "status=403"
         },
         {
           "case": "3. Nonexistent company id — no company-existence check exists; storage.getCompanyTaxLiability returns [] rather than a 404, but no data is leaked",
@@ -51,8 +51,8 @@
         },
         {
           "case": "2. Tenant A admin reads Tenant B's company quarterly taxes by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no comparison of req.params.id to the acting user's own companyId exists anywhere in this handler (server/routes.ts:7761) — storage.getPayrollRuns(req.params.id) is fed the raw path param. status=200, returned Tenant B's federal-withholding total ($933.33) to a Tenant A admin."
+          "disposition": "PASS",
+          "detail": "status=403"
         },
         {
           "case": "3. Nonexistent company id — no company-existence check exists; storage.getPayrollRuns returns [] rather than a 404, but no data is leaked",
@@ -82,16 +82,16 @@
         },
         {
           "case": "2. Tenant A admin lists Tenant B's check templates via ?companyId=",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: ?companyId= is applied verbatim with no comparison to the acting user's own companyId (server/routes.ts:20738). status=200, returned Tenant B's check template list."
+          "disposition": "PASS",
+          "detail": "status=200 count=1 (force-scoped to caller's own company; Tenant B not present)"
         },
         {
           "case": "3. Tenant A admin omits companyId entirely",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: storage.getCheckTemplates() with no argument returns every company's templates unfiltered (server/storage.ts) — a bigger leak than case 2, no companyId guess required. status=200, list included Tenant B's template."
+          "disposition": "PASS",
+          "detail": "status=200 count=1"
         },
         {
-          "case": "4. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
+          "case": "4. Role-gate check — not applicable: this route still has no requireRole (requireAuth only); tenant scoping alone closes the gap without narrowing which authenticated roles may list their own templates",
           "disposition": "N/A",
           "detail": "no requireRole present"
         },
@@ -113,11 +113,11 @@
         },
         {
           "case": "2. Tenant A admin creates a check template with Tenant B's companyId in the body",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: companyId from the request body is used verbatim with no comparison to the acting user's own company (server/routes.ts:20767). status=201, created a new row owned by Tenant B."
+          "disposition": "PASS",
+          "detail": "status=403"
         },
         {
-          "case": "3. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
+          "case": "3. Role-gate check — not applicable: this route still has no requireRole (requireAuth only); the companyId check above closes the tenant-isolation gap directly",
           "disposition": "N/A",
           "detail": "no requireRole present"
         },
@@ -139,13 +139,13 @@
         },
         {
           "case": "2. Tenant A admin updates Tenant B's payment method by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:22673) — storage.updatePayrollPaymentMethod(id, data) applies any field to any payment-method id with no comparison to the acting user's company. status=200, name changed. Restored immediately after detection."
+          "disposition": "PASS",
+          "detail": "status=404"
         },
         {
           "case": "3. Tenant A's own payment method ID + Tenant B's companyId in the update body",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: companyId is not immutable through this endpoint — the same defect shape already fixed on PATCH /api/check-templates/:id (PR #89/#90). status=200, companyId changed. Restored immediately after detection."
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403)."
         },
         {
           "case": "4. Nonexistent payment method id",
@@ -175,13 +175,13 @@
         },
         {
           "case": "2. Tenant A admin updates Tenant B's payment record by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:22828) — storage.updatePayrollPaymentRecord(id, data) applies any field to any payment-record id with no comparison to the acting user's company. status=200, memo changed. Restored immediately after detection."
+          "disposition": "PASS",
+          "detail": "status=404"
         },
         {
           "case": "3. Tenant A's own payment record ID + Tenant B's companyId in the update body",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: companyId is not immutable through this endpoint. status=200, companyId changed. Restored immediately after detection."
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403)."
         },
         {
           "case": "4. Nonexistent payment record id",
@@ -206,8 +206,8 @@
       "cases": [
         {
           "case": "1. Tenant A admin deletes Tenant B's payment record by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:22836) — storage.deletePayrollPaymentRecord(id) deletes any payment-record id with no comparison to the acting user's company. status=200, row no longer exists (was present before this request: true)."
+          "disposition": "PASS",
+          "detail": "status=403 rowStillExists=true"
         },
         {
           "case": "2. Nonexistent payroll payment record id — storage.deletePayrollPaymentRecord has no existence check, so this always reports success rather than 404; informational, not a leak",
@@ -242,13 +242,13 @@
         },
         {
           "case": "2. Tenant A admin lists Tenant B's worker memberships via ?companyId=",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no requireRole and no companyId comparison exist on this route (server/routes.ts:9747) — ?companyId= is applied verbatim. status=200, returned Tenant B's worker-membership list to a Tenant A admin."
+          "disposition": "PASS",
+          "detail": "status=200 count=2 (force-scoped to caller's own company; Tenant B not present)"
         },
         {
           "case": "3. Tenant A admin omits companyId entirely",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: storage.getWorkerMemberships() with no argument returns every company's memberships unfiltered. status=200, list included Tenant B's membership."
+          "disposition": "PASS",
+          "detail": "status=200 count=2"
         },
         {
           "case": "4. Missing authentication",
@@ -268,13 +268,13 @@
         },
         {
           "case": "2. Tenant A admin creates a worker membership with Tenant B's companyId in the body",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: companyId from the request body is used verbatim with no comparison to the acting user's own company (server/routes.ts:9758). status=201, created a new row owned by Tenant B."
+          "disposition": "PASS",
+          "detail": "status=403"
         },
         {
-          "case": "3. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
-          "disposition": "N/A",
-          "detail": "no requireRole present"
+          "case": "3. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
         },
         {
           "case": "4. Missing authentication",
@@ -294,13 +294,13 @@
         },
         {
           "case": "2. Tenant A admin updates Tenant B's worker membership by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:9768) — storage.updateWorkerMembership(id, data) applies any field to any membership id with no comparison to the acting user's company. status=200, organization changed. Restored immediately after detection."
+          "disposition": "PASS",
+          "detail": "status=404"
         },
         {
           "case": "3. Tenant A's own worker membership ID + Tenant B's companyId in the update body",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: companyId is not immutable through this endpoint. status=200, companyId changed. Restored immediately after detection."
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403)."
         },
         {
           "case": "4. Nonexistent worker membership id",
@@ -313,9 +313,9 @@
           "detail": "status=401"
         },
         {
-          "case": "6. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
-          "disposition": "N/A",
-          "detail": "no requireRole present"
+          "case": "6. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
         }
       ]
     },
@@ -325,8 +325,8 @@
       "cases": [
         {
           "case": "1. Tenant A admin deletes Tenant B's worker membership by ID",
-          "disposition": "FAIL",
-          "detail": "VERIFIED DEFECT: no company-ownership check exists in this handler (server/routes.ts:9779) — storage.deleteWorkerMembership(id) deletes any membership id with no comparison to the acting user's company. status=200, row no longer exists (was present before this request: true)."
+          "disposition": "PASS",
+          "detail": "status=403 rowStillExists=true"
         },
         {
           "case": "2. Nonexistent worker membership id — storage.deleteWorkerMembership has no existence check, so this always reports success rather than 404; informational, not a leak",
@@ -344,9 +344,9 @@
           "detail": "status=200"
         },
         {
-          "case": "5. Role-gate check — not applicable: this route has no requireRole at all (requireAuth only)",
-          "disposition": "N/A",
-          "detail": "no requireRole present"
+          "case": "5. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
         }
       ]
     }

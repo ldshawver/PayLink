@@ -557,6 +557,7 @@ export interface IStorage {
   deleteWorkerLanguage(id: string): Promise<void>;
 
   getWorkerMemberships(companyId?: string): Promise<WorkerMembership[]>;
+  getWorkerMembership(id: string): Promise<WorkerMembership | undefined>;
   createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership>;
   updateWorkerMembership(id: string, data: Partial<WorkerMembership>): Promise<WorkerMembership | undefined>;
   deleteWorkerMembership(id: string): Promise<void>;
@@ -2574,6 +2575,10 @@ export class DatabaseStorage implements IStorage {
   async getWorkerMemberships(companyId?: string): Promise<WorkerMembership[]> {
     if (companyId) return db.select().from(workerMemberships).where(eq(workerMemberships.companyId, companyId)).orderBy(workerMemberships.organization);
     return db.select().from(workerMemberships).orderBy(workerMemberships.organization);
+  }
+  async getWorkerMembership(id: string): Promise<WorkerMembership | undefined> {
+    const [r] = await db.select().from(workerMemberships).where(eq(workerMemberships.id, id));
+    return r;
   }
   async createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership> {
     const [r] = await db.insert(workerMemberships).values(data).returning();
