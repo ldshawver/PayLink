@@ -7864,6 +7864,20 @@ function hashSigningToken(token: string): string {
   app.get("/api/companies/:id/ytd-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const year = parseInt(queryStr(req.query.year) || String(new Date().getFullYear()), 10);
+
+      // Load the target company first and authorize against its persisted id
+      // before aggregating any worker/payroll data — never trust req.params.id
+      // as pre-authorized just because it's a route param. A genuinely
+      // nonexistent company id falls through unchanged (storage.getWorkers
+      // returns an empty list, same as before); a company that exists but
+      // isn't the caller's own is rejected before any worker is fetched.
+      const targetCompany = await storage.getCompany(req.params.id);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (targetCompany && isTenant && targetCompany.id !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: company belongs to a different tenant" });
+      }
+
       const workers = await storage.getWorkers(req.params.id);
       const results = await Promise.all(
         workers.map(async (w) => {
@@ -10611,12 +10625,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!existing) return res.status(404).json({ message: "Not found" });
 
       const user = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+      if (isTenant && existing.companyId !== user!.companyId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
       const isOwner = user?.workerId === existing.contractorId;
       const isManager = user?.role === "admin" || user?.role === "manager";
       if (!isOwner && !isManager) return res.status(403).json({ message: "Not authorized" });
 
+      // companyId is immutable through this endpoint, for every caller (no
+      // platform-owner exception) — reassigning an invoice to a different
+      // tenant is a distinct, explicit operation, never a side effect of an
+      // ordinary field edit.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a contractor invoice's company cannot be changed through this endpoint" });
+      }
+
       const allowedFields = ["invoiceNumber", "invoiceDate", "dueDate", "amount", "description",
-        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes", "companyId",
+        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes",
         "templateId", "brandingId",
         "paymentMethodType", "nonCashPaymentDescription", "agreedTradeValue", "rentCreditAmount",
         "writtenApprovalAttached", "disputedAmount", "approvedAmount", "withheldAmount",
@@ -18966,6 +18993,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Non-manager tenant users can only see their own wage history
       if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
+      } else if (workerId) {
+        // A manager/admin supplied an explicit workerId — authorize against
+        // that worker's persisted companyId before ever calling
+        // getWageHistory. A foreign-tenant worker id and a nonexistent one
+        // are indistinguishable: both yield an empty list, never a 403/404
+        // that could be used as a cross-tenant existence oracle.
+        const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+        if (isTenant) {
+          const targetWorker = await storage.getWorker(workerId);
+          if (!targetWorker || targetWorker.companyId !== user!.companyId) {
+            return res.json([]);
+          }
+        }
       }
       const entries = await storage.getWageHistory(workerId);
       res.json(entries);
@@ -20709,6 +20749,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const template = await storage.getCheckTemplate(req.params.id as string);
       if (!template) return res.status(404).json({ message: "Template not found" });
+
+      // A foreign-tenant template gets the exact same 404 as a nonexistent
+      // one — this route has no company-existence oracle to begin with.
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && template.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Template not found" });
+      }
+
       res.json(template);
     } catch (error) {
       console.error(error);
@@ -20737,8 +20786,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.patch("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const data = { ...req.body };
-      if (data.companyId === "") data.companyId = null;
+      const existing = await storage.getCheckTemplate(req.params.id as string);
+      if (!existing) return res.status(404).json({ message: "Template not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Template not found" });
+      }
+
+      // companyId is immutable through this general-purpose update endpoint,
+      // for every caller (no platform-owner exception) — reassigning a check
+      // template to a different tenant is a distinct, explicit operation,
+      // never a side effect of an ordinary field edit. Reject before any
+      // mutation if the request tries to change it.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a check template's company cannot be changed through this endpoint" });
+      }
+
+      const data = { ...req.body, companyId: existing.companyId };
       const template = await storage.updateCheckTemplate(req.params.id as string, data);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
@@ -20749,6 +20815,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.delete("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
+      const existing = await storage.getCheckTemplate(req.params.id as string);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: check template belongs to a different company" });
+        }
+      }
+      // A nonexistent id falls through to here unchanged — deleteCheckTemplate
+      // is a no-op and this still reports success, exactly as before.
       await storage.deleteCheckTemplate(req.params.id as string);
       res.json({ success: true });
     } catch (error) {
@@ -22604,6 +22680,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/payroll-payment-methods/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const existing = await storage.getPayrollPaymentMethod(req.params.id);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: payroll payment method belongs to a different company" });
+        }
+      }
       await storage.deletePayrollPaymentMethod(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete payment method" }); }
