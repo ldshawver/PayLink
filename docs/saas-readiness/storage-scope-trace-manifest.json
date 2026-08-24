@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-23",
+  "generatedAt": "2026-08-24",
   "version": 1,
   "sourceRouteManifestVersion": 1,
   "targetCount": 721,
@@ -3128,17 +3128,7 @@
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
-      "storageCalls": [
-        {
-          "name": "getDashboardStats",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "",
-          "source": "server/storage.ts:2004"
-        }
-      ],
+      "storageCalls": [],
       "inlineDbQuery": {
         "present": false,
         "filtersByCompanyId": false,
@@ -3146,7 +3136,7 @@
         "evidence": ""
       },
       "disposition": "unresolved",
-      "reason": "storage/query call(s) resolved but neither a companyId filter nor an id-only lookup pattern matched — the method may use a scoping shape (join, IN-list, relational query API) this single-hop static trace does not recognize.",
+      "reason": "no storage.* call or inline db query detected in the route handler body (handler may be a named function reference, or delegate to a helper this trace does not follow)",
       "confidence": "low"
     },
     {
@@ -3716,7 +3706,7 @@
           "filtersByCompanyIdInBody": false,
           "hasIdOnlyPrimaryLookup": true,
           "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
+          "source": "server/storage.ts:1986"
         }
       ],
       "inlineDbQuery": {
@@ -3745,7 +3735,7 @@
           "filtersByCompanyIdInBody": false,
           "hasIdOnlyPrimaryLookup": true,
           "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
+          "source": "server/storage.ts:1986"
         }
       ],
       "inlineDbQuery": {
@@ -3774,7 +3764,7 @@
           "filtersByCompanyIdInBody": false,
           "hasIdOnlyPrimaryLookup": true,
           "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
+          "source": "server/storage.ts:1986"
         }
       ],
       "inlineDbQuery": {
@@ -3803,7 +3793,7 @@
           "filtersByCompanyIdInBody": false,
           "hasIdOnlyPrimaryLookup": true,
           "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
+          "source": "server/storage.ts:1986"
         }
       ],
       "inlineDbQuery": {
@@ -5002,71 +4992,16 @@
       "targetReasons": [
         "client-supplied-companyId"
       ],
-      "storageCalls": [
-        {
-          "name": "getUser",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": true,
-          "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
-        },
-        {
-          "name": "getPayrollRuns",
-          "resolved": true,
-          "hasCompanyIdParam": true,
-          "filtersByCompanyIdInBody": true,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "return db.select().from(payrollRuns).where(eq(payrollRuns.companyId, companyId)).orderBy(desc(payrollRuns.createdAt));",
-          "source": "server/storage.ts:1550"
-        },
-        {
-          "name": "getWorkers",
-          "resolved": true,
-          "hasCompanyIdParam": true,
-          "filtersByCompanyIdInBody": true,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "return db.select().from(workers).where(eq(workers.companyId, companyId)).orderBy(desc(workers.createdAt));",
-          "source": "server/storage.ts:1121"
-        },
-        {
-          "name": "getCompany",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": true,
-          "evidence": "const [company] = await db.select().from(companies).where(eq(companies.id, id));",
-          "source": "server/storage.ts:1108"
-        },
-        {
-          "name": "getTaxesDeductions",
-          "resolved": true,
-          "hasCompanyIdParam": true,
-          "filtersByCompanyIdInBody": true,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "if (companyId) return db.select().from(taxesDeductions).where(eq(taxesDeductions.companyId, companyId)).orderBy(taxesDeductions.name);",
-          "source": "server/storage.ts:1700"
-        },
-        {
-          "name": "getPayrollItems",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "",
-          "source": "server/storage.ts:1569"
-        }
-      ],
+      "storageCalls": [],
       "inlineDbQuery": {
         "present": false,
         "filtersByCompanyId": false,
         "idOnly": false,
         "evidence": ""
       },
-      "disposition": "needs-runtime-hardening",
-      "reason": "the resolved storage/query call does filter by companyId, but the route's own companyId source is client-supplied (query/body/params) with no membership check (per the Phase 0.5-B manifest) — the scoping mechanism exists but may be fed an unvalidated tenant id.",
-      "confidence": "medium"
+      "disposition": "unresolved",
+      "reason": "no storage.* call or inline db query detected in the route handler body (handler may be a named function reference, or delegate to a helper this trace does not follow)",
+      "confidence": "low"
     },
     {
       "id": "GET /api/permissions/audit-log",
@@ -7147,44 +7082,16 @@
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
-      "storageCalls": [
-        {
-          "name": "getCompany",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": true,
-          "evidence": "const [company] = await db.select().from(companies).where(eq(companies.id, id));",
-          "source": "server/storage.ts:1108"
-        },
-        {
-          "name": "getUser",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": true,
-          "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
-        },
-        {
-          "name": "updateCompany",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": true,
-          "evidence": "const [company] = await db.update(companies).set(data).where(eq(companies.id, id)).returning();",
-          "source": "server/storage.ts:1116"
-        }
-      ],
+      "storageCalls": [],
       "inlineDbQuery": {
         "present": false,
         "filtersByCompanyId": false,
         "idOnly": false,
         "evidence": ""
       },
-      "disposition": "needs-runtime-hardening",
-      "reason": "storage/query layer performs an id-only lookup with no companyId/tenantId filter (evidence: const [company] = await db.select().from(companies).where(eq(companies.id, id));), and no membership check or enforceCompanyScope middleware was detected on the route. No tenant-scoping mechanism was found at either layer.",
-      "confidence": "high"
+      "disposition": "unresolved",
+      "reason": "no storage.* call or inline db query detected in the route handler body (handler may be a named function reference, or delegate to a helper this trace does not follow)",
+      "confidence": "low"
     },
     {
       "id": "PATCH /api/compliance/company/:companyId/profile",
@@ -7734,7 +7641,7 @@
           "filtersByCompanyIdInBody": false,
           "hasIdOnlyPrimaryLookup": true,
           "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
+          "source": "server/storage.ts:1986"
         }
       ],
       "inlineDbQuery": {
@@ -9617,26 +9524,7 @@
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
-      "storageCalls": [
-        {
-          "name": "createCompany",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "",
-          "source": "server/storage.ts:1112"
-        },
-        {
-          "name": "createDocumentRetentionPolicy",
-          "resolved": true,
-          "hasCompanyIdParam": false,
-          "filtersByCompanyIdInBody": false,
-          "hasIdOnlyPrimaryLookup": false,
-          "evidence": "",
-          "source": "server/storage.ts:3477"
-        }
-      ],
+      "storageCalls": [],
       "inlineDbQuery": {
         "present": false,
         "filtersByCompanyId": false,
@@ -9644,7 +9532,7 @@
         "evidence": ""
       },
       "disposition": "unresolved",
-      "reason": "storage/query call(s) resolved but neither a companyId filter nor an id-only lookup pattern matched — the method may use a scoping shape (join, IN-list, relational query API) this single-hop static trace does not recognize.",
+      "reason": "no storage.* call or inline db query detected in the route handler body (handler may be a named function reference, or delegate to a helper this trace does not follow)",
       "confidence": "low"
     },
     {
@@ -11145,7 +11033,7 @@
           "filtersByCompanyIdInBody": false,
           "hasIdOnlyPrimaryLookup": true,
           "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
-          "source": "server/storage.ts:1984"
+          "source": "server/storage.ts:1986"
         }
       ],
       "inlineDbQuery": {

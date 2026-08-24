@@ -9,6 +9,22 @@
  * PR #89/#90), or batch 4 (tests/cross-tenant-batch-4-routes-db.test.ts,
  * PR #91/#92).
  *
+ * UPDATED on the batch-5 hardening branch
+ * (saas/phase0.5-cross-tenant-batch-5-hardening) to convert all ten
+ * verified defects from the original audit (PR #93,
+ * docs/saas-readiness/phase-0.5-batch-5-cross-tenant-findings.md) into
+ * permanent regression PASS cases, using the same minimal
+ * fetch-and-compare / existence-check / centralized-role-helper pattern
+ * established on PATCH /api/workers/:id (#85) and the batch-2/3/4
+ * hardening branches (#88/#90/#92) — plus, specific to this batch's
+ * platform-console focus, a new `requirePlatformAdminRole()` middleware
+ * (server/routes.ts) narrowing tenant-mutating platform-console operations
+ * to `platform_super_admin`/`platform_admin` only, distinct from the
+ * broader `requirePlatformRole()` still used for platform-console *reads*.
+ * Every case below that previously asserted `disposition: "FAIL"` on the
+ * vulnerable behavior now asserts the repaired behavior; the route-level
+ * comments explain what changed and why.
+ *
  * Unlike batches 1-4, this batch is weighted toward the *platform-console
  * and platform-audit* surface (routes gated by requirePlatformRole() /
  * requirePlatformAudit() / requireSuperAdmin() rather than a tenant-scoped
@@ -418,9 +434,9 @@ async function main() {
 
       const r2 = await apiRequest(baseUrl, "POST", `/api/feature-registry/activate`, sessionPlatformBilling, { companyId: companyA, featureKey: featureKey2, enabled: false });
       cases.push({
-        case: "2. Role-gate check: platform_billing is blocked by this route's own inline narrowing (platform_super_admin/platform_admin only) despite passing the outer requirePlatformRole() gate",
+        case: "2. Role-gate check: platform_billing is blocked by requirePlatformAdminRole() (platform_super_admin/platform_admin only, centralized — server/routes.ts) despite passing the outer requirePlatformRole() route family",
         disposition: r2.status === 403 ? "PASS" : "FAIL",
-        detail: `status=${r2.status} — contrasts with #6/#7/#8 below, which have no such inline narrowing.`,
+        detail: `status=${r2.status} — same centralized helper now also applied to #6/#7/#8 below (previously the only routes in this batch with no such narrowing).`,
       });
 
       const beforeCount = await pool.query("SELECT COUNT(*)::int AS n FROM feature_overrides WHERE company_id = $1", [nonexistentId]);
@@ -429,9 +445,9 @@ async function main() {
       const orphanCreated = afterCount.rows[0].n > beforeCount.rows[0].n;
       if (orphanCreated) await pool.query("DELETE FROM feature_overrides WHERE company_id = $1", [nonexistentId]);
       cases.push({
-        case: "3. Nonexistent companyId — feature_overrides.company_id has no FK constraint (shared/schema.ts), and this handler never checks storage.getCompany(companyId) before writing",
-        disposition: orphanCreated ? "FAIL" : "PASS",
-        detail: orphanCreated ? `VERIFIED DEFECT: status=${r3.status}, an orphaned feature_overrides row was silently created for a companyId that does not exist in companies. Cleaned up immediately after detection.` : `status=${r3.status}, no orphan row created`,
+        case: "3. REGRESSION (batch-5 audit finding 1, was FAIL): nonexistent companyId now 404s via an explicit storage.getCompany(companyId) existence check before writing, instead of silently creating an orphaned feature_overrides row (feature_overrides.company_id still has no FK constraint — the guard is at the route level)",
+        disposition: !orphanCreated && r3.status === 404 ? "PASS" : "FAIL",
+        detail: `status=${r3.status}, orphanCreated=${orphanCreated}`,
       });
 
       const r4 = await apiRequest(baseUrl, "POST", `/api/feature-registry/activate`, sessionAAdmin, { companyId: companyA, featureKey: featureKey2, enabled: true });
@@ -454,7 +470,7 @@ async function main() {
 
       const r2 = await apiRequest(baseUrl, "POST", `/api/feature-registry/bulk-activate`, sessionPlatformAuditor, { companyId: companyA, features: [{ featureKey: featureKey3, enabled: false }] });
       cases.push({
-        case: "2. Role-gate check: platform_auditor is blocked by this route's own inline narrowing (platform_super_admin/platform_admin only)",
+        case: "2. Role-gate check: platform_auditor is blocked by requirePlatformAdminRole() (centralized platform_super_admin/platform_admin-only helper)",
         disposition: r2.status === 403 ? "PASS" : "FAIL",
         detail: `status=${r2.status}`,
       });
@@ -464,6 +480,17 @@ async function main() {
 
       const r4 = await apiRequest(baseUrl, "POST", `/api/feature-registry/bulk-activate`, null, { companyId: companyA, features: [{ featureKey: featureKey3, enabled: true }] });
       cases.push({ case: "4. Missing authentication", disposition: r4.status === 401 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
+
+      const beforeCount5 = await pool.query("SELECT COUNT(*)::int AS n FROM feature_overrides WHERE company_id = $1", [nonexistentId]);
+      const r5 = await apiRequest(baseUrl, "POST", `/api/feature-registry/bulk-activate`, sessionPlatformSuperAdmin, { companyId: nonexistentId, features: [{ featureKey: featureKey3, enabled: true }] });
+      const afterCount5 = await pool.query("SELECT COUNT(*)::int AS n FROM feature_overrides WHERE company_id = $1", [nonexistentId]);
+      const orphanCreated5 = afterCount5.rows[0].n > beforeCount5.rows[0].n;
+      if (orphanCreated5) await pool.query("DELETE FROM feature_overrides WHERE company_id = $1", [nonexistentId]);
+      cases.push({
+        case: "5. Hardening: nonexistent companyId now 404s (same existence-check pattern applied to the sibling .../activate route, finding 1)",
+        disposition: !orphanCreated5 && r5.status === 404 ? "PASS" : "FAIL",
+        detail: `status=${r5.status}, orphanCreated=${orphanCreated5}`,
+      });
 
       record("POST /api/feature-registry/bulk-activate", "server/routes.ts:35864", cases);
     }
@@ -530,25 +557,30 @@ async function main() {
 
       const afterGate = await pool.query("SELECT lifecycle_state, provisioned_at FROM tenant_commercial_gates WHERE company_id = $1", [companyA]);
       const afterAuditCount = await pool.query("SELECT COUNT(*)::int AS n FROM tenant_provisioning_audit_logs WHERE company_id = $1", [companyA]);
-      // lifecycle_state flipping pending_activation -> active is the definitive,
-      // unconditional marker runProvisioningWorkflow sets after every step runs
-      // (server/provisioning/TenantProvisioningService.ts:203-210) — a more
-      // reliable signal than "a new user was created" (stepCreateTenantOwner
-      // skips user creation when one already exists for the company, which is
-      // true here since this batch's own fixture already seeded userAAdmin for
-      // Tenant A before this route runs).
-      const provisioned =
-        beforeGate.rows[0]?.lifecycle_state === "pending_activation" &&
-        afterGate.rows[0]?.lifecycle_state === "active" &&
-        afterGate.rows[0]?.provisioned_at != null &&
-        afterAuditCount.rows[0].n > beforeAuditCount.rows[0].n;
+      const noSideEffect =
+        afterGate.rows[0]?.lifecycle_state === beforeGate.rows[0]?.lifecycle_state &&
+        afterGate.rows[0]?.provisioned_at == null &&
+        afterAuditCount.rows[0].n === beforeAuditCount.rows[0].n;
 
       cases.push({
-        case: "1. Role-gate breadth: platform_auditor (no inline narrowing on this route, unlike #2/#3) can fully provision/activate Tenant A — flips the commercial gate's lifecycle_state to active and runs every provisioning step (billing activation, owner-user bootstrap, department/permission seeding, implementation-project creation)",
-        disposition: provisioned ? "FAIL" : "INCONCLUSIVE",
-        detail: provisioned
-          ? `VERIFIED DEFECT: status=${r1.status}, body=${JSON.stringify(r1.body)}. tenant_commercial_gates.lifecycle_state for Tenant A went from "pending_activation" to "active" (provisioned_at set, ${afterAuditCount.rows[0].n - beforeAuditCount.rows[0].n} new tenant_provisioning_audit_logs rows written) via a request from a platform_auditor session. requirePlatformRole() (server/routes.ts:306-324) accepts platform_auditor for this route with no inline check narrower than "any platform role" — the same power as platform_super_admin/platform_admin on a route named "retry" that a support/billing/auditor account would reasonably be expected to only observe, not trigger.`
-          : `status=${r1.status}, no full-provisioning transition detected (lifecycle_state before="${beforeGate.rows[0]?.lifecycle_state}" after="${afterGate.rows[0]?.lifecycle_state}") — treated as inconclusive rather than PASS/FAIL pending manual confirmation of gate state.`,
+        case: "1. REGRESSION (batch-5 audit finding 6, was FAIL): platform_auditor is now blocked by requirePlatformAdminRole() — must remain read-only, cannot trigger provisioning/activation for any tenant, and denial leaves zero side effects (gate lifecycle_state, provisioned_at, and audit-log row count all unchanged)",
+        disposition: r1.status === 403 && noSideEffect ? "PASS" : "FAIL",
+        detail: `status=${r1.status} noSideEffect=${noSideEffect} (lifecycle_state before="${beforeGate.rows[0]?.lifecycle_state}" after="${afterGate.rows[0]?.lifecycle_state}")`,
+      });
+
+      // Authorized narrow platform-role behavior: platform_admin (not just
+      // platform_super_admin) must still be able to trigger provisioning —
+      // requirePlatformAdminRole() admits both.
+      const r1b = await apiRequest(baseUrl, "POST", `/api/provisioning/tenants/${companyA}/retry`, sessionPlatformAdmin);
+      const afterGateAdmin = await pool.query("SELECT lifecycle_state, provisioned_at FROM tenant_commercial_gates WHERE company_id = $1", [companyA]);
+      const provisionedByAdmin =
+        beforeGate.rows[0]?.lifecycle_state === "pending_activation" &&
+        afterGateAdmin.rows[0]?.lifecycle_state === "active" &&
+        afterGateAdmin.rows[0]?.provisioned_at != null;
+      cases.push({
+        case: "1b. Authorized narrow platform-role behavior: platform_admin (the second role requirePlatformAdminRole() admits) can still trigger provisioning for Tenant A",
+        disposition: r1b.status === 200 && provisionedByAdmin ? "PASS" : "FAIL",
+        detail: `status=${r1b.status} provisioned=${provisionedByAdmin}`,
       });
 
       const r2 = await apiRequest(baseUrl, "POST", `/api/provisioning/tenants/${nonexistentId}/retry`, sessionPlatformSuperAdmin);
@@ -570,31 +602,32 @@ async function main() {
       const r1 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${companyA}/gates`, sessionPlatformSuperAdmin, { notes: "CT5 patched by super admin" });
       cases.push({ case: "1. Platform super admin patches Tenant A's own gate notes", disposition: r1.status === 200 && (r1.body as any)?.notes === "CT5 patched by super admin" ? "PASS" : "FAIL", detail: `status=${r1.status}` });
 
-      const beforeReassign = await pool.query("SELECT company_id FROM tenant_commercial_gates WHERE id = $1", [gateA]);
+      const beforeReassign = await pool.query("SELECT company_id, notes FROM tenant_commercial_gates WHERE id = $1", [gateA]);
       const r2 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${companyA}/gates`, sessionPlatformSuperAdmin, { companyId: companyB, notes: "CT5 reassignment attempt" });
-      const afterReassign = await pool.query("SELECT company_id FROM tenant_commercial_gates WHERE id = $1", [gateA]);
+      const afterReassign = await pool.query("SELECT company_id, notes FROM tenant_commercial_gates WHERE id = $1", [gateA]);
       const reassigned = afterReassign.rows[0]?.company_id !== beforeReassign.rows[0]?.company_id;
       if (reassigned) await pool.query("UPDATE tenant_commercial_gates SET company_id = $1 WHERE id = $2", [companyA, gateA]);
       cases.push({
-        case: "2. Client-supplied companyId reassignment: PATCH targets Tenant A's gate row via the URL, but the request body also carries companyId=Tenant B — storage.upsertTenantCommercialGate's update branch does `{ ...data, updatedAt }` (server/storage.ts:4301-4304), so a body-supplied companyId silently overrides the URL's tenant scoping",
-        disposition: reassigned ? "FAIL" : "PASS",
-        detail: reassigned ? `VERIFIED DEFECT: status=${r2.status}. Tenant A's own commercial-gate row (id=${gateA}) had its company_id column reassigned from ${beforeReassign.rows[0]?.company_id} to Tenant B's id via the request body, despite the URL explicitly targeting Tenant A. Restored immediately after detection.` : `status=${r2.status}, company_id unchanged (${beforeReassign.rows[0]?.company_id})` });
-
-      const beforeInsertCount = await pool.query("SELECT COUNT(*)::int AS n FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
-      const r3 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${companyA}/gates`, sessionPlatformSuperAdmin, { companyId: companyB, notes: "CT5 insert-branch reassignment probe" });
-      const afterInsertCount = await pool.query("SELECT COUNT(*)::int AS n FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
-      const insertReassigned = afterInsertCount.rows[0].n > beforeInsertCount.rows[0].n;
-      cases.push({
-        case: "3. Note — case 2 above already exercises the update branch (Tenant A already had a gate row); this case is INCONCLUSIVE-by-construction once a gate row exists for A, retained for completeness of the insert-branch code path described in the module docstring rather than re-run against a fresh company",
-        disposition: "N/A",
-        detail: `insert-branch companyId-override (values({ companyId, ...data }), server/storage.ts:4307-4310) was not independently exercised in this run because case 2 already created a gate row for Tenant A before this case executes; documented in the findings doc as an equivalent code path requiring the same fix. companyB gate rows before=${beforeInsertCount.rows[0].n} after=${afterInsertCount.rows[0].n}${insertReassigned ? " (unexpected extra row created — see findings doc)" : ""}`,
+        case: "2. REGRESSION (batch-5 audit finding 2, was FAIL): client-supplied companyId reassignment via the update branch — PATCH targets Tenant A's gate row via the URL, request body also carries companyId=Tenant B; storage.upsertTenantCommercialGate now forces `{ ...data, companyId, updatedAt }` (companyId always last/wins, server/storage.ts) so the body's companyId can no longer override the URL's tenant scoping, while every other field in the body (notes) still applies",
+        disposition: !reassigned && afterReassign.rows[0]?.notes === "CT5 reassignment attempt" ? "PASS" : "FAIL",
+        detail: `status=${r2.status}, company_id unchanged (${beforeReassign.rows[0]?.company_id}), notes applied (${afterReassign.rows[0]?.notes})`,
       });
 
-      const r4 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${companyA}/gates`, sessionPlatformBilling, { notes: "CT5 billing role probe" });
+      const r3 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${nonexistentId}/gates`, sessionPlatformSuperAdmin, { notes: "CT5 nonexistent company probe" });
       cases.push({
-        case: "4. Role-gate breadth: platform_billing (no inline narrowing on this route) can mutate any tenant's commercial/subscription gates",
-        disposition: r4.status === 200 ? "FAIL" : "INCONCLUSIVE",
-        detail: r4.status === 200 ? `VERIFIED DEFECT: status=200 — requirePlatformRole() (server/routes.ts:306-324) allows platform_billing to reach and mutate commercial gate state (agreement/implementation-fee/subscription/payment-method status), with no narrower role check on a mutating route.` : `status=${r4.status}`,
+        case: "3. Hardening: PATCH .../gates now validates the target company exists (storage.getCompany) before calling upsertTenantCommercialGate — a nonexistent companyId 404s instead of silently creating (or, per finding 2, misdirecting) a gate row. This also closes the insert-branch companyId-override code path noted in the original audit (server/storage.ts's insert `values({ ...data, companyId })` uses the same companyId-always-wins ordering as the update branch fixed in case 2), since the insert branch can now only be reached for a companyId that has already been confirmed to exist.",
+        disposition: r3.status === 404 ? "PASS" : "FAIL",
+        detail: `status=${r3.status}`,
+      });
+
+      const beforeBilling = await pool.query("SELECT notes FROM tenant_commercial_gates WHERE id = $1", [gateA]);
+      const r4 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${companyA}/gates`, sessionPlatformBilling, { notes: "CT5 billing role probe" });
+      const afterBilling = await pool.query("SELECT notes FROM tenant_commercial_gates WHERE id = $1", [gateA]);
+      const noSideEffectBilling = afterBilling.rows[0]?.notes === beforeBilling.rows[0]?.notes;
+      cases.push({
+        case: "4. REGRESSION (batch-5 audit finding 3, was FAIL): platform_billing is now blocked by requirePlatformAdminRole() from mutating any tenant's commercial/subscription gates, and denial leaves zero side effects (notes unchanged)",
+        disposition: r4.status === 403 && noSideEffectBilling ? "PASS" : "FAIL",
+        detail: `status=${r4.status} noSideEffect=${noSideEffectBilling}`,
       });
 
       const r5 = await apiRequest(baseUrl, "PATCH", `/api/provisioning/tenants/${companyA}/gates`, sessionAAdmin, { notes: "x" });
@@ -613,25 +646,39 @@ async function main() {
       const beforeStatus = await pool.query("SELECT subscription_status FROM companies WHERE id = $1", [companyA]);
       const r1 = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformBilling, { companyId: companyA, event: "tenant.suspended" });
       const afterStatus = await pool.query("SELECT subscription_status FROM companies WHERE id = $1", [companyA]);
-      const suspended = afterStatus.rows[0]?.subscription_status === "suspended" && beforeStatus.rows[0]?.subscription_status !== "suspended";
-      if (suspended) await pool.query("UPDATE companies SET subscription_status = $1 WHERE id = $2", [beforeStatus.rows[0]?.subscription_status, companyA]);
+      const noSideEffect1 = afterStatus.rows[0]?.subscription_status === beforeStatus.rows[0]?.subscription_status;
       cases.push({
-        case: "1. Role-gate breadth: platform_billing (no inline narrowing) can suspend any tenant's subscription outright via event=\"tenant.suspended\"",
-        disposition: suspended ? "FAIL" : "INCONCLUSIVE",
-        detail: suspended ? `VERIFIED DEFECT: status=${r1.status}. companies.subscription_status for Tenant A changed from "${beforeStatus.rows[0]?.subscription_status}" to "suspended" via a request from a platform_billing session — a role whose name implies billing-adjacent read/administrative access, not the power to unilaterally suspend a paying tenant. Restored immediately after detection.` : `status=${r1.status}, subscription_status unchanged`,
+        case: "1. REGRESSION (batch-5 audit finding 4, was FAIL): platform_billing is now blocked by requirePlatformAdminRole() from suspending any tenant's subscription via event=\"tenant.suspended\", and denial leaves zero side effects (subscription_status unchanged)",
+        disposition: r1.status === 403 && noSideEffect1 ? "PASS" : "FAIL",
+        detail: `status=${r1.status} noSideEffect=${noSideEffect1}`,
       });
 
       const beforeGateB = await pool.query("SELECT COUNT(*)::int AS n FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
       const r2 = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformBilling, { companyId: companyB, event: "subscription.activated" });
-      const afterGateB = await pool.query("SELECT subscription_status FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
+      const afterGateB = await pool.query("SELECT COUNT(*)::int AS n FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
+      const noSideEffect2 = afterGateB.rows[0].n === beforeGateB.rows[0].n;
       cases.push({
-        case: "2. Role-gate breadth: platform_billing can also flip Tenant B's commercial subscription-gate to active via event=\"subscription.activated\" (auto-creates the gate row via getOrCreateGate if none existed)",
-        disposition: afterGateB.rows[0]?.subscription_status === "active" ? "FAIL" : "INCONCLUSIVE",
-        detail: afterGateB.rows[0]?.subscription_status === "active" ? `VERIFIED DEFECT: status=${r2.status}, tenant_commercial_gates.subscription_status for Tenant B is now "active" (before this request: no gate row existed, beforeCount=${beforeGateB.rows[0].n}). This is the exact "subscription paid/verified" step the commercial gate model exists to protect, bypassable by the lowest-trust platform role.` : `status=${r2.status} gateStatus=${afterGateB.rows[0]?.subscription_status}`,
+        case: "2. REGRESSION (batch-5 audit finding 5, was FAIL): platform_billing is now blocked by requirePlatformAdminRole() from flipping any tenant's commercial subscription-gate via event=\"subscription.activated\", and denial leaves zero side effects (no gate row created for Tenant B)",
+        disposition: r2.status === 403 && noSideEffect2 ? "PASS" : "FAIL",
+        detail: `status=${r2.status} noSideEffect=${noSideEffect2}`,
+      });
+
+      // Authorized narrow platform-role behavior: platform_admin (not just
+      // platform_super_admin) must still be able to fire a legitimate event.
+      const r2b = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformAdmin, { companyId: companyB, event: "agreement.signed" });
+      const gateBAfterAdmin = await pool.query("SELECT agreement_status FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
+      cases.push({
+        case: "2b. Authorized narrow platform-role behavior: platform_admin can still fire a legitimate provisioning event for Tenant B",
+        disposition: r2b.status === 200 && (r2b.body as any)?.success === true && gateBAfterAdmin.rows[0]?.agreement_status === "signed" ? "PASS" : "FAIL",
+        detail: `status=${r2b.status} agreementStatus=${gateBAfterAdmin.rows[0]?.agreement_status}`,
       });
 
       const r3 = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformSuperAdmin, { companyId: nonexistentId, event: "agreement.signed" });
-      cases.push({ case: "3. Nonexistent companyId — tenant_commercial_gates.company_id has an FK to companies(id); getOrCreateGate's insert fails, caught internally by handleProvisioningEvent, and the route still responds 200 with success:false rather than throwing or leaking", disposition: r3.status === 200 && (r3.body as any)?.success === false ? "PASS" : "INCONCLUSIVE", detail: `status=${r3.status} body=${JSON.stringify(r3.body)}` });
+      cases.push({
+        case: "3. Hardening: POST /api/provisioning/event now validates the target company exists before calling handleProvisioningEvent — a nonexistent companyId 404s explicitly instead of relying on an internal FK-violation catch that returned a 200 with success:false",
+        disposition: r3.status === 404 ? "PASS" : "FAIL",
+        detail: `status=${r3.status} body=${JSON.stringify(r3.body)}`,
+      });
 
       const r4 = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionAAdmin, { companyId: companyA, event: "agreement.signed" });
       cases.push({ case: "4. Tenant-scoped (non-platform) admin is blocked", disposition: r4.status === 403 ? "PASS" : "FAIL", detail: `status=${r4.status}` });
@@ -649,12 +696,11 @@ async function main() {
       const after1 = await pool.query("SELECT agreement_signed_at, agreement_signed_by_user_id FROM companies WHERE id = $1", [companyA]);
       cases.push({ case: "1. Platform super admin signs Tenant A's agreement (explicit target, by design)", disposition: r1.status === 200 && after1.rows[0]?.agreement_signed_at != null && after1.rows[0]?.agreement_signed_by_user_id === platformSuperAdminId ? "PASS" : "FAIL", detail: `status=${r1.status}` });
 
-      const before2 = await pool.query("SELECT COUNT(*)::int AS n FROM companies WHERE agreement_signed_by_user_id = $1 AND id = $2", [platformSuperAdminId, nonexistentId]);
       const r2 = await apiRequest(baseUrl, "POST", `/api/platform/audit/contracts/${nonexistentId}/sign`, sessionPlatformSuperAdmin);
       cases.push({
-        case: "2. Nonexistent companyId — UPDATE affects 0 rows (no existence check, no rowCount check) but the route still reports { success: true }",
-        disposition: r2.status === 200 && (r2.body as any)?.success === true ? "FAIL" : "INCONCLUSIVE",
-        detail: (r2.body as any)?.success === true ? `VERIFIED DEFECT: status=${r2.status}, body=${JSON.stringify(r2.body)} — reports success for an id that matches no company row (server/routes.ts:33289-33303 never checks UPDATE's rowCount or pre-verifies the company exists). No cross-tenant data exposure results (nothing was actually changed, confirmed: matching-row count before=${before2.rows[0].n}) — misleading audit-trail response, not a tenant-isolation break.` : `status=${r2.status} body=${JSON.stringify(r2.body)}`,
+        case: "2. REGRESSION (batch-5 audit finding 7, was FAIL): a nonexistent companyId now checks the UPDATE's rowCount and 404s truthfully, instead of reporting { success: true } for zero affected rows",
+        disposition: r2.status === 404 && (r2.body as any)?.success !== true ? "PASS" : "FAIL",
+        detail: `status=${r2.status} body=${JSON.stringify(r2.body)}`,
       });
 
       const r3 = await apiRequest(baseUrl, "POST", `/api/platform/audit/contracts/${companyA}/sign`, sessionPlatformBilling);
@@ -689,9 +735,9 @@ async function main() {
 
       const r2 = await apiRequest(baseUrl, "POST", `/api/platform/audit/licensing/${nonexistentId}/gate-override`, sessionPlatformSuperAdmin, { reason: "CT5 nonexistent probe" });
       cases.push({
-        case: "2. Nonexistent companyId — same no-existence-check / no-rowCount-check pattern as #9, still reports { success: true }",
-        disposition: r2.status === 200 && (r2.body as any)?.success === true ? "FAIL" : "INCONCLUSIVE",
-        detail: (r2.body as any)?.success === true ? `VERIFIED DEFECT: status=${r2.status}, body=${JSON.stringify(r2.body)} — same pattern as finding for POST .../contracts/:companyId/sign, on the higher-impact licensing-override endpoint.` : `status=${r2.status} body=${JSON.stringify(r2.body)}`,
+        case: "2. REGRESSION (batch-5 audit finding 8, was FAIL): same rowCount-check fix as POST .../contracts/:companyId/sign, applied here — a nonexistent companyId now 404s instead of reporting { success: true }",
+        disposition: r2.status === 404 && (r2.body as any)?.success !== true ? "PASS" : "FAIL",
+        detail: `status=${r2.status} body=${JSON.stringify(r2.body)}`,
       });
 
       const r3 = await apiRequest(baseUrl, "POST", `/api/platform/audit/licensing/${companyA}/gate-override`, sessionPlatformAuditor, { reason: "CT5 auditor probe" });
@@ -721,9 +767,9 @@ async function main() {
 
       const r1body = r1.body as any;
       cases.push({
-        case: "2. Side effect after a no-op request: the mismatched-pair request in case 1 still reports { ok: true } (no rowCount check) — DELETE has no existence verification before responding, and invalidateTenantCache(companyId) is called unconditionally regardless of whether any row was actually deleted",
-        disposition: r1.status === 200 && r1body?.ok === true ? "FAIL" : "INCONCLUSIVE",
-        detail: r1.status === 200 && r1body?.ok === true ? `VERIFIED DEFECT: a request that deleted nothing (case 1) reports the same { ok: true } response as an actual deletion — an API consumer or automation cannot distinguish "deleted" from "no matching row existed" from the response alone (server/routes.ts:31404-31415).` : `status=${r1.status} body=${JSON.stringify(r1body)}`,
+        case: "2. REGRESSION (batch-5 audit finding 9, was FAIL): the mismatched-pair (no-op) request from case 1 now checks the DELETE's rowCount and 404s truthfully instead of reporting { ok: true } for zero affected rows — an API consumer can now distinguish \"deleted\" from \"no matching association existed\"",
+        disposition: r1.status === 404 && r1body?.ok !== true ? "PASS" : "FAIL",
+        detail: `status=${r1.status} body=${JSON.stringify(r1body)}`,
       });
 
       const before3 = await pool.query("SELECT 1 FROM tenant_companies WHERE tenant_id = $1 AND company_id = $2", [tenantX, companyA]);
@@ -765,12 +811,23 @@ async function main() {
       });
 
       const r3 = await apiRequest(baseUrl, "GET", `/api/audit-log`, sessionPlatformAdmin);
-      const rows3 = Array.isArray((r3.body as any)?.rows) ? (r3.body as any).rows as Array<{ companyId?: string }> : [];
-      const crossTenantLeak = r3.status === 200 && rows3.some((x) => x.companyId === companyA) && rows3.some((x) => x.companyId === companyB);
       cases.push({
-        case: "3. platform_admin (NOT platform_super_admin) reads the audit log with no companyId param — expandRoleForGuard() aliases platform_admin to also carry \"admin\" (server/routes.ts:260-280), so requireRole(\"admin\",\"platform_super_admin\") admits it; inside the handler isSuperAdmin is an exact-string check that platform_admin fails, so it falls to resolvedCompanyId = currentUser.companyId — but platform accounts are required to have companyId=NULL (enforced at login), so resolvedCompanyId is undefined and storage.getAuthorizationAuditLogsFiltered applies no company filter at all (server/storage.ts:4171-4207, `if (opts.companyId)`)",
-        disposition: crossTenantLeak ? "FAIL" : "INCONCLUSIVE",
-        detail: crossTenantLeak ? `VERIFIED DEFECT: status=${r3.status}, a single platform_admin request with no ?companyId= returned BOTH Tenant A's row (companyId=${companyA}) and Tenant B's row (companyId=${companyB}) — a full unfiltered cross-tenant authorization-audit-log read, reachable by platform_admin and (same code path, not independently re-tested here) platform_support and platform_implementation.` : `status=${r3.status} count=${rows3.length}`,
+        case: "3. REGRESSION (batch-5 audit finding 10, was FAIL): platform_admin (NOT platform_super_admin) is now blocked outright rather than silently falling through to an unfiltered cross-tenant read — role-alias escalation via expandRoleForGuard()'s \"admin\" alias (server/routes.ts:260-280) is closed by an explicit isSuperAdmin-or-has-own-companyId check before resolvedCompanyId is computed. Same code path also now blocks platform_support/platform_implementation (not independently re-tested here — see the batch-5 findings doc for why one representative role is sufficient).",
+        disposition: r3.status === 403 ? "PASS" : "FAIL",
+        detail: `status=${r3.status}`,
+      });
+
+      // Authorized platform-owner behavior, preserved: platform_super_admin
+      // must still see every tenant's rows with no ?companyId= filter — the
+      // fix narrows who gets unfiltered access, it does not remove the
+      // capability itself from its intended holder.
+      const r3b = await apiRequest(baseUrl, "GET", `/api/audit-log`, sessionPlatformSuperAdmin);
+      const rows3b = Array.isArray((r3b.body as any)?.rows) ? (r3b.body as any).rows as Array<{ companyId?: string }> : [];
+      const seesBoth = rows3b.some((x) => x.companyId === companyA) && rows3b.some((x) => x.companyId === companyB);
+      cases.push({
+        case: "3b. Authorized platform-owner behavior, preserved: platform_super_admin with no ?companyId= still sees both Tenant A's and Tenant B's rows",
+        disposition: r3b.status === 200 && seesBoth ? "PASS" : "FAIL",
+        detail: `status=${r3b.status} seesBoth=${seesBoth}`,
       });
 
       const r4 = await apiRequest(baseUrl, "GET", `/api/audit-log`, null);

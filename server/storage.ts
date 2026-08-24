@@ -4297,15 +4297,21 @@ export class DatabaseStorage implements IStorage {
 
   async upsertTenantCommercialGate(companyId: string, data: Partial<InsertTenantCommercialGate>): Promise<TenantCommercialGate> {
     const existing = await this.getTenantCommercialGate(companyId);
+    // companyId is sourced exclusively from the `companyId` parameter — the
+    // caller's own explicit target — never from `data`. Spreading `data`
+    // after `companyId` here would let a `companyId` key inside `data`
+    // silently win and reassign or misdirect the write to a different
+    // tenant's row (batch 5 audit, verified defect 2: a client-supplied
+    // companyId in the request body overrode the URL's tenant scoping).
     if (existing) {
       const [updated] = await db.update(tenantCommercialGates)
-        .set({ ...data, updatedAt: new Date() })
+        .set({ ...data, companyId, updatedAt: new Date() })
         .where(eq(tenantCommercialGates.companyId, companyId))
         .returning();
       return updated;
     } else {
       const [created] = await db.insert(tenantCommercialGates)
-        .values({ companyId, ...data })
+        .values({ ...data, companyId })
         .returning();
       return created;
     }
