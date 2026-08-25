@@ -1,0 +1,419 @@
+{
+  "generatedAt": "2026-08-25",
+  "sourceReport": "docs/saas-readiness/phase-0.5-security-convergence-report.md",
+  "rootCause": "expandRoleForGuard() aliased platform_support/platform_implementation to [\"admin\",\"manager\",role], contradicting GET /api/platform/audit/roles' documented aliases:[] for both.",
+  "fix": "server/routes.ts expandRoleForGuard(): removed the platform_support/platform_implementation special case; both now fall through to the default return [role].",
+  "summary": {
+    "PASS": 68,
+    "FAIL": 0,
+    "INCONCLUSIVE": 0,
+    "EXPECTED GLOBAL": 0,
+    "N/A": 2
+  },
+  "routes": [
+    {
+      "id": "GET /api/admin/lifecycle-overview",
+      "source": "server/routes.ts:31223",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect 200",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_auditor — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_support — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_implementation — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/tenants",
+      "source": "server/routes.ts:31316",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_auditor — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_support — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_implementation — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/provisioning/templates",
+      "source": "server/routes.ts:31496",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_auditor — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_support — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_implementation — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/provisioning/tenants",
+      "source": "server/routes.ts:31500",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_auditor — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_support — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_implementation — expect 200 (documented read-only global permission)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/tenants/:id",
+      "source": "server/routes.ts:31374",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect role gate passes (reaches handler)",
+          "disposition": "PASS",
+          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect role gate passes (reaches handler)",
+          "disposition": "PASS",
+          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+        },
+        {
+          "case": "platform_auditor — expect role gate passes (reaches handler)",
+          "disposition": "PASS",
+          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+        },
+        {
+          "case": "platform_support — expect role gate passes (reaches handler)",
+          "disposition": "PASS",
+          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+        },
+        {
+          "case": "platform_implementation — expect role gate passes (reaches handler)",
+          "disposition": "PASS",
+          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "OUT-OF-SCOPE FINDING (not fixed by this branch): companies.status column does not exist in shared/schema.ts or any server/index.ts bootstrap ALTER statement — this route 500s for every caller, including authorized ones, independent of role",
+          "disposition": "N/A",
+          "detail": "reported for the record; a data-layer bug, not an authorization-boundary defect"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/breach-incidents",
+      "source": "server/routes.ts:36640",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect 200",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect 200",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "platform_auditor — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_support — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_implementation — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/breach-incidents",
+      "source": "server/routes.ts:36683",
+      "cases": [
+        {
+          "case": "platform_super_admin — expect 201",
+          "disposition": "PASS",
+          "detail": "status=201"
+        },
+        {
+          "case": "platform_owner — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_admin — expect 201",
+          "disposition": "PASS",
+          "detail": "status=201"
+        },
+        {
+          "case": "platform_auditor — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_support — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "platform_implementation — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "tenant_admin — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "employee — expect 403",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "no incident row created by any rejected (403) request — only the two accepted (201) requests wrote rows",
+          "disposition": "PASS",
+          "detail": "before=0 after=2 expectedNewRows=2"
+        },
+        {
+          "case": "missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/debug/permissions/me",
+      "source": "server/routes.ts:31069",
+      "cases": [
+        {
+          "case": "authenticated caller reaches the handler (proves requireAuth-only gating is unaffected by this branch)",
+          "disposition": "PASS",
+          "detail": "status=500"
+        },
+        {
+          "case": "OUT-OF-SCOPE FINDING (not fixed by this branch): feature_registry.key does not exist (real column is feature_key) — this route 500s for every caller, so its expandedRoles field cannot be observed via HTTP; see server/__tests__/expand-role-for-guard.test.ts for the direct fix verification instead",
+          "disposition": "N/A",
+          "detail": "status=500 body={\"message\":\"column fr.key does not exist\"}"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/platform/audit/roles",
+      "source": "server/routes.ts:32984",
+      "cases": [
+        {
+          "case": "platform_support's documented aliases ([]) match expandRoleForGuard()'s real output (no aliases beyond the role itself)",
+          "disposition": "PASS",
+          "detail": "status=200 documentedAliases=[]"
+        },
+        {
+          "case": "platform_implementation's documented aliases ([]) match expandRoleForGuard()'s real output (no aliases beyond the role itself)",
+          "disposition": "PASS",
+          "detail": "status=200 documentedAliases=[]"
+        },
+        {
+          "case": "platform_support itself cannot read this platform_super_admin-only audit endpoint (requirePlatformAudit — literal-role check, unaffected by and unrelated to this branch's fix)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        }
+      ]
+    }
+  ]
+}

@@ -256,16 +256,21 @@ function requireAuth<P extends ParamsDictionary>(req: Request<P>, res: Response,
  * Critical: platform_* roles are NOT tenant admins — they bypass tenant checks only
  * for platform-console operations. For tenant-scoped API routes they are treated as
  * super-admins so that platform support staff can assist tenants.
+ *
+ * platform_support and platform_implementation deliberately receive NO alias here —
+ * GET /api/platform/audit/roles documents both as `aliases: []` ("Read-only tenant
+ * data for support" / "Implementation/CS modules only"), and their actual read-only
+ * platform-console access is granted separately by requirePlatformRole()'s literal
+ * role allowlist, which does not consult this function. Aliasing them to "admin"/
+ * "manager" here silently handed them tenant-admin mutation reach on every
+ * requireRole()-gated route — see docs/saas-readiness/phase-0.5-security-convergence-report.md §2.6.
  */
-function expandRoleForGuard(role: string): string[] {
+export function expandRoleForGuard(role: string): string[] {
   if (role === "platform_super_admin" || role === "platform_admin" || role === "platform_owner") {
     return ["admin", "manager", "supervisor", role];
   }
   if (role === "system_admin") {
     return ["admin", "system_admin"];
-  }
-  if (role === "platform_support" || role === "platform_implementation") {
-    return ["admin", "manager", role];
   }
   if (role === "owner") {
     return ["admin", "owner"];
@@ -31131,16 +31136,21 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
       // requireRole("admin", "platform_super_admin") admits more than those
-      // two literal roles — expandRoleForGuard() aliases platform_admin,
-      // platform_support, and platform_implementation to also carry "admin".
-      // Those three are correctly NOT isSuperAdmin, but platform-scoped
-      // accounts are required to have companyId = NULL (enforced at login),
-      // so falling through to `currentUser.companyId` would resolve to
-      // undefined for them — and storage.getAuthorizationAuditLogsFiltered
-      // applies no company filter at all when companyId is falsy, handing
-      // them every tenant's audit log unfiltered (batch 5 audit, verified
-      // defect 10). Only a real tenant-scoped caller (has a companyId) or
-      // platform_super_admin may proceed past this point.
+      // two literal roles — expandRoleForGuard() still aliases platform_admin
+      // (and platform_owner) to also carry "admin" (intentional, centralized
+      // platform-admin authority — out of scope for the platform_support/
+      // platform_implementation boundary fix, see phase-0.5-platform-role-boundary
+      // report). platform_support and platform_implementation no longer carry
+      // "admin" here as of that fix, so they now 403 at requireRole() itself
+      // rather than reaching this handler. platform_admin is correctly NOT
+      // isSuperAdmin, but platform-scoped accounts are required to have
+      // companyId = NULL (enforced at login), so falling through to
+      // `currentUser.companyId` would resolve to undefined for it — and
+      // storage.getAuthorizationAuditLogsFiltered applies no company filter
+      // at all when companyId is falsy, handing it every tenant's audit log
+      // unfiltered (batch 5 audit, verified defect 10). Only a real
+      // tenant-scoped caller (has a companyId) or platform_super_admin may
+      // proceed past this point.
       if (!isSuperAdmin && !currentUser?.companyId) {
         return res.status(403).json({ message: "Forbidden: platform_super_admin access required to view cross-tenant audit logs" });
       }
