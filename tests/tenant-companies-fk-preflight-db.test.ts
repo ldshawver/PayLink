@@ -6,14 +6,24 @@
  * (against a disposable database and synthetic fixtures only) the claims made
  * in docs/saas-readiness/phase-0.5-tenant-companies-fk-preflight.md:
  *
- *  1. The orphan-creation vector is real: POST /api/tenants/:id/companies
- *     (server/routes.ts, requireSuperAdmin) inserts into tenant_companies
- *     using the URL's :id as tenant_id with NO existence check against
- *     tenants — a nonexistent tenant id in the URL still returns 201 and
- *     creates a row nothing else in the app will ever surface (getTenantIdForCompany,
- *     server/tenant-context.ts:77-104, INNER JOINs tenants and so silently
- *     treats an orphaned row as "no tenant assigned" rather than crashing or
- *     leaking data — the gap is dead/dangling data, not an active leak).
+ *  1. An orphaned tenant_companies row (tenant_id referring to nothing in
+ *     tenants) is a real, reachable state, not a theoretical one — until
+ *     saas/phase0.5-tenant-company-membership-guard, POST
+ *     /api/tenants/:id/companies (server/routes.ts, requireSuperAdmin)
+ *     inserted using the URL's :id as tenant_id with NO existence check
+ *     against tenants, and a nonexistent tenant id in the URL returned 201
+ *     and created exactly this row. That application-level vector is now
+ *     closed (see that branch for the route-level fix and its own
+ *     regression tests) — this file no longer reproduces it via HTTP, and
+ *     instead manufactures a synthetic orphan directly via SQL, since this
+ *     file's job is to prove the DB-level tooling below behaves correctly
+ *     given an orphan, however one might arise (a stale manual data fix, a
+ *     future bug elsewhere, direct administrative SQL — the tooling must be
+ *     correct regardless of cause). getTenantIdForCompany
+ *     (server/tenant-context.ts:77-104) INNER JOINs tenants and so silently
+ *     treats any orphaned row as "no tenant assigned" rather than crashing
+ *     or leaking data — the gap this FK closes is dead/dangling data, not
+ *     an active leak.
  *  2. scripts/tenant-companies-fk-preflight/check-orphans.ts correctly
  *     detects that orphan (and correctly reports clean once it's resolved).
  *  3. scripts/tenant-companies-fk-preflight/migration.sql applies cleanly
@@ -42,9 +52,7 @@
 import { Pool } from "pg";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
-import bcrypt from "bcrypt";
 import fs from "node:fs";
-import { startTestServer, login, apiRequest, type TestServer } from "../scripts/cross-tenant-negative-tests/server-harness";
 import { cascadeDelete, verifyZeroResidue } from "../scripts/cross-tenant-negative-tests/cascade-cleanup";
 
 const FORBIDDEN_PATTERNS = [/staging/i, /production/i, /^prod$/i, /apppaylinkstaging/i, /apppaylinkmain/i];
@@ -96,7 +104,6 @@ async function main() {
   const pool = new Pool({ connectionString: testDatabaseUrl, max: 4 });
   const companyIds: string[] = [];
   const tenantIds: string[] = [];
-  let server: TestServer | undefined;
   let harnessOk = true;
   let constraintCurrentlyApplied = false;
 
@@ -126,57 +133,26 @@ async function main() {
       [tenantX, companyA, tenantY, companyB],
     );
 
-    const pwPlain = crypto.randomBytes(12).toString("hex");
-    const pwHash = await bcrypt.hash(pwPlain, 10);
-    const superAdminId = crypto.randomUUID();
-    const superAdminUsername = `fkpre_super_${suffix}`;
-    await pool.query(
-      `INSERT INTO users (id, username, password, role, company_id, worker_id, first_name, last_name, is_active) VALUES ($1,$2,$3,'platform_super_admin',NULL,NULL,'FKPre','Super', true)`,
-      [superAdminId, superAdminUsername, pwHash],
-    );
-
     const beforeOrphanCount = (await pool.query("SELECT COUNT(*)::int AS n FROM tenant_companies")).rows[0].n as number;
     check("fixtures created: 2 clean tenant_companies rows exist, 0 orphans yet", beforeOrphanCount === 2, `count=${beforeOrphanCount}`);
 
-    // ── Schema-drift workaround (test-infra only, not an app-code change) ────
-    // tenant_companies' UNIQUE(tenant_id, company_id) is declared only in
-    // server/index.ts's own `CREATE TABLE IF NOT EXISTS` bootstrap
-    // (server/index.ts:3623-3630), never in shared/schema.ts — so a database
-    // built via `drizzle-kit push` (as this disposable database is) gets a
-    // tenant_companies table with no such constraint, and the app's own
-    // `CREATE TABLE IF NOT EXISTS` is a no-op once the table already exists.
-    // POST /api/tenants/:id/companies relies on
-    // `ON CONFLICT (tenant_id, company_id) DO UPDATE`, which requires this
-    // exact constraint to exist or the upsert 500s regardless of caller —
-    // confirmed by reproduction before adding this workaround. This is the
-    // same class of gap already tracked as finding D5
-    // (docs/saas-readiness/phase-0.5-a-ci-baseline-manifest.md) and already
-    // worked around identically for `feature_overrides` in
-    // tests/cross-tenant-batch-5-routes-db.test.ts — out of scope for this
-    // branch (role-boundary/FK-preflight only) and NOT repaired in
-    // application code here. Adding the missing constraint directly to this
-    // disposable database is test-infrastructure setup, the same category of
-    // action as the `drizzle-kit push` that built this schema in the first
-    // place — it does not touch server/, shared/, or storage.ts.
-    await pool.query(`ALTER TABLE tenant_companies ADD CONSTRAINT IF NOT EXISTS tenant_companies_tenant_id_company_id_unique UNIQUE (tenant_id, company_id)`).catch(async () => {
-      // Older Postgres (<15) lacks "ADD CONSTRAINT IF NOT EXISTS" — fall back to a plain unique index, which ON CONFLICT accepts equally.
-      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS tenant_companies_tenant_id_company_id_unique_idx ON tenant_companies (tenant_id, company_id)`);
-    });
-
-    console.log("\n── 2. Reproduce the orphan-creation vector via the real, running app ──");
-    server = await startTestServer(testDatabaseUrl);
-    const baseUrl = server.baseUrl;
-    const superAdminSession = await login(baseUrl, superAdminUsername, pwPlain);
-
+    console.log("\n── 2. Manufacture a synthetic orphan directly via SQL ──");
+    // Previously reproduced via a real HTTP call to POST
+    // /api/tenants/:id/companies — that application-level vector is now
+    // closed by saas/phase0.5-tenant-company-membership-guard (the route
+    // loads and validates the tenant before inserting anything, and 404s on
+    // a nonexistent one), so this file no longer boots the server or exists
+    // to demonstrate that vector. It manufactures the same DB state directly
+    // instead, since everything downstream in this file (check-orphans.ts,
+    // migration.sql, validate.ts, rollback.sql) only cares that an orphan
+    // row exists, not how it got there.
     const nonexistentTenantId = crypto.randomUUID();
-    const rCreateOrphan = await apiRequest(baseUrl, "POST", `/api/tenants/${nonexistentTenantId}/companies`, superAdminSession, { companyId: companyA, isPrimary: false });
-    check(
-      "POST /api/tenants/:id/companies with a nonexistent tenant id in the URL returns 201, not 404 (server/routes.ts:31450 — no tenant-existence check before the INSERT)",
-      rCreateOrphan.status === 201,
-      `status=${rCreateOrphan.status}`,
+    await pool.query(
+      `INSERT INTO tenant_companies (tenant_id, company_id, is_primary) VALUES ($1, $2, false)`,
+      [nonexistentTenantId, companyA],
     );
     const afterCreateCount = (await pool.query("SELECT COUNT(*)::int AS n FROM tenant_companies WHERE tenant_id = $1", [nonexistentTenantId])).rows[0].n as number;
-    check("that request actually wrote a dangling row (tenant_id refers to nothing)", afterCreateCount === 1, `rows for nonexistentTenantId=${afterCreateCount}`);
+    check("synthetic orphan row exists (tenant_id refers to nothing in tenants)", afterCreateCount === 1, `rows for nonexistentTenantId=${afterCreateCount}`);
 
     console.log("\n── 3. check-orphans.ts detects it ──");
     const dirtyCheck = runScript("scripts/tenant-companies-fk-preflight/check-orphans.ts", testDatabaseUrl);
@@ -247,14 +223,6 @@ async function main() {
         await runSqlFile(pool, "scripts/tenant-companies-fk-preflight/rollback.sql");
       } catch (e) {
         console.error("Failed to roll back constraint during cleanup:", e);
-      }
-    }
-    if (server) {
-      try {
-        await server.stop();
-      } catch (e) {
-        harnessOk = false;
-        console.error("Failed to stop test server cleanly:", e);
       }
     }
     try {

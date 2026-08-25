@@ -31447,10 +31447,33 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // Assign a company to a tenant — super_admin only
+  //
+  // The URL's :id is the sole authoritative tenant id for this operation.
+  // Before this fix, it was passed straight into the INSERT with no
+  // existence check at all — companyId is (and always was) implicitly
+  // validated by its own FK to companies.id, but tenant_id carries no FK
+  // (docs/saas-readiness/phase-0.5-tenant-companies-fk-preflight.md), so a
+  // stale or mistyped tenant id in the URL silently created a dangling
+  // tenant_companies row and still returned 201. Both sides are now checked
+  // to exist before any write is attempted, so an invalid tenant or company
+  // 404s/400s with zero rows written, instead of writing an orphan.
   app.post("/api/tenants/:id/companies", requireAuth, requireSuperAdmin(), async (req, res) => {
     try {
-      const { companyId, isPrimary = false } = req.body;
+      const { companyId, isPrimary = false, tenantId: bodyTenantId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      // A body-supplied tenantId can never override the URL's :id — if the
+      // caller sends one, it must agree with the URL or the request is
+      // rejected outright, rather than silently ignoring a mismatched value.
+      if (bodyTenantId !== undefined && bodyTenantId !== req.params.id) {
+        return res.status(400).json({ message: "tenantId in the request body does not match the tenant in the URL" });
+      }
+
+      const { rows: tenantRows } = await db.$client.query(`SELECT id FROM tenants WHERE id = $1`, [req.params.id]);
+      if (!tenantRows.length) return res.status(404).json({ message: "Tenant not found" });
+
+      const { rows: companyRows } = await db.$client.query(`SELECT id FROM companies WHERE id = $1`, [companyId]);
+      if (!companyRows.length) return res.status(400).json({ message: "Company not found" });
+
       const { rows } = await db.$client.query(`
         INSERT INTO tenant_companies (tenant_id, company_id, is_primary)
         VALUES ($1, $2, $3)
