@@ -40,6 +40,20 @@
  *     behind check-orphans.ts, not just documentation.
  *  6. scripts/tenant-companies-fk-preflight/rollback.sql fully reverses the
  *     migration (constraint gone, zero data changed).
+ *  7. tenant_id's existing NOT NULL constraint (independent of this FK) still
+ *     rejects a NULL tenant_id outright — the FK never has to think about a
+ *     NULL case because the column-level constraint already forecloses it.
+ *  8. migration.sql is not one-shot: it can be reapplied cleanly after
+ *     rollback.sql has removed the constraint.
+ *  9. migrations/0015_tenant_companies_tenant_id_fk.sql — the versioned,
+ *     canonical migration file this branch (saas/phase0.5-tenant-companies-fk-apply)
+ *     adds to integrate this FK with the repository's real migration
+ *     mechanism (the migrations/ directory, applied manually the same way
+ *     0004/0013/etc. are per DEPLOYMENT.md) — produces the exact same
+ *     constraint shape as migration.sql and is equally reversible by the
+ *     same rollback.sql. Deliberately NOT wired into shared/schema.ts,
+ *     drizzle-kit push, or server/index.ts's auto-apply-on-startup DDL
+ *     block — see that file's own header for why.
  *
  * SAFETY: same conventions as the rest of Phase 0.5's disposable-database
  * suite — requires TEST_DATABASE_URL, refuses staging/production-shaped
@@ -212,6 +226,41 @@ async function main() {
     check("constraint no longer exists after rollback.sql", constraintGone);
     const rowsUnchangedAfterRollback = (await pool.query("SELECT COUNT(*)::int AS n FROM tenant_companies")).rows[0].n as number;
     check("rollback did not change any data (only removed the constraint)", rowsUnchangedAfterRollback === beforeMigrationCount - 1 /* tenantY's row was cascade-removed in step 8, before rollback */, `rows=${rowsUnchangedAfterRollback}`);
+
+    console.log("\n── 10. NULL handling: tenant_id's own NOT NULL constraint rejects NULL regardless of the FK ──");
+    let nullRejected = false;
+    try {
+      await pool.query(`INSERT INTO tenant_companies (tenant_id, company_id, is_primary) VALUES (NULL, $1, false)`, [companyA]);
+    } catch (e: any) {
+      nullRejected = e?.code === "23502"; // not_null_violation
+    }
+    check("inserting a NULL tenant_id is rejected outright (23502 not_null_violation), not silently accepted", nullRejected);
+    const nullRows = (await pool.query("SELECT COUNT(*)::int AS n FROM tenant_companies WHERE tenant_id IS NULL")).rows[0].n as number;
+    check("no NULL-tenant_id row exists after the rejected insert", nullRows === 0, `count=${nullRows}`);
+
+    console.log("\n── 11. migration.sql can be reapplied cleanly after rollback.sql (the pair is not one-shot) ──");
+    const beforeReapplyCount = (await pool.query("SELECT COUNT(*)::int AS n FROM tenant_companies")).rows[0].n as number;
+    await runSqlFile(pool, "scripts/tenant-companies-fk-preflight/migration.sql");
+    constraintCurrentlyApplied = true;
+    const reapplyValidate = runScript("scripts/tenant-companies-fk-preflight/validate.ts", testDatabaseUrl, [`--before-count=${beforeReapplyCount}`]);
+    check("validate.ts confirms the reapplied constraint has the correct shape", reapplyValidate.status === 0, reapplyValidate.stdout);
+    check("validate.ts confirms row count unchanged on reapply", reapplyValidate.stdout.includes("row count unchanged"));
+
+    console.log("\n── 12. migrations/0015_tenant_companies_tenant_id_fk.sql is equivalent to migration.sql ──");
+    await runSqlFile(pool, "scripts/tenant-companies-fk-preflight/rollback.sql");
+    constraintCurrentlyApplied = false;
+    const beforeVersionedCount = (await pool.query("SELECT COUNT(*)::int AS n FROM tenant_companies")).rows[0].n as number;
+    await runSqlFile(pool, "migrations/0015_tenant_companies_tenant_id_fk.sql");
+    constraintCurrentlyApplied = true;
+    const versionedValidate = runScript("scripts/tenant-companies-fk-preflight/validate.ts", testDatabaseUrl, [`--before-count=${beforeVersionedCount}`]);
+    check("validate.ts confirms migrations/0015 produces the identical constraint shape (FK, tenants.id, ON DELETE CASCADE)", versionedValidate.status === 0, versionedValidate.stdout);
+    check("validate.ts confirms migrations/0015 is purely additive too", versionedValidate.stdout.includes("row count unchanged"));
+    await runSqlFile(pool, "scripts/tenant-companies-fk-preflight/rollback.sql");
+    constraintCurrentlyApplied = false;
+    const constraintGoneFinal = (await pool.query(`
+      SELECT 1 FROM information_schema.table_constraints WHERE table_name = 'tenant_companies' AND constraint_name = 'tenant_companies_tenant_id_tenants_id_fk'
+    `)).rows.length === 0;
+    check("constraint removed again after the final rollback — disposable database left clean", constraintGoneFinal);
 
     console.log(`\n${passed} checks passed, ${failed} checks failed`);
   } finally {
