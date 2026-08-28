@@ -120,7 +120,19 @@ interface ContractorDocument {
   notes: string | null;
   uploadedBy: string;
   createdAt: string;
+  /** "contractor_document" (native) or "worker_document" (linked from the worker profile). */
+  source?: string;
 }
+
+const CONTRACTOR_DOC_TYPE_LABELS: Record<string, string> = {
+  w9: "W-9",
+  contractor_agreement: "Contractor Agreement",
+  amendment: "Amendment",
+  insurance_certificate: "Insurance Certificate",
+  license_certification: "License / Certification",
+  invoice_support: "Invoice / Supporting Doc",
+  other: "Other",
+};
 
 interface Contractor1099Summary {
   id: string;
@@ -302,6 +314,15 @@ export default function TradeCompensationPage() {
     onError: () => toast({ title: "Failed to mark as filed", variant: "destructive" }),
   });
 
+  const UPLOAD_ERROR_MESSAGES: Record<string, string> = {
+    INVALID_FILE_TYPE: "That file type isn't accepted. Upload a PDF or image (PDF, JPG, PNG, TIFF, HEIC).",
+    FILE_TOO_LARGE: "That file is too large. The limit is 15 MB.",
+    NOT_A_CONTRACTOR: "This worker isn't set up as an independent contractor.",
+    CONTRACTOR_NOT_FOUND: "This contractor no longer exists.",
+    CROSS_TENANT: "You don't have access to this contractor.",
+    COMPANY_MISMATCH: "The selected company doesn't match this contractor.",
+  };
+
   const uploadW9 = async (file: File, workerId: string) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -310,11 +331,17 @@ export default function TradeCompensationPage() {
     fd.append("documentType", "w9");
     try {
       const res = await fetch("/api/contractor-documents/upload", { method: "POST", credentials: "include", body: fd });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const code = typeof body?.error === "string" ? body.error : "";
+        throw new Error(UPLOAD_ERROR_MESSAGES[code] || body?.message || "Upload failed. Please try again.");
+      }
       toast({ title: "W-9 uploaded" });
       qc.invalidateQueries({ queryKey: ["/api/contractor-documents", selectedCompanyId] });
       invalidate1099();
-    } catch { toast({ title: "Upload failed", variant: "destructive" }); }
+    } catch (e: any) {
+      toast({ title: "Upload failed", description: e?.message, variant: "destructive" });
+    }
   };
 
   const deleteDocMutation = useMutation({
@@ -679,7 +706,7 @@ export default function TradeCompensationPage() {
                           )}
                         </div>
 
-                        {/* W-9 file list */}
+                        {/* Tax & Compliance documents (W-9, contractor agreement, …) */}
                         {docs.length > 0 && (
                           <div className="mt-3 space-y-1">
                             {docs.map(d => (
@@ -687,18 +714,23 @@ export default function TradeCompensationPage() {
                                 <div className="flex items-center gap-1.5">
                                   <FileCheck className="h-3.5 w-3.5 text-muted-foreground" />
                                   <span className="font-medium">{d.fileName}</span>
-                                  <span className="text-muted-foreground capitalize">{d.documentType.toUpperCase()}</span>
+                                  <span className="text-muted-foreground">{CONTRACTOR_DOC_TYPE_LABELS[d.documentType] || d.documentType}</span>
+                                  {d.source === "worker_document" && (
+                                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70" title="Linked from the worker profile — the file is not duplicated">· from profile</span>
+                                  )}
                                   <span className="text-muted-foreground">· {fmtDate(d.createdAt)}</span>
                                 </div>
                                 <div className="flex items-center gap-1">
                                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" asChild data-testid={`button-download-doc-${d.id}`}>
-                                    <a href={d.fileUrl} target="_blank" rel="noopener noreferrer" download>
+                                    <a href={`/api/contractor-documents/${d.id}/download`} target="_blank" rel="noopener noreferrer">
                                       <Download className="h-3 w-3" />
                                     </a>
                                   </Button>
-                                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-500" onClick={() => deleteDocMutation.mutate(d.id)} data-testid={`button-delete-doc-${d.id}`}>
-                                    <Trash2 className="h-3 w-3" />
-                                  </Button>
+                                  {d.source !== "worker_document" && (
+                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-500" onClick={() => deleteDocMutation.mutate(d.id)} data-testid={`button-delete-doc-${d.id}`}>
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  )}
                                 </div>
                               </div>
                             ))}

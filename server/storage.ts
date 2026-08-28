@@ -165,7 +165,8 @@ import {
   type TradeAttachment, type InsertTradeAttachment,
   type TradeAuditLog, type InsertTradeAuditLog,
   contractorDocuments, contractor1099Summaries,
-  type ContractorDocument, type InsertContractorDocument,
+  classifyContractorComplianceDoc, normalizeContractorDocumentType,
+  type ContractorDocument, type InsertContractorDocument, type ContractorComplianceDocument,
   type Contractor1099Summary, type InsertContractor1099Summary,
   locations, teams, employeeManagerRelations,
   platformModules, permissionGroups, permissions, enterpriseRolePermissions,
@@ -845,8 +846,17 @@ export interface IStorage {
   createTradeAuditLog(data: InsertTradeAuditLog): Promise<TradeAuditLog>;
   getTradeReportingSummary(companyId: string, year: number): Promise<{ counterpartyId: string | null; counterpartyName: string; totalFairMarketValue: string; transactionCount: number }[]>;
 
-  // Contractor documents (W-9, W-8BEN)
+  // Contractor documents (W-9, contractor agreement, insurance, etc.)
   getContractorDocuments(companyId: string, workerId?: string): Promise<ContractorDocument[]>;
+  /**
+   * Contractor compliance view: `contractor_documents` unified with the
+   * contractor-compliance subset of `worker_documents` (same worker, no
+   * binary duplication). This is the canonical read for the contractor
+   * profile and for W-9 status.
+   */
+  getContractorComplianceDocuments(companyId: string, workerId?: string): Promise<ContractorComplianceDocument[]>;
+  getContractorComplianceDocumentById(id: string): Promise<ContractorComplianceDocument | undefined>;
+  contractorHasCurrentW9(companyId: string, workerId: string): Promise<boolean>;
   createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument>;
   deleteContractorDocument(id: string): Promise<void>;
 
@@ -3849,8 +3859,94 @@ export class DatabaseStorage implements IStorage {
     if (workerId) conds.push(eq(contractorDocuments.workerId, workerId));
     return db.select().from(contractorDocuments).where(and(...conds)).orderBy(desc(contractorDocuments.createdAt));
   }
+
+  /**
+   * `contractor_documents` for the company/worker, unified with the
+   * contractor-compliance subset of `worker_documents` for the same
+   * contractor-type workers. A `worker_documents` row is dropped from the
+   * union when a `contractor_documents` row already points at the same
+   * file (post-reconciliation), so the binary is never represented twice.
+   */
+  async getContractorComplianceDocuments(companyId: string, workerId?: string): Promise<ContractorComplianceDocument[]> {
+    const native = await this.getContractorDocuments(companyId, workerId);
+    const nativeUrls = new Set(native.map(d => d.fileUrl));
+
+    // Contractor-type workers in this company (optionally a single worker).
+    const workerConds = [eq(workers.companyId, companyId), eq(workers.workerType, "contractor" as any)];
+    if (workerId) workerConds.push(eq(workers.id, workerId));
+    const contractorWorkers = await db.select({ id: workers.id }).from(workers).where(and(...workerConds));
+    const contractorWorkerIds = new Set(contractorWorkers.map(w => w.id));
+    if (contractorWorkerIds.size === 0) {
+      return native.map(d => ({ ...d, source: "contractor_document" as const }));
+    }
+
+    const wd = await db.select().from(workerDocuments)
+      .where(inArray(workerDocuments.workerId, Array.from(contractorWorkerIds)))
+      .orderBy(desc(workerDocuments.uploadedAt));
+
+    const unified: ContractorComplianceDocument[] = wd
+      .map(d => {
+        const canonicalType = classifyContractorComplianceDoc(d.documentType, d.name);
+        if (!canonicalType) return null;
+        if (nativeUrls.has(d.fileUrl)) return null; // already represented natively
+        return {
+          id: d.id,
+          companyId,
+          workerId: d.workerId,
+          documentType: canonicalType,
+          fileName: d.name,
+          fileUrl: d.fileUrl,
+          fileSize: null,
+          mimeType: null,
+          notes: d.notes ?? null,
+          uploadedBy: "",
+          createdAt: d.uploadedAt ?? null,
+          source: "worker_document" as const,
+        } as ContractorComplianceDocument;
+      })
+      .filter((d): d is ContractorComplianceDocument => d !== null);
+
+    return [
+      ...native.map(d => ({ ...d, source: "contractor_document" as const })),
+      ...unified,
+    ].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+  }
+
+  async getContractorComplianceDocumentById(id: string): Promise<ContractorComplianceDocument | undefined> {
+    const [native] = await db.select().from(contractorDocuments).where(eq(contractorDocuments.id, id));
+    if (native) return { ...native, source: "contractor_document" };
+    const [wd] = await db.select().from(workerDocuments).where(eq(workerDocuments.id, id));
+    if (!wd) return undefined;
+    const [w] = await db.select().from(workers).where(eq(workers.id, wd.workerId));
+    if (!w || w.workerType !== "contractor") return undefined;
+    const canonicalType = classifyContractorComplianceDoc(wd.documentType, wd.name);
+    if (!canonicalType) return undefined;
+    return {
+      id: wd.id,
+      companyId: w.companyId,
+      workerId: wd.workerId,
+      documentType: canonicalType,
+      fileName: wd.name,
+      fileUrl: wd.fileUrl,
+      fileSize: null,
+      mimeType: null,
+      notes: wd.notes ?? null,
+      uploadedBy: "",
+      createdAt: wd.uploadedAt ?? null,
+      source: "worker_document",
+    };
+  }
+
+  async contractorHasCurrentW9(companyId: string, workerId: string): Promise<boolean> {
+    const docs = await this.getContractorComplianceDocuments(companyId, workerId);
+    return docs.some(d => d.documentType === "w9");
+  }
+
   async createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument> {
-    const [r] = await db.insert(contractorDocuments).values(data).returning();
+    const [r] = await db.insert(contractorDocuments).values({
+      ...data,
+      documentType: normalizeContractorDocumentType(data.documentType),
+    }).returning();
     return r;
   }
   async deleteContractorDocument(id: string): Promise<void> {
@@ -3908,8 +4004,9 @@ export class DatabaseStorage implements IStorage {
       .filter(t => t.taxYear === year)
       .reduce((sum, t) => sum + parseFloat(t.fairMarketValue), 0);
 
-    const docs = await this.getContractorDocuments(companyId, workerId);
-    const hasW9 = docs.some(d => d.documentType === "w9");
+    // W-9 status is derived from the canonical contractor-compliance view,
+    // which includes an existing W-9 that only lives in worker_documents.
+    const hasW9 = await this.contractorHasCurrentW9(companyId, workerId);
 
     return { cashTotal, tradeTotal, total: cashTotal + tradeTotal, missingW9: !hasW9 };
   }
