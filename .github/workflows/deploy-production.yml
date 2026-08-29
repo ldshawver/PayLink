@@ -81,7 +81,16 @@ jobs:
             echo "APP_PORT=$APP_PORT"
             test -f "$ENV_FILE"
 
-            mkdir -p "$BACKUP_DIR"
+            # Prefer the shared backup dir; fall back to a deploy-user-owned path if
+            # it is missing or not writable (e.g. a pre-existing root-owned directory).
+            mkdir -p "$BACKUP_DIR" 2>/dev/null || true
+            if [ ! -w "$BACKUP_DIR" ]; then
+              echo "Backup dir $BACKUP_DIR is not writable; falling back to a deploy-user-owned path"
+              BACKUP_DIR="${HOME:-/home/paylinkssh}/paylink-predeploy-backups"
+              mkdir -p "$BACKUP_DIR"
+            fi
+            echo "BACKUP_DIR=$BACKUP_DIR"
+
             set -a
             . "$ENV_FILE"
             set +a
