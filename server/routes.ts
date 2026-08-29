@@ -18,7 +18,7 @@ import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema, normalizeContractorDocumentType } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -191,6 +191,116 @@ const documentUpload = multer({
     else cb(new Error("Only image and document files are allowed"));
   },
 });
+
+// Contractor compliance documents (W-9, contractor agreement, insurance
+// certificates, …) are overwhelmingly PDFs or scans. The generic `upload`
+// instance above is image-only and 500s on a PDF; this instance accepts the
+// real formats and is size-capped for tax paperwork.
+const CONTRACTOR_DOC_MAX_BYTES = 15 * 1024 * 1024;
+const contractorComplianceUpload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: CONTRACTOR_DOC_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /\.(pdf|jpg|jpeg|png|tif|tiff|heic|webp)$/i;
+    if (allowed.test(path.extname(file.originalname))) cb(null, true);
+    else cb(Object.assign(new Error("Unsupported file type"), { code: "INVALID_FILE_TYPE" }));
+  },
+});
+
+/**
+ * Wrap a multer single-file middleware so a rejected upload returns a
+ * sanitized, machine-readable error code instead of falling through to the
+ * generic 500 error handler. No filenames, sizes, or paths are echoed.
+ */
+function singleFileUpload(mw: multer.Multer, field: string, opts: { maxBytes: number }) {
+  const handler = mw.single(field);
+  return (req: Request, res: Response, next: NextFunction) => {
+    handler(req, res, (err: any) => {
+      if (!err) return next();
+      if (err?.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          error: "FILE_TOO_LARGE",
+          message: `File exceeds the ${Math.round(opts.maxBytes / (1024 * 1024))} MB limit.`,
+        });
+      }
+      if (err?.code === "INVALID_FILE_TYPE" || /unsupported file type|only .* allowed/i.test(String(err?.message))) {
+        return res.status(415).json({
+          error: "INVALID_FILE_TYPE",
+          message: "Upload a PDF or image file (PDF, JPG, PNG, TIFF, HEIC).",
+        });
+      }
+      return res.status(400).json({ error: "UPLOAD_FAILED", message: "The file could not be processed." });
+    });
+  };
+}
+
+/** Best-effort removal of an uploaded temp file when a later step fails. */
+async function discardUploadedFile(file?: Express.Multer.File): Promise<void> {
+  if (!file?.path) return;
+  try { await fs.promises.unlink(file.path); } catch { /* already gone */ }
+}
+
+type ResolvedWorker = NonNullable<Awaited<ReturnType<typeof storage.getWorker>>>;
+type ContractorAccess =
+  | { ok: true; worker: ResolvedWorker; companyId: string }
+  | { ok: false; status: number; body: { error: string; message: string } };
+
+/**
+ * Resolve the contractor for a contractor-document operation and authorize
+ * the caller. Company scope is derived from the target worker record and
+ * validated against the caller's own access — never trusted from the
+ * client. A client-supplied companyId is only permitted if it agrees with
+ * the contractor's actual company.
+ */
+async function resolveContractorAccess(
+  actorUserId: string,
+  workerId: string | undefined,
+  claimedCompanyId?: string | null,
+): Promise<ContractorAccess> {
+  if (!workerId) {
+    return { ok: false, status: 400, body: { error: "WORKER_ID_REQUIRED", message: "workerId is required." } };
+  }
+  const user = await storage.getUser(actorUserId);
+  if (!user) return { ok: false, status: 401, body: { error: "UNAUTHENTICATED", message: "Session user not found." } };
+  const worker = await storage.getWorker(workerId);
+  if (!worker) {
+    return { ok: false, status: 404, body: { error: "CONTRACTOR_NOT_FOUND", message: "Contractor not found." } };
+  }
+  if (worker.workerType !== "contractor") {
+    return { ok: false, status: 400, body: { error: "NOT_A_CONTRACTOR", message: "This worker is not an independent contractor." } };
+  }
+  if (!(await canAccessCompany(user, worker.companyId))) {
+    return { ok: false, status: 403, body: { error: "CROSS_TENANT", message: "You do not have access to this contractor." } };
+  }
+  if (claimedCompanyId && claimedCompanyId !== worker.companyId) {
+    return { ok: false, status: 400, body: { error: "COMPANY_MISMATCH", message: "companyId does not match the contractor's company." } };
+  }
+  return { ok: true, worker, companyId: worker.companyId };
+}
+
+/**
+ * Append a contractor-document lifecycle event to compliance_audit_events.
+ * `detail` must never contain tax data, SSNs/TINs, file URLs, or storage
+ * keys — only the event kind, canonical document type, record source, and
+ * the acting user id.
+ */
+async function recordContractorDocEvent(
+  companyId: string,
+  workerId: string,
+  detail: { event: string; documentType?: string | null; source?: string | null; docId?: string | null; actorUserId?: string | null; replaced?: boolean },
+): Promise<void> {
+  try {
+    await db.execute(sql`
+      INSERT INTO compliance_audit_events
+        (company_id, worker_id, rule_type, entity_type, entity_id, severity, message, detail)
+      VALUES
+        (${companyId}, ${workerId}, 'contractor_document', 'worker', ${workerId}, 'info',
+         ${`contractor_document.${detail.event}`}, ${JSON.stringify(detail)}::jsonb)
+    `);
+  } catch (e) {
+    console.error("[ContractorDocs] audit write failed:", (e as Error).message);
+  }
+}
 
 function computeFileSha256(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -30928,43 +31038,168 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
   });
 
-  // ── Phase 2: Contractor Documents (W-9 / W-8BEN) ─────────────────────────
+  // ── Contractor compliance documents (W-9, contractor agreement, …) ───────
+  //
+  // Canonical read is the unified contractor-compliance view: contractor_documents
+  // plus the contractor-compliance subset of worker_documents for the same
+  // worker (no binary duplication). Company scope is always derived from the
+  // target contractor record and checked against the caller — the client
+  // companyId is advisory and must agree with the contractor's real company.
   app.get("/api/contractor-documents", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {
-      const { companyId, workerId } = req.query;
-      if (!companyId) return res.status(400).json({ message: "companyId required" });
-      res.json(await storage.getContractorDocuments(companyId as string, workerId as string | undefined));
-    } catch (e) { res.status(500).json({ message: "Failed to fetch contractor documents" }); }
-  });
-
-  app.post("/api/contractor-documents/upload", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req: any, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const { companyId, workerId } = req.query as { companyId?: string; workerId?: string };
       const userId = req.session.userId as string;
-      const { companyId, workerId, documentType, notes } = req.body;
-      if (!companyId || !workerId) return res.status(400).json({ message: "companyId and workerId required" });
-      const doc = await storage.createContractorDocument({
-        companyId, workerId,
-        documentType: documentType || "w9",
-        fileName: req.file.originalname,
-        fileUrl: `/uploads/${req.file.filename}`,
-        fileSize: req.file.size,
-        mimeType: req.file.mimetype,
-        notes: notes || null,
-        uploadedBy: userId,
-      });
-      // Recalculate 1099 after W-9 upload
-      const year = new Date().getFullYear();
-      await storage.calculate1099Summary(companyId, workerId, year);
-      res.status(201).json(doc);
-    } catch (e) { res.status(500).json({ message: "Failed to upload contractor document" }); }
+
+      if (workerId) {
+        const access = await resolveContractorAccess(userId, workerId, companyId ?? null);
+        if (!access.ok) return res.status(access.status).json(access.body);
+        return res.json(await storage.getContractorComplianceDocuments(access.companyId, workerId));
+      }
+
+      if (!companyId) return res.status(400).json({ error: "COMPANY_ID_REQUIRED", message: "companyId or workerId is required." });
+      const user = await storage.getUser(userId);
+      if (!user || !(await canAccessCompany(user, companyId))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
+      res.json(await storage.getContractorComplianceDocuments(companyId));
+    } catch (e) {
+      console.error("[ContractorDocs] list failed:", (e as Error).message);
+      res.status(500).json({ error: "LIST_FAILED", message: "Failed to fetch contractor documents." });
+    }
   });
 
-  app.delete("/api/contractor-documents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post(
+    "/api/contractor-documents/upload",
+    requireAuth,
+    requireRole("admin", "manager"),
+    singleFileUpload(contractorComplianceUpload, "file", { maxBytes: CONTRACTOR_DOC_MAX_BYTES }),
+    async (req: any, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      try {
+        if (!file) return res.status(400).json({ error: "NO_FILE", message: "No file was uploaded." });
+        const userId = req.session.userId as string;
+        const { companyId, workerId, documentType, notes } = req.body as Record<string, string | undefined>;
+
+        const access = await resolveContractorAccess(userId, workerId, companyId ?? null);
+        if (!access.ok) {
+          await discardUploadedFile(file);
+          return res.status(access.status).json(access.body);
+        }
+
+        const canonicalType = normalizeContractorDocumentType(documentType || "w9");
+        const hadW9Before = canonicalType === "w9"
+          ? await storage.contractorHasCurrentW9(access.companyId, workerId!)
+          : false;
+
+        let doc;
+        try {
+          doc = await storage.createContractorDocument({
+            companyId: access.companyId,
+            workerId: workerId!,
+            documentType: canonicalType,
+            fileName: file.originalname,
+            fileUrl: `/uploads/${file.filename}`,
+            fileSize: file.size,
+            mimeType: file.mimetype,
+            notes: notes || null,
+            uploadedBy: userId,
+          });
+        } catch (dbErr) {
+          // Metadata write failed after the object landed on disk — remove the orphan.
+          await discardUploadedFile(file);
+          throw dbErr;
+        }
+
+        await recordContractorDocEvent(access.companyId, workerId!, {
+          event: hadW9Before ? "replaced" : "uploaded",
+          documentType: canonicalType,
+          source: "contractor_document",
+          docId: doc.id,
+          actorUserId: userId,
+          replaced: hadW9Before,
+        });
+
+        // Refresh the current year's 1099 W-9 status (best-effort).
+        try {
+          await storage.calculate1099Summary(access.companyId, workerId!, new Date().getFullYear());
+        } catch (calcErr) {
+          console.error("[ContractorDocs] 1099 recalc after upload failed:", (calcErr as Error).message);
+        }
+
+        res.status(201).json({ ...doc, source: "contractor_document" });
+      } catch (e) {
+        console.error("[ContractorDocs] upload failed:", (e as Error).message);
+        res.status(500).json({ error: "UPLOAD_FAILED", message: "The document could not be saved." });
+      }
+    },
+  );
+
+  // Authenticated, audited download. Serves both contractor_documents and
+  // worker_documents-sourced compliance records; every request is authorized
+  // afresh against the caller's company scope — there is no public URL.
+  app.get("/api/contractor-documents/:id/download", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {
-      await storage.deleteContractorDocument(req.params.id);
+      const userId = req.session.userId as string;
+      const doc = await storage.getContractorComplianceDocumentById(req.params.id);
+      if (!doc) return res.status(404).json({ error: "NOT_FOUND", message: "Document not found." });
+
+      const access = await resolveContractorAccess(userId, doc.workerId, null);
+      if (!access.ok) return res.status(access.status).json(access.body);
+
+      const abs = path.join(resolvedUploadDir, path.basename(doc.fileUrl || ""));
+      if (!abs.startsWith(resolvedUploadDir) || !fs.existsSync(abs)) {
+        return res.status(404).json({ error: "FILE_MISSING", message: "The stored file is unavailable." });
+      }
+
+      await recordContractorDocEvent(access.companyId, doc.workerId, {
+        event: "accessed",
+        documentType: doc.documentType,
+        source: doc.source,
+        docId: doc.id,
+        actorUserId: userId,
+      });
+
+      res.setHeader("Cache-Control", "no-store, private");
+      res.setHeader("Content-Disposition", `attachment; filename="${(doc.fileName || "document").replace(/[^a-z0-9.\-_]/gi, "_")}"`);
+      res.sendFile(abs);
+    } catch (e) {
+      console.error("[ContractorDocs] download failed:", (e as Error).message);
+      res.status(500).json({ error: "DOWNLOAD_FAILED", message: "The document could not be retrieved." });
+    }
+  });
+
+  app.delete("/api/contractor-documents/:id", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const doc = await storage.getContractorComplianceDocumentById(req.params.id);
+      if (!doc) return res.status(404).json({ error: "NOT_FOUND", message: "Document not found." });
+
+      const access = await resolveContractorAccess(userId, doc.workerId, null);
+      if (!access.ok) return res.status(access.status).json(access.body);
+
+      if (doc.source !== "contractor_document") {
+        return res.status(409).json({
+          error: "MANAGED_ELSEWHERE",
+          message: "This document is managed in the worker profile's Documents tab and must be removed there.",
+        });
+      }
+
+      await storage.deleteContractorDocument(doc.id);
+      await recordContractorDocEvent(access.companyId, doc.workerId, {
+        event: "deleted",
+        documentType: doc.documentType,
+        source: doc.source,
+        docId: doc.id,
+        actorUserId: userId,
+      });
+      try {
+        await storage.calculate1099Summary(access.companyId, doc.workerId, new Date().getFullYear());
+      } catch { /* best-effort */ }
       res.json({ ok: true });
-    } catch (e) { res.status(500).json({ message: "Failed to delete contractor document" }); }
+    } catch (e) {
+      console.error("[ContractorDocs] delete failed:", (e as Error).message);
+      res.status(500).json({ error: "DELETE_FAILED", message: "Failed to delete contractor document." });
+    }
   });
 
   // ── Phase 2: 1099 Summaries ───────────────────────────────────────────────
@@ -31008,6 +31243,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { companyId, year } = req.query;
       if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user || !(await canAccessCompany(user, companyId as string))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
       res.json(await storage.get1099Summaries(companyId as string, parseInt(year as string)));
     } catch (e) { res.status(500).json({ message: "Failed to fetch 1099 summaries" }); }
   });
@@ -31024,6 +31263,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { companyId, year } = req.body;
       if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user || !(await canAccessCompany(user, companyId as string))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
       const summaries = await storage.generateAll1099Summaries(companyId, parseInt(year));
       res.json({ generated: summaries.length, summaries });
     } catch (e) { res.status(500).json({ message: "Failed to generate 1099 summaries" }); }
@@ -31302,6 +31545,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { companyId } = req.query;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user || !(await canAccessCompany(user, companyId as string))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
       const allWorkers = await storage.getWorkers(companyId as string);
       const contractors = allWorkers.filter(w => w.workerType === "contractor");
       res.json(contractors);

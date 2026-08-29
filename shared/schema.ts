@@ -3751,12 +3751,63 @@ export const insertTradeAuditLogSchema = createInsertSchema(tradeAuditLogs).omit
 export type TradeAuditLog = typeof tradeAuditLogs.$inferSelect;
 export type InsertTradeAuditLog = z.infer<typeof insertTradeAuditLogSchema>;
 
-// ── Contractor Documents (W-9, W-8BEN, etc.) ─────────────────────────────
+// ── Contractor Documents (W-9, contractor agreement, insurance, etc.) ─────
+//
+// Canonical store for a contractor's compliance documents, surfaced in the
+// contractor profile (Trade Compensation → Contractors). Independent
+// contractors are `workers` rows with worker_type = 'contractor'; the same
+// worker's ad-hoc profile documents also live in `worker_documents` (shared
+// by every worker type). `documentType` is kept as free text for forward
+// compatibility, but new writes normalize to CONTRACTOR_DOCUMENT_TYPES.
+export const CONTRACTOR_DOCUMENT_TYPES = [
+  "w9",
+  "contractor_agreement",
+  "amendment",
+  "insurance_certificate",
+  "license_certification",
+  "invoice_support",
+  "other",
+] as const;
+export type ContractorDocumentType = (typeof CONTRACTOR_DOCUMENT_TYPES)[number];
+
+/** Coerce an arbitrary/legacy document-type string to a canonical contractor type. */
+export function normalizeContractorDocumentType(raw: string | null | undefined): ContractorDocumentType {
+  const s = (raw || "").trim().toLowerCase();
+  if ((CONTRACTOR_DOCUMENT_TYPES as readonly string[]).includes(s)) return s as ContractorDocumentType;
+  if (/\bw-?9\b/.test(s)) return "w9";
+  if (/(contractor|independent).*agreement|agreement.*(contractor|independent)|contractor_agreement/.test(s)) return "contractor_agreement";
+  if (/amendment|addend/.test(s)) return "amendment";
+  if (/insurance|certificate of insurance|\bcoi\b/.test(s)) return "insurance_certificate";
+  if (/licen[sc]e|certification|permit/.test(s)) return "license_certification";
+  if (/invoice|receipt|supporting doc/.test(s)) return "invoice_support";
+  return "other";
+}
+
+/**
+ * Classify a `worker_documents` row (free-text type + name) as a specific
+ * contractor-compliance document, or null when it is just a generic worker
+ * document that should NOT surface in the contractor compliance view.
+ * Deliberately conservative — only rows unambiguously identifiable as
+ * contractor compliance are unified into the contractor profile.
+ */
+export function classifyContractorComplianceDoc(
+  rawType: string | null | undefined,
+  rawName: string | null | undefined,
+): ContractorDocumentType | null {
+  const hay = `${rawType || ""} ${rawName || ""}`.toLowerCase();
+  if (/\bw-?9\b/.test(hay)) return "w9";
+  if (/(contractor|independent contractor).*agreement|contractor_agreement/.test(hay)) return "contractor_agreement";
+  if (/contractor.*amendment|agreement amendment/.test(hay)) return "amendment";
+  if (/insurance|certificate of insurance|\bcoi\b/.test(hay)) return "insurance_certificate";
+  if (/contractor licen[sc]e|licen[sc]e\/cert|certification/.test(hay)) return "license_certification";
+  return null;
+}
+
 export const contractorDocuments = pgTable("contractor_documents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull(),
   workerId: varchar("worker_id").notNull(),
-  documentType: text("document_type").notNull().default("w9"), // w9 | w8ben | other
+  documentType: text("document_type").notNull().default("w9"), // CONTRACTOR_DOCUMENT_TYPES
   fileName: text("file_name").notNull(),
   fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),
@@ -3768,6 +3819,16 @@ export const contractorDocuments = pgTable("contractor_documents", {
 export const insertContractorDocumentSchema = createInsertSchema(contractorDocuments).omit({ id: true, createdAt: true });
 export type ContractorDocument = typeof contractorDocuments.$inferSelect;
 export type InsertContractorDocument = z.infer<typeof insertContractorDocumentSchema>;
+
+/**
+ * A contractor compliance document as surfaced in the contractor profile.
+ * `source` records which table the canonical record lives in — a
+ * `worker_document` entry is an existing profile document classified as
+ * contractor compliance and shown here without copying the binary.
+ */
+export type ContractorComplianceDocument = ContractorDocument & {
+  source: "contractor_document" | "worker_document";
+};
 
 // ── Authorization Audit Log ────────────────────────────────────────────────
 export const authorizationAuditLog = pgTable("authorization_audit_log", {
