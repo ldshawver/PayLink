@@ -858,6 +858,16 @@ export interface IStorage {
   getContractorComplianceDocumentById(id: string): Promise<ContractorComplianceDocument | undefined>;
   contractorHasCurrentW9(companyId: string, workerId: string): Promise<boolean>;
   createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument>;
+  /**
+   * Insert a new contractor W-9 and, in the same transaction, supersede any
+   * prior *native* (`contractor_documents`) W-9 rows for the same company +
+   * worker so the contractor profile shows exactly one current W-9.
+   * `worker_documents` rows are never modified. Returns the fileUrls of
+   * superseded rows whose stored blob is no longer referenced anywhere.
+   */
+  replaceContractorW9(data: InsertContractorDocument): Promise<{ doc: ContractorDocument; supersededFileUrls: string[] }>;
+  /** True when `fileUrl` is still referenced by any contractor_documents or worker_documents row. */
+  isCanonicalFileReferenced(fileUrl: string, opts?: { excludeContractorDocumentId?: string }): Promise<boolean>;
   deleteContractorDocument(id: string): Promise<void>;
 
   // 1099 summaries
@@ -3949,6 +3959,64 @@ export class DatabaseStorage implements IStorage {
     }).returning();
     return r;
   }
+
+  async replaceContractorW9(
+    data: InsertContractorDocument,
+  ): Promise<{ doc: ContractorDocument; supersededFileUrls: string[] }> {
+    const documentType = normalizeContractorDocumentType(data.documentType);
+    return db.transaction(async (tx) => {
+      // Serialize concurrent W-9 replacements for the same contractor so two
+      // simultaneous uploads can never each observe "no prior row" and both
+      // keep their own — the lock is held only for this transaction.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`contractor-w9:${data.companyId}:${data.workerId}`}, 0))`,
+      );
+
+      const [doc] = await tx.insert(contractorDocuments).values({ ...data, documentType }).returning();
+
+      const priors = await tx.select().from(contractorDocuments).where(and(
+        eq(contractorDocuments.companyId, data.companyId),
+        eq(contractorDocuments.workerId, data.workerId),
+        eq(contractorDocuments.documentType, documentType),
+        ne(contractorDocuments.id, doc.id),
+      ));
+      if (priors.length === 0) return { doc, supersededFileUrls: [] };
+
+      await tx.delete(contractorDocuments).where(inArray(contractorDocuments.id, priors.map(p => p.id)));
+
+      // A superseded blob is removable only when nothing else — a remaining
+      // contractor_documents row (incl. the new one) or ANY worker_documents
+      // row — still points at that file_url.
+      const superseded: string[] = [];
+      for (const p of priors) {
+        if (!p.fileUrl || p.fileUrl === doc.fileUrl || superseded.includes(p.fileUrl)) continue;
+        const [cd] = await tx.select({ id: contractorDocuments.id }).from(contractorDocuments)
+          .where(eq(contractorDocuments.fileUrl, p.fileUrl)).limit(1);
+        if (cd) continue;
+        const [wd] = await tx.select({ id: workerDocuments.id }).from(workerDocuments)
+          .where(eq(workerDocuments.fileUrl, p.fileUrl)).limit(1);
+        if (wd) continue;
+        superseded.push(p.fileUrl);
+      }
+      return { doc, supersededFileUrls: superseded };
+    });
+  }
+
+  async isCanonicalFileReferenced(
+    fileUrl: string,
+    opts?: { excludeContractorDocumentId?: string },
+  ): Promise<boolean> {
+    if (!fileUrl) return false;
+    const cdConds = [eq(contractorDocuments.fileUrl, fileUrl)];
+    if (opts?.excludeContractorDocumentId) cdConds.push(ne(contractorDocuments.id, opts.excludeContractorDocumentId));
+    const [cd] = await db.select({ id: contractorDocuments.id }).from(contractorDocuments)
+      .where(and(...cdConds)).limit(1);
+    if (cd) return true;
+    const [wd] = await db.select({ id: workerDocuments.id }).from(workerDocuments)
+      .where(eq(workerDocuments.fileUrl, fileUrl)).limit(1);
+    return !!wd;
+  }
+
   async deleteContractorDocument(id: string): Promise<void> {
     await db.delete(contractorDocuments).where(eq(contractorDocuments.id, id));
   }
