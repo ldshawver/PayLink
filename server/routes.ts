@@ -25184,10 +25184,43 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    // Company scope is resolved from the session, never trusted from the body:
+    // a caller with no company context, a cross-tenant companyId, or a stale
+    // company_id that no longer exists now gets a clear 4xx instead of an
+    // opaque 500 from a NOT NULL / FK violation deep in the insert.
     try {
-      const r = await storage.createCustomer(req.body);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (!sessionCompanyId) {
+        return res.status(400).json({
+          error: "NO_COMPANY_CONTEXT",
+          message: "Your account is not associated with a company. Switch to a company account to add customers.",
+        });
+      }
+      if (req.body?.companyId && req.body.companyId !== sessionCompanyId) {
+        return res.status(403).json({ error: "COMPANY_MISMATCH", message: "You cannot create a customer for another company." });
+      }
+      const company = await storage.getCompany(sessionCompanyId);
+      if (!company) {
+        return res.status(400).json({
+          error: "INVALID_COMPANY_CONTEXT",
+          message: "Your account is linked to a company that no longer exists. Contact an administrator.",
+        });
+      }
+      const { id: _id, companyId: _bodyCompanyId, createdAt: _createdAt, updatedAt: _updatedAt, ...rest } =
+        (req.body ?? {}) as Record<string, unknown>;
+      const r = await storage.createCustomer({ ...(rest as any), companyId: sessionCompanyId });
       res.status(201).json(r);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") }); }
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      if (code === "23502" || code === "23503") {
+        return res.status(400).json({ error: "CUSTOMER_INVALID", message: "A required field or the company reference was invalid." });
+      }
+      if (code === "23505") {
+        return res.status(409).json({ error: "CUSTOMER_DUPLICATE", message: "A customer with these details already exists." });
+      }
+      console.error("[Customers] create failed:", (e as Error).message);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") });
+    }
   });
 
   app.patch("/api/customers/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
