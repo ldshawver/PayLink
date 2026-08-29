@@ -1,6 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { redactDiagnosticText } from "./diagnostics-safety";
+import { redactDiagnosticText, redactContractorDocumentLogBody } from "./diagnostics-safety";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import session from "express-session";
@@ -341,6 +341,13 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      // Scoped pre-pass: a contractor W-9 / compliance document's fileName can
+      // carry a real person's name and its fileUrl is an internal storage path;
+      // strip just those two fields for that route group before the response
+      // body is logged. The response itself was already sent above.
+      if (capturedJsonResponse && path.startsWith("/api/contractor-documents")) {
+        capturedJsonResponse = redactContractorDocumentLogBody(capturedJsonResponse) as Record<string, any>;
+      }
       if (capturedJsonResponse) {
         // Truncate large response bodies (e.g. bulk worker/payroll list endpoints)
         // to prevent multi-megabyte log lines that spike memory on every request.

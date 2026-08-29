@@ -342,7 +342,8 @@ async function main() {
     check("no audit event leaks ssn/tin/file url/storage key", !/"ssn"|"tin"|"file_url"|"fileurl"|"storage_key"|"signedurl"|\/uploads\//.test(dump));
 
     console.log("\n── 17. Download requires live authorization every call; no public URL ──");
-    const dlDoc = (await pool.query(`SELECT id FROM contractor_documents WHERE worker_id=$1 AND file_name='dana-w9.pdf' LIMIT 1`, [dualContractor])).rows[0].id;
+    // The re-issue in section 15 supersedes the original row, so match on type, not the original filename.
+    const dlDoc = (await pool.query(`SELECT id FROM contractor_documents WHERE worker_id=$1 AND document_type='w9' LIMIT 1`, [dualContractor])).rows[0].id;
     const dlAuthed = await fetch(`${base}/api/contractor-documents/${dlDoc}/download`, { headers: { cookie: sAdminA.cookie } });
     check("authorized download → 200 with attachment + no-store", dlAuthed.status === 200 &&
       /attachment/.test(dlAuthed.headers.get("content-disposition") || "") &&

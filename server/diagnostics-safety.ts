@@ -52,6 +52,29 @@ function maskSensitiveValue(value: string): string {
   }
 }
 
+/**
+ * Scoped redaction for contractor-document response bodies before they reach
+ * the request logger. A contractor W-9 / compliance document's `fileName` can
+ * carry a real person's name and its `fileUrl` is an internal storage path —
+ * neither belongs in PM2 output. Deep-walks the value and replaces only those
+ * two keys; every other field (ids, documentType, source, timestamps) is kept.
+ * Intentionally narrow — not a change to the general logging pipeline.
+ */
+const CONTRACTOR_DOC_REDACT_KEYS = new Set(["fileName", "file_name", "fileUrl", "file_url"]);
+export function redactContractorDocumentLogBody(input: unknown): unknown {
+  if (Array.isArray(input)) return input.map(redactContractorDocumentLogBody);
+  if (input && typeof input === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      out[k] = CONTRACTOR_DOC_REDACT_KEYS.has(k) && typeof v === "string" && v.length > 0
+        ? "[redacted]"
+        : redactContractorDocumentLogBody(v);
+    }
+    return out;
+  }
+  return input;
+}
+
 export function redactDiagnosticText(input: unknown): string {
   let output = String(input ?? "");
   // Field-based masking runs first, producing a nicely shortened value (…VFnO…P9-style) for named

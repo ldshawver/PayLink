@@ -240,6 +240,52 @@ async function discardUploadedFile(file?: Express.Multer.File): Promise<void> {
   try { await fs.promises.unlink(file.path); } catch { /* already gone */ }
 }
 
+/**
+ * Resolve a stored `/uploads/<name>` reference to an absolute path that is
+ * strictly inside `resolvedUploadDir`. Returns null for anything else — a
+ * different URL shape, an absolute/external path, a NUL byte, or any value
+ * that normalises to a location outside the uploads root (path traversal).
+ */
+function resolveUploadPath(fileUrl: string | null | undefined): string | null {
+  if (!fileUrl || typeof fileUrl !== "string" || fileUrl.includes("\0")) return null;
+  const m = /^\/uploads\/(.+)$/.exec(fileUrl);
+  if (!m) return null;
+  const rel = m[1];
+  if (rel.split(/[\\/]/).some(seg => seg === "..")) return null;
+  const root = path.resolve(resolvedUploadDir);
+  const abs = path.resolve(root, rel);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (abs !== root && !abs.startsWith(rootWithSep)) return null;
+  return abs;
+}
+
+/**
+ * Remove a stored contractor-document blob, but only after confirming no
+ * `contractor_documents` or `worker_documents` row still references the same
+ * canonical file_url. Path is resolved safely beneath the uploads root.
+ * Best-effort: never throws, returns what happened for audit/logging.
+ */
+async function removeUnreferencedUploadFile(
+  fileUrl: string | null | undefined,
+  opts?: { excludeContractorDocumentId?: string },
+): Promise<"removed" | "retained-shared" | "skipped-unsafe-path" | "missing" | "error"> {
+  if (!fileUrl) return "skipped-unsafe-path";
+  try {
+    if (await storage.isCanonicalFileReferenced(fileUrl, opts)) return "retained-shared";
+  } catch (e) {
+    console.error("[ContractorDocs] reference check failed:", (e as Error).message);
+    return "error";
+  }
+  const abs = resolveUploadPath(fileUrl);
+  if (!abs) return "skipped-unsafe-path";
+  try {
+    await fs.promises.unlink(abs);
+    return "removed";
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "error";
+  }
+}
+
 type ResolvedWorker = NonNullable<Awaited<ReturnType<typeof storage.getWorker>>>;
 type ContractorAccess =
   | { ok: true; worker: ResolvedWorker; companyId: string }
@@ -287,7 +333,16 @@ async function resolveContractorAccess(
 async function recordContractorDocEvent(
   companyId: string,
   workerId: string,
-  detail: { event: string; documentType?: string | null; source?: string | null; docId?: string | null; actorUserId?: string | null; replaced?: boolean },
+  detail: {
+    event: string;
+    documentType?: string | null;
+    source?: string | null;
+    docId?: string | null;
+    actorUserId?: string | null;
+    replaced?: boolean;
+    fileRemoved?: boolean;
+    fileRetained?: boolean;
+  },
 ): Promise<void> {
   try {
     await db.execute(sql`
@@ -31087,27 +31142,47 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         }
 
         const canonicalType = normalizeContractorDocumentType(documentType || "w9");
-        const hadW9Before = canonicalType === "w9"
+        const isW9 = canonicalType === "w9";
+        const hadW9Before = isW9
           ? await storage.contractorHasCurrentW9(access.companyId, workerId!)
           : false;
 
-        let doc;
+        const insert = {
+          companyId: access.companyId,
+          workerId: workerId!,
+          documentType: canonicalType,
+          fileName: file.originalname,
+          fileUrl: `/uploads/${file.filename}`,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          notes: notes || null,
+          uploadedBy: userId,
+        };
+
+        let doc: Awaited<ReturnType<typeof storage.createContractorDocument>>;
+        let supersededFileUrls: string[] = [];
         try {
-          doc = await storage.createContractorDocument({
-            companyId: access.companyId,
-            workerId: workerId!,
-            documentType: canonicalType,
-            fileName: file.originalname,
-            fileUrl: `/uploads/${file.filename}`,
-            fileSize: file.size,
-            mimeType: file.mimetype,
-            notes: notes || null,
-            uploadedBy: userId,
-          });
+          if (isW9) {
+            // Atomic: insert the new W-9 and remove any prior native W-9 row(s)
+            // for this contractor so the profile shows exactly one current W-9.
+            ({ doc, supersededFileUrls } = await storage.replaceContractorW9(insert));
+          } else {
+            doc = await storage.createContractorDocument(insert);
+          }
         } catch (dbErr) {
-          // Metadata write failed after the object landed on disk — remove the orphan.
+          // The write (and, for a W-9, the atomic supersede) failed after the
+          // object landed on disk — nothing changed in the DB. Remove the
+          // just-uploaded orphan and surface a clean 500.
           await discardUploadedFile(file);
           throw dbErr;
+        }
+
+        // Prior W-9 rows were deleted inside the transaction above; drop their
+        // blobs too, but only those no longer referenced by any remaining
+        // contractor_documents or worker_documents row.
+        for (const url of supersededFileUrls) {
+          const outcome = await removeUnreferencedUploadFile(url, { excludeContractorDocumentId: doc.id });
+          if (outcome === "error") console.error("[ContractorDocs] superseded W-9 blob cleanup failed");
         }
 
         await recordContractorDocEvent(access.companyId, workerId!, {
@@ -31146,8 +31221,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const access = await resolveContractorAccess(userId, doc.workerId, null);
       if (!access.ok) return res.status(access.status).json(access.body);
 
-      const abs = path.join(resolvedUploadDir, path.basename(doc.fileUrl || ""));
-      if (!abs.startsWith(resolvedUploadDir) || !fs.existsSync(abs)) {
+      const abs = resolveUploadPath(doc.fileUrl);
+      if (!abs || !fs.existsSync(abs)) {
         return res.status(404).json({ error: "FILE_MISSING", message: "The stored file is unavailable." });
       }
 
@@ -31185,17 +31260,29 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       }
 
       await storage.deleteContractorDocument(doc.id);
+
+      // Remove the stored blob unless another contractor_documents or
+      // worker_documents row still points at the same canonical file.
+      const fileOutcome = await removeUnreferencedUploadFile(doc.fileUrl);
+      const fileCleanup =
+        fileOutcome === "removed" || fileOutcome === "missing" ? "removed"
+        : fileOutcome === "retained-shared" ? "retained"
+        : "deferred";
+      if (fileOutcome === "error") console.error("[ContractorDocs] stored-file cleanup failed after delete");
+
       await recordContractorDocEvent(access.companyId, doc.workerId, {
         event: "deleted",
         documentType: doc.documentType,
         source: doc.source,
         docId: doc.id,
         actorUserId: userId,
+        fileRemoved: fileCleanup === "removed",
+        fileRetained: fileCleanup === "retained",
       });
       try {
         await storage.calculate1099Summary(access.companyId, doc.workerId, new Date().getFullYear());
       } catch { /* best-effort */ }
-      res.json({ ok: true });
+      res.json({ ok: true, fileCleanup });
     } catch (e) {
       console.error("[ContractorDocs] delete failed:", (e as Error).message);
       res.status(500).json({ error: "DELETE_FAILED", message: "Failed to delete contractor document." });
