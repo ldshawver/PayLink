@@ -37,6 +37,7 @@
         "tests/deploy-app-workflow-static.test.ts",
         "tests/deployment-validation-static.test.ts",
         "tests/deploy-version-propagation-static.test.ts",
+        "tests/production-deploy-env-path-static.test.ts",
         "tests/diagnostics-safety-static.test.ts",
         "tests/documenso-incident-static.test.ts",
         "tests/documenso-log-redaction.test.ts",
