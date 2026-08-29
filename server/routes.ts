@@ -25184,31 +25184,75 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
-    // Company scope is resolved from the session, never trusted from the body:
-    // a caller with no company context, a cross-tenant companyId, or a stale
-    // company_id that no longer exists now gets a clear 4xx instead of an
-    // opaque 500 from a NOT NULL / FK violation deep in the insert.
+    // Company scope is resolved server-side, never trusted from an arbitrary
+    // body companyId:
+    //  - a tenant user's company comes exclusively from the session;
+    //  - a platform admin (super-admin / admin / owner — the only platform
+    //    roles requireRole("admin","manager") admits) must explicitly select
+    //    an acting company, which the server then validates (exists + the
+    //    platform role may act for it) and audits;
+    //  - anything else → a sanitized 400 INVALID_COMPANY_CONTEXT, nothing created.
     try {
-      const sessionCompanyId = await getSessionCompanyId(req);
-      if (!sessionCompanyId) {
-        return res.status(400).json({
-          error: "NO_COMPANY_CONTEXT",
-          message: "Your account is not associated with a company. Switch to a company account to add customers.",
-        });
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const bodyCompanyId =
+        typeof req.body?.companyId === "string" && req.body.companyId ? req.body.companyId : null;
+
+      let companyId: string;
+      if (isGlobalDiagnosticsRole(user.role)) {
+        // Platform admin: acting company is explicit, validated, and audited.
+        if (!bodyCompanyId) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Select a company before adding a customer.",
+          });
+        }
+        const company = await storage.getCompany(bodyCompanyId);
+        if (!company) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "The selected company was not found.",
+          });
+        }
+        if (!(await canAccessCompany({ id: user.id, companyId: user.companyId, role: user.role }, bodyCompanyId))) {
+          return res.status(403).json({
+            error: "COMPANY_ACCESS_DENIED",
+            message: "You are not permitted to act for the selected company.",
+          });
+        }
+        companyId = bodyCompanyId;
+        await writeAuditLog({
+          actorUserId: user.id,
+          targetResource: `company:${companyId}`,
+          changeType: "platform_acting_company",
+          note: "customer.create",
+          companyId,
+        }).catch(() => {});
+      } else {
+        // Tenant user: company is the session's; the body cannot override it.
+        const sessionCompanyId = user.companyId || null;
+        if (!sessionCompanyId) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Your account is not associated with a company. Contact an administrator.",
+          });
+        }
+        if (bodyCompanyId && bodyCompanyId !== sessionCompanyId) {
+          return res.status(403).json({ error: "COMPANY_MISMATCH", message: "You cannot create a customer for another company." });
+        }
+        const company = await storage.getCompany(sessionCompanyId);
+        if (!company) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Your account is linked to a company that no longer exists. Contact an administrator.",
+          });
+        }
+        companyId = sessionCompanyId;
       }
-      if (req.body?.companyId && req.body.companyId !== sessionCompanyId) {
-        return res.status(403).json({ error: "COMPANY_MISMATCH", message: "You cannot create a customer for another company." });
-      }
-      const company = await storage.getCompany(sessionCompanyId);
-      if (!company) {
-        return res.status(400).json({
-          error: "INVALID_COMPANY_CONTEXT",
-          message: "Your account is linked to a company that no longer exists. Contact an administrator.",
-        });
-      }
+
       const { id: _id, companyId: _bodyCompanyId, createdAt: _createdAt, updatedAt: _updatedAt, ...rest } =
         (req.body ?? {}) as Record<string, unknown>;
-      const r = await storage.createCustomer({ ...(rest as any), companyId: sessionCompanyId });
+      const r = await storage.createCustomer({ ...(rest as any), companyId });
       res.status(201).json(r);
     } catch (e) {
       const code = (e as { code?: string })?.code;

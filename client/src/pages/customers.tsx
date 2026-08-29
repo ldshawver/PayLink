@@ -363,7 +363,17 @@ export default function CustomersPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const deepLinkHandled = useRef(false);
 
-  const companyId = user?.companyId;
+  // A tenant user's company comes from the session. A platform admin has no
+  // company and must explicitly pick an acting company (validated server-side)
+  // before viewing or adding directory records.
+  const sessionCompanyId = user?.companyId;
+  const isPlatformActor = !sessionCompanyId;
+  const [actingCompanyId, setActingCompanyId] = useState("");
+  const { data: actingCompanyOptions = [] } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["/api/companies"],
+    enabled: isPlatformActor,
+  });
+  const companyId = sessionCompanyId || actingCompanyId || undefined;
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: [`/api/customers?companyId=${companyId}`],
@@ -480,10 +490,36 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Directory</h1>
           <p className="text-muted-foreground">Customers, vendors, and contractors</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-customer" className="w-full sm:w-auto">
-          <Plus className="h-4 w-4 mr-2" /> Add to Directory
-        </Button>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          {isPlatformActor && (
+            <Select value={actingCompanyId} onValueChange={setActingCompanyId}>
+              <SelectTrigger className="w-full sm:w-64" data-testid="select-acting-company">
+                <SelectValue placeholder="Select a company…" />
+              </SelectTrigger>
+              <SelectContent>
+                {actingCompanyOptions.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button
+            onClick={() => { setEditing(undefined); setDialogOpen(true); }}
+            data-testid="button-add-customer"
+            className="w-full sm:w-auto"
+            disabled={!companyId}
+            title={!companyId ? "Select a company first" : undefined}
+          >
+            <Plus className="h-4 w-4 mr-2" /> Add to Directory
+          </Button>
+        </div>
       </div>
+
+      {isPlatformActor && !companyId && (
+        <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground" data-testid="text-select-company-hint">
+          Select a company above to view or add its customers, vendors, and contractors.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card>
