@@ -25184,10 +25184,87 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    // Company scope is resolved server-side, never trusted from an arbitrary
+    // body companyId:
+    //  - a tenant user's company comes exclusively from the session;
+    //  - a platform admin (super-admin / admin / owner — the only platform
+    //    roles requireRole("admin","manager") admits) must explicitly select
+    //    an acting company, which the server then validates (exists + the
+    //    platform role may act for it) and audits;
+    //  - anything else → a sanitized 400 INVALID_COMPANY_CONTEXT, nothing created.
     try {
-      const r = await storage.createCustomer(req.body);
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const bodyCompanyId =
+        typeof req.body?.companyId === "string" && req.body.companyId ? req.body.companyId : null;
+
+      let companyId: string;
+      if (isGlobalDiagnosticsRole(user.role)) {
+        // Platform admin: acting company is explicit, validated, and audited.
+        if (!bodyCompanyId) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Select a company before adding a customer.",
+          });
+        }
+        const company = await storage.getCompany(bodyCompanyId);
+        if (!company) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "The selected company was not found.",
+          });
+        }
+        if (!(await canAccessCompany({ id: user.id, companyId: user.companyId, role: user.role }, bodyCompanyId))) {
+          return res.status(403).json({
+            error: "COMPANY_ACCESS_DENIED",
+            message: "You are not permitted to act for the selected company.",
+          });
+        }
+        companyId = bodyCompanyId;
+        await writeAuditLog({
+          actorUserId: user.id,
+          targetResource: `company:${companyId}`,
+          changeType: "platform_acting_company",
+          note: "customer.create",
+          companyId,
+        }).catch(() => {});
+      } else {
+        // Tenant user: company is the session's; the body cannot override it.
+        const sessionCompanyId = user.companyId || null;
+        if (!sessionCompanyId) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Your account is not associated with a company. Contact an administrator.",
+          });
+        }
+        if (bodyCompanyId && bodyCompanyId !== sessionCompanyId) {
+          return res.status(403).json({ error: "COMPANY_MISMATCH", message: "You cannot create a customer for another company." });
+        }
+        const company = await storage.getCompany(sessionCompanyId);
+        if (!company) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Your account is linked to a company that no longer exists. Contact an administrator.",
+          });
+        }
+        companyId = sessionCompanyId;
+      }
+
+      const { id: _id, companyId: _bodyCompanyId, createdAt: _createdAt, updatedAt: _updatedAt, ...rest } =
+        (req.body ?? {}) as Record<string, unknown>;
+      const r = await storage.createCustomer({ ...(rest as any), companyId });
       res.status(201).json(r);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") }); }
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      if (code === "23502" || code === "23503") {
+        return res.status(400).json({ error: "CUSTOMER_INVALID", message: "A required field or the company reference was invalid." });
+      }
+      if (code === "23505") {
+        return res.status(409).json({ error: "CUSTOMER_DUPLICATE", message: "A customer with these details already exists." });
+      }
+      console.error("[Customers] create failed:", (e as Error).message);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") });
+    }
   });
 
   app.patch("/api/customers/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
