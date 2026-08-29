@@ -71,19 +71,25 @@ export async function runDemoCleanup(deps: DemoCleanupDeps): Promise<DemoCleanup
   const protectedCandidates = candidates.filter(isIntegrityProtected);
   const ordinaryCandidates = candidates.filter((c) => !isIntegrityProtected(c));
 
-  if (protectedCandidates.length > 0) {
-    const signature = protectedCandidates
-      .map((c) => c.id)
-      .sort()
-      .join(",");
-    if (signature !== deps.throttle.lastProtectedSignature) {
-      deps.log(
-        `${protectedCandidates.length} integrity-protected demo company(ies) retained; ` +
-          `excluded from cleanup (gate_override_reason marks them inert).`,
-      );
-      deps.throttle.lastProtectedSignature = signature;
-    }
+  // Sanitized, throttled summary for the skipped integrity-protected parents:
+  // a count only (no ids / names / reasons), emitted at most once per run and
+  // not repeated on a later run while the protected set is unchanged. The
+  // signature is tracked unconditionally so the summary re-appears if the set
+  // empties and later returns.
+  const protectedSignature = protectedCandidates
+    .map((c) => c.id)
+    .sort()
+    .join(",");
+  if (
+    protectedCandidates.length > 0 &&
+    protectedSignature !== deps.throttle.lastProtectedSignature
+  ) {
+    deps.log(
+      `${protectedCandidates.length} integrity-protected demo company(ies) retained; ` +
+        `excluded from cleanup (gate_override_reason marks them inert).`,
+    );
   }
+  deps.throttle.lastProtectedSignature = protectedSignature;
 
   let removed = 0;
   let failed = 0;

@@ -156,6 +156,16 @@ ok("marker is the documented 'integrity-repair' prefix", INTEGRITY_REPAIR_MARKER
     "protected summary is re-emitted when the protected set changes",
     run3.logs.filter((l) => l.includes("integrity-protected")).length === 1,
   );
+
+  const run4 = harness({ candidates: [], throttle });
+  await runDemoCleanup(run4.deps);
+  const run5 = harness({ candidates: [p1], throttle });
+  await runDemoCleanup(run5.deps);
+  ok(
+    "protected summary re-appears if the protected set empties and later returns",
+    run4.logs.filter((l) => l.includes("integrity-protected")).length === 0 &&
+      run5.logs.filter((l) => l.includes("integrity-protected")).length === 1,
+  );
 }
 
 // -- existing behaviour outside this case does not regress ---------------
