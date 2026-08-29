@@ -19,7 +19,8 @@ jobs:
     timeout-minutes: 40
     env:
       APP_PATH: /home/paylinkssh/paylink-app/PayLink
-      ENV_FILE: /etc/paylink/production.env
+      # Established production environment file on the VPS (see also scripts/backup-db.sh).
+      ENV_FILE: /etc/paylink/.env
       PM2_NAME: paylink
       APP_PORT: "8000"
       RELEASE_TAG: ${{ inputs.release_tag }}
@@ -67,7 +68,7 @@ jobs:
             set -Eeuo pipefail
 
             APP_PATH="/home/paylinkssh/paylink-app/PayLink"
-            ENV_FILE="/etc/paylink/production.env"
+            ENV_FILE="/etc/paylink/.env"
             PM2_NAME="paylink"
             APP_PORT="8000"
             RELEASE_TAG="${{ inputs.release_tag }}"

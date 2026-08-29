@@ -18,7 +18,12 @@ ok("push to main deploys staging workflow only", staging.includes("push:") && st
 ok("production deploy is manual only", production.includes("workflow_dispatch:") && !production.includes("push:"));
 ok("production requires explicit release_tag", production.includes("release_tag:") && production.includes("required: true") && production.includes('test -n "$RELEASE_TAG"'));
 ok("production runs pg_dump before PM2 restart", production.indexOf('pg_dump "$DATABASE_URL"') > -1 && production.indexOf('pm2 delete "$PM2_NAME"') > production.indexOf('pg_dump "$DATABASE_URL"'));
-ok("staging and production env files differ", staging.includes('/etc/paylink/.env.staging') && production.includes('/etc/paylink/production.env'));
+ok(
+  "staging and production env files differ (staging: /etc/paylink/.env.staging, production: /etc/paylink/.env)",
+  staging.includes('/etc/paylink/.env.staging') &&
+    /\/etc\/paylink\/\.env(?![.\w])/.test(production) &&
+    !production.includes('/etc/paylink/production.env'),
+);
 ok("staging workflow does not use the incorrect /etc/paylink/staging.env path", !staging.includes('/etc/paylink/staging.env'));
 ok("staging and production ports differ", staging.includes('APP_PORT="8010"') && production.includes('APP_PORT="8000"'));
 ok("staging workflow does not mutate nginx", !/apply_mypaylink_nginx|nginx -t|nginx -s|reload nginx/i.test(staging));
