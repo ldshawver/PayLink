@@ -234,6 +234,19 @@ async function main() {
     const wouldLink = (out: string) => Number((out.match(/would link\s*:\s*(\d+)/) || [])[1] ?? -1);
     const linkedThisRun = (out: string) => Number((out.match(/linked this run\s*:\s*(\d+)/) || [])[1] ?? -1);
 
+    // Company scope is mandatory and enforced before any DB connection.
+    const runReconcileRaw = (args: string[]) => {
+      const r = spawnSync(process.execPath, [tsxBin, "scripts/contractor-w9-document-routing/reconcile.ts",
+        "--database-url", testDatabaseUrl, ...args], { encoding: "utf8", timeout: 120000 });
+      return { status: r.status, out: `${r.stdout || ""}\n${r.stderr || ""}` };
+    };
+    const noScope = runReconcileRaw([]);
+    check("reconcile with no company scope is refused (exit 4)", noScope.status === 4 && /company scope is required/i.test(noScope.out), noScope.out.slice(-300));
+    const applyNoCompany = runReconcileRaw(["--all-companies", "--apply"]);
+    check("--apply without --company is refused even with --all-companies (exit 4)", applyNoCompany.status === 4 && /writes are single-company only/i.test(applyNoCompany.out), applyNoCompany.out.slice(-300));
+    const sweep = runReconcileRaw(["--all-companies"]);
+    check("--all-companies dry-run is allowed (exit 0, no writes)", sweep.status === 0, sweep.out.slice(-300));
+
     // Count reconciliation-linked rows for THIS test's tenant only — a global
     // count is confounded by residue from an aborted run or a concurrent suite.
     const reconcileLinkedCount = async () =>

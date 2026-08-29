@@ -12,7 +12,9 @@
  * SAME `file_url`. The binary is never duplicated. It is:
  *   - dry-run by default; writes only with --apply
  *   - idempotent: a re-run inserts nothing (dedup key = worker_id + file_url)
- *   - tenant-scoped: pass --company <id> to limit to one company
+ *   - tenant-scoped: company scope is mandatory. --apply always requires
+ *     --company <id> (writes are single-company only). A dry-run requires
+ *     either --company <id> or an explicit --all-companies opt-in.
  *   - silent about content: it prints aggregate counts only — never names,
  *     SSNs/TINs, document contents, file URLs, storage keys, or signed URLs
  *
@@ -20,8 +22,15 @@
  * and it does NOT touch employee relationships.
  *
  * Usage:
+ *   # dry-run, one company
  *   tsx scripts/contractor-w9-document-routing/reconcile.ts \
- *     --database-url postgres://... [--company <id>] [--apply] [--allow-protected]
+ *     --database-url postgres://... --company <id>
+ *   # dry-run, aggregate sweep across every company (read-only)
+ *   tsx scripts/contractor-w9-document-routing/reconcile.ts \
+ *     --database-url postgres://... --all-companies
+ *   # apply (single company only)
+ *   tsx scripts/contractor-w9-document-routing/reconcile.ts \
+ *     --database-url postgres://... --company <id> --apply [--allow-protected]
  *
  * Running --apply against a staging/production-shaped database name requires
  * --allow-protected AND, per the repair plan, separate written approval.
@@ -29,7 +38,7 @@
 import { Pool } from "pg";
 import { classifyContractorComplianceDoc } from "../../shared/schema";
 
-interface Args { databaseUrl: string; company: string | null; apply: boolean; allowProtected: boolean; }
+interface Args { databaseUrl: string; company: string | null; allCompanies: boolean; apply: boolean; allowProtected: boolean; }
 
 function parseArgs(argv: string[]): Args {
   const get = (flag: string): string | null => {
@@ -44,6 +53,7 @@ function parseArgs(argv: string[]): Args {
   return {
     databaseUrl,
     company: get("--company"),
+    allCompanies: argv.includes("--all-companies"),
     apply: argv.includes("--apply"),
     allowProtected: argv.includes("--allow-protected"),
   };
@@ -52,8 +62,30 @@ function parseArgs(argv: string[]): Args {
 const PROTECTED_DB_PATTERNS = [/apppaylinkmain/i, /apppaylinkstaging/i, /prod/i, /staging/i];
 const RECONCILE_MARKER = "system:w9-doc-reconcile";
 
+/**
+ * Company-scope gate. Runs before any DB connection so a mis-scoped
+ * invocation never opens a pool. Writes must always target a single
+ * company; a dry-run may sweep every company only with an explicit
+ * --all-companies opt-in.
+ */
+function assertCompanyScope(args: Args): void {
+  if (args.apply && !args.company) {
+    console.error(`\nRefusing to --apply without --company <id>. Writes are single-company only.`);
+    process.exit(4);
+  }
+  if (args.allCompanies && args.company) {
+    console.error(`\nPass either --company <id> or --all-companies, not both.`);
+    process.exit(4);
+  }
+  if (!args.company && !args.allCompanies) {
+    console.error(`\nCompany scope is required. Pass --company <id>, or --all-companies for a read-only aggregate dry-run.`);
+    process.exit(4);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  assertCompanyScope(args);
   const pool = new Pool({ connectionString: args.databaseUrl, max: 4 });
 
   try {
@@ -64,7 +96,7 @@ async function main() {
     console.log(`── contractor-w9 reconciliation ──`);
     console.log(`database        : ${dbName}`);
     console.log(`mode            : ${args.apply ? "APPLY (writes enabled)" : "dry-run (no writes)"}`);
-    console.log(`company scope   : ${args.company ? args.company : "ALL companies"}`);
+    console.log(`company scope   : ${args.company ? args.company : "ALL companies (dry-run sweep)"}`);
 
     if (args.apply && isProtected && !args.allowProtected) {
       console.error(`\nRefusing to --apply against a protected database ("${dbName}") without --allow-protected.`);
