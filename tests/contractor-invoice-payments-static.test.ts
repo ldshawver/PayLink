@@ -111,6 +111,12 @@ ok("the old print-check invoice UPDATE ('payment_method=check') is gone",
 ok("POST /cut-check issues: one payment + atomic balance reduction, returns the rendered PDF",
   routes.includes('app.post("/api/contractor-invoices/:id/cut-check"') &&
   /cut-check[\s\S]{0,6000}?INSERT INTO contractor_payments[\s\S]{0,600}?'check'/.test(routes));
+ok("cut-check replay is stable after the balance drops to zero (sentinel fingerprint, not the live balance)",
+  routes.includes("FULL_BALANCE_SENTINEL = -1") &&
+  routes.includes("requestedCents ?? FULL_BALANCE_SENTINEL") &&
+  !routes.includes("requestedCents ?? toCents(invPre.balance_due ?? invPre.amount)"));
+ok("a cut-check replay with an explicit DIFFERENT amount than the issued check still 409s",
+  routes.includes("requestedCents !== null && toCents(priorByKey.amount) !== requestedCents"));
 ok("GET /api/contractor-payments/:paymentId/check reprints with zero financial writes",
   routes.includes('app.get("/api/contractor-payments/:paymentId/check"') &&
   !/paymentId\/check"[\s\S]{0,1500}?(INSERT INTO contractor_payments|UPDATE contractor_invoices)/.test(routes));
