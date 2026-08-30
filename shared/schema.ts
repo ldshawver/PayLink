@@ -2462,11 +2462,21 @@ export const contractorPayments = pgTable("contractor_payments", {
   paymentMethod: text("payment_method"),
   paymentProvider: text("payment_provider"),
   externalPaymentId: text("external_payment_id"),
-  status: text("status").notNull().default("completed"),
+  status: text("status").notNull().default("completed"), // completed | void
   paidAt: timestamp("paid_at").defaultNow(),
   referenceNumber: text("reference_number"),
   notes: text("notes"),
   recordedByUserId: varchar("recorded_by_user_id"),
+  // ── Idempotency (migration 0016) — company-scoped partial unique on (company_id, idempotency_key) ──
+  idempotencyKey: text("idempotency_key"),
+  idempotencyFingerprint: text("idempotency_fingerprint"),
+  // ── Void / reversal audit (migration 0016) — the original row is never deleted or overwritten ──
+  voidedAt: timestamp("voided_at"),
+  voidedByUserId: varchar("voided_by_user_id"),
+  voidReason: text("void_reason"),
+  // ── Reissue / reversal linkage (migration 0016) ──
+  reversesPaymentId: varchar("reverses_payment_id"),
+  reissuedByPaymentId: varchar("reissued_by_payment_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -2495,6 +2505,8 @@ export const contractorTradeCompensation = pgTable("contractor_trade_compensatio
   deliveryReference: text("delivery_reference"),
   includedIn1099: boolean("included_in_1099").notNull().default(true),
   notes: text("notes"),
+  // ── Idempotency (migration 0016) — company-scoped partial unique on (company_id, idempotency_key) ──
+  idempotencyKey: text("idempotency_key"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -3849,6 +3849,20 @@ Thank you,
     await runInv("contractor_invoices.withheld_amount",              sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS withheld_amount NUMERIC DEFAULT 0`);
     await runInv("contractor_invoices.setoff_amount",                sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS setoff_amount NUMERIC DEFAULT 0`);
     await runInv("contractor_invoices.setoff_reason",                sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS setoff_reason TEXT`);
+
+    // ── Contractor payment lifecycle (migration 0016): idempotency, void audit, reissue linkage ──
+    await runInv("contractor_payments.idempotency_key",         sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS idempotency_key TEXT`);
+    await runInv("contractor_payments.idempotency_fingerprint", sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS idempotency_fingerprint TEXT`);
+    await runInv("contractor_payments.voided_at",               sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP`);
+    await runInv("contractor_payments.voided_by_user_id",       sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS voided_by_user_id VARCHAR`);
+    await runInv("contractor_payments.void_reason",             sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS void_reason TEXT`);
+    await runInv("contractor_payments.reverses_payment_id",     sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS reverses_payment_id VARCHAR`);
+    await runInv("contractor_payments.reissued_by_payment_id",  sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS reissued_by_payment_id VARCHAR`);
+    await runInv("contractor_trade_compensation.idempotency_key", sqlInv`ALTER TABLE contractor_trade_compensation ADD COLUMN IF NOT EXISTS idempotency_key TEXT`);
+    await runInv("contractor_payments company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_payments_company_idempotency_key ON contractor_payments (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    await runInv("contractor_trade_comp company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_trade_comp_company_idempotency_key ON contractor_trade_compensation (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    await runInv("contractor_trade_comp payment_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_contractor_trade_comp_payment_id ON contractor_trade_compensation (contractor_payment_id) WHERE contractor_payment_id IS NOT NULL`);
+
     await runInv("invoice_term_settings table", sqlInv`CREATE TABLE IF NOT EXISTS invoice_term_settings (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id VARCHAR NOT NULL UNIQUE REFERENCES companies(id),
