@@ -11373,13 +11373,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ error: "NO_FUNDING_ACCOUNT", message: "No enabled bank account found for this company. Configure a remittance source first." });
       }
 
+      // Cut-check fingerprint: an explicit requested amount, else a sentinel meaning
+      // "the invoice's remaining balance at issue time" — so a replay after the
+      // balance has gone to zero still matches the same key.
       const requestedCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : null;
-      const fingerprintAmount = requestedCents ?? toCents(invPre.balance_due ?? invPre.amount);
-      const fingerprint = paymentFingerprint({ companyId: invPre.company_id, invoiceId, method: "check", amountCents: fingerprintAmount, tradeCompensationId: null });
+      const FULL_BALANCE_SENTINEL = -1;
+      const fingerprint = paymentFingerprint({ companyId: invPre.company_id, invoiceId, method: "check", amountCents: requestedCents ?? FULL_BALANCE_SENTINEL, tradeCompensationId: null });
 
       const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
       if (priorByKey) {
-        if (priorByKey.idempotency_fingerprint !== fingerprint) {
+        // A replay is: no explicit amount, or an explicit amount equal to the issued check.
+        const explicitMismatch = requestedCents !== null && toCents(priorByKey.amount) !== requestedCents;
+        if (explicitMismatch && priorByKey.idempotency_fingerprint !== fingerprint) {
           return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
         }
         // Replay: re-render the already-issued check, no write.
@@ -11431,13 +11436,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } catch (txErr) {
         if (isUniqueConstraintViolation(txErr)) {
           const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
-          if (committed && committed.idempotency_fingerprint === fingerprint) {
+          if (committed) {
+            const explicitMismatch = requestedCents !== null && toCents(committed.amount) !== requestedCents;
+            if (explicitMismatch) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
             const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: committed.amount, checkNumber: committed.reference_number });
             res.set("Content-Type", "application/pdf");
             res.set("X-Payment-Id", String(committed.id));
             return res.send(Buffer.from(pdfBytes));
           }
-          if (committed) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
         }
         if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
         throw txErr;
