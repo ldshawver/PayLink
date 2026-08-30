@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 68,
+      "fileCount": 71,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -25,7 +25,10 @@
         "tests/contractor-hub-documenso-button-static.test.ts",
         "tests/contractor-hub-lifecycle-static.test.ts",
         "tests/contractor-invoice-exactly-once-static.test.ts",
+        "tests/contractor-invoice-payments-static.test.ts",
         "tests/contractor-lifecycle-audit-static.test.ts",
+        "tests/contractor-payments.test.ts",
+        "tests/contractor-payments-1099-unchanged.test.ts",
         "tests/contractor-proposal-identity.test.ts",
         "tests/contractor-proposal-identity-wiring-static.test.ts",
         "tests/contractor-trade-compensation-static.test.ts",
@@ -83,7 +86,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 16,
+      "fileCount": 17,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/worker-create-payrate-null-db.test.ts",
@@ -100,7 +103,8 @@
         "tests/tenant-company-membership-guard-db.test.ts",
         "tests/contractor-w9-document-routing-db.test.ts",
         "tests/contractor-w9-upload-lifecycle-db.test.ts",
-        "tests/customer-create-company-scope-db.test.ts"
+        "tests/customer-create-company-scope-db.test.ts",
+        "tests/contractor-invoice-payments-db.test.ts"
       ]
     },
     "e2e": {

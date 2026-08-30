@@ -39,6 +39,12 @@ import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
 import { assertContractorTradeCreditsPrintable, calculateContractorTradeSettlement } from "./contractor-trade-compensation";
 import { buildMicrString, buildFractionalRouting, formatCheckNumber } from "./check-micr";
+import {
+  CONTRACTOR_PAYMENT_METHODS, DESCRIPTION_REQUIRED_METHODS, normalizeContractorPaymentMethod,
+  toCents, fromCents, checkPaymentAmount, recomputeInvoiceStatus, paymentFingerprint,
+  requireIdempotencyKey, checkTradeCreditApplicable, tradeCompFingerprint,
+  externalSettlementDisclaimer, isUniqueConstraintViolation,
+} from "./contractor-payments";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -11252,95 +11258,225 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
   });
 
-  // POST /api/contractor-invoices/:id/print-check — generate vendor check PDF
-  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
+  // ── Contractor-payment lifecycle helpers (Release B) ─────────────────────
+  class PaymentRuleError extends Error {
+    constructor(public httpStatus: number, public code: string, message: string) { super(message); }
+  }
+  const cpRows = (r: unknown): any[] => (Array.isArray(r) ? r : (((r as any)?.rows ?? []) as any[]));
+  const cpRow = (r: unknown): any => cpRows(r)[0];
+  // Fire-and-forget contractor notification, sent only AFTER the financial
+  // transaction commits. Failure never affects the payment; the
+  // contractor_notifications insert is itself the durable queue. Logs only the
+  // payment id (never amounts, names, methods, or bank details).
+  const notifyAfterCommit = (paymentId: string, input: Parameters<typeof createContractorNotification>[0]) => {
+    Promise.resolve()
+      .then(() => createContractorNotification(input))
+      .catch(() => console.warn(`[contractor-payment] notification deferred for payment ${paymentId}`));
+  };
+
+  // Render a contractor-invoice check PDF. PURE RENDER — no financial writes.
+  // Throws PaymentRuleError for missing invoice / cross-company / no bank account.
+  async function buildContractorInvoiceCheckPdf(
+    invoiceId: string,
+    req: any,
+    opts: { amount?: unknown; checkNumber?: string | number | null; memo?: string; payeeName?: string; payeeAddress?: string; payeeCityStateZip?: string },
+  ): Promise<{ pdfBytes: Uint8Array; invoice: any; companyId: string }> {
+    const inv = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`));
+    if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+    const sessionCompanyId = await getSessionCompanyId(req);
+    if (sessionCompanyId && inv.company_id && sessionCompanyId !== inv.company_id) {
+      throw new PaymentRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const user = await storage.getUser(req.session.userId!);
+    if (inv.company_id && !(await canAccessCompany(user!, inv.company_id))) {
+      throw new PaymentRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const compId = inv.company_id || sessionCompanyId;
+    const coRow = cpRow(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
+    const rsRow = cpRow(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`)) as CheckRsRow | undefined;
+    if (!rsRow?.routing_number || !rsRow?.account_number) {
+      throw new PaymentRuleError(400, "NO_FUNDING_ACCOUNT", "No enabled bank account found for this company. Configure a remittance source first.");
+    }
+    const workerRow = cpRow(await db.execute(sql`SELECT w.first_name, w.last_name FROM workers w WHERE w.id = ${inv.contractor_id} LIMIT 1`));
+    const defaultPayeeName = workerRow ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || "Contractor" : "Contractor";
+    const calTplRow = cpRow(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`)) as CheckTplRow | undefined;
+    const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
+    const calibrationOffsets = (rsRow as any).calibration_config ? parseCalibrationOffsets((rsRow as any).calibration_config) : undefined;
+    const coNorm = coRow ? {
+      name: coRow.name || "", address: coRow.address || "", city: coRow.city || "", state: coRow.state || "",
+      zip: coRow.zip || "", phone: coRow.phone || "", ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || "",
+    } : null;
+    const pdfBytes = await renderCheckPdf({
+      item: null, worker: null, run: null, company: coNorm,
+      remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
+      isCalibration: false, layoutConfig, calibrationOffsets,
+      vendorCheck: {
+        payeeName: String(opts.payeeName || defaultPayeeName),
+        payeeAddress: String(opts.payeeAddress || ""),
+        payeeCityStateZip: String(opts.payeeCityStateZip || ""),
+        amount: fromCents(toCents(opts.amount ?? inv.amount)),
+        checkNumber: opts.checkNumber != null ? String(opts.checkNumber) : undefined,
+        memo: String(opts.memo || inv.description || inv.invoice_number || ""),
+      },
+    });
+    return { pdfBytes, invoice: inv, companyId: String(compId) };
+  }
+
+  // GET|POST /api/contractor-invoices/:id/print-check — PREVIEW ONLY. Renders the
+  // check PDF and performs ZERO financial writes. Issuing a check is POST /cut-check.
+  const contractorInvoiceCheckPreview = async (req: any, res: any) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      const inv = pgRow<any>(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`));
-      if (!inv) return res.status(404).json({ message: "Invoice not found" });
-
-      const sessionCompanyId = await getSessionCompanyId(req);
-      if (sessionCompanyId && inv.company_id && sessionCompanyId !== inv.company_id) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const compId = inv.company_id || sessionCompanyId;
-      const coRow = pgRow<any>(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
-
-      const rsRow = pgRow<CheckRsRow>(await db.execute(sql`
-        SELECT * FROM remittance_sources
-        WHERE company_id = ${compId} AND status = 'enabled'
-        LIMIT 1
-      `));
-
-      if (!rsRow?.routing_number || !rsRow?.account_number) {
-        return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
-      }
-
-      // Resolve payee name from the worker record only. The users table does
-      // not carry first_name/last_name in production, so keep this path away
-      // from users aliases entirely.
-      const workerRow = pgRow<any>(await db.execute(sql`
-        SELECT w.first_name, w.last_name, w.email, w.work_email, w.home_email
-        FROM workers w
-        WHERE w.id = ${inv.contractor_id} LIMIT 1
-      `));
-      const defaultPayeeName = workerRow
-        ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || "Contractor"
-        : "Contractor";
-
-      const {
-        payeeName = defaultPayeeName,
-        payeeAddress = "",
-        payeeCityStateZip = "",
-        amount = inv.amount,
-        checkNumber,
-        memo = inv.description || inv.invoice_number || "",
-      } = req.body || {};
-
-      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
-      const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
-      const calibrationOffsets = rsRow.calibration_config ? parseCalibrationOffsets(rsRow.calibration_config) : undefined;
-
-      const coNorm = coRow ? {
-        name: coRow.name || "", address: coRow.address || "", city: coRow.city || "",
-        state: coRow.state || "", zip: coRow.zip || "", phone: coRow.phone || "",
-        ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || "",
-      } : null;
-
-      const pdfBytes = await renderCheckPdf({
-        item: null, worker: null, run: null,
-        company: coNorm,
-        remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
-        isCalibration: false,
-        layoutConfig,
-        calibrationOffsets,
-        vendorCheck: {
-          payeeName: String(payeeName),
-          payeeAddress: String(payeeAddress),
-          payeeCityStateZip: String(payeeCityStateZip),
-          amount: parseFloat(String(amount || 0)),
-          checkNumber: checkNumber ? String(checkNumber) : undefined,
-          memo: String(memo),
-        },
+      const body = (req.method === "POST" ? req.body : req.query) || {};
+      const { pdfBytes } = await buildContractorInvoiceCheckPdf(String(req.params.id), req, {
+        amount: body.amount, checkNumber: body.checkNumber, memo: body.memo,
+        payeeName: body.payeeName, payeeAddress: body.payeeAddress, payeeCityStateZip: body.payeeCityStateZip,
       });
-
-      // Record payment reference on invoice (allow reprinting — no paid guard)
-      await db.execute(sql`
-        UPDATE contractor_invoices
-        SET payment_method    = 'check',
-            payment_reference = ${checkNumber ? String(checkNumber) : null},
-            updated_at        = NOW()
-        WHERE id = ${req.params.id}
-      `);
-
       res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `attachment; filename="invoice-check-${req.params.id}.pdf"`);
+      res.set("Content-Disposition", `inline; filename="invoice-check-preview-${req.params.id}.pdf"`);
       res.set("Content-Length", String(pdfBytes.length));
       return res.send(Buffer.from(pdfBytes));
     } catch (e: any) {
-      console.error("invoice-print-check error:", e?.message || e, e?.stack);
-      res.status(500).json({ message: e?.message || "Failed to generate check PDF" });
+      if (e instanceof PaymentRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[contractor-invoice] check preview failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to generate check preview" });
+    }
+  };
+  app.get("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), contractorInvoiceCheckPreview);
+  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), contractorInvoiceCheckPreview);
+
+  // POST /api/contractor-invoices/:id/cut-check — ISSUE a check: authorize, allocate
+  // a company+funding-account-scoped check number, create exactly one 'check'
+  // payment, reduce the invoice balance atomically, then return the rendered PDF.
+  // Idempotency-Key required; a replay re-renders the already-issued check with no write.
+  app.post("/api/contractor-invoices/:id/cut-check", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const invoiceId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      const invPre = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`));
+      if (!invPre) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && invPre.company_id && sessionCompanyId !== invPre.company_id) return res.status(403).json({ message: "Access denied" });
+      if (invPre.company_id && !(await canAccessCompany(user!, invPre.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      if (invPre.proposal_id) {
+        const proposalStatus = (cpRow(await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invPre.proposal_id}`)) as any)?.status;
+        if (proposalStatus && proposalStatus !== "approved") {
+          return res.status(403).json({ message: `Check blocked. The linked proposal is "${proposalStatus}" — it must be approved first.`, blocked: true });
+        }
+      }
+
+      const rsPre = cpRow(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${invPre.company_id} AND status = 'enabled' LIMIT 1`));
+      if (!rsPre?.routing_number || !rsPre?.account_number) {
+        return res.status(400).json({ error: "NO_FUNDING_ACCOUNT", message: "No enabled bank account found for this company. Configure a remittance source first." });
+      }
+
+      const requestedCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : null;
+      const fingerprintAmount = requestedCents ?? toCents(invPre.balance_due ?? invPre.amount);
+      const fingerprint = paymentFingerprint({ companyId: invPre.company_id, invoiceId, method: "check", amountCents: fingerprintAmount, tradeCompensationId: null });
+
+      const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        if (priorByKey.idempotency_fingerprint !== fingerprint) {
+          return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
+        }
+        // Replay: re-render the already-issued check, no write.
+        const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, memo: invPre.description || invPre.invoice_number || "" });
+        res.set("Content-Type", "application/pdf");
+        res.set("X-Payment-Id", String(priorByKey.id));
+        res.set("Content-Disposition", `attachment; filename="invoice-check-${invoiceId}.pdf"`);
+        return res.send(Buffer.from(pdfBytes));
+      }
+
+      let issued: { payment: any; checkNumber: string };
+      try {
+        issued = await db.transaction(async (tx) => {
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+          if (["draft", "voided", "voided_duplicate", "rejected", "rejected_duplicate"].includes(inv.status ?? "")) {
+            throw new PaymentRuleError(409, "INVOICE_NOT_PAYABLE", `Invoice status "${inv.status}" cannot take a check.`);
+          }
+          const paidRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${invoiceId} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const balanceDueCents = totalCents - toCents(paidRow?.paid);
+          const amtInput = (req.body as any)?.amount !== undefined ? (req.body as any).amount : fromCents(balanceDueCents);
+          const amt = checkPaymentAmount(amtInput, balanceDueCents);
+          if (!amt.ok) throw new PaymentRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          // Company + funding-account scoped check number (advisory lock avoids cross-txn skew).
+          const rs = cpRow(await tx.execute(sql`SELECT id, last_check_number FROM remittance_sources WHERE id = ${rsPre.id} FOR UPDATE`));
+          const nextCheckNum = Number(rs?.last_check_number || 0) + 1;
+          await tx.execute(sql`UPDATE remittance_sources SET last_check_number = ${nextCheckNum} WHERE id = ${rsPre.id}`);
+          const checkNumberStr = formatCheckNumber(nextCheckNum);
+
+          const payment = cpRow(await tx.execute(sql`
+            INSERT INTO contractor_payments
+              (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id, idempotency_key, idempotency_fingerprint, status)
+            VALUES (${invoiceId}, ${inv.company_id}, ${inv.contractor_id}, ${fromCents(amt.cents)}, 'check', ${checkNumberStr},
+                    ${`Check ${checkNumberStr} issued`}, ${req.session.userId}, ${idem.key}, ${fingerprint}, 'completed')
+            RETURNING *`));
+
+          const newPaidCents = toCents(paidRow?.paid) + amt.cents;
+          const newBalanceCents = Math.max(0, totalCents - newPaidCents);
+          await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(newPaidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${recomputeInvoiceStatus(totalCents, newPaidCents)},
+                paid_at = ${newBalanceCents <= 0 ? sql`NOW()` : sql`paid_at`}, payment_method = 'check', payment_reference = ${checkNumberStr}, updated_at = NOW()
+            WHERE id = ${invoiceId}`);
+
+          return { payment, checkNumber: checkNumberStr };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed && committed.idempotency_fingerprint === fingerprint) {
+            const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: committed.amount, checkNumber: committed.reference_number });
+            res.set("Content-Type", "application/pdf");
+            res.set("X-Payment-Id", String(committed.id));
+            return res.send(Buffer.from(pdfBytes));
+          }
+          if (committed) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
+        }
+        if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: issued.payment.amount, checkNumber: issued.checkNumber, memo: invPre.description || invPre.invoice_number || "" });
+      notifyAfterCommit(issued.payment.id, {
+        workerId: invPre.contractor_id, companyId: invPre.company_id, notificationType: "check_issued",
+        title: `Check ${issued.checkNumber} issued: $${fromCents(toCents(issued.payment.amount)).toFixed(2)}`,
+        body: "A check has been issued against your invoice.",
+        entityType: "invoice", entityId: invoiceId, actionUrl: `/app/contractor-hub?section=payments&id=${invoiceId}`,
+      });
+      res.set("Content-Type", "application/pdf");
+      res.set("X-Payment-Id", String(issued.payment.id));
+      res.set("Content-Disposition", `attachment; filename="invoice-check-${issued.checkNumber}.pdf"`);
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e: any) {
+      console.error("[contractor-invoice] cut-check failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to issue check" });
+    }
+  });
+
+  // GET /api/contractor-payments/:paymentId/check — reprint an already-issued check. Zero financial writes.
+  app.get("/api/contractor-payments/:paymentId/check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
+    try {
+      const pay = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${String(req.params.paymentId)}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      if (pay.payment_method !== "check") return res.status(400).json({ error: "NOT_A_CHECK_PAYMENT", message: "This payment was not issued as a check." });
+      const user = await storage.getUser(req.session.userId!);
+      if (pay.company_id && !(await canAccessCompany(user!, pay.company_id))) return res.status(403).json({ message: "Access denied" });
+      const { pdfBytes } = await buildContractorInvoiceCheckPdf(String(pay.invoice_id), req, { amount: pay.amount, checkNumber: pay.reference_number });
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `attachment; filename="invoice-check-${pay.reference_number || pay.id}.pdf"`);
+      res.set("X-Reprint", "1");
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e: any) {
+      if (e instanceof PaymentRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[contractor-payment] reprint failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to reprint check" });
     }
   });
 
@@ -13689,53 +13825,321 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to fetch payments" }); }
   });
 
-  // POST /api/contractor-invoices/:id/payments — record a payment (enforces proposal approval)
+  // POST /api/contractor-invoices/:id/payments — record a payment.
+  // Atomic (SELECT ... FOR UPDATE on the invoice), idempotent (Idempotency-Key
+  // required), normalized payment method, and links approved fair-market-value
+  // trade compensation exactly once.
   app.post("/api/contractor-invoices/:id/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const invoiceId = String(req.params.id);
     try {
-      const invoiceRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`);
-      if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
-      const invoice = invoiceRes.rows[0] as any;
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      const invPre = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`));
+      if (!invPre) return res.status(404).json({ message: "Invoice not found" });
+
+      const user = await storage.getUser(req.session.userId!);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && invPre.company_id && sessionCompanyId !== invPre.company_id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (invPre.company_id && !(await canAccessCompany(user!, invPre.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
 
       // ── HARD RULE: proposal must be approved before any payment ──
-      if (invoice.proposal_id) {
-        const proposalRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invoice.proposal_id}`);
-        if (proposalRes.rows.length) {
-          const proposalStatus = (proposalRes.rows[0] as any).status;
-          if (proposalStatus !== "approved") {
-            return res.status(403).json({
-              message: `Payment blocked. The linked proposal is "${proposalStatus}" — it must be approved before any payment can be collected.`,
-              proposalStatus,
-              blocked: true,
-            });
-          }
+      if (invPre.proposal_id) {
+        const proposalStatus = (cpRow(await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invPre.proposal_id}`)) as any)?.status;
+        if (proposalStatus && proposalStatus !== "approved") {
+          return res.status(403).json({ message: `Payment blocked. The linked proposal is "${proposalStatus}" — it must be approved before any payment can be collected.`, proposalStatus, blocked: true });
         }
       }
 
-      const { amount, paymentMethod, referenceNumber, notes } = req.body;
-      if (!amount || parseFloat(amount) <= 0) return res.status(400).json({ message: "Valid amount is required" });
-
-      const balanceDue = parseFloat(invoice.balance_due ?? invoice.amount ?? "0");
-      if (parseFloat(amount) > balanceDue + 0.01) {
-        return res.status(400).json({ message: `Payment amount ($${amount}) exceeds balance due ($${balanceDue.toFixed(2)})` });
+      const method = normalizeContractorPaymentMethod((req.body as any)?.paymentMethod);
+      if (!method) {
+        return res.status(400).json({ error: "INVALID_PAYMENT_METHOD", message: `payment method must be one of: ${CONTRACTOR_PAYMENT_METHODS.join(", ")}` });
+      }
+      const description = String((req.body as any)?.description ?? (req.body as any)?.nonCashPaymentDescription ?? "").trim();
+      if (DESCRIPTION_REQUIRED_METHODS.has(method) && !description) {
+        return res.status(400).json({ error: "DESCRIPTION_REQUIRED", message: `A description is required for "${method}" payments.` });
+      }
+      const tradeCompensationId = method === "trade_credit"
+        ? (String((req.body as any)?.tradeCompensationId ?? "").trim() || null)
+        : null;
+      if (method === "trade_credit" && !tradeCompensationId) {
+        return res.status(400).json({ error: "TRADE_COMPENSATION_REQUIRED", message: "trade_credit payments require an approved trade-compensation record (tradeCompensationId)." });
       }
 
-      const userId = (req.session as any).userId;
-      const result = await db.execute(sql`
-        INSERT INTO contractor_payments (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id)
-        VALUES (${req.params.id}, ${invoice.company_id}, ${invoice.contractor_id}, ${parseFloat(amount)}, ${paymentMethod ?? null}, ${referenceNumber ?? null}, ${notes ?? null}, ${userId})
-        RETURNING *`);
+      const requestedCents = toCents((req.body as any)?.amount);
+      if (!Number.isFinite(requestedCents) || requestedCents <= 0) {
+        return res.status(400).json({ error: "INVALID_AMOUNT", message: "Payment amount must be a positive number." });
+      }
+      const fingerprint = paymentFingerprint({ companyId: invPre.company_id, invoiceId, method, amountCents: requestedCents, tradeCompensationId });
 
-      // Update invoice paid amount and balance
-      const newAmountPaid = parseFloat(invoice.amount_paid ?? "0") + parseFloat(amount);
-      const total = parseFloat(invoice.amount ?? "0");
-      const newBalance = Math.max(0, total - newAmountPaid);
-      const newStatus = newBalance <= 0.01 ? "paid" : "partially_paid";
-      const paidAt = newBalance <= 0.01 ? sql`NOW()` : sql`${invoice.paid_at ?? null}`;
-      await db.execute(sql`UPDATE contractor_invoices SET amount_paid = ${newAmountPaid}, balance_due = ${newBalance}, status = ${newStatus}, paid_at = ${paidAt}, updated_at = NOW() WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: invoice.contractor_id, notificationType: "payment_received", title: `Payment Recorded: $${parseFloat(amount).toFixed(2)}`, body: `A payment of $${parseFloat(amount).toFixed(2)} has been recorded for your invoice.`, entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=payments&id=${req.params.id}` }).catch(() => {});
+      // Idempotency pre-check (company-scoped). Same key + same fingerprint ->
+      // return the original; same key + different fingerprint -> 409.
+      const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json(priorByKey)
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+      }
 
-      res.status(201).json(result.rows[0]);
-    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to record payment" }); }
+      const referenceNumber = String((req.body as any)?.referenceNumber ?? "").trim() || null;
+      const noteText = description || String((req.body as any)?.notes ?? "").trim() || null;
+
+      let created: any;
+      try {
+        created = await db.transaction(async (tx) => {
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+          if (["draft", "voided", "voided_duplicate", "rejected", "rejected_duplicate"].includes(inv.status ?? "")) {
+            throw new PaymentRuleError(409, "INVOICE_NOT_PAYABLE", `Invoice status "${inv.status}" cannot take a payment.`);
+          }
+
+          // Authoritative remaining balance: amount - SUM(non-void payments), computed in the DB.
+          const paidRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${invoiceId} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const paidCents = toCents(paidRow?.paid);
+          const balanceDueCents = totalCents - paidCents;
+
+          const amt = checkPaymentAmount((req.body as any)?.amount, balanceDueCents);
+          if (!amt.ok) throw new PaymentRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          if (method === "trade_credit" && tradeCompensationId) {
+            const tc = cpRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
+            const chk = checkTradeCreditApplicable(
+              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id } : null,
+              { companyId: inv.company_id, contractorId: inv.contractor_id, paymentCents: amt.cents },
+            );
+            if (!chk.ok) throw new PaymentRuleError(422, chk.code, chk.message);
+          }
+
+          const payment = cpRow(await tx.execute(sql`
+            INSERT INTO contractor_payments
+              (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id, idempotency_key, idempotency_fingerprint, status)
+            VALUES (${invoiceId}, ${inv.company_id}, ${inv.contractor_id}, ${fromCents(amt.cents)}, ${method}, ${referenceNumber}, ${noteText}, ${req.session.userId}, ${idem.key}, ${fingerprint}, 'completed')
+            RETURNING *`));
+
+          if (method === "trade_credit" && tradeCompensationId) {
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL`);
+          }
+
+          const newPaidCents = paidCents + amt.cents;
+          const newBalanceCents = Math.max(0, totalCents - newPaidCents);
+          const newStatus = recomputeInvoiceStatus(totalCents, newPaidCents);
+          await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(newPaidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${newStatus},
+                paid_at = ${newBalanceCents <= 0 ? sql`NOW()` : sql`paid_at`},
+                payment_method = ${method}, updated_at = NOW()
+            WHERE id = ${invoiceId}`);
+
+          return payment;
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          // Concurrent insert with the same key committed first — return the committed original.
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            return committed.idempotency_fingerprint === fingerprint
+              ? res.status(200).json(committed)
+              : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+          }
+        }
+        if (txErr instanceof PaymentRuleError) {
+          return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        }
+        throw txErr;
+      }
+
+      notifyAfterCommit(created.id, {
+        workerId: invPre.contractor_id, companyId: invPre.company_id, notificationType: "payment_received",
+        title: `Payment recorded: $${fromCents(toCents(created.amount)).toFixed(2)}`,
+        body: "A payment has been recorded against your invoice.",
+        entityType: "invoice", entityId: invoiceId, actionUrl: `/app/contractor-hub?section=payments&id=${invoiceId}`,
+      });
+      return res.status(201).json(created);
+    } catch (e) {
+      console.error("[contractor-payment] record failed:", e instanceof Error ? e.message : e);
+      return res.status(500).json({ message: "Failed to record payment" });
+    }
+  });
+
+  // POST /api/contractor-payments/:id/void — reverse MyPayLink's internal record
+  // of a payment. The original row is preserved (status='void' + audit fields);
+  // the invoice balance is restored and its status recomputed, atomically.
+  app.post("/api/contractor-payments/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const paymentId = String(req.params.id);
+    try {
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to void a payment." });
+
+      const payPre = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${paymentId}`));
+      if (!payPre) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (payPre.company_id && !(await canAccessCompany(user!, payPre.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      let result: any;
+      try {
+        result = await db.transaction(async (tx) => {
+          const pay = cpRow(await tx.execute(sql`SELECT * FROM contractor_payments WHERE id = ${paymentId} FOR UPDATE`));
+          if (!pay) throw new PaymentRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          if (pay.status === "void") {
+            // Repeated void is idempotent — no financial change.
+            return { payment: pay, invoice: cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${pay.invoice_id}`)), alreadyVoid: true };
+          }
+
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${pay.invoice_id} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Linked invoice not found");
+
+          const voided = cpRow(await tx.execute(sql`
+            UPDATE contractor_payments
+            SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason}
+            WHERE id = ${paymentId} AND status <> 'void'
+            RETURNING *`));
+
+          // Release any trade-compensation linkage so the value cannot be lost or double-spent.
+          await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = NULL, updated_at = NOW() WHERE contractor_payment_id = ${paymentId}`);
+
+          const paidRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${pay.invoice_id} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const paidCents = toCents(paidRow?.paid);
+          const newBalanceCents = Math.max(0, totalCents - paidCents);
+          const newStatus = recomputeInvoiceStatus(totalCents, paidCents);
+          const updatedInvoice = cpRow(await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(paidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${newStatus},
+                paid_at = ${newBalanceCents <= 0 && paidCents > 0 ? sql`paid_at` : sql`NULL`}, updated_at = NOW()
+            WHERE id = ${pay.invoice_id}
+            RETURNING *`));
+
+          return { payment: voided, invoice: updatedInvoice, alreadyVoid: false };
+        });
+      } catch (txErr) {
+        if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      if (!result.alreadyVoid) {
+        notifyAfterCommit(paymentId, {
+          workerId: payPre.contractor_id, companyId: payPre.company_id, notificationType: "payment_voided",
+          title: "A payment was reversed",
+          body: `A previously recorded payment on your invoice was reversed. ${externalSettlementDisclaimer(String(payPre.payment_method ?? "")) ?? ""}`.trim(),
+          entityType: "invoice", entityId: String(payPre.invoice_id), actionUrl: `/app/contractor-hub?section=payments&id=${payPre.invoice_id}`,
+        });
+      }
+      return res.json({
+        payment: result.payment, invoice: result.invoice, alreadyVoid: result.alreadyVoid,
+        externalSettlementNote: externalSettlementDisclaimer(String(payPre.payment_method ?? "")),
+      });
+    } catch (e) {
+      console.error("[contractor-payment] void failed:", e instanceof Error ? e.message : e);
+      return res.status(500).json({ message: "Failed to void payment" });
+    }
+  });
+
+  // POST /api/contractor-payments/:id/reissue — void the original and create one
+  // linked replacement payment, atomically. Body: { reason, amount?, paymentMethod?,
+  // referenceNumber?, description? } and an Idempotency-Key for the replacement.
+  app.post("/api/contractor-payments/:id/reissue", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const originalId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to reissue a payment." });
+
+      const orig = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${originalId}`));
+      if (!orig) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (orig.company_id && !(await canAccessCompany(user!, orig.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const newMethod = normalizeContractorPaymentMethod((req.body as any)?.paymentMethod ?? orig.payment_method) ?? "check";
+      const newAmountCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : toCents(orig.amount);
+      if (!Number.isFinite(newAmountCents) || newAmountCents <= 0) {
+        return res.status(400).json({ error: "INVALID_AMOUNT", message: "Replacement amount must be a positive number." });
+      }
+      const description = String((req.body as any)?.description ?? "").trim();
+      if (DESCRIPTION_REQUIRED_METHODS.has(newMethod) && !description) {
+        return res.status(400).json({ error: "DESCRIPTION_REQUIRED", message: `A description is required for "${newMethod}" payments.` });
+      }
+      const fingerprint = paymentFingerprint({ companyId: orig.company_id, invoiceId: String(orig.invoice_id), method: newMethod, amountCents: newAmountCents, tradeCompensationId: null });
+
+      const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json({ replacement: priorByKey })
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+      }
+
+      let out: any;
+      try {
+        out = await db.transaction(async (tx) => {
+          const o = cpRow(await tx.execute(sql`SELECT * FROM contractor_payments WHERE id = ${originalId} FOR UPDATE`));
+          if (!o) throw new PaymentRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          if (o.reissued_by_payment_id) throw new PaymentRuleError(409, "ALREADY_REISSUED", "This payment has already been reissued.");
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${o.invoice_id} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Linked invoice not found");
+
+          if (o.status !== "void") {
+            await tx.execute(sql`UPDATE contractor_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason} WHERE id = ${originalId}`);
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = NULL, updated_at = NOW() WHERE contractor_payment_id = ${originalId}`);
+          }
+
+          const paidBeforeRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${o.invoice_id} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const paidBeforeCents = toCents(paidBeforeRow?.paid);
+          if (paidBeforeCents + newAmountCents > totalCents) {
+            throw new PaymentRuleError(422, "AMOUNT_EXCEEDS_BALANCE", "Replacement amount exceeds the invoice balance after reversing the original.");
+          }
+
+          const replacement = cpRow(await tx.execute(sql`
+            INSERT INTO contractor_payments
+              (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id, idempotency_key, idempotency_fingerprint, status, reverses_payment_id)
+            VALUES (${o.invoice_id}, ${o.company_id}, ${o.contractor_id}, ${fromCents(newAmountCents)}, ${newMethod},
+                    ${String((req.body as any)?.referenceNumber ?? "").trim() || null},
+                    ${description || `Reissue of payment ${originalId}: ${reason}`},
+                    ${req.session.userId}, ${idem.key}, ${fingerprint}, 'completed', ${originalId})
+            RETURNING *`));
+          await tx.execute(sql`UPDATE contractor_payments SET reissued_by_payment_id = ${replacement.id} WHERE id = ${originalId}`);
+
+          const newPaidCents = paidBeforeCents + newAmountCents;
+          const newBalanceCents = Math.max(0, totalCents - newPaidCents);
+          const newStatus = recomputeInvoiceStatus(totalCents, newPaidCents);
+          const updatedInvoice = cpRow(await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(newPaidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${newStatus},
+                paid_at = ${newBalanceCents <= 0 ? sql`NOW()` : sql`NULL`}, payment_method = ${newMethod}, updated_at = NOW()
+            WHERE id = ${o.invoice_id}
+            RETURNING *`));
+
+          return { original: originalId, replacement, invoice: updatedInvoice };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) return res.status(committed.idempotency_fingerprint === fingerprint ? 200 : 409).json(committed.idempotency_fingerprint === fingerprint ? { replacement: committed } : { error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+        }
+        if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      notifyAfterCommit(out.replacement.id, {
+        workerId: orig.contractor_id, companyId: orig.company_id, notificationType: "payment_reissued",
+        title: "A payment was reissued",
+        body: "A payment on your invoice was reversed and reissued.",
+        entityType: "invoice", entityId: String(orig.invoice_id), actionUrl: `/app/contractor-hub?section=payments&id=${orig.invoice_id}`,
+      });
+      return res.status(201).json({ ...out, externalSettlementNote: externalSettlementDisclaimer(String(orig.payment_method ?? "")) });
+    } catch (e) {
+      console.error("[contractor-payment] reissue failed:", e instanceof Error ? e.message : e);
+      return res.status(500).json({ message: "Failed to reissue payment" });
+    }
   });
 
   // POST /api/contractor-invoices/:id/stripe-checkout-session — create Stripe Checkout session for online payment
@@ -22879,7 +23283,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const [item] = await db.select().from(payrollItems).where(eq(payrollItems.id, payload.payrollItemId));
         if (item) calculateContractorTradeSettlement({ grossCompensation: Number(item.grossPay || 0), tradeCredits: [{ totalValue }] });
       }
-      const [created] = await db.insert(contractorTradeCompensation).values(payload).returning();
+      // Exactly-once: an explicit Idempotency-Key, else a fingerprint anchored to
+      // the payroll item / SKU (two legitimately-distinct credits never collapse;
+      // when there is no such anchor an explicit key is required).
+      const tcHeaderKey = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      const idempotencyKey = tcHeaderKey.ok
+        ? tcHeaderKey.key
+        : (payload.payrollItemId || payload.itemSku)
+          ? tradeCompFingerprint({ companyId, contractorUserId: String(payload.contractorUserId || ""), payrollItemId: payload.payrollItemId ?? null, itemSku: payload.itemSku ?? null, itemName: payload.itemName ?? null, totalValueCents: Math.round(Number(totalValue) * 100) })
+          : null;
+      if (!idempotencyKey) {
+        return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: "An Idempotency-Key is required for a trade-compensation record with no payroll item or SKU anchor." });
+      }
+      const priorTc = cpRow(await db.execute(sql`SELECT * FROM contractor_trade_compensation WHERE company_id = ${companyId} AND idempotency_key = ${idempotencyKey} LIMIT 1`));
+      if (priorTc) return res.status(200).json(priorTc);
+
+      let created: any;
+      try {
+        [created] = await db.insert(contractorTradeCompensation).values({ ...payload, idempotencyKey }).returning();
+      } catch (tcErr) {
+        if (isUniqueConstraintViolation(tcErr)) {
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_trade_compensation WHERE company_id = ${companyId} AND idempotency_key = ${idempotencyKey} LIMIT 1`));
+          if (committed) return res.status(200).json(committed);
+        }
+        throw tcErr;
+      }
       await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: created.id, actionType: "trade_credit_created", companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ contractorStatementId: created.contractorStatementId, settlementId: created.settlementId, payrollItemId: created.payrollItemId, totalValue: created.totalValue }) }).catch(() => {});
       res.status(201).json(created);
     } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to create trade credit") }); }
