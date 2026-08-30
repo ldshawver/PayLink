@@ -11,8 +11,9 @@ assert(routes.includes("institution ||"), "bank text fallback uses remittance in
 assert(routes.includes("only to Zone 1/check-face elements so the paystub/company-copy sections remain untouched"), "new nested calibration is documented as Zone 1 only");
 assert(routes.includes("bankLogoUrl"), "bank logo URL from the existing template config is embedded when present");
 assert(routes.includes('const MICR_FONT_FILE = "micrenc.ttf"'), "server PDF uses the same micrenc.ttf MICR font mapping as the browser preview");
-assert(routes.includes('const T      = "c"; // ⑆ transit') && routes.includes('const O      = "d"; // ⑈ on-us'), "server MICR source string uses transit/on-us symbols only and does not use the MICR dash mapping before digits");
-assert(!routes.includes('const T      = "a"; // ⑆ transit'), "server MICR no longer maps the transit symbol to the micrenc dash glyph");
+const checkMicr = fs.readFileSync("server/check-micr.ts", "utf8");
+assert(checkMicr.includes('const T = "c"; // ⑆ transit') && checkMicr.includes('const O = "d"; // ⑈ on-us'), "server MICR source string uses transit/on-us symbols only and does not use the MICR dash mapping before digits");
+assert(!checkMicr.includes('const T = "a";'), "server MICR no longer maps the transit symbol to the micrenc dash glyph");
 
 const zone2OffsetUsage = routes.match(/checkFace(Sender|Receiver)Off[XY][\s\S]{0,160}checkBot -/g);
 assert.equal(zone2OffsetUsage, null, "check-face sender/receiver offsets are not applied to paystub/company-copy y positions");
