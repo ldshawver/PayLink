@@ -80,3 +80,53 @@ Fresh Adiken Inc. and Adiken Properties PDFs, full check-face screenshots, 300-D
 ## Physical print status
 
 Not completed in this Codex environment. Staging must print at Actual Size / 100%, with no Fit to Page and no Shrink Oversized Pages, then validate MICR and layout against the intended check stock before production deployment.
+
+## Release A (v2.2.2) — verify-first MICR / logo / fractional evidence
+
+Rendered-output inspection was performed on the current production renderer BEFORE
+any MICR/position change (see `scripts/render-check-samples.ts` and the staging
+`/api/checks/calibration-pdf` render):
+
+- **MICR line**: `micrenc.ttf` ("MICR Encoding", SHA-256 `cf20632b…`) provides real
+  distinct E-13B glyphs for the transit `c`, on-us `d` and every digit `0`–`9`, and
+  has **no glyph** for `=`, `:`, `;` or `-`. `buildMicrString()` emits only `[0-9cd ]`.
+  Rendered at 600 DPI the line reads `⑈<checknum>⑈  ⑆<routing>⑆  <account>⑈` with
+  correct symbols and digits — **no `=` appears before `2` or anywhere else.** The
+  earlier written "`=` before each 2" report is **not reproduced** by the canonical
+  server renderer; the only client-side MICR path (a second React builder using a
+  CSS `@font-face` stack) has been removed. **No MICR mapping or baseline change made.**
+- **Bank logo**: renders at check-face x 3.45 in, y 0.46 in (top-centre, above the
+  pay-to/amount rows). Tenant-uploaded logo wins; Bank of America gets a vector
+  fallback only when the normalized bank name matches. Every company can now nudge
+  it via `layout_config.checkLayoutCalibration.bankLogo{x,y}`. **No default change.**
+- **Fractional routing**: numerator 0.545 in / rule 0.595 in / denominator 0.695 in
+  from the check-face top (the +0.125 in default lowering is retained). Adjustable
+  per company via `fractionalRoutingOffsetY` / `checkLayoutCalibration.fractionalRouting`.
+  **No default change.**
+
+Regression anchor: `tests/check-micr-render.test.ts` (rendered-glyph assertions on
+the real font + `buildMicrString`, no bank data) is in the required CI suite.
+
+## Release A (v2.2.2) — contractor statement separation
+
+The contractor payment statement is now a dedicated renderer branch (Zone 2 stub
+and Zone 3 detachable copy), not an employee paystub painted over with a white
+rectangle. Employee wage content (earnings/deductions table, withholding, FICA,
+sick/PTO, YTD, and the 15.3 % self-employment-tax reference) is **never drawn** for
+a contractor, so no employee terminology can be extracted from the PDF. Every
+contractor panel carries the exact heading `CONTRACTOR PAYMENT STATEMENT —
+NONEMPLOYEE COMPENSATION` and the line `Not an employee wage statement. No payroll
+taxes were withheld.` "Paid" is no longer hard-coded; the statement shows payer,
+contractor, check/reference number, payment date, payment method, current payment
+amount, documented trade/noncash amount when present, and remaining invoice
+balance where available. Employee wage statements are unchanged. No tax, payroll,
+invoice-ledger, schema or financial-calculation change.
+
+## Release A (v2.2.2) — full per-element check-face position config
+
+`check_templates.layout_config.checkLayoutCalibration` now accepts independent
+`{x, y}` point offsets (clamped ±36 pt, default 0 so today's rendering is
+unchanged) for: `printableArea` (global), `companyLogo`, `bankLogo`,
+`fractionalRouting`, `senderAddress`, `recipientAddress`, `payee`, `date`,
+`amountInWords`, `numericAmount`, `memo`, `signature`, `micr`. The BofA account
+keeps its saved/default preset; every company gets the same capability.

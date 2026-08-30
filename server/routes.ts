@@ -38,6 +38,7 @@ import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
 import { assertContractorTradeCreditsPrintable, calculateContractorTradeSettlement } from "./contractor-trade-compensation";
+import { buildMicrString, buildFractionalRouting, formatCheckNumber } from "./check-micr";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -12367,7 +12368,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           await fs.promises.unlink(abs).catch((e: NodeJS.ErrnoException) => {
             if (e.code !== "ENOENT") {
               unlinkFailures.push(filePath);
-              console.error("[PURGE] file_unlink_failed:", filePath, e.message);
+              // Sanitized: log the error code only, not the document path.
+              console.error(`[PURGE] file_unlink_failed (${e.code || "EUNKNOWN"})`);
             }
           });
         }
@@ -21208,49 +21210,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return (dollars === 0 ? "Zero" : conv(dollars)) + " Dollars and " + String(cents).padStart(2, "0") + "/100";
   }
 
-  // Zero-pad check number to `length` digits (default 4).
-  // If the number already exceeds `length` digits it is kept as-is.
-  function formatCheckNumber(n: string | number, length = 4): string {
-    return String(n).replace(/\D/g, "").padStart(length, "0");
-  }
-
-  function buildMicrStr(routing: string, account: string, checkNum: string): string {
-    // micrenc.ttf E-13B character mapping (matches the browser preview):
-    //   'c' = ⑆ transit routing delimiter
-    //   'd' = ⑈ on-us symbol
-    //   'b' = ⑇ amount symbol (not used in basic check layout)
-    //   'a' = ⑉ dash symbol (not inserted by default)
-    //
-    // ANSI X9.7 BUSINESS CHECK field order (checks > 6 inches):
-    //   Auxiliary On-Us  |  Transit Field    |  On-Us Field
-    //   ⑈ checknum ⑈       ⑆ routing ⑆         account ⑈
-    //
-    // This differs from personal-check order (⑆ routing ⑆ account ⑈ check ⑈).
-    const T      = "c"; // ⑆ transit
-    const O      = "d"; // ⑈ on-us
-    const r      = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
-    const a      = account.replace(/\D/g, "").slice(0, 17);
-    const fmtChk = formatCheckNumber(checkNum);
-    // Auxiliary On-Us field: ⑈ checknum ⑈ (check number only, no padding spaces)
-    const auxOnUs = `${O}${fmtChk}${O}`;
-    return `${auxOnUs}  ${T}${r}${T}  ${a}${O}`;
-  }
-
-  // Build fractional ABA routing number for human-readable backup on check face.
-  // Correct ABA fractional formula per ABA standard:
-  //   Numerator   = prefix-institution  (e.g. "11-35")
-  //     prefix    = ABA geographic city/state code (configured per remittance source)
-  //     institution = digits 5–8 of routing, leading zeros dropped (e.g. "0035" → "35")
-  //   Denominator = first 4 digits of routing, leading zeros kept  (e.g. "1210")
-  // Example: routing 121000358, prefix "11" → "11-35\n1210" → rendered as 11-35/1210
-  function buildFractionalRouting(routing: string, abaPrefix?: string): string {
-    const r = routing.replace(/\D/g, "").padStart(9, "0");
-    if (r.length < 9 || r === "000000000") return "";
-    const denom  = r.slice(0, 4);                         // "1210" — keep leading zeros
-    const instit = String(parseInt(r.slice(4, 8), 10));   // "0035" → "35"
-    const num    = abaPrefix ? `${abaPrefix}-${instit}` : instit;
-    return `${num}\n${denom}`;
-  }
+  // formatCheckNumber, buildMicrString (E-13B) and buildFractionalRouting are
+  // imported from ./check-micr so the exact strings the renderer draws can be
+  // covered by rendered-artifact regression tests without exposing bank data.
+  const buildMicrStr = buildMicrString;
 
   async function renderCheckPdf(params: {
     item: any; worker: any; run: any; company: any; remittanceSource: any;
@@ -21293,7 +21256,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       micrFontLoaded = true;
       micrFontName = MICR_FONT_FILE;
     } catch (micrErr) {
-      console.error("[CHECK_PDF] MICR font load error:", micrErr);
+      // Log the error class only — the message embeds the font filesystem path.
+      const micrErrCls = micrErr instanceof Error ? `${micrErr.name}` : typeof micrErr;
+      console.error(`[CHECK_PDF] MICR font (${MICR_FONT_FILE}) load failed: ${micrErrCls}`);
       if (!isCalibration) {
         throw new Error(
           `MICR font (${MICR_FONT_FILE}) failed to load. Printing requires the MICR E-13B font ` +
@@ -21347,6 +21312,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const companyLogoOffset = nestedCalibration.companyLogo || {};
     const bankLogoOffset = nestedCalibration.bankLogo || {};
     const fractionalRoutingOffset = nestedCalibration.fractionalRouting || {};
+    // Additional per-element check-face position offsets (points, clamped ±36, default 0
+    // so today's rendering is unchanged). Every company/bank account can adjust each of
+    // these independently via check_templates.layout_config.checkLayoutCalibration.
+    const elOffXY = (key: string): { x: number; y: number } => {
+      const o = (nestedCalibration as Record<string, any>)[key] || {};
+      return { x: clampCheckFaceOffsetPt(o.x), y: clampCheckFaceOffsetPt(o.y) };
+    };
+    const printableAreaOffset  = elOffXY("printableArea");   // whole check face (global)
+    const dateOffset           = elOffXY("date");
+    const amountInWordsOffset   = elOffXY("amountInWords");
+    const numericAmountOffset   = elOffXY("numericAmount");
+    const memoOffset            = elOffXY("memo");
+    const signatureOffset       = elOffXY("signature");
+    const payeeOffset           = elOffXY("payee");
+    const recipientAddressOffset = elOffXY("recipientAddress");
+    const micrOffset            = elOffXY("micr");
 
     // Existing Zone 2 envelope-window offsets are intentionally left as-is for backwards compatibility.
     // The nested *checkLayoutCalibration* offsets below are point-based and clamped to ±36pt; they apply
@@ -21376,9 +21357,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const paystubOffX      = Number(cfg.paystubOffsetX      ?? 72);  // default +1in right (envelope window safety)
     const paystubOffY      = Number(cfg.paystubOffsetY      ?? -18); // default -0.25in (down, envelope window safety)
 
-    // Global calibration offsets (globalTop > 0 = shift down in CSS; = subtract in PDF Y-up)
-    const gOT = -(params.calibrationOffsets?.globalTop  || 0);
-    const gOL =   params.calibrationOffsets?.globalLeft || 0;
+    // Global calibration offsets (globalTop > 0 = shift down in CSS; = subtract in PDF Y-up).
+    // printableArea{x,y} from layout_config applies the same global shift per company/bank account.
+    const gOT = -(params.calibrationOffsets?.globalTop  || 0) + printableAreaOffset.y;
+    const gOL =   (params.calibrationOffsets?.globalLeft || 0) + printableAreaOffset.x;
 
     const px = (def: number, key: string): number =>
       positions[key]?.x !== undefined ? Math.round(positions[key].x! + gOL) : def;
@@ -21437,9 +21419,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
     const isContractor  = isCalibration ? true : isIndependentContractorWorker(worker);
-    const statementLabel = isContractor ? "CONTRACTOR STATEMENT" : "EMPLOYEE EARNINGS STATEMENT";
-    const statementTitle = isContractor ? "Contractor Statement" : "Employee Earnings Statement";
-    const companyCopyHeading = isContractor ? "Company Copy - Contractor Payment Statement" : "Company Copy - Employee Paystub";
+    // Exact contractor-statement heading + disclaimer — used on every contractor
+    // statement panel and detachable contractor copy. Nonemployee compensation:
+    // no payroll taxes are withheld and no self-employment-tax estimate is shown.
+    const CONTRACTOR_STATEMENT_HEADING = "CONTRACTOR PAYMENT STATEMENT — NONEMPLOYEE COMPENSATION";
+    const CONTRACTOR_STATEMENT_DISCLAIMER = "Not an employee wage statement. No payroll taxes were withheld.";
+    const statementLabel = isContractor ? CONTRACTOR_STATEMENT_HEADING : "EMPLOYEE EARNINGS STATEMENT";
+    const statementTitle = isContractor ? "Contractor Payment Statement — Nonemployee Compensation" : "Employee Earnings Statement";
+    const companyCopyHeading = isContractor ? CONTRACTOR_STATEMENT_HEADING : "Company Copy - Employee Paystub";
+    // Contractor payment context — used in place of hard-coded "Paid" / "$0.00".
+    const contractorPaymentMethod = isCalibration
+      ? "Check"
+      : sanitizeForPdf(String(params.vendorCheck ? "Check" : (item?.paymentMethod || "Check")))
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (m) => m.toUpperCase());
 
     // Company fields
     const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
@@ -21497,7 +21490,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const isPng = imageUrl.toLowerCase().endsWith(".png") || imageBytes[0] === 0x89;
         return isPng ? await doc.embedPng(imageBytes) : await doc.embedJpg(imageBytes);
       } catch (imageErr) {
-        console.warn("[CHECK_PDF] Logo image embed failed (using text fallback):", imageErr);
+        // Sanitized: never log the image URL / stored-file path — only the error class.
+        const cls = imageErr instanceof Error ? imageErr.name : typeof imageErr;
+        console.warn(`[CHECK_PDF] Logo image embed failed (${cls}) — using text fallback`);
         return null;
       }
     };
@@ -21632,12 +21627,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
 
     // ── Date — label above, value above its underline (x 6.75in–8.00in) ──
-    const dtX1 = z1x(6.75), dtX2 = z1x(8.00);
-    drawGuide(dtX1, z1y(0.95), dtX2 - dtX1, Math.round(0.51*72), "DATE BLOCK");
-    page.drawText("DATE",   { x: dtX1, y: z1y(0.52), size: 7.5,  font: hvB, color: rgb(0.35, 0.35, 0.35) });
-    page.drawText(payDate,  { x: dtX1 + 2, y: z1y(0.70), size: 10.5, font: hv,  color: rgb(0,   0,   0  ) });
-    page.drawLine({ start: { x: dtX1, y: z1y(0.76) }, end: { x: dtX2, y: z1y(0.76) }, color: rgb(0, 0, 0), thickness: 0.9 });
-    page.drawText("VOID AFTER 90 DAYS", { x: z1x(6.75), y: z1y(0.95), size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    const dtX1 = z1x(6.75) + dateOffset.x, dtX2 = z1x(8.00) + dateOffset.x;
+    const dtY = (inches: number) => z1y(inches) + dateOffset.y;
+    drawGuide(dtX1, dtY(0.95), dtX2 - dtX1, Math.round(0.51*72), "DATE BLOCK");
+    page.drawText("DATE",   { x: dtX1, y: dtY(0.52), size: 7.5,  font: hvB, color: rgb(0.35, 0.35, 0.35) });
+    page.drawText(payDate,  { x: dtX1 + 2, y: dtY(0.70), size: 10.5, font: hv,  color: rgb(0,   0,   0  ) });
+    page.drawLine({ start: { x: dtX1, y: dtY(0.76) }, end: { x: dtX2, y: dtY(0.76) }, color: rgb(0, 0, 0), thickness: 0.9 });
+    page.drawText("VOID AFTER 90 DAYS", { x: dtX1, y: dtY(0.95), size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
     // ── PAY TO THE ORDER OF — stacked two-line label matching sample layout ──
     //    "PAY TO THE" on line 1 (y 1.18in), "ORDER OF" on line 2 (y 1.30in)
@@ -21654,25 +21650,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     drawGuide(payLabelX, z1y(1.39 + 0.02), payLineX2 - payLabelX, Math.round(0.30*72), "PAYEE ROW");
     page.drawText("PAY TO THE",   { x: payLabelX, y: payLine1Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("ORDER OF",     { x: payLabelX, y: payRowY,   size: 9, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(wName, { x: payeeNameX + checkFaceReceiverOffX, y: payRowY + checkFaceReceiverOffY, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(wName, { x: payeeNameX + checkFaceReceiverOffX + payeeOffset.x, y: payRowY + checkFaceReceiverOffY + payeeOffset.y, size: 11, font: hvB, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: payLineX1, y: payeeLineY }, end: { x: payLineX2, y: payeeLineY }, color: rgb(0, 0, 0), thickness: 0.9 });
 
     // Numeric amount — no box, right-aligned bold 12pt on same baseline as payee name row
     // Right edge at x 7.82in, baseline at y 1.30in (same as ORDER OF / payee baseline)
     const amtStr   = `$${fmtMoney(netPay)}`;
     const amtStrW  = Math.round(amtStr.length * 7.0); // approx char width at 12pt bold
-    const amtTextX = Math.round(z1x(7.20) - amtStrW); // was 7.82 — moved left toward date/check# area
+    const amtTextX = Math.round(z1x(7.20) - amtStrW) + numericAmountOffset.x; // was 7.82 — moved left toward date/check# area
     drawGuide(amtTextX, z1y(1.38), amtStrW + 4, 14, "AMOUNT TEXT");
-    page.drawText(amtStr, { x: amtTextX, y: payRowY, size: 12, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(amtStr, { x: amtTextX, y: payRowY + numericAmountOffset.y, size: 12, font: hvB, color: rgb(0, 0, 0) });
 
     // ── Legal amount row: "The Sum of" (bold) + written amount + underline ─
     //    "The Sum of" same size/weight as "PAY TO THE ORDER OF" (9pt bold)
     //    Written amount includes Dollars: "Forty Dollars and 00/100"
     //    Underline from x 1.30in to x 7.20in at y 1.84in; no underline under label
-    const legalY      = z1y(1.75);
-    const legalLineY  = z1y(1.84);
-    const writtenX    = z1x(1.30);
-    const writtenEndX = z1x(7.20);
+    const legalY      = z1y(1.75) + amountInWordsOffset.y;
+    const legalLineY  = z1y(1.84) + amountInWordsOffset.y;
+    const writtenX    = z1x(1.30) + amountInWordsOffset.x;
+    const writtenEndX = z1x(7.20) + amountInWordsOffset.x;
     const writtenStr  = amtWords.length > 58 ? amtWords.slice(0, 55) + "..." : amtWords;
     drawGuide(z1x(0.30), legalLineY - 2, writtenEndX - z1x(0.30), Math.round(0.15*72), "LEGAL AMT");
     page.drawText("The Sum of", { x: z1x(0.30), y: legalY, size: 9,   font: hvB, color: rgb(0, 0, 0) });
@@ -21681,29 +21677,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       color: rgb(0, 0, 0), thickness: 0.6 });
 
     // ── Payee mailing address — moved lower (x 1.90in) ───────────────────
-    drawGuide(z1x(1.90), z1y(2.40 + 0.12), Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
-    if (wStreet)       page.drawText(wStreet,       { x: z1x(1.90), y: z1y(2.23), size: 9, font: hv, color: rgb(0, 0, 0) });
-    if (wCityStateZip) page.drawText(wCityStateZip, { x: z1x(1.90), y: z1y(2.40), size: 9, font: hv, color: rgb(0, 0, 0) });
+    const recipX = z1x(1.90) + recipientAddressOffset.x;
+    drawGuide(recipX, z1y(2.40 + 0.12) + recipientAddressOffset.y, Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
+    if (wStreet)       page.drawText(wStreet,       { x: recipX, y: z1y(2.23) + recipientAddressOffset.y, size: 9, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: recipX, y: z1y(2.40) + recipientAddressOffset.y, size: 9, font: hv, color: rgb(0, 0, 0) });
 
     // ── Memo (left) + Signature (right) — both at y 2.65in/2.72in ────────
     //    Must not enter MICR clear band (starts y 2.875in from check top)
-    const memoLabelY = z1y(2.65);
-    const memoLineY  = z1y(2.72);
+    const memoLabelY = z1y(2.65) + memoOffset.y;
+    const memoLineY  = z1y(2.72) + memoOffset.y;
+    const memoX      = memoOffset.x;
     const memoText   = sanitizeForPdf(params.vendorCheck?.memo ? params.vendorCheck.memo : (pStart && pEnd && pStart !== "N/A" && pEnd !== "N/A" ? `Pay period ${pStart} - ${pEnd}` : ""));
-    drawGuide(z1x(0.30), memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
-    page.drawText("MEMO:",   { x: z1x(0.30), y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
-    page.drawText(memoText,  { x: z1x(0.80), y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
-    page.drawLine({ start: { x: z1x(0.75), y: memoLineY }, end: { x: z1x(3.95), y: memoLineY },
+    drawGuide(z1x(0.30) + memoX, memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
+    page.drawText("MEMO:",   { x: z1x(0.30) + memoX, y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
+    page.drawText(memoText,  { x: z1x(0.80) + memoX, y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
+    page.drawLine({ start: { x: z1x(0.75) + memoX, y: memoLineY }, end: { x: z1x(3.95) + memoX, y: memoLineY },
       color: rgb(0, 0, 0), thickness: 0.6 });
 
-    const sigLineY = memoLineY; // same Y as memo underline per spec
-    const sigX1    = z1x(5.35), sigX2 = z1x(7.95);
+    const sigLineY = memoLineY + signatureOffset.y - memoOffset.y; // signature Y independently adjustable
+    const sigX1    = z1x(5.35) + signatureOffset.x, sigX2 = z1x(7.95) + signatureOffset.x;
     const sigLabel  = "AUTHORIZED SIGNATURE";
     const sigLabelW = Math.round(sigLabel.length * 3.5);
-    const sigCenterX = z1x(6.65);
+    const sigCenterX = z1x(6.65) + signatureOffset.x;
     page.drawLine({ start: { x: sigX1, y: sigLineY }, end: { x: sigX2, y: sigLineY },
       color: rgb(0, 0, 0), thickness: 0.6 });
-    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.90),
+    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.90) + signatureOffset.y,
       size: 7, font: hv, color: rgb(0.4, 0.4, 0.4) }); // was z1y(2.78) — moved below line so it doesn't get cut
 
     // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.38in ──
@@ -21711,8 +21709,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
     if (showMicrLine) {
       const micrString = buildMicrStr(routing, account, checkNum);
-      console.log(`[CHECK_PDF] MICR source string (redacted): ${micrString.replace(/\d(?=\d{4})/g, "•")}`);
-      page.drawText(micrString, { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
+      // Do not log the MICR string (even redacted) — it encodes routing/account digits.
+      console.log(`[CHECK_PDF] MICR line rendered (E-13B, length ${micrString.length})`);
+      page.drawText(micrString, { x: z1x(0.50) + micrOffset.x, y: z1y(3.38) + micrOffset.y, size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
     }
 
     // Zone 1 / Zone 2 separator — REMOVED: check stock has physical perforations; software lines are redundant.
@@ -21774,62 +21773,65 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       ].filter(Boolean).join(" • ");
     };
     const renderContractorStatementStub = () => {
-      // Reuse the same Zone 2 right-column bounding box as the employee paystub.
-      // This white overlay replaces contractor-only stub content without moving the check face/header/MICR.
-      page.drawRectangle({ x: psX - 4, y: mailBot + 4, width: psW + 8, height: checkBot - mailBot - 6, color: rgb(1, 1, 1) });
-      const psC1 = psX, psC2 = Math.min(psX + 150, rm - 116), psC3 = rm - 108, psC4 = rm - 52;
-      let psY = checkBot - 30 + paystubOffY;
+      // Zone 2 right column — contractor payment statement. Nonemployee
+      // compensation: no wage terminology, no deductions/withholding/FICA,
+      // no YTD, no self-employment-tax estimate. No overlay is drawn because
+      // the employee paystub content is never rendered for a contractor.
+      const psC1 = psX, psC3 = rm - 108;
       const minY = mailBot + 8;
+      let psY = checkBot - 40 + paystubOffY;
       const row = (label: string, value: string, bold = false, color = rgb(0, 0, 0), size = 6.7) => {
         if (psY < minY) return;
         page.drawText(label, { x: psC1, y: psY, size, font: bold ? hvB : hv, color });
-        page.drawText(value, { x: psC3, y: psY, size, font: bold ? hvB : cour, color });
+        if (value) page.drawText(value, { x: psC3, y: psY, size, font: bold ? hvB : cour, color });
         psY -= 10;
       };
 
       page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-      page.drawText("CONTRACTOR STATEMENT", { x: psX + psW / 2 - 55, y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
-      const psChkLabel = `Check No. ${fmtCheckNum}`;
-      page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
+      page.drawText(CONTRACTOR_STATEMENT_HEADING, { x: psX, y: checkBot - 13 + paystubOffY, size: 5.6, font: hvB, color: rgb(1, 1, 1) });
+      page.drawText(CONTRACTOR_STATEMENT_DISCLAIMER, { x: psX, y: checkBot - 27 + paystubOffY, size: 5.4, font: hv, color: rgb(0.3, 0.3, 0.3) });
 
-      page.drawText(truncatePdfText(wName, 36), { x: psC1, y: psY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(truncatePdfText(coName, 34), { x: psC2, y: psY, size: 6.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
-      psY -= 10;
-      page.drawText(`Statement Date: ${payDate}`, { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
-      page.drawText(`Statement No. ${fmtCheckNum}`, { x: psC2, y: psY, size: 6.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
-      psY -= 12;
+      // Payer / contractor / reference block
+      page.drawText(`Payer: ${truncatePdfText(coName, 40)}`, { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) }); psY -= 10;
+      page.drawText(`Contractor: ${truncatePdfText(wName, 38)}`, { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0.2, 0.2, 0.2) }); psY -= 10;
+      page.drawText(`Check / Ref No.: ${fmtCheckNum}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9;
+      page.drawText(`Payment Date: ${payDate}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9;
+      page.drawText(`Payment Method: ${contractorPaymentMethod}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9;
+      const invRef = sanitizeForPdf(String(item?.invoiceNumber || item?.invoice_number || item?.reference || ""));
+      const conRef = sanitizeForPdf(String(item?.contractReference || item?.contract_reference || item?.contractId || ""));
+      if (invRef) { page.drawText(`Invoice: ${truncatePdfText(invRef, 40)}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9; }
+      if (conRef) { page.drawText(`Contract: ${truncatePdfText(conRef, 40)}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9; }
+      psY -= 3;
 
       page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 12, color: rgb(0.88, 0.88, 0.88) });
-      page.drawText("SERVICES / COMPENSATION", { x: psC1, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText("PAYMENT", { x: psC1, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
       page.drawText("AMOUNT", { x: psC3, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
       psY -= 12;
-      row("Contract services", `$${fmtMoney(totalCompensation)}`);
-      psY -= 2;
-      row("TOTAL COMPENSATION", `$${fmtMoney(totalCompensation)}`, true);
-      if (totalTradeCredit > 0) row("Trade Compensation - Goods", `($${fmtMoney(totalTradeCredit)})`, true, rgb(0.55, 0, 0));
-      else if (psY >= minY) { page.drawText("No trade compensation applied.", { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.35, 0.35, 0.35) }); psY -= 9; }
-      row("Other Non-Cash Credits", "$0.00", false, rgb(0.35, 0.35, 0.35));
-      page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 12, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
-      row("CASH PAYMENT / CHECK AMOUNT", `$${fmtMoney(netPay)}`, true, rgb(0, 0, 0.55), 6.8);
-      row("BALANCE DUE", "$0.00", true);
+      row("Current payment amount", `$${fmtMoney(netPay)}`, true, rgb(0, 0, 0.55), 6.8);
+      if (totalTradeCredit > 0) row("Documented trade / noncash amount", `$${fmtMoney(totalTradeCredit)}`, true, rgb(0.05, 0.35, 0.12));
+      const invBalanceRaw = item?.balanceDue ?? item?.balance_due;
+      if (invBalanceRaw !== undefined && invBalanceRaw !== null && String(invBalanceRaw) !== "") {
+        row("Remaining invoice balance", `$${fmtMoney(Number(invBalanceRaw) || 0)}`);
+      }
 
-      if (psY >= minY + 20) {
+      if (totalTradeCredit > 0 && psY >= minY + 20) {
         page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 12, color: rgb(0.90, 0.96, 0.92), opacity: 0.9 });
-        page.drawText("TRADE GOODS CREDIT", { x: psC1, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
-        page.drawText("VALUE", { x: psC4, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+        page.drawText("TRADE / NONCASH DETAIL", { x: psC1, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+        page.drawText("VALUE", { x: rm - 52, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
         psY -= 11;
         for (const credit of tradeCredits.slice(0, 3)) {
           if (psY < minY + 8) break;
           page.drawText(truncatePdfText(tradeCreditLabel(credit), 56), { x: psC1, y: psY, size: 5.7, font: hv, color: rgb(0, 0, 0) });
-          page.drawText(`($${fmtMoney(tradeCreditValue(credit))})`, { x: psC3, y: psY, size: 5.7, font: cour, color: rgb(0, 0, 0) });
+          page.drawText(`$${fmtMoney(tradeCreditValue(credit))}`, { x: psC3, y: psY, size: 5.7, font: cour, color: rgb(0, 0, 0) });
           psY -= 8;
         }
       }
-      if (psY >= minY + 18) {
-        page.drawText("PROOF OF PAYMENT", { x: psC1, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) }); psY -= 9;
-        page.drawText(`Check ${fmtCheckNum} • ${payDate} • Check $${fmtMoney(netPay)} • Trade $${fmtMoney(totalTradeCredit)} • Total $${fmtMoney(totalCompensation)} • Paid`, {
-          x: psC1, y: psY, size: 5.6, font: hv, color: rgb(0.1, 0.1, 0.1),
-        });
+      if (psY >= minY + 12) {
+        page.drawText(
+          `Ref ${fmtCheckNum} • ${payDate} • ${contractorPaymentMethod} $${fmtMoney(netPay)}` +
+            (totalTradeCredit > 0 ? ` • Trade $${fmtMoney(totalTradeCredit)}` : ""),
+          { x: psC1, y: psY, size: 5.6, font: hv, color: rgb(0.1, 0.1, 0.1) },
+        );
       }
     };
     const renderEmployeePaystub = () => {
@@ -21840,11 +21842,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     type ERow = [string, string, string, string, string];
     const earnRows: ERow[] = [];
     let totalHrs = 0;
-    if (!params.vendorCheck) {
+    if (!params.vendorCheck && isContractor) {
+      // Contractor payment statement — the sole Zone 2 renderer for contractors.
+      // Employee wage-statement content below is never drawn for contractors, so
+      // no employee terminology, deductions, withholding, FICA or YTD can leak.
+      renderContractorStatementStub();
+    } else if (!params.vendorCheck) {
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
     page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    page.drawText(statementLabel, { x: psX + psW / 2 - (isContractor ? 55 : 22), y: checkBot - 14 + paystubOffY, size: isContractor ? 8.5 : 10, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText(statementLabel, { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
     const psChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
@@ -21855,10 +21862,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(`Pay Period Start: ${pStart}`, { x: psX, y: checkBot - 42 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
     page.drawText(`Pay Period End: ${pEnd}`,     { x: psX, y: checkBot - 52 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
     page.drawText(`Pay Date: ${payDate}`,        { x: psX, y: checkBot - 62 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
-    // Contractor note
-    if (isContractor)
-      page.drawText("Independent contractor — responsible for self-employment tax (15.3%: SS 12.4% + Medicare 2.9%)",
-        { x: psX, y: checkBot - 74 + paystubOffY, size: 5.5, font: hv, color: rgb(0.45, 0.32, 0.05) });
 
     // Compact earnings table
     const psC1 = psX, psC2 = psX + 115, psC3 = psX + 160, psC4 = psX + 210;
@@ -21948,34 +21951,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       psY -= 14;
     }
 
-    if (isContractor && tradeCredits.length > 0 && psY >= mailBot + 32) {
-      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.90, 0.96, 0.92), opacity: 0.9 });
-      page.drawText("TRADE GOODS CREDIT DETAIL", { x: psC1, y: psY, size: 6, font: hvB, color: rgb(0.05, 0.35, 0.12) }); psY -= 12;
-      for (const credit of tradeCredits.slice(0, 2)) {
-        if (psY < mailBot + 8) break;
-        const sku = credit.itemSku || credit.item_sku || "";
-        const qty = credit.quantity || "1";
-        const status = credit.deliveryStatus || credit.delivery_status || "pending";
-        const name = sanitizeForPdf(`${credit.itemName || credit.item_name || "Goods"}${sku ? ` (${sku})` : ""} x${qty} — ${status}`);
-        page.drawText(name.slice(0, 42), { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) });
-        page.drawText(`-$${fmtMoney(Number(credit.totalValue || credit.total_value || 0))}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) });
-        psY -= 10;
-      }
-      if (psY >= mailBot + 8) { page.drawText(`Proof of Payment: Total $${fmtMoney(totalCompensation)} = Goods $${fmtMoney(totalTradeCredit)} + Check $${fmtMoney(netPay)}`, { x: psC1, y: psY, size: 5.6, font: hvB, color: rgb(0.05,0.25,0.08) }); psY -= 9; }
-    }
-
-    // SE tax reference (Zone 2 right col, contractor only)
-    if (isContractor && psY >= mailBot + 50) {
-      const ssSEcur = grossPay * 0.124, medSEcur = grossPay * 0.029, totSEcur = grossPay * 0.153;
-      const ssSEytd = ytdGross  * 0.124, medSEytd = ytdGross  * 0.029, totSEytd = ytdGross  * 0.153;
-      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.95, 0.92, 0.82), opacity: 0.85 });
-      page.drawText("SELF-EMPLOYMENT TAX REFERENCE", { x: psC1, y: psY, size: 6, font: hvB, color: rgb(0.5, 0.35, 0) }); psY -= 12;
-      if (psY >= mailBot + 8) { page.drawText("Social Security (SS) 12.4%", { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(ssSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
-      if (psY >= mailBot + 8) { page.drawText("Medicare 2.9%",              { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(medSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
-      if (psY >= mailBot + 8) { page.drawText("Total SE Tax 15.3%",         { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: psC4, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(totSEytd)}`, { x: psC5, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); }
-    }
-    if (isContractor) renderContractorStatementStub();
-    else renderEmployeePaystub();
+    renderEmployeePaystub();
     } else {
       // Vendor check info panel — right column of Zone 2
       page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.08, 0.38, 0.14), opacity: 0.9 });
@@ -22013,6 +21989,57 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(`Amount:  $${fmtMoney(netPay)}`, { x: lm, y: vcZ3Y, size: 9, font: hvB, color: rgb(0, 0, 0.5) }); vcZ3Y -= 12;
       page.drawText(`Date:    ${payDate}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); vcZ3Y -= 12;
       if (vcMemo) { page.drawText(`Memo:    ${vcMemo.length > 60 ? vcMemo.slice(0, 57) + "…" : vcMemo}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); }
+    } else if (isContractor) {
+    // ═══════════════════════════════════════════════════════════════════════
+    // ZONE 3 — CONTRACTOR PAYMENT STATEMENT (detachable contractor copy)
+    // Nonemployee compensation: no earnings/deductions table, no withholding,
+    // no self-employment-tax estimate, no YTD, no hard-coded "Paid".
+    // ═══════════════════════════════════════════════════════════════════════
+    const cz3Banner = mailBot - 14;
+    page.drawRectangle({ x: lm - 4, y: cz3Banner - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
+    page.drawText(`${CONTRACTOR_STATEMENT_HEADING} — DETACH AND RETAIN`, { x: lm, y: cz3Banner, size: 6.6, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    const cz3Chk = `Check / Ref No. ${fmtCheckNum}`;
+    page.drawText(cz3Chk, { x: rm - Math.round(cz3Chk.length * 4.2), y: cz3Banner, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    let cy = cz3Banner - 14;
+    page.drawText(CONTRACTOR_STATEMENT_DISCLAIMER, { x: lm, y: cy, size: 6.4, font: hv, color: rgb(0.35, 0.35, 0.35) }); cy -= 14;
+    page.drawText(`Payer: ${coName}`, { x: lm, y: cy, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`Payment Date: ${payDate}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
+    page.drawText(`Contractor: ${wName}`, { x: lm, y: cy, size: 8, font: hv, color: rgb(0.15, 0.15, 0.15) });
+    page.drawText(`Payment Method: ${contractorPaymentMethod}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
+    if (wStreet) { page.drawText(wStreet, { x: lm, y: cy, size: 8, font: hv, color: rgb(0.15, 0.15, 0.15) }); }
+    if (coEin) { page.drawText(`Payer EIN: ${coEin}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); }
+    cy -= 12;
+    if (wCityStateZip) { page.drawText(wCityStateZip, { x: lm, y: cy, size: 8, font: hv, color: rgb(0.15, 0.15, 0.15) }); cy -= 14; } else { cy -= 2; }
+
+    const czAmt = rm - 95;
+    page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
+    page.drawText("PAYMENT", { x: lm, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("AMOUNT", { x: czAmt, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) }); cy -= 14;
+    page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+    page.drawText("Current payment amount", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+    page.drawText(`$${fmtMoney(netPay)}`, { x: czAmt, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) }); cy -= 14;
+    if (totalTradeCredit > 0) {
+      page.drawText("Documented trade / noncash amount", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+      page.drawText(`$${fmtMoney(totalTradeCredit)}`, { x: czAmt, y: cy, size: 8, font: hvB, color: rgb(0.05, 0.35, 0.12) }); cy -= 12;
+      for (const credit of tradeCredits.slice(0, 4)) {
+        if (cy < 40) break;
+        page.drawText(truncatePdfText(tradeCreditLabel(credit), 74), { x: lm + 6, y: cy, size: 6, font: hv, color: rgb(0.25, 0.25, 0.25) });
+        page.drawText(`$${fmtMoney(tradeCreditValue(credit))}`, { x: czAmt, y: cy, size: 6, font: cour, color: rgb(0.25, 0.25, 0.25) }); cy -= 9;
+      }
+    }
+    {
+      const czBal = item?.balanceDue ?? item?.balance_due;
+      if (czBal !== undefined && czBal !== null && String(czBal) !== "") {
+        page.drawText("Remaining invoice balance", { x: lm, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) });
+        page.drawText(`$${fmtMoney(Number(czBal) || 0)}`, { x: czAmt, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) }); cy -= 14;
+      }
+    }
+    cy -= 2;
+    page.drawText(
+      `Ref ${fmtCheckNum} • ${payDate} • ${contractorPaymentMethod} $${fmtMoney(netPay)}` +
+        (totalTradeCredit > 0 ? ` • Trade $${fmtMoney(totalTradeCredit)}` : ""),
+      { x: lm, y: cy, size: 6.5, font: hv, color: rgb(0.15, 0.15, 0.15) },
+    );
     } else {
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 3 — DETAILED EARNINGS STATEMENT  (Y: 0..mailBot = 0..288)
@@ -22116,66 +22143,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(`$${fmtMoney(netPay)}`,    { x: d4, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
     page.drawText(`$${fmtMoney(ytdNet)}`,    { x: d5, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
     z3Y -= 18;
-
-    // SE tax reference detail (contractor only, Zone 3)
-    if (isContractor && z3Y > 55) {
-      const ssSEcur = grossPay * 0.124, medSEcur = grossPay * 0.029, totSEcur = grossPay * 0.153;
-      const ssSEytd = ytdGross  * 0.124, medSEytd = ytdGross  * 0.029, totSEytd = ytdGross  * 0.153;
-      page.drawRectangle({ x: lm - 2, y: z3Y - 4, width: rm - lm + 2, height: 13, color: rgb(0.95, 0.92, 0.82), opacity: 0.85 });
-      page.drawText("SELF-EMPLOYMENT TAX REFERENCE — NOT DEDUCTED FROM PAY", { x: lm, y: z3Y, size: 6.5, font: hvB, color: rgb(0.5, 0.35, 0) }); z3Y -= 13;
-      // SE table header
-      const se4 = rm - 200, se5 = rm - 128, se6 = rm - 55;
-      page.drawRectangle({ x: lm - 2, y: z3Y - 3, width: rm - lm + 2, height: 12, color: rgb(0.92, 0.89, 0.78) });
-      page.drawText("DESCRIPTION", { x: lm,  y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
-      page.drawText("RATE",        { x: se4, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
-      page.drawText("CURRENT",     { x: se5, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
-      page.drawText("YTD",         { x: se6, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) }); z3Y -= 12;
-      if (z3Y > 30) { page.drawText("Social Security (SSI)", { x: lm, y: z3Y, size: 7.5, font: hv, color: rgb(0,0,0) }); page.drawText("12.4%", { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); z3Y -= 11; }
-      if (z3Y > 30) { page.drawText("Medicare",              { x: lm, y: z3Y, size: 7.5, font: hv, color: rgb(0,0,0) }); page.drawText("2.9%",  { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); z3Y -= 11; }
-      if (z3Y > 30) { page.drawText("Total SE Tax",          { x: lm, y: z3Y, size: 7.5, font: hvB, color: rgb(0,0,0) }); page.drawText("15.3%", { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: hvB,  color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: hvB,  color: rgb(0,0,0) }); z3Y -= 11; }
-      if (z3Y > 18)
-        page.drawText("As an independent contractor, you are responsible for self-employment tax (SSI 12.4% + Medicare 2.9% = 15.3%) directly to the IRS. SS applies to first $168,600 of earnings.",
-          { x: lm, y: z3Y, size: 5.5, font: hv, color: rgb(0.4, 0.4, 0.4) });
-    }
-    } // end Zone 3 else block (regular payroll earnings statement)
-
-    if (isContractor && !params.vendorCheck) {
-      // Replace only contractor company-copy content in the existing Zone 3 area.
-      // Employee company-copy rendering above is untouched.
-      page.drawRectangle({ x: lm - 4, y: 18, width: rm - lm + 8, height: mailBot - 24, color: rgb(1, 1, 1) });
-      const z3BannerY = mailBot - 14;
-      page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
-      page.drawText("CONTRACTOR STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
-      page.drawText(companyCopyHeading, { x: lm, y: z3BannerY - 13, size: 6.5, font: hvB, color: rgb(0.25, 0.25, 0.25) });
-      const z3ChkLabel = `Check No. ${fmtCheckNum}`;
-      page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
-      let cy = z3BannerY - 16;
-      page.drawText(wName, { x: lm, y: cy, size: 9, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`Company: ${coName}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
-      if (wStreet) page.drawText(wStreet, { x: lm, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) });
-      page.drawText(`Statement Date: ${payDate}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
-      if (wCityStateZip) page.drawText(wCityStateZip, { x: lm, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) });
-      page.drawText(`Payment Status: Paid`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 16;
-
-      const cAmt = rm - 95;
-      page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
-      page.drawText("SERVICES / COMPENSATION", { x: lm, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText("AMOUNT", { x: cAmt, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) }); cy -= 14;
-      page.drawText("Contract services", { x: lm, y: cy, size: 7.5, font: hv, color: rgb(0, 0, 0) });
-      page.drawText(`$${fmtMoney(totalCompensation)}`, { x: cAmt, y: cy, size: 7.5, font: cour, color: rgb(0, 0, 0) }); cy -= 12;
-      page.drawText("TOTAL COMPENSATION", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`$${fmtMoney(totalCompensation)}`, { x: cAmt, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0) }); cy -= 12;
-      page.drawText("Trade Compensation - Goods", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`($${fmtMoney(totalTradeCredit)})`, { x: cAmt, y: cy, size: 8, font: hvB, color: rgb(0.55, 0, 0) }); cy -= 12;
-      page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 14, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
-      page.drawText("CASH PAYMENT / CHECK AMOUNT", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
-      page.drawText(`$${fmtMoney(netPay)}`, { x: cAmt, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) }); cy -= 16;
-
-      page.drawText("PROOF OF PAYMENT", { x: lm, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`Check ${fmtCheckNum} • ${payDate} • Check $${fmtMoney(netPay)} • Trade $${fmtMoney(totalTradeCredit)} • Total $${fmtMoney(totalCompensation)} • Paid`, {
-        x: lm + 105, y: cy, size: 6.2, font: hv, color: rgb(0.15, 0.15, 0.15),
-      });
-    }
+    } // end Zone 3 employee earnings statement
 
     // Footer
     const footerText = coEin ? `This is a computer-generated document. ${coName} - EIN: ${coEin}` : "This is a computer-generated document.";
