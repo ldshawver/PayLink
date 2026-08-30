@@ -45,6 +45,10 @@ import {
   requireIdempotencyKey, checkTradeCreditApplicable, tradeCompFingerprint,
   externalSettlementDisclaimer, isUniqueConstraintViolation,
 } from "./contractor-payments";
+import {
+  EXPENSE_PAYMENT_METHOD, EXPENSE_VOID_STOP_PAYMENT_NOTE, recomputeExpensePaymentStatus,
+  expensePaymentFingerprint, checkExpenseEligibility,
+} from "./expense-payments";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -10720,100 +10724,402 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/expenses/:id/print-check — generate vendor check PDF + mark expense as paid
-  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+  // ── Expense payment lifecycle helpers (Release B2) ───────────────────────
+  class ExpenseRuleError extends Error {
+    constructor(public httpStatus: number, public code: string, message: string) { super(message); }
+  }
+  const epRows = (r: unknown): any[] => (Array.isArray(r) ? r : (((r as any)?.rows ?? []) as any[]));
+  const epRow = (r: unknown): any => epRows(r)[0];
+  const notifyExpenseAfterCommit = (paymentId: string, input: Parameters<typeof createContractorNotification>[0]) => {
+    Promise.resolve().then(() => createContractorNotification(input))
+      .catch(() => console.warn(`[expense-payment] notification deferred for payment ${paymentId}`));
+  };
+
+  // Resolve an expense + its company scope + funding account for a check render.
+  // PURE READ — no financial writes. Throws ExpenseRuleError.
+  async function resolveExpenseCheckContext(expenseId: string, req: any, sessionCompanyIdArg?: string | null): Promise<{
+    expense: any; companyId: string; company: any; remittanceSource: any; layoutConfig: any; calibrationOffsets: any;
+  }> {
+    const expense = epRow(await db.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId}`));
+    if (!expense) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+    const sessionCompanyId = sessionCompanyIdArg !== undefined ? sessionCompanyIdArg : await getSessionCompanyId(req);
+    if (sessionCompanyId && expense.company_id && sessionCompanyId !== expense.company_id) {
+      throw new ExpenseRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const user = await storage.getUser(req.session.userId!);
+    if (expense.company_id && !(await canAccessCompany(user!, expense.company_id))) {
+      throw new ExpenseRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const companyId = expense.company_id || sessionCompanyId;
+    const company = epRow(companyId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${companyId}`) : { rows: [] });
+    const rs = epRow(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${companyId} AND status = 'enabled' ORDER BY created_at ASC LIMIT 1`));
+    if (!rs?.routing_number || !rs?.account_number) {
+      throw new ExpenseRuleError(400, "NO_FUNDING_ACCOUNT", "No enabled bank account found for this company. Configure a remittance source first.");
+    }
+    const tpl = epRow(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${companyId} AND is_default = true LIMIT 1`)) as CheckTplRow | undefined;
+    return {
+      expense, companyId: String(companyId), company, remittanceSource: rs,
+      layoutConfig: tpl ? parseLayoutConfig(tpl.layout_config) : undefined,
+      calibrationOffsets: rs.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined,
+    };
+  }
+
+  async function renderExpenseCheckPdf(ctx: {
+    expense: any; company: any; remittanceSource: any; layoutConfig: any; calibrationOffsets: any;
+  }, opts: { amount?: unknown; checkNumber?: string | number | null; memo?: string; payeeName?: string; payeeAddress?: string; payeeCityStateZip?: string }): Promise<Uint8Array> {
+    const e = ctx.expense;
+    const co = ctx.company;
+    return renderCheckPdf({
+      item: null, worker: null, run: null,
+      company: co ? { name: co.name || "", address: co.address || "", city: co.city || "", state: co.state || "", zip: co.zip || "", phone: co.phone || "", ein: co.ein || "", dba: co.dba || "", logoUrl: co.logo_url || "" } : null,
+      remittanceSource: { routingNumber: ctx.remittanceSource.routing_number, accountNumber: ctx.remittanceSource.account_number },
+      isCalibration: false, layoutConfig: ctx.layoutConfig, calibrationOffsets: ctx.calibrationOffsets,
+      vendorCheck: {
+        payeeName: String(opts.payeeName || e.payee_name || e.vendor || "Vendor"),
+        payeeAddress: String(opts.payeeAddress || e.payee_address || ""),
+        payeeCityStateZip: String(opts.payeeCityStateZip || e.payee_city_state_zip || ""),
+        amount: fromCents(toCents(opts.amount ?? e.amount)),
+        checkNumber: opts.checkNumber != null ? String(opts.checkNumber) : undefined,
+        memo: String(opts.memo || e.memo || e.description || ""),
+      },
+    });
+  }
+
+  // GET|POST /api/expenses/:id/print-check[?preview=1] — PREVIEW ONLY, zero
+  // financial writes, zero check-counter increments. Issuing is POST /cut-check.
+  const expenseCheckPreview = async (req: any, res: any, sessionCompanyId: string | null | undefined) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      const expRow = pgRow<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
-      if (!expRow) return res.status(404).json({ message: "Expense not found" });
-
-      const sessionCompanyId = await getSessionCompanyId(req);
-      if (sessionCompanyId && expRow.company_id && sessionCompanyId !== expRow.company_id) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      // Duplicate payment guard
-      if (expRow.payment_status === "paid") {
-        return res.status(409).json({
-          message: "This expense has already been paid.",
-          checkNumber: expRow.check_number,
-          paidAt: expRow.paid_at,
-          hint: "To reissue, void the original payment first.",
-        });
-      }
-
-      const compId = expRow.company_id || sessionCompanyId;
-      const coRow = pgRow<any>(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
-
-      // Find the enabled remittance source for this company
-      const rsRow = pgRow<CheckRsRow>(await db.execute(sql`
-        SELECT * FROM remittance_sources
-        WHERE company_id = ${compId} AND status = 'enabled'
-        LIMIT 1
-      `));
-
-      const {
-        payeeName = expRow.payee_name || expRow.vendor || "Unknown Payee",
-        payeeAddress = expRow.payee_address || "",
-        payeeCityStateZip = expRow.payee_city_state_zip || "",
-        amount = expRow.amount,
-        checkNumber,
-        memo = expRow.memo || expRow.description || "",
-      } = req.body || {};
-
-      if (!rsRow?.routing_number || !rsRow?.account_number) {
-        return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
-      }
-
-      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
-      const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
-      const calibrationOffsets = rsRow.calibration_config ? parseCalibrationOffsets(rsRow.calibration_config) : undefined;
-
-      const coNorm = coRow ? {
-        name: coRow.name || "", address: coRow.address || "", city: coRow.city || "",
-        state: coRow.state || "", zip: coRow.zip || "", phone: coRow.phone || "",
-        ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || ""
-      } : null;
-
-      const pdfBytes = await renderCheckPdf({
-        item: null, worker: null, run: null,
-        company: coNorm,
-        remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
-        isCalibration: false,
-        layoutConfig,
-        calibrationOffsets,
-        vendorCheck: {
-          payeeName: String(payeeName),
-          payeeAddress: String(payeeAddress),
-          payeeCityStateZip: String(payeeCityStateZip),
-          amount: parseFloat(String(amount || 0)),
-          checkNumber: checkNumber ? String(checkNumber) : undefined,
-          memo: String(memo),
-        },
+      const body = (req.method === "POST" ? req.body : req.query) || {};
+      const ctx = await resolveExpenseCheckContext(String(req.params.id), req, sessionCompanyId);
+      const pdfBytes = await renderExpenseCheckPdf(ctx, {
+        amount: body.amount, checkNumber: body.checkNumber, memo: body.memo,
+        payeeName: body.payeeName, payeeAddress: body.payeeAddress, payeeCityStateZip: body.payeeCityStateZip,
       });
-
-      // Mark expense as paid
-      const resolvedCheckNum = checkNumber ? String(checkNumber) : null;
-      await db.execute(sql`
-        UPDATE expenses
-        SET payment_status  = 'paid',
-            check_number    = ${resolvedCheckNum},
-            memo            = ${memo || null},
-            payee_name      = ${payeeName || null},
-            payee_address   = ${payeeAddress || null},
-            payee_city_state_zip = ${payeeCityStateZip || null},
-            paid_by_user_id = ${user?.id || null},
-            paid_at         = NOW(),
-            updated_at      = NOW()
-        WHERE id = ${req.params.id}
-      `);
-
       res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `attachment; filename="expense-check-${req.params.id}.pdf"`);
+      res.set("X-Preview", "1");
+      res.set("Content-Disposition", `inline; filename="expense-check-preview-${req.params.id}.pdf"`);
       res.set("Content-Length", String(pdfBytes.length));
       return res.send(Buffer.from(pdfBytes));
     } catch (e: any) {
-      console.error("expense-print-check error:", e?.message || e, e?.stack);
-      res.status(500).json({ message: e?.message || "Failed to generate check PDF" });
+      if (e instanceof ExpenseRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[expense] check preview failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to generate check preview" });
+    }
+  };
+  // GET + POST share one preview implementation; each carries the server-side
+  // company-scope guard inline (session-derived company id, canAccessCompany
+  // membership check — never a body-supplied company id).
+  app.get("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+    const sessionCompanyId = await getSessionCompanyId(req);
+    const scopeUser = await storage.getUser(req.session.userId!);
+    const scopeRow = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${String(req.params.id)}`));
+    if (scopeRow?.company_id && !(await canAccessCompany(scopeUser!, scopeRow.company_id))) return res.status(403).json({ error: "ACCESS_DENIED", message: "Access denied" });
+    return expenseCheckPreview(req, res, sessionCompanyId);
+  });
+  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+    const sessionCompanyId = await getSessionCompanyId(req);
+    const scopeUser = await storage.getUser(req.session.userId!);
+    const scopeRow = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${String(req.params.id)}`));
+    if (scopeRow?.company_id && !(await canAccessCompany(scopeUser!, scopeRow.company_id))) return res.status(403).json({ error: "ACCESS_DENIED", message: "Access denied" });
+    return expenseCheckPreview(req, res, sessionCompanyId);
+  });
+
+  // POST /api/expenses/:id/cut-check — ISSUE a vendor/expense check. Idempotency-Key
+  // required. Atomic: lock the expense + funding account, recompute the unpaid
+  // balance from the expense_payments ledger, validate approval/vendor/funding,
+  // allocate one check number, write exactly one expense_payments row, update the
+  // expense payment status, commit together; then return the rendered PDF.
+  app.post("/api/expenses/:id/cut-check", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    const expenseId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      // Company scope is resolved and enforced server-side — never from the request body.
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const scopeUser = await storage.getUser(req.session.userId!);
+      const scopeRow = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${expenseId}`));
+      if (scopeRow?.company_id && !(await canAccessCompany(scopeUser!, scopeRow.company_id))) {
+        return res.status(403).json({ error: "ACCESS_DENIED", message: "Access denied" });
+      }
+      const ctx = await resolveExpenseCheckContext(expenseId, req, sessionCompanyId);
+      const bodyPayeeName = String((req.body as any)?.payeeName ?? "").trim() || null;
+      const bodyPayeeAddress = String((req.body as any)?.payeeAddress ?? "").trim() || null;
+      const bodyPayeeCsz = String((req.body as any)?.payeeCityStateZip ?? "").trim() || null;
+      const bodyMemo = String((req.body as any)?.memo ?? "").trim() || null;
+      const elig = checkExpenseEligibility(
+        { companyId: ctx.expense.company_id, status: ctx.expense.status, paymentStatus: ctx.expense.payment_status, vendor: ctx.expense.vendor, payeeName: ctx.expense.payee_name || bodyPayeeName, isArchived: ctx.expense.is_archived, archivedAt: ctx.expense.archived_at, amount: ctx.expense.amount },
+        { companyId: ctx.companyId },
+      );
+      if (!elig.ok) return res.status(elig.code === "EXPENSE_CROSS_COMPANY" ? 403 : 422).json({ error: elig.code, message: elig.message });
+
+      const requestedCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : null;
+      const FULL_BALANCE_SENTINEL = -1;
+      const fingerprint = expensePaymentFingerprint({
+        companyId: ctx.companyId, expenseId, amountCents: requestedCents ?? FULL_BALANCE_SENTINEL,
+        method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName: elig.payeeName,
+      });
+
+      const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        const explicitMismatch = requestedCents !== null && toCents(priorByKey.amount) !== requestedCents;
+        if (explicitMismatch) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+        const pdf = await renderExpenseCheckPdf(ctx, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+        res.set("Content-Type", "application/pdf");
+        res.set("X-Payment-Id", String(priorByKey.id));
+        res.set("Content-Disposition", `attachment; filename="expense-check-${priorByKey.reference_number || expenseId}.pdf"`);
+        return res.send(Buffer.from(pdf));
+      }
+
+      let issued: { payment: any; checkNumber: string };
+      try {
+        issued = await db.transaction(async (tx) => {
+          const e = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId} FOR UPDATE`));
+          if (!e) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+          const eg = checkExpenseEligibility(
+            { companyId: e.company_id, status: e.status, paymentStatus: e.payment_status, vendor: e.vendor, payeeName: e.payee_name, isArchived: e.is_archived, archivedAt: e.archived_at, amount: e.amount },
+            { companyId: ctx.companyId },
+          );
+          if (!eg.ok) throw new ExpenseRuleError(eg.code === "EXPENSE_CROSS_COMPANY" ? 403 : 422, eg.code, eg.message);
+
+          const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${expenseId} AND status <> 'void'`));
+          const totalCents = toCents(e.amount);
+          const balanceDueCents = totalCents - toCents(paidRow?.paid);
+          const amtInput = requestedCents !== null ? (req.body as any).amount : fromCents(balanceDueCents);
+          const amt = checkPaymentAmount(amtInput, balanceDueCents);
+          if (!amt.ok) throw new ExpenseRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          const rs = epRow(await tx.execute(sql`SELECT id, last_check_number FROM remittance_sources WHERE id = ${ctx.remittanceSource.id} FOR UPDATE`));
+          const nextCheckNum = Number(rs?.last_check_number || 0) + 1;
+          await tx.execute(sql`UPDATE remittance_sources SET last_check_number = ${nextCheckNum} WHERE id = ${ctx.remittanceSource.id}`);
+          const checkNumberStr = formatCheckNumber(nextCheckNum);
+
+          const payment = epRow(await tx.execute(sql`
+            INSERT INTO expense_payments
+              (company_id, expense_id, remittance_source_id, amount, payment_method, status, reference_number, idempotency_key, idempotency_fingerprint, created_by_user_id, issued_at)
+            VALUES (${ctx.companyId}, ${expenseId}, ${ctx.remittanceSource.id}, ${fromCents(amt.cents)}, 'check', 'completed', ${checkNumberStr}, ${idem.key}, ${fingerprint}, ${req.session.userId}, NOW())
+            RETURNING *`));
+
+          const newPaidCents = toCents(paidRow?.paid) + amt.cents;
+          const newStatus = recomputeExpensePaymentStatus(totalCents, newPaidCents);
+          await tx.execute(sql`
+            UPDATE expenses
+            SET payment_status = ${newStatus},
+                check_number = ${checkNumberStr},
+                payee_name = ${bodyPayeeName ?? eg.payeeName},
+                payee_address = ${bodyPayeeAddress ?? e.payee_address ?? null},
+                payee_city_state_zip = ${bodyPayeeCsz ?? e.payee_city_state_zip ?? null},
+                memo = ${bodyMemo ?? e.memo ?? null},
+                paid_by_user_id = ${req.session.userId},
+                paid_at = ${newStatus === "paid" ? sql`NOW()` : sql`paid_at`},
+                updated_at = NOW()
+            WHERE id = ${expenseId}`);
+
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, previous_status, new_status, metadata_json)
+            VALUES ('expense', ${expenseId}, 'check_issued', ${req.session.userId}, ${ctx.companyId}, ${e.payment_status ?? 'unpaid'}, ${newStatus}, ${JSON.stringify({ expensePaymentId: payment.id, checkNumber: checkNumberStr })})`);
+
+          return { payment, checkNumber: checkNumberStr };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            const explicitMismatch = requestedCents !== null && toCents(committed.amount) !== requestedCents;
+            if (explicitMismatch) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+            const pdf = await renderExpenseCheckPdf(ctx, { amount: committed.amount, checkNumber: committed.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+            res.set("Content-Type", "application/pdf");
+            res.set("X-Payment-Id", String(committed.id));
+            return res.send(Buffer.from(pdf));
+          }
+        }
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      const pdf = await renderExpenseCheckPdf(ctx, { amount: issued.payment.amount, checkNumber: issued.checkNumber, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+      notifyExpenseAfterCommit(issued.payment.id, {
+        workerId: ctx.expense.submitter_id, companyId: ctx.companyId, notificationType: "expense_check_issued",
+        title: `Check ${issued.checkNumber} issued: $${fromCents(toCents(issued.payment.amount)).toFixed(2)}`,
+        body: "A check has been issued for an approved expense.",
+        entityType: "expense", entityId: expenseId, actionUrl: `/app/expenses?id=${expenseId}`,
+      });
+      res.set("Content-Type", "application/pdf");
+      res.set("X-Payment-Id", String(issued.payment.id));
+      res.set("Content-Disposition", `attachment; filename="expense-check-${issued.checkNumber}.pdf"`);
+      return res.send(Buffer.from(pdf));
+    } catch (e: any) {
+      console.error("[expense] cut-check failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to issue expense check" });
+    }
+  });
+
+  // GET /api/expense-payments/:paymentId/check — reprint an issued check. Zero financial writes.
+  app.get("/api/expense-payments/:paymentId/check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+    try {
+      const pay = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${String(req.params.paymentId)}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (pay.company_id && !(await canAccessCompany(user!, pay.company_id))) return res.status(403).json({ message: "Access denied" });
+      const ctx = await resolveExpenseCheckContext(String(pay.expense_id), req);
+      const pdf = await renderExpenseCheckPdf(ctx, { amount: pay.amount, checkNumber: pay.reference_number });
+      res.set("Content-Type", "application/pdf");
+      res.set("X-Reprint", "1");
+      res.set("Content-Disposition", `attachment; filename="expense-check-${pay.reference_number || pay.id}.pdf"`);
+      return res.send(Buffer.from(pdf));
+    } catch (e: any) {
+      if (e instanceof ExpenseRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[expense-payment] reprint failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to reprint check" });
+    }
+  });
+
+  // POST /api/expense-payments/:id/void — reverse MyPayLink's internal record.
+  app.post("/api/expense-payments/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const paymentId = String(req.params.id);
+    try {
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to void an expense check." });
+      const payPre = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${paymentId}`));
+      if (!payPre) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (payPre.company_id && !(await canAccessCompany(user!, payPre.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      let result: any;
+      try {
+        result = await db.transaction(async (tx) => {
+          const pay = epRow(await tx.execute(sql`SELECT * FROM expense_payments WHERE id = ${paymentId} FOR UPDATE`));
+          if (!pay) throw new ExpenseRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          const expense = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${pay.expense_id} FOR UPDATE`));
+          if (pay.status === "void") {
+            return { payment: pay, expense, alreadyVoid: true };
+          }
+          const voided = epRow(await tx.execute(sql`
+            UPDATE expense_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason}
+            WHERE id = ${paymentId} AND status <> 'void' RETURNING *`));
+          const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${pay.expense_id} AND status <> 'void'`));
+          const totalCents = toCents(expense?.amount);
+          const paidCents = toCents(paidRow?.paid);
+          const newStatus = recomputeExpensePaymentStatus(totalCents, paidCents);
+          const updatedExpense = epRow(await tx.execute(sql`
+            UPDATE expenses SET payment_status = ${newStatus},
+              paid_at = ${newStatus === "paid" ? sql`paid_at` : sql`NULL`},
+              check_number = ${newStatus === "unpaid" ? null : expense?.check_number ?? null},
+              updated_at = NOW()
+            WHERE id = ${pay.expense_id} RETURNING *`));
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, previous_status, new_status, notes, metadata_json)
+            VALUES ('expense', ${pay.expense_id}, 'check_voided', ${req.session.userId}, ${pay.company_id}, ${expense?.payment_status ?? null}, ${newStatus}, ${reason}, ${JSON.stringify({ expensePaymentId: paymentId, checkNumber: pay.reference_number })})`);
+          return { payment: voided, expense: updatedExpense, alreadyVoid: false };
+        });
+      } catch (txErr) {
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      if (!result.alreadyVoid) {
+        notifyExpenseAfterCommit(paymentId, {
+          workerId: payPre.expense_id ? undefined : undefined, companyId: payPre.company_id, notificationType: "expense_check_voided",
+          title: "An expense check was reversed",
+          body: `A previously issued expense check was reversed. ${EXPENSE_VOID_STOP_PAYMENT_NOTE}`,
+          entityType: "expense", entityId: String(payPre.expense_id), actionUrl: `/app/expenses?id=${payPre.expense_id}`,
+        });
+      }
+      return res.json({ payment: result.payment, expense: result.expense, alreadyVoid: result.alreadyVoid, stopPaymentNote: EXPENSE_VOID_STOP_PAYMENT_NOTE });
+    } catch (e: any) {
+      console.error("[expense-payment] void failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to void expense check" });
+    }
+  });
+
+  // POST /api/expense-payments/:id/reissue — void the original + one linked replacement, atomically, with a new check number.
+  app.post("/api/expense-payments/:id/reissue", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    const originalId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to reissue an expense check." });
+
+      const orig = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${originalId}`));
+      if (!orig) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (orig.company_id && !(await canAccessCompany(user!, orig.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      const ctx = await resolveExpenseCheckContext(String(orig.expense_id), req);
+      const newAmountCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : toCents(orig.amount);
+      if (!Number.isFinite(newAmountCents) || newAmountCents <= 0) return res.status(400).json({ error: "INVALID_AMOUNT", message: "Replacement amount must be a positive number." });
+      const fingerprint = expensePaymentFingerprint({
+        companyId: orig.company_id, expenseId: String(orig.expense_id), amountCents: newAmountCents,
+        method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName: ctx.expense.payee_name || ctx.expense.vendor,
+      });
+
+      const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json({ replacement: priorByKey })
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+      }
+
+      let out: any;
+      try {
+        out = await db.transaction(async (tx) => {
+          const o = epRow(await tx.execute(sql`SELECT * FROM expense_payments WHERE id = ${originalId} FOR UPDATE`));
+          if (!o) throw new ExpenseRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          if (o.reissued_by_payment_id) throw new ExpenseRuleError(409, "ALREADY_REISSUED", "This expense check has already been reissued.");
+          const expense = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${o.expense_id} FOR UPDATE`));
+          if (!expense) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Linked expense not found");
+
+          if (o.status !== "void") {
+            await tx.execute(sql`UPDATE expense_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason} WHERE id = ${originalId}`);
+          }
+          const paidBeforeRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${o.expense_id} AND status <> 'void'`));
+          const totalCents = toCents(expense.amount);
+          if (toCents(paidBeforeRow?.paid) + newAmountCents > totalCents) {
+            throw new ExpenseRuleError(422, "AMOUNT_EXCEEDS_BALANCE", "Replacement amount exceeds the expense balance after reversing the original.");
+          }
+          const rs = epRow(await tx.execute(sql`SELECT id, last_check_number FROM remittance_sources WHERE id = ${ctx.remittanceSource.id} FOR UPDATE`));
+          const nextCheckNum = Number(rs?.last_check_number || 0) + 1;
+          await tx.execute(sql`UPDATE remittance_sources SET last_check_number = ${nextCheckNum} WHERE id = ${ctx.remittanceSource.id}`);
+          const checkNumberStr = formatCheckNumber(nextCheckNum);
+
+          const replacement = epRow(await tx.execute(sql`
+            INSERT INTO expense_payments
+              (company_id, expense_id, remittance_source_id, amount, payment_method, status, reference_number, idempotency_key, idempotency_fingerprint, created_by_user_id, issued_at, reverses_payment_id)
+            VALUES (${o.company_id}, ${o.expense_id}, ${ctx.remittanceSource.id}, ${fromCents(newAmountCents)}, 'check', 'completed', ${checkNumberStr}, ${idem.key}, ${fingerprint}, ${req.session.userId}, NOW(), ${originalId})
+            RETURNING *`));
+          await tx.execute(sql`UPDATE expense_payments SET reissued_by_payment_id = ${replacement.id} WHERE id = ${originalId}`);
+
+          const newPaidCents = toCents(paidBeforeRow?.paid) + newAmountCents;
+          const newStatus = recomputeExpensePaymentStatus(totalCents, newPaidCents);
+          const updatedExpense = epRow(await tx.execute(sql`
+            UPDATE expenses SET payment_status = ${newStatus}, check_number = ${checkNumberStr},
+              paid_at = ${newStatus === "paid" ? sql`NOW()` : sql`NULL`}, updated_at = NOW()
+            WHERE id = ${o.expense_id} RETURNING *`));
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, notes, metadata_json)
+            VALUES ('expense', ${o.expense_id}, 'check_reissued', ${req.session.userId}, ${o.company_id}, ${reason}, ${JSON.stringify({ originalPaymentId: originalId, replacementPaymentId: replacement.id, checkNumber: checkNumberStr })})`);
+          return { original: originalId, replacement, expense: updatedExpense };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) return res.status(committed.idempotency_fingerprint === fingerprint ? 200 : 409).json(committed.idempotency_fingerprint === fingerprint ? { replacement: committed } : { error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+        }
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      notifyExpenseAfterCommit(out.replacement.id, {
+        workerId: ctx.expense.submitter_id, companyId: orig.company_id, notificationType: "expense_check_reissued",
+        title: "An expense check was reissued",
+        body: `An expense check was reversed and reissued. ${EXPENSE_VOID_STOP_PAYMENT_NOTE}`,
+        entityType: "expense", entityId: String(orig.expense_id), actionUrl: `/app/expenses?id=${orig.expense_id}`,
+      });
+      return res.status(201).json({ ...out, stopPaymentNote: EXPENSE_VOID_STOP_PAYMENT_NOTE });
+    } catch (e: any) {
+      console.error("[expense-payment] reissue failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to reissue expense check" });
     }
   });
 
