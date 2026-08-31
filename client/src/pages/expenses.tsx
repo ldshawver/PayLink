@@ -45,6 +45,32 @@ function formatCurrency(v: string | number | null | undefined) {
   return `$${parseFloat(String(v)).toFixed(2)}`;
 }
 
+/**
+ * Client mirror of the server's checkExpenseEligibility (server/expense-payments.ts).
+ * Drives ONLY the disabled state + reason label for the Cut Check action — the
+ * server route stays the single source of truth on issue. `fundedCompanyIds` is
+ * the set of companies with an enabled, routable remittance source; pass
+ * `fundingKnown=false` while that list is still loading so funding is not
+ * asserted prematurely.
+ */
+function cutCheckEligibility(
+  e: any,
+  fundedCompanyIds: Set<string>,
+  fundingKnown: boolean,
+): { ok: boolean; reason: string | null } {
+  const status = String(e?.status ?? "").toLowerCase();
+  const ps = String(e?.paymentStatus ?? "unpaid").toLowerCase();
+  if (ps === "paid") return { ok: false, reason: "Already paid" };
+  if (ps === "voided") return { ok: false, reason: "Payment voided" };
+  if (status !== "approved") return { ok: false, reason: "Approve expense first" };
+  if (!String(e?.payeeName || e?.vendor || "").trim()) return { ok: false, reason: "Add vendor/payee first" };
+  if (!(parseFloat(String(e?.amount ?? "0")) > 0)) return { ok: false, reason: "No unpaid balance" };
+  if (fundingKnown && e?.companyId && !fundedCompanyIds.has(String(e.companyId))) {
+    return { ok: false, reason: "Funding account required" };
+  }
+  return { ok: true, reason: null };
+}
+
 function extractedNumber(value: any): string {
   if (value == null || value === "") return "";
   const n = Number(value);
@@ -579,8 +605,55 @@ export default function ExpensesPage() {
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
     currentUser?.role === "owner" || currentUser?.role === "supervisor" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
+  // Issuing a check is admin/manager-only server-side (POST /api/expenses/:id/cut-check).
+  const canCutCheck = currentUser?.role === "admin" || currentUser?.role === "manager";
   const myWorkerId = currentUser?.workerId;
   const isContractor = currentUser?.workerType === "contractor";
+
+  // Companies with an enabled, routable remittance source — used only to explain a
+  // disabled Cut Check action ("Funding account required"). admin/manager-only route.
+  const { data: remittanceSources = [], isSuccess: remittanceSourcesLoaded } = useQuery<any[]>({
+    queryKey: ["/api/remittance-sources"],
+    queryFn: async () => { const r = await fetch("/api/remittance-sources", { credentials: "include" }); return r.ok ? r.json() : []; },
+    enabled: canCutCheck,
+  });
+  const fundedCompanyIds = new Set(
+    (remittanceSources as any[])
+      .filter(s => String(s?.status ?? "").toLowerCase() === "enabled" && s?.routingNumber && s?.accountNumber)
+      .map(s => String(s.companyId)),
+  );
+
+  function renderCutCheckAction(e: any) {
+    if (!canCutCheck) return null;
+    const { ok, reason } = cutCheckEligibility(e, fundedCompanyIds, remittanceSourcesLoaded);
+    const isPaid = String(e?.paymentStatus ?? "").toLowerCase() === "paid";
+    const paidLabel = isPaid && e?.checkNumber ? `Paid · #${e.checkNumber}` : reason;
+    return (
+      <div className="flex flex-wrap items-center gap-1" data-testid={`cut-check-action-${e.id}`}>
+        <span title={ok ? undefined : (reason ?? undefined)} className="inline-flex">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!ok}
+            onClick={() => openPrintCheck(e)}
+            data-testid={`button-cut-check-${e.id}`}
+          >
+            <Printer className="h-3 w-3 mr-1" /> Cut Check
+          </Button>
+        </span>
+        {!ok && (
+          <span className="text-xs text-muted-foreground" data-testid={`text-cut-check-reason-${e.id}`}>
+            {paidLabel}
+          </span>
+        )}
+        {!isPaid && String(e?.status ?? "").toLowerCase() === "approved" && (
+          <Button size="sm" variant="ghost" onClick={() => setMarkPaidExpenseId(e.id)} data-testid={`button-mark-paid-expense-${e.id}`}>
+            <BanknoteIcon className="h-3 w-3 mr-1" /> Mark Paid
+          </Button>
+        )}
+      </div>
+    );
+  }
 
   const myExpenses = allExpenses.filter(e => e.submitterId === myWorkerId);
   const pendingExpenseApprovals = allExpenses.filter(e => e.status === "submitted");
@@ -911,6 +984,15 @@ export default function ExpensesPage() {
                 <Download className="h-4 w-4 mr-1" /> Export CSV
               </Button>
             </div>
+            {!loadingExpenses && allExpenses.length === 0 && (
+              <Card>
+                <CardContent className="text-center py-12 text-muted-foreground" data-testid="empty-all-expenses">
+                  <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No expenses yet</p>
+                  <p className="text-sm">Add and approve a vendor expense to use Cut Check.</p>
+                </CardContent>
+              </Card>
+            )}
             <div className="space-y-3 sm:hidden">
               {allExpenses.map((e: any) => (
                 <Card key={e.id} data-testid={`card-all-expense-${e.id}`}>
@@ -924,8 +1006,12 @@ export default function ExpensesPage() {
                     </div>
                     <div className="flex items-center gap-2 mt-2">
                       {statusBadge(e.status)}
+                      {paymentStatusBadge(e.paymentStatus)}
                       <span className="text-xs text-muted-foreground">{e.categoryName || "—"}</span>
                     </div>
+                    {canCutCheck && (
+                      <div className="mt-3 pt-3 border-t">{renderCutCheckAction(e)}</div>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -944,18 +1030,7 @@ export default function ExpensesPage() {
                       <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
                       <TableCell>{statusBadge(e.status)}</TableCell>
                       <TableCell>{paymentStatusBadge(e.paymentStatus)}{e.checkNumber && <span className="text-xs text-muted-foreground ml-1">#{e.checkNumber}</span>}</TableCell>
-                      <TableCell>
-                        {isAdmin && e.status === "approved" && e.paymentStatus !== "paid" && (
-                          <div className="flex gap-1">
-                            <Button size="sm" variant="outline" onClick={() => openPrintCheck(e)} data-testid={`button-print-check-${e.id}`}>
-                              <Printer className="h-3 w-3 mr-1" /> Print Check
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setMarkPaidExpenseId(e.id)} data-testid={`button-mark-paid-expense-${e.id}`}>
-                              <BanknoteIcon className="h-3 w-3 mr-1" /> Mark Paid
-                            </Button>
-                          </div>
-                        )}
-                      </TableCell>
+                      <TableCell>{renderCutCheckAction(e)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1235,7 +1310,7 @@ export default function ExpensesPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>Mark Expense as Paid</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This records the expense as paid without printing a check. Use <strong>Print Check</strong> instead if you want to generate a vendor check PDF at the same time.
+            This records the expense as paid without printing a check. Use <strong>Cut Check</strong> instead if you want to generate a vendor check PDF at the same time.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setMarkPaidExpenseId(null)} data-testid="button-cancel-mark-paid">Cancel</Button>
@@ -1250,15 +1325,15 @@ export default function ExpensesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Print Check for Expense ────────────────────────────────────────── */}
+      {/* ── Cut Check for Expense ──────────────────────────────────────────── */}
       <Dialog open={!!printCheckTarget} onOpenChange={(v) => { if (!v) setPrintCheckTarget(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Printer className="h-5 w-5" /> Print Vendor Check</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><Printer className="h-5 w-5" /> Cut Vendor Check</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-1">
             <p className="text-sm text-muted-foreground">
-              <strong>Preview</strong> renders the check PDF only. <strong>Issue Check</strong> records the payment, allocates a check number from the funding account and reduces the expense balance. Payee details are printed on the check — ensure they match the pre-printed check stock.
+              <strong>Preview</strong> renders the check PDF only — no financial writes. <strong>Cut Check</strong> records the payment, allocates a check number from the funding account and reduces the expense balance. Payee details are printed on the check — ensure they match the pre-printed check stock.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1">
@@ -1329,8 +1404,8 @@ export default function ExpensesPage() {
               data-testid="button-confirm-print-check"
             >
               {printCheckMutation.isPending
-                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Issuing…</>
-                : <><Printer className="h-4 w-4 mr-1" />Issue Check</>}
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Cutting check…</>
+                : <><Printer className="h-4 w-4 mr-1" />Cut Check</>}
             </Button>
           </DialogFooter>
         </DialogContent>
