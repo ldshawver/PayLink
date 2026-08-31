@@ -136,14 +136,21 @@ ok("eligibility is re-checked against the LOCKED row inside the tx",
   /FOR UPDATE[\s\S]{0,200}?checkExpenseEligibility\(/.test(cut));
 
 // ── idempotency ───────────────────────────────────────────────
-ok("same key + no/equal amount re-renders the original with zero new writes",
+ok("same key + same operation re-renders the original with zero new writes",
   cut.includes("if (priorByKey)") && cut.includes("X-Payment-Id") &&
   !/if \(priorByKey\)[\s\S]{0,600}?(INSERT INTO|UPDATE expenses)/.test(cut));
-ok("same key + explicitly different amount → 409 IDEMPOTENCY_KEY_REUSED",
-  cut.includes("requestedCents !== null && toCents(priorByKey.amount) !== requestedCents") &&
+ok("a stored key replays ONLY for the same expense (never returns another expense's check)",
+  cut.includes("const isKeyReplay = (prior: any): boolean => {") &&
+  cut.includes('if (String(prior.expense_id) !== expenseId) return false;'));
+ok("a stored key on a different expense — even at the same amount — is 409 IDEMPOTENCY_KEY_REUSED",
+  cut.includes("if (!isKeyReplay(priorByKey)) return res.status(409).json({ error: \"IDEMPOTENCY_KEY_REUSED\"") &&
+  cut.includes("prior.idempotency_fingerprint === fingerprint"));
+ok("same key + explicitly different amount (same expense) still → 409",
+  cut.includes("requestedCents !== null && toCents(prior.amount) === requestedCents") && // #111 tolerance is the ONLY amount-based accept
   cut.includes('"IDEMPOTENCY_KEY_REUSED"'));
-ok("a concurrent unique-index conflict fetches + returns the committed original",
+ok("a concurrent unique-index conflict re-checks the replay guard, then returns the committed original",
   cut.includes("isUniqueConstraintViolation(txErr)") &&
+  cut.includes("if (!isKeyReplay(committed)) return res.status(409)") &&
   cut.includes("SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key}"));
 ok("replay fingerprint uses a FULL_BALANCE_SENTINEL, not the live balance",
   cut.includes("FULL_BALANCE_SENTINEL = -1") && cut.includes("requestedCents ?? FULL_BALANCE_SENTINEL"));

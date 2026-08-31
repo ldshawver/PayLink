@@ -10860,10 +10860,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName: elig.payeeName,
       });
 
+      // A stored key is a valid REPLAY only when it names the same operation —
+      // same company + expense + funding account + payee, and a compatible
+      // amount. Reusing the key for anything else (a different expense, even at
+      // the same dollar amount) is a client error: 409, never another check.
+      const isKeyReplay = (prior: any): boolean => {
+        if (String(prior.expense_id) !== expenseId) return false;
+        if (prior.idempotency_fingerprint === fingerprint) return true;
+        // #111 tolerance: original issued for the full balance (sentinel
+        // fingerprint), retried with an explicit amount equal to what was paid.
+        return requestedCents !== null && toCents(prior.amount) === requestedCents;
+      };
       const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
       if (priorByKey) {
-        const explicitMismatch = requestedCents !== null && toCents(priorByKey.amount) !== requestedCents;
-        if (explicitMismatch) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+        if (!isKeyReplay(priorByKey)) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
         const pdf = await renderExpenseCheckPdf(ctx, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
         res.set("Content-Type", "application/pdf");
         res.set("X-Payment-Id", String(priorByKey.id));
@@ -10925,8 +10935,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (isUniqueConstraintViolation(txErr)) {
           const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
           if (committed) {
-            const explicitMismatch = requestedCents !== null && toCents(committed.amount) !== requestedCents;
-            if (explicitMismatch) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+            if (!isKeyReplay(committed)) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
             const pdf = await renderExpenseCheckPdf(ctx, { amount: committed.amount, checkNumber: committed.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
             res.set("Content-Type", "application/pdf");
             res.set("X-Payment-Id", String(committed.id));
