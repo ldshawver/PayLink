@@ -133,12 +133,17 @@ ok("the expense payment status + check number are updated in the same tx",
 ok("a check_issued audit row is written in the same tx",
   cut.includes("INSERT INTO expense_approval_actions") && cut.includes("'check_issued'"));
 ok("eligibility is re-checked against the LOCKED row inside the tx",
-  /FOR UPDATE[\s\S]{0,200}?checkExpenseEligibility\(/.test(cut));
+  /SELECT \* FROM expenses WHERE id = \$\{expenseId\} FOR UPDATE[\s\S]{0,1400}?const eg = checkExpenseEligibility\([\s\S]{0,200}?paymentStatus: e\.payment_status/.test(cut));
+ok("a concurrent same-key winner is re-returned from inside the tx (not re-issued / not failed on eligibility)",
+  /SELECT \* FROM expenses WHERE id = \$\{expenseId\} FOR UPDATE[\s\S]{0,400}?SELECT \* FROM expense_payments WHERE company_id = \$\{ctx\.companyId\} AND idempotency_key = \$\{idem\.key\}[\s\S]{0,300}?return \{ payment: raced/.test(cut));
 
 // ── idempotency ───────────────────────────────────────────────
 ok("same key + same operation re-renders the original with zero new writes",
   cut.includes("if (priorByKey)") && cut.includes("X-Payment-Id") &&
   !/if \(priorByKey\)[\s\S]{0,600}?(INSERT INTO|UPDATE expenses)/.test(cut));
+ok("idempotency replay is resolved BEFORE the fresh-issuance eligibility gate",
+  cut.indexOf("if (priorByKey) {") < cut.indexOf("// Not a replay — enforce eligibility") &&
+  cut.indexOf("// Not a replay — enforce eligibility") < cut.indexOf("await db.transaction"));
 ok("a stored key replays ONLY for the same expense (never returns another expense's check)",
   cut.includes("const isKeyReplay = (prior: any): boolean => {") &&
   cut.includes('if (String(prior.expense_id) !== expenseId) return false;'));

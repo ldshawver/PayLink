@@ -10847,19 +10847,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const bodyPayeeAddress = String((req.body as any)?.payeeAddress ?? "").trim() || null;
       const bodyPayeeCsz = String((req.body as any)?.payeeCityStateZip ?? "").trim() || null;
       const bodyMemo = String((req.body as any)?.memo ?? "").trim() || null;
-      const elig = checkExpenseEligibility(
-        { companyId: ctx.expense.company_id, status: ctx.expense.status, paymentStatus: ctx.expense.payment_status, vendor: ctx.expense.vendor, payeeName: ctx.expense.payee_name || bodyPayeeName, isArchived: ctx.expense.is_archived, archivedAt: ctx.expense.archived_at, amount: ctx.expense.amount },
-        { companyId: ctx.companyId },
-      );
-      if (!elig.ok) return res.status(elig.code === "EXPENSE_CROSS_COMPANY" ? 403 : 422).json({ error: elig.code, message: elig.message });
-
       const requestedCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : null;
       const FULL_BALANCE_SENTINEL = -1;
+      const payeeName = String(ctx.expense.payee_name || bodyPayeeName || ctx.expense.vendor || "").trim();
       const fingerprint = expensePaymentFingerprint({
         companyId: ctx.companyId, expenseId, amountCents: requestedCents ?? FULL_BALANCE_SENTINEL,
-        method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName: elig.payeeName,
+        method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName,
       });
 
+      // Idempotency replay is checked BEFORE eligibility: a retried Cut Check
+      // whose first attempt already fully paid the expense must re-return that
+      // same check, not be rejected as "already paid".
       // A stored key is a valid REPLAY only when it names the same operation —
       // same company + expense + funding account + payee, and a compatible
       // amount. Reusing the key for anything else (a different expense, even at
@@ -10874,18 +10872,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
       if (priorByKey) {
         if (!isKeyReplay(priorByKey)) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
-        const pdf = await renderExpenseCheckPdf(ctx, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+        const pdf = await renderExpenseCheckPdf(ctx, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, payeeName: payeeName || undefined, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
         res.set("Content-Type", "application/pdf");
         res.set("X-Payment-Id", String(priorByKey.id));
         res.set("Content-Disposition", `attachment; filename="expense-check-${priorByKey.reference_number || expenseId}.pdf"`);
         return res.send(Buffer.from(pdf));
       }
 
-      let issued: { payment: any; checkNumber: string };
+      // Not a replay — enforce eligibility for a fresh issuance.
+      const elig = checkExpenseEligibility(
+        { companyId: ctx.expense.company_id, status: ctx.expense.status, paymentStatus: ctx.expense.payment_status, vendor: ctx.expense.vendor, payeeName: ctx.expense.payee_name || bodyPayeeName, isArchived: ctx.expense.is_archived, archivedAt: ctx.expense.archived_at, amount: ctx.expense.amount },
+        { companyId: ctx.companyId },
+      );
+      if (!elig.ok) return res.status(elig.code === "EXPENSE_CROSS_COMPANY" ? 403 : 422).json({ error: elig.code, message: elig.message });
+
+      let issued: { payment: any; checkNumber: string; replay?: boolean };
       try {
         issued = await db.transaction(async (tx) => {
           const e = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId} FOR UPDATE`));
           if (!e) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+          // A concurrent request with the same key may have committed while we
+          // waited for the row lock — re-return its check rather than re-issuing
+          // or failing eligibility.
+          const raced = epRow(await tx.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (raced) {
+            if (!isKeyReplay(raced)) throw new ExpenseRuleError(409, "IDEMPOTENCY_KEY_REUSED", "This Idempotency-Key was already used for a different expense check.");
+            return { payment: raced, checkNumber: String(raced.reference_number ?? ""), replay: true };
+          }
           const eg = checkExpenseEligibility(
             { companyId: e.company_id, status: e.status, paymentStatus: e.payment_status, vendor: e.vendor, payeeName: e.payee_name, isArchived: e.is_archived, archivedAt: e.archived_at, amount: e.amount },
             { companyId: ctx.companyId },
@@ -10946,7 +10959,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         throw txErr;
       }
 
-      const pdf = await renderExpenseCheckPdf(ctx, { amount: issued.payment.amount, checkNumber: issued.checkNumber, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+      const pdf = await renderExpenseCheckPdf(ctx, { amount: issued.payment.amount, checkNumber: issued.checkNumber || issued.payment.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+      if (issued.replay) {
+        res.set("Content-Type", "application/pdf");
+        res.set("X-Payment-Id", String(issued.payment.id));
+        res.set("Content-Disposition", `attachment; filename="expense-check-${issued.payment.reference_number || expenseId}.pdf"`);
+        return res.send(Buffer.from(pdf));
+      }
       notifyExpenseAfterCommit(issued.payment.id, {
         workerId: ctx.expense.submitter_id, companyId: ctx.companyId, notificationType: "expense_check_issued",
         title: `Check ${issued.checkNumber} issued: $${fromCents(toCents(issued.payment.amount)).toFixed(2)}`,
