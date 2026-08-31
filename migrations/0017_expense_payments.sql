@@ -8,7 +8,9 @@
 -- Backup before applying in production:
 --   pg_dump "$DATABASE_URL" > backups/pre_0017_expense_payments_$(date +%Y%m%d_%H%M%S).sql
 --
--- Rollback: see the block at the bottom of this file.
+-- Rollback: prefer a compatible code rollback that preserves this additive
+-- schema (never drop the ledger once real payments exist). See the block at the
+-- bottom of this file — destructive teardown is for disposable test DBs only.
 
 CREATE TABLE IF NOT EXISTS expense_payments (
   id                     VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -45,7 +47,18 @@ CREATE INDEX IF NOT EXISTS idx_expense_payments_expense_id ON expense_payments (
 CREATE INDEX IF NOT EXISTS idx_expense_payments_company_id ON expense_payments (company_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- ROLLBACK (verified against a disposable current-schema clone):
+-- ROLLBACK
+--
+-- This migration is purely additive, so the preferred rollback for a released
+-- build is a COMPATIBLE CODE ROLLBACK (redeploy the prior application tag) while
+-- LEAVING THIS SCHEMA IN PLACE. The prior code never reads or writes
+-- expense_payments, so the empty/populated table is inert — and once a single
+-- real check has been cut, expense_payments IS the financial ledger and its
+-- rows + void/reissue audit history must never be dropped.
+--
+-- Do NOT run the destructive block below against staging or production once real
+-- payments exist. It is provided only for tearing down a DISPOSABLE TEST
+-- database (verified against a disposable current-schema clone):
 --
 --   DROP INDEX IF EXISTS uq_expense_payments_company_idempotency_key;
 --   DROP INDEX IF EXISTS uq_expense_payments_funding_check_number;
