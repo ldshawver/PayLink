@@ -3863,6 +3863,32 @@ Thank you,
     await runInv("contractor_trade_comp company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_trade_comp_company_idempotency_key ON contractor_trade_compensation (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
     await runInv("contractor_trade_comp payment_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_contractor_trade_comp_payment_id ON contractor_trade_compensation (contractor_payment_id) WHERE contractor_payment_id IS NOT NULL`);
 
+    // ── Expense payments ledger (migration 0017 / Release B2) — vendor/expense Cut Check ──
+    await runInv("expense_payments table", sqlInv`CREATE TABLE IF NOT EXISTS expense_payments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      expense_id VARCHAR NOT NULL REFERENCES expenses(id),
+      remittance_source_id VARCHAR REFERENCES remittance_sources(id),
+      amount NUMERIC NOT NULL,
+      payment_method TEXT NOT NULL DEFAULT 'check',
+      status TEXT NOT NULL DEFAULT 'completed',
+      reference_number TEXT,
+      idempotency_key TEXT,
+      idempotency_fingerprint TEXT,
+      issued_at TIMESTAMP DEFAULT now(),
+      created_by_user_id VARCHAR,
+      voided_at TIMESTAMP,
+      voided_by_user_id VARCHAR,
+      void_reason TEXT,
+      reverses_payment_id VARCHAR,
+      reissued_by_payment_id VARCHAR,
+      created_at TIMESTAMP DEFAULT now()
+    )`);
+    await runInv("expense_payments company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_payments_company_idempotency_key ON expense_payments (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    await runInv("expense_payments funding+check-number unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_payments_funding_check_number ON expense_payments (remittance_source_id, reference_number) WHERE status <> 'void' AND reference_number IS NOT NULL AND remittance_source_id IS NOT NULL`);
+    await runInv("expense_payments expense_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_expense_id ON expense_payments (expense_id)`);
+    await runInv("expense_payments company_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_company_id ON expense_payments (company_id)`);
+
     await runInv("invoice_term_settings table", sqlInv`CREATE TABLE IF NOT EXISTS invoice_term_settings (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id VARCHAR NOT NULL UNIQUE REFERENCES companies(id),

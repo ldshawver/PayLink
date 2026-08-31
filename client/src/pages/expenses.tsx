@@ -560,7 +560,7 @@ export default function ExpensesPage() {
   const [rejectTarget, setRejectTarget] = useState<{ type: string; id: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [printCheckTarget, setPrintCheckTarget] = useState<any | null>(null);
-  const [printCheckForm, setPrintCheckForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
+  const [printCheckForm, setPrintCheckForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "", idempotencyKey: "" });
   const [invoicePrintTarget, setInvoicePrintTarget] = useState<any | null>(null);
   const [invoicePrintForm, setInvoicePrintForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
   const [markPaidExpenseId, setMarkPaidExpenseId] = useState<string | null>(null);
@@ -660,31 +660,46 @@ export default function ExpensesPage() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Cut Check (financial issuance) — POST /cut-check, requires a stable per-operation
+  // Idempotency-Key so a retry reuses it and never double-issues. The server
+  // allocates the check number from the funding account.
   const printCheckMutation = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: typeof printCheckForm }) => {
-      const res = await fetch(`/api/expenses/${id}/print-check`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      const res = await fetch(`/api/expenses/${id}/cut-check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": form.idempotencyKey },
+        credentials: "include",
         body: JSON.stringify({
           payeeName: form.payeeName,
           payeeAddress: form.payeeAddress,
           payeeCityStateZip: form.payeeCityStateZip,
-          checkNumber: form.checkNumber || undefined,
           memo: form.memo,
           amount: parseFloat(form.amount),
         }),
       });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message || e.error || "Failed to issue check"); }
       return res.blob();
     },
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
-      toast({ title: "Check printed", description: "Expense marked as paid." });
+      toast({ title: "Check issued", description: "The expense payment was recorded and the check PDF opened." });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       setPrintCheckTarget(null);
     },
-    onError: (e: any) => toast({ title: "Print check failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Cut check failed", description: e.message, variant: "destructive" }),
   });
+
+  // Preview — GET /print-check?preview=1, render only, zero financial writes.
+  function previewExpenseCheck(id: string, form: typeof printCheckForm) {
+    const q = new URLSearchParams({
+      preview: "1",
+      payeeName: form.payeeName, payeeAddress: form.payeeAddress,
+      payeeCityStateZip: form.payeeCityStateZip, memo: form.memo,
+      ...(form.amount ? { amount: String(parseFloat(form.amount)) } : {}),
+    });
+    window.open(`/api/expenses/${id}/print-check?${q.toString()}`, "_blank");
+  }
 
   function openPrintCheck(expense: any) {
     setPrintCheckForm({
@@ -694,6 +709,7 @@ export default function ExpensesPage() {
       checkNumber: expense.checkNumber || "",
       memo: expense.memo || expense.description || "",
       amount: expense.amount || "",
+      idempotencyKey: crypto.randomUUID(),
     });
     setPrintCheckTarget(expense);
   }
@@ -1242,7 +1258,7 @@ export default function ExpensesPage() {
           </DialogHeader>
           <div className="space-y-4 py-1">
             <p className="text-sm text-muted-foreground">
-              Generates a check PDF and marks the expense as paid. Payee details are printed on the check — ensure they match the pre-printed check stock.
+              <strong>Preview</strong> renders the check PDF only. <strong>Issue Check</strong> records the payment, allocates a check number from the funding account and reduces the expense balance. Payee details are printed on the check — ensure they match the pre-printed check stock.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1">
@@ -1283,13 +1299,8 @@ export default function ExpensesPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Check Number <span className="text-xs text-muted-foreground">(optional)</span></Label>
-                <Input
-                  value={printCheckForm.checkNumber}
-                  onChange={e => setPrintCheckForm(f => ({ ...f, checkNumber: e.target.value }))}
-                  placeholder="auto"
-                  data-testid="input-check-number"
-                />
+                <Label>Check Number</Label>
+                <Input value="auto — allocated on issue" disabled data-testid="input-check-number" />
               </div>
               <div className="col-span-2 space-y-1">
                 <Label>Memo</Label>
@@ -1305,13 +1316,21 @@ export default function ExpensesPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setPrintCheckTarget(null)} data-testid="button-cancel-print-check">Cancel</Button>
             <Button
+              variant="outline"
+              onClick={() => { if (printCheckTarget) previewExpenseCheck(String(printCheckTarget.id), printCheckForm); }}
+              disabled={!printCheckForm.payeeName}
+              data-testid="button-preview-print-check"
+            >
+              <Printer className="h-4 w-4 mr-1" />Preview
+            </Button>
+            <Button
               onClick={() => { if (printCheckTarget) printCheckMutation.mutate({ id: String(printCheckTarget.id), form: printCheckForm }); }}
               disabled={printCheckMutation.isPending || !printCheckForm.payeeName || !printCheckForm.amount}
               data-testid="button-confirm-print-check"
             >
               {printCheckMutation.isPending
-                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Generating…</>
-                : <><Printer className="h-4 w-4 mr-1" />Print Check &amp; Mark Paid</>}
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Issuing…</>
+                : <><Printer className="h-4 w-4 mr-1" />Issue Check</>}
             </Button>
           </DialogFooter>
         </DialogContent>

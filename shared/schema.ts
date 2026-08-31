@@ -1848,6 +1848,35 @@ export const insertExpenseAttachmentSchema = createInsertSchema(expenseAttachmen
 export type ExpenseAttachment = typeof expenseAttachments.$inferSelect;
 export type InsertExpenseAttachment = z.infer<typeof insertExpenseAttachmentSchema>;
 
+// ── Expense Payments ledger (migration 0017 / Release B2) ────────────────────
+// Vendor/expense Cut Check disbursements. The expense's authoritative unpaid
+// balance is amount - SUM(non-void expense_payments). The original row is never
+// deleted or overwritten — void/reissue append audit + linkage fields.
+export const expensePayments = pgTable("expense_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  expenseId: varchar("expense_id").notNull().references(() => expenses.id),
+  remittanceSourceId: varchar("remittance_source_id").references(() => remittanceSources.id),
+  amount: numeric("amount").notNull(),
+  paymentMethod: text("payment_method").notNull().default("check"),
+  status: text("status").notNull().default("completed"), // completed | void
+  referenceNumber: text("reference_number"), // check number
+  idempotencyKey: text("idempotency_key"),
+  idempotencyFingerprint: text("idempotency_fingerprint"),
+  issuedAt: timestamp("issued_at").defaultNow(),
+  createdByUserId: varchar("created_by_user_id"),
+  voidedAt: timestamp("voided_at"),
+  voidedByUserId: varchar("voided_by_user_id"),
+  voidReason: text("void_reason"),
+  reversesPaymentId: varchar("reverses_payment_id"),
+  reissuedByPaymentId: varchar("reissued_by_payment_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertExpensePaymentSchema = createInsertSchema(expensePayments).omit({ id: true, createdAt: true });
+export type ExpensePayment = typeof expensePayments.$inferSelect;
+export type InsertExpensePayment = z.infer<typeof insertExpensePaymentSchema>;
+
 // ── Contractor Invoices ──────────────────────────────────────────────────
 export const contractorInvoices = pgTable("contractor_invoices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
