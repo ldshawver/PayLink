@@ -43,8 +43,18 @@ ok("a client eligibility mirror exists with the required disabled reasons",
   client.includes('"Already paid"') &&
   client.includes('"No unpaid balance"') &&
   client.includes('"Funding account required"'));
-ok("the action is gated to admin/manager (matching the server cut-check route)",
-  /canCutCheck\s*=\s*currentUser\?\.role === "admin" \|\| currentUser\?\.role === "manager"/.test(client));
+ok("the action is gated to admin/manager AND the roles the server expands to admin/manager",
+  /cutCheckRole === "admin" \|\| cutCheckRole === "manager"/.test(client) &&
+  // requireRole("admin","manager") + expandRoleForGuard() lets these through server-side,
+  // so the client must not hide the action from them (platform_super_admin especially —
+  // the account most operators actually log in with).
+  client.includes('"platform_super_admin"') &&
+  client.includes('"platform_admin"') &&
+  client.includes('"owner"') &&
+  client.includes('"tenant_admin"') &&
+  client.includes('"tenant_manager"'));
+ok("the action is NOT gated by the loose isAdmin flag (which also covers supervisor / platform_support)",
+  !/canCutCheck\s*=\s*isAdmin\b/.test(client));
 ok("an ineligible row renders the disabled action with a visible reason (not a missing button)",
   /disabled=\{!ok\}/.test(client) &&
   /data-testid=\{`text-cut-check-reason-\$\{e\.id\}`\}/.test(client));
@@ -55,6 +65,9 @@ ok("the row action is used on BOTH the desktop table and the mobile card",
 // ── empty state ──────────────────────────────────────────────────
 ok('the empty All Expenses list explains an approved vendor expense is needed first',
   /empty-all-expenses[\s\S]{0,240}Add and approve a vendor expense to use Cut Check/.test(client));
+ok('the empty All Expenses list still surfaces the Cut Check control + a way to add an expense',
+  /empty-all-expenses[\s\S]{0,900}button-cut-check-sample[\s\S]{0,160}Cut Check/.test(client) &&
+  /empty-all-expenses[\s\S]{0,1200}button-empty-new-expense/.test(client));
 
 // ── preview vs issuance unchanged ────────────────────────────────
 ok("preview is still a separate no-write action (previewExpenseCheck → print-check?preview=1)",
