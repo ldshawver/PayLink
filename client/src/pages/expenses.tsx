@@ -605,8 +605,20 @@ export default function ExpensesPage() {
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
     currentUser?.role === "owner" || currentUser?.role === "supervisor" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
-  // Issuing a check is admin/manager-only server-side (POST /api/expenses/:id/cut-check).
-  const canCutCheck = currentUser?.role === "admin" || currentUser?.role === "manager";
+  // Issuing a check is admin/manager-only server-side (POST /api/expenses/:id/cut-check),
+  // but requireRole("admin","manager") runs the role through expandRoleForGuard() first —
+  // so platform_super_admin / platform_admin / owner / system_admin and the tenant_* admin
+  // and manager roles all resolve to "admin" or "manager" server-side. Mirror that same
+  // expansion here, otherwise the action is hidden from users the server would allow
+  // (e.g. a platform_super_admin, the account most operators log in with).
+  const cutCheckRole = currentUser?.role || "";
+  const canCutCheck =
+    cutCheckRole === "admin" || cutCheckRole === "manager" ||
+    [
+      "platform_super_admin", "platform_admin", "platform_owner", "system_admin", "owner",
+      "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
+      "tenant_manager", "tenant_supervisor",
+    ].includes(cutCheckRole);
   const myWorkerId = currentUser?.workerId;
   const isContractor = currentUser?.workerType === "contractor";
 
@@ -990,6 +1002,18 @@ export default function ExpensesPage() {
                   <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
                   <p className="font-medium">No expenses yet</p>
                   <p className="text-sm">Add and approve a vendor expense to use Cut Check.</p>
+                  {canCutCheck && (
+                    <div className="mt-4 flex flex-col items-center gap-2">
+                      <span className="inline-flex" title="Cut Check becomes available on each approved vendor expense">
+                        <Button size="sm" variant="outline" disabled data-testid="button-cut-check-sample">
+                          <Printer className="h-3 w-3 mr-1" /> Cut Check
+                        </Button>
+                      </span>
+                      <Button size="sm" onClick={() => setExpenseDialogOpen(true)} data-testid="button-empty-new-expense">
+                        <Plus className="h-3 w-3 mr-1" /> New Expense
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
