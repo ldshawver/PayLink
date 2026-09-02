@@ -908,8 +908,8 @@ export default function ExpensesPage() {
 
   // Only approved, unused, fair-market-value valuations that are provably tied to
   // THIS expense's payee — the valuation's contractor must be the worker who
-  // submitted the expense. Unrelated same-company valuations are never offered
-  // (the server enforces the same link, plus a payee-name fallback).
+  // submitted the expense. Unrelated same-company valuations are never offered,
+  // and the server enforces the identical worker-id link on record-payment.
   const { data: recordPayTradeComps = [] } = useQuery<any[]>({
     queryKey: ["/api/contractor-trade-compensation", recordPayTarget?.companyId, recordPayTarget?.submitterId, "expense-payable"],
     queryFn: async () => {
