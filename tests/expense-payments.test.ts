@@ -7,6 +7,8 @@ import {
   EXPENSE_PAYMENT_METHOD, EXPENSE_VOID_STOP_PAYMENT_NOTE,
   recomputeExpensePaymentStatus, expensePaymentFingerprint, checkExpenseEligibility,
   toCents, fromCents, checkPaymentAmount, requireIdempotencyKey,
+  EXPENSE_PAYMENT_METHODS, EXPENSE_RECORD_PAYMENT_METHODS, EXPENSE_DESCRIPTION_REQUIRED_METHODS,
+  normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable,
 } from "../server/expense-payments.ts";
 
 let pass = 0, fail = 0;
@@ -63,6 +65,47 @@ ok("partially_paid is still eligible for another partial check",
 ok("payeeName wins over vendor for the printed name",
   checkExpenseEligibility({ ...approved, payeeName: "Payee Co", vendor: "Vendor Co" }, { companyId: "co1" }).ok &&
   (checkExpenseEligibility({ ...approved, payeeName: "Payee Co", vendor: "Vendor Co" }, { companyId: "co1" }) as any).payeeName === "Payee Co");
+
+// ── combined usability release: non-check methods on the same ledger ─────────
+console.log("\n--- non-check payment methods (migration 0018) ---");
+ok("the ledger accepts exactly check + cash + ach + trade_credit + rent_credit + other",
+  JSON.stringify([...EXPENSE_PAYMENT_METHODS]) === JSON.stringify(["check", "cash", "ach", "trade_credit", "rent_credit", "other"]));
+ok("record-payment methods are the non-check subset (check is issued via /cut-check)",
+  JSON.stringify([...EXPENSE_RECORD_PAYMENT_METHODS]) === JSON.stringify(["cash", "ach", "trade_credit", "rent_credit", "other"]));
+ok("wire / credit_card are never accepted", normalizeExpensePaymentMethod("wire") === null && normalizeExpensePaymentMethod("credit_card") === null);
+ok("method normalization is case / separator tolerant",
+  normalizeExpensePaymentMethod("Trade-Credit") === "trade_credit" && normalizeExpensePaymentMethod(" ACH ") === "ach" && normalizeExpensePaymentMethod("CHECK") === "check");
+ok("description is required for trade_credit / rent_credit / other only",
+  EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("trade_credit") && EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("rent_credit") &&
+  EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("other") && !EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("cash") && !EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("ach"));
+
+// a trade_credit payment's fingerprint differs from an otherwise-identical check
+{
+  const base = { companyId: "co1", expenseId: "e1", amountCents: 5000, fundingAccountId: null, payeeName: "Acme" };
+  ok("check fingerprint is byte-identical with/without a null tradeCompensationId (back-compat)",
+    expensePaymentFingerprint({ ...base, method: "check" }) === expensePaymentFingerprint({ ...base, method: "check", tradeCompensationId: null }));
+  ok("a trade_credit payment linked to a valuation has its own stable fingerprint",
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc1" }) ===
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc1" }) &&
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc1" }) !==
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc2" }));
+}
+
+console.log("\n--- trade / barter FMV valuation gate ---");
+const comp = {
+  id: "tc1", companyId: "co1", contractorUserId: "w1", approvedAt: new Date(),
+  valuationMethod: "fair_market_value", totalValue: "500.00", contractorPaymentId: null, expensePaymentId: null,
+};
+const ctxOk = { companyId: "co1", contractorId: "w1", paymentCents: 40000 };
+ok("approved FMV valuation, in company, unused, covers the amount -> applicable",
+  checkExpenseTradeCreditApplicable(comp, ctxOk).ok);
+ok("missing valuation -> TRADE_COMP_NOT_FOUND", (checkExpenseTradeCreditApplicable(null, ctxOk) as any).code === "TRADE_COMP_NOT_FOUND");
+ok("cross-company valuation -> TRADE_COMP_CROSS_COMPANY", (checkExpenseTradeCreditApplicable({ ...comp, companyId: "coX" }, ctxOk) as any).code === "TRADE_COMP_CROSS_COMPANY");
+ok("unapproved valuation -> TRADE_COMP_NOT_APPROVED", (checkExpenseTradeCreditApplicable({ ...comp, approvedAt: null }, ctxOk) as any).code === "TRADE_COMP_NOT_APPROVED");
+ok("non-FMV valuation -> TRADE_COMP_NOT_FMV", (checkExpenseTradeCreditApplicable({ ...comp, valuationMethod: "cost_basis" }, ctxOk) as any).code === "TRADE_COMP_NOT_FMV");
+ok("already linked to a contractor payment -> TRADE_COMP_ALREADY_LINKED", (checkExpenseTradeCreditApplicable({ ...comp, contractorPaymentId: "cp9" }, ctxOk) as any).code === "TRADE_COMP_ALREADY_LINKED");
+ok("already linked to an expense payment -> TRADE_COMP_ALREADY_LINKED", (checkExpenseTradeCreditApplicable({ ...comp, expensePaymentId: "ep9" }, ctxOk) as any).code === "TRADE_COMP_ALREADY_LINKED");
+ok("payment exceeds the approved value -> TRADE_COMP_VALUE_INSUFFICIENT", (checkExpenseTradeCreditApplicable(comp, { ...ctxOk, paymentCents: 60000 }) as any).code === "TRADE_COMP_VALUE_INSUFFICIENT");
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

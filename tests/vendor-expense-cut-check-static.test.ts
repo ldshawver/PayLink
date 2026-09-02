@@ -16,10 +16,13 @@ const migration = fs.readFileSync("migrations/0017_expense_payments.sql", "utf8"
 const mod = fs.readFileSync("server/expense-payments.ts", "utf8");
 const client = fs.readFileSync("client/src/pages/expenses.tsx", "utf8");
 
-// The B2 route block: from the lifecycle-helpers comment to the contractor-invoice module banner.
+// The B2 route block: from the lifecycle-helpers comment to the explicit
+// end-of-B2 marker. The combined usability release adds sibling routes (non-check
+// record-payment, proof-of-payment documents) immediately after this marker, on
+// the same ledger — those are guarded by their own tests, not this B2 guard.
 const b2 = routes.slice(
   routes.indexOf("Expense payment lifecycle helpers (Release B2)"),
-  routes.indexOf("CONTRACTOR INVOICE MODULE"),
+  routes.indexOf("End of Release B2 (vendor/expense Cut Check)"),
 );
 if (!b2 || b2.length < 2000) throw new Error("could not isolate the B2 route block");
 

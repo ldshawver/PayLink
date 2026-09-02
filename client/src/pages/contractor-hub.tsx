@@ -3984,14 +3984,30 @@ function InvoiceDetailPanel({
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("check");
   const [payRef, setPayRef] = useState("");
+  const [payDescription, setPayDescription] = useState("");
+  const [payTradeCompId, setPayTradeCompId] = useState("");
+  const [payIdemKey, setPayIdemKey] = useState(() => crypto.randomUUID());
+  const [cuttingCheck, setCuttingCheck] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [attUploading, setAttUploading] = useState(false);
+  const DESCRIPTION_REQUIRED = new Set(["trade_credit", "rent_credit", "other"]);
 
   const { data: payments = [], refetch: refetchPayments } = useQuery<Payment[]>({
     queryKey: ["/api/contractor-invoices", invoice.id, "payments"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-invoices/${invoice.id}/payments`, { credentials: "include" });
-      return r.ok ? r.json() : [];
+      if (!r.ok) return [];
+      const rows = await r.json();
+      // The endpoint returns raw rows (snake_case) — normalize the fields the UI reads.
+      return (Array.isArray(rows) ? rows : []).map((p: any) => ({
+        ...p,
+        amount: p.amount,
+        paymentMethod: p.paymentMethod ?? p.payment_method,
+        referenceNumber: p.referenceNumber ?? p.reference_number,
+        notes: p.notes,
+        paidAt: p.paidAt ?? p.paid_at,
+        status: p.status,
+      }));
     },
   });
 
@@ -4051,18 +4067,72 @@ function InvoiceDetailPanel({
     finally { setAttUploading(false); e.target.value = ""; }
   }
 
+  // Approved fair-market-value trade / barter valuations available to apply as a
+  // trade_credit payment on this invoice.
+  const { data: tradeComps = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-trade-compensation", invoice.companyId, invoice.contractorId, "payable"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-trade-compensation?companyId=${invoice.companyId || ""}`, { credentials: "include" });
+      if (!r.ok) return [];
+      const rows = await r.json();
+      return (Array.isArray(rows) ? rows : []).filter((t: any) =>
+        t.approvedAt && !t.contractorPaymentId && !t.expensePaymentId &&
+        String(t.valuationMethod || "").toLowerCase() === "fair_market_value" &&
+        (!invoice.contractorId || t.contractorUserId === invoice.contractorId || t.contractorId === invoice.contractorId));
+    },
+    enabled: isAdmin && payMethod === "trade_credit",
+  });
+
   const payMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-invoices/${invoice.id}/payments`, {
-      amount: parseFloat(payAmount), paymentMethod: payMethod, referenceNumber: payRef,
-    }),
+    mutationFn: async () => {
+      const body: Record<string, unknown> = {
+        amount: parseFloat(payAmount), paymentMethod: payMethod, referenceNumber: payRef,
+        idempotencyKey: payIdemKey,
+      };
+      if (DESCRIPTION_REQUIRED.has(payMethod)) body.description = payDescription.trim();
+      if (payMethod === "trade_credit") body.tradeCompensationId = payTradeCompId;
+      const res = await fetch(`/api/contractor-invoices/${invoice.id}/payments`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": payIdemKey },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `Payment failed (${res.status})`);
+      return res.json();
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-trade-compensation"] });
       refetchPayments();
-      setPayAmount(""); setPayRef("");
+      setPayAmount(""); setPayRef(""); setPayDescription(""); setPayTradeCompId("");
+      setPayIdemKey(crypto.randomUUID());
       toast({ title: "Payment recorded" });
     },
     onError: (e: any) => toast({ title: e?.message || "Payment failed", variant: "destructive" }),
   });
+
+  async function handleCutCheck() {
+    setCuttingCheck(true);
+    const idem = crypto.randomUUID();
+    try {
+      const res = await fetch(`/api/contractor-invoices/${invoice.id}/cut-check`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idem },
+        body: JSON.stringify({ idempotencyKey: idem, amount: payAmount ? parseFloat(payAmount) : undefined }),
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => ({}))).message || `Cut Check failed (${res.status})`;
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      window.open(URL.createObjectURL(blob), "_blank");
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      refetchPayments();
+      setPayAmount("");
+      toast({ title: "Check issued" });
+    } catch (e: any) {
+      toast({ title: e?.message || "Cut Check failed", variant: "destructive" });
+    } finally { setCuttingCheck(false); }
+  }
 
   const reminderMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-invoices/${invoice.id}/send-reminder`, {}),
@@ -4296,7 +4366,7 @@ function InvoiceDetailPanel({
               )}
               {isAdmin && !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && !proposalBlocked && balance > 0 && (
                 <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm">Record Payment</CardTitle></CardHeader>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm">Submit / Record Payment</CardTitle></CardHeader>
                   <CardContent className="space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -4306,27 +4376,75 @@ function InvoiceDetailPanel({
                       </div>
                       <div>
                         <Label className="text-xs">Method</Label>
-                        <Select value={payMethod} onValueChange={setPayMethod}>
+                        <Select value={payMethod} onValueChange={v => { setPayMethod(v); setPayTradeCompId(""); }}>
                           <SelectTrigger data-testid="select-payment-method"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="check">Check</SelectItem>
-                            <SelectItem value="ach">ACH / Bank Transfer</SelectItem>
-                            <SelectItem value="wire">Wire Transfer</SelectItem>
-                            <SelectItem value="credit_card">Credit Card</SelectItem>
                             <SelectItem value="cash">Cash</SelectItem>
-                            <SelectItem value="other">Other</SelectItem>
+                            <SelectItem value="ach">ACH / Bank Transfer</SelectItem>
+                            <SelectItem value="trade_credit">Trade / Barter</SelectItem>
+                            <SelectItem value="rent_credit">Rent Credit</SelectItem>
+                            <SelectItem value="other">Other / Manual</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                     </div>
-                    <div>
-                      <Label className="text-xs">Reference # (optional)</Label>
-                      <Input value={payRef} onChange={e => setPayRef(e.target.value)} placeholder="Check #, transaction ID..." data-testid="input-payment-ref" />
-                    </div>
-                    <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending || !payAmount} className="w-full" data-testid="btn-record-payment">
-                      {payMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}
-                      Record Payment
-                    </Button>
+                    {payMethod === "trade_credit" && (
+                      <div>
+                        <Label className="text-xs">Approved trade / barter valuation (fair market value)</Label>
+                        <Select value={payTradeCompId} onValueChange={setPayTradeCompId}>
+                          <SelectTrigger data-testid="select-trade-compensation">
+                            <SelectValue placeholder={tradeComps.length ? "Select a valuation…" : "No approved valuation available"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {tradeComps.map((t: any) => (
+                              <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {fmt(t.totalValue)}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {!tradeComps.length && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Requires an approved fair-market-value valuation. <a href="/app/trade-compensation" className="text-primary underline">Create one in Trade Compensation.</a>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {DESCRIPTION_REQUIRED.has(payMethod) ? (
+                      <div>
+                        <Label className="text-xs">Description <span className="text-red-500">*</span></Label>
+                        <Input value={payDescription} onChange={e => setPayDescription(e.target.value)}
+                          placeholder="Describe the trade / barter / rent credit / other payment" data-testid="input-payment-description" />
+                      </div>
+                    ) : (
+                      <div>
+                        <Label className="text-xs">Reference # (optional)</Label>
+                        <Input value={payRef} onChange={e => setPayRef(e.target.value)} placeholder="Check #, transaction ID..." data-testid="input-payment-ref" />
+                      </div>
+                    )}
+                    {payMethod === "check" ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button variant="outline" onClick={handleCutCheck} disabled={cuttingCheck} data-testid="btn-cut-check">
+                          {cuttingCheck ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <FileCheck className="h-4 w-4 mr-2" />}
+                          Cut Check
+                        </Button>
+                        <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending || !payAmount || !payRef.trim()} data-testid="btn-record-payment">
+                          {payMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}
+                          Record Check
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button onClick={() => payMutation.mutate()}
+                        disabled={payMutation.isPending || !payAmount ||
+                          (DESCRIPTION_REQUIRED.has(payMethod) && !payDescription.trim()) ||
+                          (payMethod === "trade_credit" && !payTradeCompId)}
+                        className="w-full" data-testid="btn-record-payment">
+                        {payMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}
+                        Record Payment
+                      </Button>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Cut Check issues and prints a check now. Record Payment logs a payment made outside MyPayLink. Both reduce the invoice balance and produce a payment statement + company receipt.
+                    </p>
                   </CardContent>
                 </Card>
               )}
@@ -4337,13 +4455,25 @@ function InvoiceDetailPanel({
                 ) : (
                   <div className="space-y-2">
                     {payments.map(p => (
-                      <div key={p.id} className="flex justify-between items-center p-3 border rounded-lg text-sm">
-                        <div>
+                      <div key={p.id} className="flex justify-between items-start p-3 border rounded-lg text-sm gap-3">
+                        <div className="min-w-0">
                           <p className="font-medium">{fmt(p.amount)}</p>
                           <p className="text-xs text-muted-foreground capitalize">{p.paymentMethod?.replace(/_/g, " ")} · {fmtDate(p.paidAt)}</p>
                           {p.referenceNumber && <p className="text-xs text-muted-foreground">Ref: {p.referenceNumber}</p>}
+                          {p.status !== "void" && (
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                              <a href={`/api/contractor-payments/${p.id}/document?copy=payee`} target="_blank" rel="noreferrer"
+                                className="text-xs text-primary underline" data-testid={`link-payment-statement-${p.id}`}>View Payment Statement</a>
+                              {isAdmin && (
+                                <a href={`/api/contractor-payments/${p.id}/document?copy=company`} target="_blank" rel="noreferrer"
+                                  className="text-xs text-primary underline" data-testid={`link-payment-receipt-${p.id}`}>Company Receipt</a>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <Badge variant="outline" className="text-green-600">Recorded</Badge>
+                        <Badge variant="outline" className={p.status === "void" ? "text-muted-foreground" : "text-green-600"}>
+                          {p.status === "void" ? "Voided" : "Recorded"}
+                        </Badge>
                       </div>
                     ))}
                   </div>

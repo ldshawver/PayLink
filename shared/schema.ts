@@ -1858,12 +1858,17 @@ export const expensePayments = pgTable("expense_payments", {
   expenseId: varchar("expense_id").notNull().references(() => expenses.id),
   remittanceSourceId: varchar("remittance_source_id").references(() => remittanceSources.id),
   amount: numeric("amount").notNull(),
-  paymentMethod: text("payment_method").notNull().default("check"),
+  paymentMethod: text("payment_method").notNull().default("check"), // check | cash | ach | trade_credit | rent_credit | other (migration 0018)
   status: text("status").notNull().default("completed"), // completed | void
   referenceNumber: text("reference_number"), // check number
   idempotencyKey: text("idempotency_key"),
   idempotencyFingerprint: text("idempotency_fingerprint"),
   issuedAt: timestamp("issued_at").defaultNow(),
+  // ── Non-check payment methods + document linkage (migration 0018) ──
+  notes: text("notes"), // free-text description; required by the app for trade_credit / rent_credit / other
+  paymentDate: timestamp("payment_date"), // effective date the money changed hands (independent of check issuance)
+  tradeCompensationId: varchar("trade_compensation_id").references(() => contractorTradeCompensation.id), // one approved FMV trade record
+  payeeUserId: varchar("payee_user_id"), // contractor user, when the vendor/payee is a known contractor
   createdByUserId: varchar("created_by_user_id"),
   voidedAt: timestamp("voided_at"),
   voidedByUserId: varchar("voided_by_user_id"),
@@ -2516,6 +2521,7 @@ export const contractorTradeCompensation = pgTable("contractor_trade_compensatio
   companyId: varchar("company_id").notNull(),
   contractorUserId: varchar("contractor_user_id").notNull(),
   contractorPaymentId: varchar("contractor_payment_id"),
+  expensePaymentId: varchar("expense_payment_id"), // mirror of contractorPaymentId for expense/AP trade payments (migration 0018)
   contractorStatementId: varchar("contractor_statement_id"),
   settlementId: varchar("settlement_id"),
   payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),

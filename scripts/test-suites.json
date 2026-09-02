@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 75,
+      "fileCount": 76,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -33,6 +33,7 @@
         "tests/vendor-expense-cut-check-static.test.ts",
         "tests/vendor-expense-cut-check-boundary.test.ts",
         "tests/vendor-expense-cut-check-discoverability-static.test.ts",
+        "tests/mypaylink-payment-usability-static.test.ts",
         "tests/contractor-proposal-identity.test.ts",
         "tests/contractor-proposal-identity-wiring-static.test.ts",
         "tests/contractor-trade-compensation-static.test.ts",
@@ -90,10 +91,11 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 18,
+      "fileCount": 19,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
+        "tests/expense-record-payment-db.test.ts",
         "tests/worker-create-payrate-null-db.test.ts",
         "tests/contractor-contract-email-projection-db.test.ts",
         "tests/proposal-send-idempotency-db.test.ts",
