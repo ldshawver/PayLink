@@ -667,6 +667,53 @@ export default function ExpensesPage() {
     );
   }
 
+  // Expenses this user could cut a check for right now (mirrors the per-row gate).
+  const eligibleCutCheckExpenses = canCutCheck
+    ? allExpenses.filter((e: any) => cutCheckEligibility(e, fundedCompanyIds, remittanceSourcesLoaded).ok)
+    : [];
+
+  /**
+   * A page-level Cut Check entry point, shown for check-authorized users on both the
+   * My Expenses and All Expenses tabs (including their empty states) so the feature is
+   * discoverable without an eligible row on screen. When at least one eligible vendor
+   * expense exists it jumps to All Expenses (where the per-row action lives); otherwise
+   * it renders disabled with the reason. "New Expense" stays next to it.
+   */
+  function renderCutCheckEntryPoint(context: "my" | "all") {
+    if (!canCutCheck) return null;
+    const n = eligibleCutCheckExpenses.length;
+    const reason = "Create and approve a vendor expense before cutting a check.";
+    return (
+      <Card data-testid={`cut-check-entrypoint-${context}`}>
+        <CardContent className="py-4 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 mr-1">
+            <Printer className="h-4 w-4 text-muted-foreground" />
+            <span className="font-medium text-sm">Cut Check</span>
+          </div>
+          <span className="inline-flex" title={n === 0 ? reason : undefined}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={n === 0}
+              onClick={() => { if (isAdmin) setActiveTab("all-expenses"); }}
+              data-testid="button-cut-check-entry"
+            >
+              <Printer className="h-3 w-3 mr-1" /> Cut Check{n > 0 ? ` (${n})` : ""}
+            </Button>
+          </span>
+          {n === 0 && (
+            <span className="text-xs text-muted-foreground" data-testid="text-cut-check-entry-reason">
+              {reason}
+            </span>
+          )}
+          <Button size="sm" onClick={() => setExpenseDialogOpen(true)} data-testid="button-cut-check-entry-new-expense">
+            <Plus className="h-3 w-3 mr-1" /> New Expense
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   const myExpenses = allExpenses.filter(e => e.submitterId === myWorkerId);
   const pendingExpenseApprovals = allExpenses.filter(e => e.status === "submitted");
   const pendingInvoiceApprovals = invoices.filter(i => i.status === "submitted");
@@ -926,6 +973,7 @@ export default function ExpensesPage() {
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /> {EXPENSE_POLICY}
             </p>
           </div>
+          {renderCutCheckEntryPoint("my")}
           {myExpenses.length === 0 ? (
             <Card><CardContent className="text-center py-12 text-muted-foreground">
               <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
@@ -996,24 +1044,13 @@ export default function ExpensesPage() {
                 <Download className="h-4 w-4 mr-1" /> Export CSV
               </Button>
             </div>
+            {renderCutCheckEntryPoint("all")}
             {!loadingExpenses && allExpenses.length === 0 && (
               <Card>
                 <CardContent className="text-center py-12 text-muted-foreground" data-testid="empty-all-expenses">
                   <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
                   <p className="font-medium">No expenses yet</p>
-                  <p className="text-sm">Add and approve a vendor expense to use Cut Check.</p>
-                  {canCutCheck && (
-                    <div className="mt-4 flex flex-col items-center gap-2">
-                      <span className="inline-flex" title="Cut Check becomes available on each approved vendor expense">
-                        <Button size="sm" variant="outline" disabled data-testid="button-cut-check-sample">
-                          <Printer className="h-3 w-3 mr-1" /> Cut Check
-                        </Button>
-                      </span>
-                      <Button size="sm" onClick={() => setExpenseDialogOpen(true)} data-testid="button-empty-new-expense">
-                        <Plus className="h-3 w-3 mr-1" /> New Expense
-                      </Button>
-                    </div>
-                  )}
+                  <p className="text-sm">Create and approve a vendor expense before cutting a check.</p>
                 </CardContent>
               </Card>
             )}

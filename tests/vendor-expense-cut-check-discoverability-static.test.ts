@@ -5,9 +5,11 @@
  * Proves — by reading client/src/pages/expenses.tsx — that the already-shipped
  * B2 Cut Check feature is discoverable:
  *   - the label "Cut Check" is used (not the old "Print Check")
- *   - the action renders for admin/manager even when disabled, with a reason
- *   - the mobile expense card carries the same action
- *   - the empty "All Expenses" list explains an approved vendor expense is needed
+ *   - the role gate matches the server's expanded admin/manager guard
+ *   - a page-level entry point renders on BOTH the My Expenses and All Expenses
+ *     tabs (incl. their empty states): disabled Cut Check + reason + New Expense
+ *   - the per-row action renders on desktop rows AND mobile cards, disabled with a
+ *     reason when ineligible
  *   - preview stays a separate no-write action; issuance still goes through
  *     POST /cut-check with an Idempotency-Key
  * and that NO server / ledger / migration file was touched.
@@ -62,12 +64,26 @@ ok("the row action is used on BOTH the desktop table and the mobile card",
   (client.match(/renderCutCheckAction\(e\)/g) || []).length >= 2 &&
   /sm:hidden[\s\S]{0,1200}renderCutCheckAction\(e\)/.test(client));
 
-// ── empty state ──────────────────────────────────────────────────
-ok('the empty All Expenses list explains an approved vendor expense is needed first',
-  /empty-all-expenses[\s\S]{0,240}Add and approve a vendor expense to use Cut Check/.test(client));
-ok('the empty All Expenses list still surfaces the Cut Check control + a way to add an expense',
-  /empty-all-expenses[\s\S]{0,900}button-cut-check-sample[\s\S]{0,160}Cut Check/.test(client) &&
-  /empty-all-expenses[\s\S]{0,1200}button-empty-new-expense/.test(client));
+// ── page-level entry point (visible without an eligible row on screen) ────
+const REASON = "Create and approve a vendor expense before cutting a check.";
+ok("a page-level renderCutCheckEntryPoint(...) exists — disabled Cut Check + reason + New Expense",
+  /function renderCutCheckEntryPoint\(/.test(client) &&
+  /data-testid="button-cut-check-entry"/.test(client) &&
+  /data-testid="button-cut-check-entry-new-expense"/.test(client) &&
+  client.includes(REASON) &&
+  /disabled=\{n === 0\}/.test(client));
+ok("the entry point is role-gated the same way as the row action (canCutCheck)",
+  /function renderCutCheckEntryPoint\([\s\S]{0,80}if \(!canCutCheck\) return null;/.test(client));
+ok("the entry point count mirrors the per-row eligibility gate",
+  /eligibleCutCheckExpenses\s*=\s*canCutCheck[\s\S]{0,180}cutCheckEligibility\(e, fundedCompanyIds, remittanceSourcesLoaded\)\.ok/.test(client));
+
+// ── it renders on BOTH tabs, INCLUDING their empty states ────────────────
+ok('the entry point renders on the My Expenses tab, above its empty state',
+  /TabsContent value="my-expenses"[\s\S]{0,600}renderCutCheckEntryPoint\("my"\)[\s\S]{0,400}myExpenses\.length === 0/.test(client));
+ok('the entry point renders on the All Expenses tab, above its empty state',
+  /TabsContent value="all-expenses"[\s\S]{0,600}renderCutCheckEntryPoint\("all"\)[\s\S]{0,400}empty-all-expenses/.test(client));
+ok('the empty All Expenses card carries the same reason string',
+  /empty-all-expenses[\s\S]{0,260}Create and approve a vendor expense before cutting a check\./.test(client));
 
 // ── preview vs issuance unchanged ────────────────────────────────
 ok("preview is still a separate no-write action (previewExpenseCheck → print-check?preview=1)",
