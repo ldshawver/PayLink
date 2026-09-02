@@ -906,15 +906,21 @@ export default function ExpensesPage() {
     setRecordPayTarget(expense);
   }
 
+  // Only approved, unused, fair-market-value valuations that are provably tied to
+  // THIS expense's payee — the valuation's contractor must be the worker who
+  // submitted the expense. Unrelated same-company valuations are never offered
+  // (the server enforces the same link, plus a payee-name fallback).
   const { data: recordPayTradeComps = [] } = useQuery<any[]>({
-    queryKey: ["/api/contractor-trade-compensation", recordPayTarget?.companyId, "expense-payable"],
+    queryKey: ["/api/contractor-trade-compensation", recordPayTarget?.companyId, recordPayTarget?.submitterId, "expense-payable"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-trade-compensation?companyId=${recordPayTarget?.companyId || ""}`, { credentials: "include" });
       if (!r.ok) return [];
       const rows = await r.json();
+      const payeeWorkerId = recordPayTarget?.submitterId;
       return (Array.isArray(rows) ? rows : []).filter((t: any) =>
         t.approvedAt && !t.contractorPaymentId && !t.expensePaymentId &&
-        String(t.valuationMethod || "").toLowerCase() === "fair_market_value");
+        String(t.valuationMethod || "").toLowerCase() === "fair_market_value" &&
+        !!payeeWorkerId && t.contractorUserId === payeeWorkerId);
     },
     enabled: !!recordPayTarget && recordPayForm.method === "trade_credit",
   });

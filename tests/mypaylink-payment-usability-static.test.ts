@@ -102,6 +102,17 @@ ok("record-payment recomputes payment_status from the ledger, not a browser valu
 ok("record-payment trade_credit binds ONE approved FMV valuation, guarded across BOTH ledgers",
   rp.includes("checkExpenseTradeCreditApplicable(") &&
   rp.includes("expense_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND expense_payment_id IS NULL AND contractor_payment_id IS NULL"));
+ok("record-payment proves the valuation is tied to THIS expense's payee (submitter worker or payee name), not just same-company",
+  rp.includes("expensePayeeWorkerId: e.submitter_id") &&
+  rp.includes("expensePayeeName: e.payee_name || e.vendor") &&
+  rp.includes("compContractorName:") &&
+  !/contractorId: tc\?\.contractor_user_id/.test(rp) &&
+  mod.includes('code: "TRADE_COMP_UNRELATED"') &&
+  mod.includes("export function expenseTradeCompLinked("));
+ok("the AP trade/barter picker only offers valuations tied to the expense's submitter worker",
+  expenses.includes("const payeeWorkerId = recordPayTarget?.submitterId") &&
+  expenses.includes("t.contractorUserId === payeeWorkerId") &&
+  expenses.includes("Missing approved trade/barter valuation"));
 ok("a linked contractor-invoice expense is NOT payable as a separate expense payment (no double count)",
   mod.includes('code: "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"'));
 

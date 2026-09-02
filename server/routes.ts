@@ -11293,9 +11293,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           let payeeUserId: string | null = null;
           if (method === "trade_credit" && tradeCompensationId) {
             const tc = epRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
+            // Resolve the valuation's contractor name so the "same payee" check can
+            // fall back to a name match when the expense was entered as free-text AP.
+            const compWorker = tc?.contractor_user_id
+              ? epRow(await tx.execute(sql`SELECT first_name, last_name FROM workers WHERE id = ${tc.contractor_user_id}`))
+              : null;
             const chk = checkExpenseTradeCreditApplicable(
               tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id } : null,
-              { companyId: e.company_id, contractorId: tc?.contractor_user_id ?? null, paymentCents: amt.cents },
+              {
+                companyId: e.company_id,
+                paymentCents: amt.cents,
+                expensePayeeWorkerId: e.submitter_id ?? null,
+                expensePayeeName: e.payee_name || e.vendor || null,
+                compContractorName: compWorker ? `${compWorker.first_name ?? ""} ${compWorker.last_name ?? ""}` : null,
+              },
             );
             if (!chk.ok) throw new ExpenseRuleError(422, chk.code, chk.message);
             payeeUserId = tc?.contractor_user_id ?? null;

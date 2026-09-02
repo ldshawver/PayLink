@@ -8,7 +8,8 @@ import {
   recomputeExpensePaymentStatus, expensePaymentFingerprint, checkExpenseEligibility,
   toCents, fromCents, checkPaymentAmount, requireIdempotencyKey,
   EXPENSE_PAYMENT_METHODS, EXPENSE_RECORD_PAYMENT_METHODS, EXPENSE_DESCRIPTION_REQUIRED_METHODS,
-  normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable,
+  EXPENSE_TRADE_COMP_MISSING_REASON,
+  normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable, expenseTradeCompLinked,
 } from "../server/expense-payments.ts";
 
 let pass = 0, fail = 0;
@@ -91,21 +92,49 @@ ok("description is required for trade_credit / rent_credit / other only",
     expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc2" }));
 }
 
-console.log("\n--- trade / barter FMV valuation gate ---");
+console.log("\n--- trade / barter FMV valuation gate (must be tied to the expense's payee) ---");
 const comp = {
   id: "tc1", companyId: "co1", contractorUserId: "w1", approvedAt: new Date(),
   valuationMethod: "fair_market_value", totalValue: "500.00", contractorPaymentId: null, expensePaymentId: null,
 };
-const ctxOk = { companyId: "co1", contractorId: "w1", paymentCents: 40000 };
-ok("approved FMV valuation, in company, unused, covers the amount -> applicable",
+// expense submitted BY worker w1, payee name "Jane Contractor"
+const ctxOk = { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "w1", expensePayeeName: "Jane Contractor", compContractorName: "Jane Contractor" };
+
+// (2) correctly linked approved valuation is accepted — by worker id
+ok("approved FMV valuation tied to the expense's submitter worker -> applicable",
   checkExpenseTradeCreditApplicable(comp, ctxOk).ok);
-ok("missing valuation -> TRADE_COMP_NOT_FOUND", (checkExpenseTradeCreditApplicable(null, ctxOk) as any).code === "TRADE_COMP_NOT_FOUND");
+ok("approved FMV valuation tied only by matching payee name -> applicable",
+  checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "someone-else", expensePayeeName: "Jane  CONTRACTOR", compContractorName: "jane contractor" }).ok);
+
+// (1) unrelated same-company approved valuation is rejected
+ok("unrelated same-company valuation (different worker, different name) -> TRADE_COMP_UNRELATED",
+  (checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "w-other", expensePayeeName: "Acme Roofing LLC", compContractorName: "Jane Contractor" }) as any).code === "TRADE_COMP_UNRELATED");
+ok("an unrelated valuation is rejected with the 'Missing approved trade/barter valuation' reason",
+  (checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "w-other", expensePayeeName: "Acme", compContractorName: "Jane Contractor" }) as any).message.startsWith(EXPENSE_TRADE_COMP_MISSING_REASON));
+ok("no payee identity on the expense at all -> rejected (cannot prove the link)",
+  !checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: null, expensePayeeName: null, compContractorName: "Jane Contractor" }).ok);
+
+// (3) cross-company valuation is rejected
 ok("cross-company valuation -> TRADE_COMP_CROSS_COMPANY", (checkExpenseTradeCreditApplicable({ ...comp, companyId: "coX" }, ctxOk) as any).code === "TRADE_COMP_CROSS_COMPANY");
+
+// (4) missing valuation -> the expected disabled reason
+ok("missing valuation -> TRADE_COMP_NOT_FOUND with the 'Missing approved trade/barter valuation' reason",
+  (() => { const r = checkExpenseTradeCreditApplicable(null, ctxOk) as any; return r.code === "TRADE_COMP_NOT_FOUND" && r.message.startsWith(EXPENSE_TRADE_COMP_MISSING_REASON); })());
+ok("the canonical disabled reason string is exactly 'Missing approved trade/barter valuation'",
+  EXPENSE_TRADE_COMP_MISSING_REASON === "Missing approved trade/barter valuation");
+
+// remaining gates still enforced (after the link is proven)
 ok("unapproved valuation -> TRADE_COMP_NOT_APPROVED", (checkExpenseTradeCreditApplicable({ ...comp, approvedAt: null }, ctxOk) as any).code === "TRADE_COMP_NOT_APPROVED");
 ok("non-FMV valuation -> TRADE_COMP_NOT_FMV", (checkExpenseTradeCreditApplicable({ ...comp, valuationMethod: "cost_basis" }, ctxOk) as any).code === "TRADE_COMP_NOT_FMV");
 ok("already linked to a contractor payment -> TRADE_COMP_ALREADY_LINKED", (checkExpenseTradeCreditApplicable({ ...comp, contractorPaymentId: "cp9" }, ctxOk) as any).code === "TRADE_COMP_ALREADY_LINKED");
 ok("already linked to an expense payment -> TRADE_COMP_ALREADY_LINKED", (checkExpenseTradeCreditApplicable({ ...comp, expensePaymentId: "ep9" }, ctxOk) as any).code === "TRADE_COMP_ALREADY_LINKED");
 ok("payment exceeds the approved value -> TRADE_COMP_VALUE_INSUFFICIENT", (checkExpenseTradeCreditApplicable(comp, { ...ctxOk, paymentCents: 60000 }) as any).code === "TRADE_COMP_VALUE_INSUFFICIENT");
+
+// the link helper in isolation
+ok("expenseTradeCompLinked: worker-id match", expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeWorkerId: "w1" }));
+ok("expenseTradeCompLinked: name match (normalized)", expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeName: "  Jane   Contractor ", compContractorName: "jane contractor" }));
+ok("expenseTradeCompLinked: no link -> false", !expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeWorkerId: "w2", expensePayeeName: "X", compContractorName: "Y" }));
+ok("expenseTradeCompLinked: empty names never match", !expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeName: "", compContractorName: "" }));
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

@@ -165,22 +165,60 @@ export type ExpenseTradeCreditCheck =
   | { ok: true; appliedCents: number }
   | { ok: false; code: string; message: string };
 
+/** The disabled reason the AP UI shows when no valuation can be tied to the expense. */
+export const EXPENSE_TRADE_COMP_MISSING_REASON = "Missing approved trade/barter valuation";
+
+/** Normalize a payee / contractor name for an auditable "same payee" comparison. */
+export function normalizePayeeName(raw: unknown): string {
+  return String(raw ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Prove the trade/barter valuation is tied to THIS expense's payee. The AP
+ * expense schema has no direct expense_id link on contractor_trade_compensation,
+ * so the auditable relationship is one of:
+ *   - the valuation's contractor is the worker who submitted the expense, or
+ *   - the valuation's contractor name matches the expense's payee / vendor name.
+ * Anything else — including an unrelated approved valuation for the same company —
+ * is rejected.
+ */
+export function expenseTradeCompLinked(
+  comp: Pick<ExpenseTradeCompensationRecord, "contractorUserId">,
+  ctx: { expensePayeeWorkerId?: string | null; expensePayeeName?: string | null; compContractorName?: string | null },
+): boolean {
+  if (comp.contractorUserId && ctx.expensePayeeWorkerId && comp.contractorUserId === ctx.expensePayeeWorkerId) return true;
+  const payee = normalizePayeeName(ctx.expensePayeeName);
+  const contractor = normalizePayeeName(ctx.compContractorName);
+  return payee.length > 0 && contractor.length > 0 && payee === contractor;
+}
+
 /**
  * Validate that an approved fair-market-value trade-compensation record may be
  * applied, exactly once, to a trade/barter payment on this expense. Mirrors
  * checkTradeCreditApplicable on the contractor side, but the "already used"
- * guard covers BOTH ledgers so a credit can never be double-posted.
+ * guard covers BOTH ledgers so a credit can never be double-posted, and the
+ * valuation must be provably tied to this expense's payee (expenseTradeCompLinked).
  */
 export function checkExpenseTradeCreditApplicable(
   comp: ExpenseTradeCompensationRecord | null | undefined,
-  ctx: { companyId: string | null | undefined; contractorId: string | null | undefined; paymentCents: number },
+  ctx: {
+    companyId: string | null | undefined;
+    paymentCents: number;
+    expensePayeeWorkerId?: string | null;
+    expensePayeeName?: string | null;
+    compContractorName?: string | null;
+  },
 ): ExpenseTradeCreditCheck {
-  if (!comp) return { ok: false, code: "TRADE_COMP_NOT_FOUND", message: "The linked trade / barter valuation record was not found." };
+  if (!comp) return { ok: false, code: "TRADE_COMP_NOT_FOUND", message: `${EXPENSE_TRADE_COMP_MISSING_REASON}.` };
   if (comp.companyId !== ctx.companyId) {
     return { ok: false, code: "TRADE_COMP_CROSS_COMPANY", message: "The trade / barter valuation belongs to a different company." };
   }
-  if (!ctx.contractorId || comp.contractorUserId !== ctx.contractorId) {
-    return { ok: false, code: "TRADE_COMP_CONTRACTOR_MISMATCH", message: "The trade / barter valuation belongs to a different payee." };
+  if (!expenseTradeCompLinked(comp, ctx)) {
+    return {
+      ok: false,
+      code: "TRADE_COMP_UNRELATED",
+      message: `${EXPENSE_TRADE_COMP_MISSING_REASON}. The selected valuation is not linked to this expense's payee, invoice, or contract.`,
+    };
   }
   if (!comp.approvedAt) {
     return { ok: false, code: "TRADE_COMP_NOT_APPROVED", message: "The trade / barter valuation has not been approved." };
