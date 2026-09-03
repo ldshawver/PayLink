@@ -69,8 +69,16 @@ ok("B2 never inserts / updates contractor_payments or contractor_invoices",
 ok("the contractor cut-check route still exists and still writes contractor_payments",
   routes.includes('app.post("/api/contractor-invoices/:id/cut-check"') &&
   /contractor-invoices\/:id\/cut-check[\s\S]{0,7000}?INSERT INTO contractor_payments/.test(routes));
-ok("server/contractor-payments.ts is not modified by B2 (no expense_payments references)",
-  !/expense_payments|expensePayment/.test(contractorMod));
+// B2 itself did not touch this module. The combined MyPayLink payment-usability
+// release adds ONE audited cross-ledger reference: the FMV trade/barter valuation
+// is "used exactly once" across BOTH the contractor and the expense ledgers, so
+// checkTradeCreditApplicable must also reject a valuation already bound to an
+// expense payment (comp.expensePaymentId). No expense-ledger WRITES and no
+// expense check-issuance logic may live here.
+ok("server/contractor-payments.ts holds no expense-ledger writes / no expense check-issuance logic",
+  !/expense_payments\b|INSERT INTO expense|EXPENSE_PAYMENT_METHOD|checkExpenseEligibility|cut-check/.test(contractorMod));
+ok("the one allowed cross-ledger reference is the FMV valuation's exactly-once guard (comp.expensePaymentId)",
+  /comp\.contractorPaymentId \|\| comp\.expensePaymentId/.test(contractorMod));
 ok("migration 0017 does not ALTER any contractor / payroll / 1099 table",
   !/(contractor_payments|contractor_invoices|contractor_trade_compensation|payroll|trade_transactions)/i.test(migration));
 

@@ -132,6 +132,28 @@ async function main() {
     ok("voiding the trade payment restores its 300 to the balance (450 + 300 = 750)", (await balanceCents()) === toCents("750.00"));
     ok("voiding the trade payment frees the valuation for re-use",
       (await pool.query(`SELECT expense_payment_id FROM contractor_trade_compensation WHERE id=$1`, [TC])).rows[0].expense_payment_id === null);
+
+    // ── cross-ledger one-time link: a valuation already bound to a CONTRACTOR
+    //    payment cannot be bound to an expense payment, and vice-versa. Both the
+    //    contractor route (…WHERE contractor_payment_id IS NULL AND expense_payment_id IS NULL)
+    //    and the expense route (…WHERE expense_payment_id IS NULL AND contractor_payment_id IS NULL)
+    //    guard on BOTH columns. ──
+    await pool.query(`UPDATE contractor_trade_compensation SET expense_payment_id=NULL, contractor_payment_id=$1, updated_at=NOW() WHERE id=$2`, [`${RUN}_cp`, TC]);
+    const boundToContractor = await pool.query(
+      `UPDATE contractor_trade_compensation SET expense_payment_id=$1, updated_at=NOW()
+       WHERE id=$2 AND expense_payment_id IS NULL AND contractor_payment_id IS NULL`,
+      [`${RUN}_ep2`, TC],
+    );
+    ok("a contractor-payment-bound valuation is NOT re-bindable to an expense payment (0 rows updated)", boundToContractor.rowCount === 0);
+
+    await pool.query(`UPDATE contractor_trade_compensation SET contractor_payment_id=NULL, expense_payment_id=$1, updated_at=NOW() WHERE id=$2`, [`${RUN}_ep`, TC]);
+    const boundToExpense = await pool.query(
+      `UPDATE contractor_trade_compensation SET contractor_payment_id=$1, updated_at=NOW()
+       WHERE id=$2 AND contractor_payment_id IS NULL AND expense_payment_id IS NULL`,
+      [`${RUN}_cp2`, TC],
+    );
+    ok("an expense-payment-bound valuation is NOT re-bindable to a contractor payment (0 rows updated)", boundToExpense.rowCount === 0);
+    await pool.query(`UPDATE contractor_trade_compensation SET contractor_payment_id=NULL, expense_payment_id=NULL WHERE id=$1`, [TC]);
   } finally {
     await pool.query(`DELETE FROM expense_payments WHERE company_id LIKE $1`, [`${RUN}%`]);
     await pool.query(`DELETE FROM contractor_trade_compensation WHERE company_id LIKE $1`, [`${RUN}%`]);

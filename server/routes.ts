@@ -14577,7 +14577,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (method === "trade_credit" && tradeCompensationId) {
             const tc = cpRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
             const chk = checkTradeCreditApplicable(
-              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id } : null,
+              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id } : null,
               { companyId: inv.company_id, contractorId: inv.contractor_id, paymentCents: amt.cents },
             );
             if (!chk.ok) throw new PaymentRuleError(422, chk.code, chk.message);
@@ -14590,7 +14590,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             RETURNING *`));
 
           if (method === "trade_credit" && tradeCompensationId) {
-            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL`);
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL AND expense_payment_id IS NULL`);
           }
 
           const newPaidCents = paidCents + amt.cents;

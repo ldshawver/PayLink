@@ -88,7 +88,8 @@ ok("cross-company -> rejected", (() => { const r = checkTradeCreditApplicable({ 
 ok("different contractor -> rejected", (() => { const r = checkTradeCreditApplicable({ ...okComp, contractorUserId: "wX" }, ctx); return !r.ok && r.code === "TRADE_COMP_CONTRACTOR_MISMATCH"; })());
 ok("not approved -> rejected", (() => { const r = checkTradeCreditApplicable({ ...okComp, approvedAt: null }, ctx); return !r.ok && r.code === "TRADE_COMP_NOT_APPROVED"; })());
 ok("valuation not fair_market_value -> rejected", (() => { const r = checkTradeCreditApplicable({ ...okComp, valuationMethod: "cost" }, ctx); return !r.ok && r.code === "TRADE_COMP_NOT_FMV"; })());
-ok("already linked to another payment -> rejected", (() => { const r = checkTradeCreditApplicable({ ...okComp, contractorPaymentId: "pOther" }, ctx); return !r.ok && r.code === "TRADE_COMP_ALREADY_LINKED"; })());
+ok("already linked to another contractor payment -> rejected", (() => { const r = checkTradeCreditApplicable({ ...okComp, contractorPaymentId: "pOther" }, ctx); return !r.ok && r.code === "TRADE_COMP_ALREADY_LINKED"; })());
+ok("already linked to an EXPENSE payment (other ledger) -> rejected — one-time link spans both ledgers", (() => { const r = checkTradeCreditApplicable({ ...okComp, expensePaymentId: "epOther" }, ctx); return !r.ok && r.code === "TRADE_COMP_ALREADY_LINKED"; })());
 ok("approved value does not cover the payment -> rejected", (() => { const r = checkTradeCreditApplicable({ ...okComp, totalValue: "100.00" }, ctx); return !r.ok && r.code === "TRADE_COMP_VALUE_INSUFFICIENT"; })());
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);

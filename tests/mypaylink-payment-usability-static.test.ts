@@ -116,6 +116,10 @@ ok("the AP trade/barter picker only offers valuations tied to the expense's subm
   expenses.includes("Missing approved trade/barter valuation"));
 ok("a linked contractor-invoice expense is NOT payable as a separate expense payment (no double count)",
   mod.includes('code: "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"'));
+ok("the CONTRACTOR-invoice trade/barter path also guards the valuation across BOTH ledgers (cannot re-bind one already tied to an AP expense payment)",
+  cpMod.includes("comp.contractorPaymentId || comp.expensePaymentId") &&
+  routes.includes("contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id") &&
+  routes.includes("SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL AND expense_payment_id IS NULL"));
 
 // proof-of-payment document routes — read only
 for (const [label, marker, end] of [
