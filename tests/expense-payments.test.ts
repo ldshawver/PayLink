@@ -66,6 +66,10 @@ ok("partially_paid is still eligible for another partial check",
 ok("payeeName wins over vendor for the printed name",
   checkExpenseEligibility({ ...approved, payeeName: "Payee Co", vendor: "Vendor Co" }, { companyId: "co1" }).ok &&
   (checkExpenseEligibility({ ...approved, payeeName: "Payee Co", vendor: "Vendor Co" }, { companyId: "co1" }) as any).payeeName === "Payee Co");
+ok("an expense linked to a contractor invoice cannot be paid separately through the AP path",
+  (() => { const r = checkExpenseEligibility({ ...approved, contractorInvoiceId: "ci-9" }, { companyId: "co1" }); return !r.ok && r.code === "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"; })());
+ok("the linked-invoice gate fires before the not-approved / no-vendor checks",
+  (() => { const r = checkExpenseEligibility({ ...approved, contractorInvoiceId: "ci-9", status: "submitted", vendor: null, payeeName: null }, { companyId: "co1" }); return !r.ok && r.code === "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"; })());
 
 // ── combined usability release: non-check methods on the same ledger ─────────
 console.log("\n--- non-check payment methods (migration 0018) ---");
