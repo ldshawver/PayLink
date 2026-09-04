@@ -11207,11 +11207,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/expenses/:id/payments — the expense's payment ledger (non-void first).
   app.get("/api/expenses/:id/payments", requireAuth, async (req, res) => {
     try {
-      const scope = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${req.params.id}`));
+      const scope = epRow(await db.execute(sql`SELECT company_id, submitter_id FROM expenses WHERE id = ${req.params.id}`));
       if (!scope) return res.status(404).json({ message: "Expense not found" });
       const user = await storage.getUser(req.session.userId!);
       if (scope.company_id && !(await canAccessCompany(user!, scope.company_id))) return res.status(403).json({ message: "Access denied" });
-      const rows = epRows(await db.execute(sql`SELECT * FROM expense_payments WHERE expense_id = ${req.params.id} ORDER BY status = 'void', COALESCE(payment_date, issued_at) DESC`));
+      // Same object-level gate every sibling expense sub-resource route enforces
+      // (GET /api/expenses/:id, /attachments, …): managers see any expense in the
+      // company; everyone else only the expense they submitted.
+      const isManager = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || user?.role === "supervisor";
+      if (!isManager && user?.workerId !== scope.submitter_id) return res.status(403).json({ message: "Not authorized" });
+      // Explicit projection — the internal replay-guard columns are never sent to a client.
+      const rows = epRows(await db.execute(sql`
+        SELECT id, expense_id, company_id, amount, payment_method, status, reference_number,
+               notes, payment_date, issued_at, trade_compensation_id, payee_user_id,
+               voided_at, void_reason, created_by_user_id
+        FROM expense_payments WHERE expense_id = ${req.params.id}
+        ORDER BY status = 'void', COALESCE(payment_date, issued_at) DESC`));
       res.json(rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch expense payments" }); }
   });
@@ -14438,7 +14449,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isPlatform = (user?.role || "").startsWith("platform_");
       const isManager = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
       const wRes = cpRow(await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`));
-      if (!isManager && pay.contractor_id !== wRes?.worker_id) return res.status(403).json({ message: "Access denied" });
+      // A non-manager may only fetch their OWN payment doc — and only when both
+      // sides of the identity are present (never let null === null through).
+      if (!isManager && (!wRes?.worker_id || !pay.contractor_id || pay.contractor_id !== wRes.worker_id)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       if (isManager && !isPlatform && pay.company_id && !(await canAccessCompany(user!, pay.company_id))) {
         return res.status(403).json({ message: "Access denied" });
       }

@@ -116,6 +116,24 @@ ok("the AP trade/barter picker only offers valuations tied to the expense's subm
   expenses.includes("Missing approved trade/barter valuation"));
 ok("a linked contractor-invoice expense is NOT payable as a separate expense payment (no double count)",
   mod.includes('code: "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"'));
+
+// GET /api/expenses/:id/payments — object-level authz + no idempotency leakage
+{
+  const gp = routes.slice(
+    routes.indexOf('app.get("/api/expenses/:id/payments"'),
+    routes.indexOf('app.post("/api/expenses/:id/record-payment"'),
+  );
+  ok("GET /api/expenses/:id/payments enforces the same manager-or-submitter gate as the sibling expense routes",
+    gp.includes("SELECT company_id, submitter_id FROM expenses") &&
+    /!isManager && user\?\.workerId !== scope\.submitter_id/.test(gp) &&
+    gp.includes("canAccessCompany(user!, scope.company_id)"));
+  ok("GET /api/expenses/:id/payments uses an explicit projection (no SELECT *, no idempotency columns) so replay-guard material never reaches the client",
+    !/SELECT \* FROM expense_payments/.test(gp) &&
+    /SELECT id, expense_id, company_id, amount, payment_method, status, reference_number/.test(gp) &&
+    !/idempotency/.test(gp));
+}
+ok("GET /api/contractor-payments/:id/document rejects a non-manager whose worker id or the payment's contractor id is absent (no null === null bypass)",
+  routes.includes("!isManager && (!wRes?.worker_id || !pay.contractor_id || pay.contractor_id !== wRes.worker_id)"));
 ok("the CONTRACTOR-invoice trade/barter path also guards the valuation across BOTH ledgers (cannot re-bind one already tied to an AP expense payment)",
   cpMod.includes("comp.contractorPaymentId || comp.expensePaymentId") &&
   routes.includes("contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id") &&
