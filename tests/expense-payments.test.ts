@@ -7,6 +7,9 @@ import {
   EXPENSE_PAYMENT_METHOD, EXPENSE_VOID_STOP_PAYMENT_NOTE,
   recomputeExpensePaymentStatus, expensePaymentFingerprint, checkExpenseEligibility,
   toCents, fromCents, checkPaymentAmount, requireIdempotencyKey,
+  EXPENSE_PAYMENT_METHODS, EXPENSE_RECORD_PAYMENT_METHODS, EXPENSE_DESCRIPTION_REQUIRED_METHODS,
+  EXPENSE_TRADE_COMP_MISSING_REASON,
+  normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable, expenseTradeCompLinked,
 } from "../server/expense-payments.ts";
 
 let pass = 0, fail = 0;
@@ -63,6 +66,82 @@ ok("partially_paid is still eligible for another partial check",
 ok("payeeName wins over vendor for the printed name",
   checkExpenseEligibility({ ...approved, payeeName: "Payee Co", vendor: "Vendor Co" }, { companyId: "co1" }).ok &&
   (checkExpenseEligibility({ ...approved, payeeName: "Payee Co", vendor: "Vendor Co" }, { companyId: "co1" }) as any).payeeName === "Payee Co");
+ok("an expense linked to a contractor invoice cannot be paid separately through the AP path",
+  (() => { const r = checkExpenseEligibility({ ...approved, contractorInvoiceId: "ci-9" }, { companyId: "co1" }); return !r.ok && r.code === "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"; })());
+ok("the linked-invoice gate fires before the not-approved / no-vendor checks",
+  (() => { const r = checkExpenseEligibility({ ...approved, contractorInvoiceId: "ci-9", status: "submitted", vendor: null, payeeName: null }, { companyId: "co1" }); return !r.ok && r.code === "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"; })());
+
+// ── combined usability release: non-check methods on the same ledger ─────────
+console.log("\n--- non-check payment methods (migration 0018) ---");
+ok("the ledger accepts exactly check + cash + ach + trade_credit + rent_credit + other",
+  JSON.stringify([...EXPENSE_PAYMENT_METHODS]) === JSON.stringify(["check", "cash", "ach", "trade_credit", "rent_credit", "other"]));
+ok("record-payment methods are the non-check subset (check is issued via /cut-check)",
+  JSON.stringify([...EXPENSE_RECORD_PAYMENT_METHODS]) === JSON.stringify(["cash", "ach", "trade_credit", "rent_credit", "other"]));
+ok("wire / credit_card are never accepted", normalizeExpensePaymentMethod("wire") === null && normalizeExpensePaymentMethod("credit_card") === null);
+ok("method normalization is case / separator tolerant",
+  normalizeExpensePaymentMethod("Trade-Credit") === "trade_credit" && normalizeExpensePaymentMethod(" ACH ") === "ach" && normalizeExpensePaymentMethod("CHECK") === "check");
+ok("description is required for trade_credit / rent_credit / other only",
+  EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("trade_credit") && EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("rent_credit") &&
+  EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("other") && !EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("cash") && !EXPENSE_DESCRIPTION_REQUIRED_METHODS.has("ach"));
+
+// a trade_credit payment's fingerprint differs from an otherwise-identical check
+{
+  const base = { companyId: "co1", expenseId: "e1", amountCents: 5000, fundingAccountId: null, payeeName: "Acme" };
+  ok("check fingerprint is byte-identical with/without a null tradeCompensationId (back-compat)",
+    expensePaymentFingerprint({ ...base, method: "check" }) === expensePaymentFingerprint({ ...base, method: "check", tradeCompensationId: null }));
+  ok("a trade_credit payment linked to a valuation has its own stable fingerprint",
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc1" }) ===
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc1" }) &&
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc1" }) !==
+    expensePaymentFingerprint({ ...base, method: "trade_credit", tradeCompensationId: "tc2" }));
+}
+
+console.log("\n--- trade / barter FMV valuation gate (must be auditable-linked to the expense's payee) ---");
+const comp = {
+  id: "tc1", companyId: "co1", contractorUserId: "w1", approvedAt: new Date(),
+  valuationMethod: "fair_market_value", totalValue: "500.00", contractorPaymentId: null, expensePaymentId: null,
+};
+// The expense was submitted BY worker w1 — the valuation's contractor. This is
+// the only relationship the AP schema can prove (contractor_trade_compensation
+// has no expense_id / invoice_id).
+const ctxOk = { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "w1" };
+
+// (2) correctly linked approved valuation is accepted — the valuation's
+// contractor is the worker who submitted the expense
+ok("approved FMV valuation whose contractor submitted the expense -> applicable",
+  checkExpenseTradeCreditApplicable(comp, ctxOk).ok);
+
+// (1) unrelated same-company approved valuation is rejected — a matching
+// free-text payee/vendor name is NOT an auditable link and must never accept it
+ok("unrelated same-company valuation (different submitter worker) -> TRADE_COMP_UNRELATED",
+  (checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "w-other" }) as any).code === "TRADE_COMP_UNRELATED");
+ok("an unrelated valuation is rejected with the 'Missing approved trade/barter valuation' reason",
+  (checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: "w-other" }) as any).message.startsWith(EXPENSE_TRADE_COMP_MISSING_REASON));
+ok("no submitter identity on the expense at all -> rejected (cannot prove the link)",
+  (checkExpenseTradeCreditApplicable(comp, { companyId: "co1", paymentCents: 40000, expensePayeeWorkerId: null }) as any).code === "TRADE_COMP_UNRELATED");
+
+// (3) cross-company valuation is rejected (checked before the link, so even a
+// same-worker cross-company valuation is refused)
+ok("cross-company valuation -> TRADE_COMP_CROSS_COMPANY", (checkExpenseTradeCreditApplicable({ ...comp, companyId: "coX" }, ctxOk) as any).code === "TRADE_COMP_CROSS_COMPANY");
+
+// (4) missing valuation -> the expected disabled reason
+ok("missing valuation -> TRADE_COMP_NOT_FOUND with the 'Missing approved trade/barter valuation' reason",
+  (() => { const r = checkExpenseTradeCreditApplicable(null, ctxOk) as any; return r.code === "TRADE_COMP_NOT_FOUND" && r.message.startsWith(EXPENSE_TRADE_COMP_MISSING_REASON); })());
+ok("the canonical disabled reason string is exactly 'Missing approved trade/barter valuation'",
+  EXPENSE_TRADE_COMP_MISSING_REASON === "Missing approved trade/barter valuation");
+
+// remaining gates still enforced (after the link is proven)
+ok("unapproved valuation -> TRADE_COMP_NOT_APPROVED", (checkExpenseTradeCreditApplicable({ ...comp, approvedAt: null }, ctxOk) as any).code === "TRADE_COMP_NOT_APPROVED");
+ok("non-FMV valuation -> TRADE_COMP_NOT_FMV", (checkExpenseTradeCreditApplicable({ ...comp, valuationMethod: "cost_basis" }, ctxOk) as any).code === "TRADE_COMP_NOT_FMV");
+ok("already linked to a contractor payment -> TRADE_COMP_ALREADY_LINKED", (checkExpenseTradeCreditApplicable({ ...comp, contractorPaymentId: "cp9" }, ctxOk) as any).code === "TRADE_COMP_ALREADY_LINKED");
+ok("already linked to an expense payment -> TRADE_COMP_ALREADY_LINKED", (checkExpenseTradeCreditApplicable({ ...comp, expensePaymentId: "ep9" }, ctxOk) as any).code === "TRADE_COMP_ALREADY_LINKED");
+ok("payment exceeds the approved value -> TRADE_COMP_VALUE_INSUFFICIENT", (checkExpenseTradeCreditApplicable(comp, { ...ctxOk, paymentCents: 60000 }) as any).code === "TRADE_COMP_VALUE_INSUFFICIENT");
+
+// the link helper in isolation — worker-id match is the ONLY accepted link
+ok("expenseTradeCompLinked: submitter worker-id match -> true", expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeWorkerId: "w1" }));
+ok("expenseTradeCompLinked: different submitter -> false", !expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeWorkerId: "w2" }));
+ok("expenseTradeCompLinked: no submitter id -> false", !expenseTradeCompLinked({ contractorUserId: "w1" }, { expensePayeeWorkerId: null }));
+ok("expenseTradeCompLinked: valuation has no contractor -> false", !expenseTradeCompLinked({ contractorUserId: "" }, { expensePayeeWorkerId: "" }));
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

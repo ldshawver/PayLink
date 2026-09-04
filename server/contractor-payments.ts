@@ -120,6 +120,12 @@ export interface TradeCompensationRecord {
   valuationMethod: string | null;
   totalValue: string | number | null;
   contractorPaymentId: string | null;
+  /**
+   * Mirror of contractorPaymentId for the AP/expense ledger (migration 0018). A
+   * valuation already bound to an expense payment must not be re-bound here — the
+   * "used exactly once" guard spans BOTH ledgers.
+   */
+  expensePaymentId?: string | null;
 }
 
 export type TradeCreditCheck =
@@ -147,7 +153,7 @@ export function checkTradeCreditApplicable(
   if (String(comp.valuationMethod ?? "").toLowerCase() !== "fair_market_value") {
     return { ok: false, code: "TRADE_COMP_NOT_FMV", message: "The trade-compensation record is not valued at fair market value." };
   }
-  if (comp.contractorPaymentId) {
+  if (comp.contractorPaymentId || comp.expensePaymentId) {
     return { ok: false, code: "TRADE_COMP_ALREADY_LINKED", message: "The trade-compensation record is already linked to another payment." };
   }
   const availableCents = toCents(comp.totalValue);

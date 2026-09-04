@@ -12,11 +12,15 @@
  *     reason when ineligible
  *   - preview stays a separate no-write action; issuance still goes through
  *     POST /cut-check with an Idempotency-Key
- * and that NO server / ledger / migration file was touched.
+ * and that the B2 check-only issuance ledger (migration 0017) still stands —
+ * the combined MyPayLink usability release extends it additively (migration
+ * 0018, non-check record-payment) without rewriting the B2 core.
  */
 import fs from "node:fs";
 
 const client = fs.readFileSync("client/src/pages/expenses.tsx", "utf8");
+const mod = fs.readFileSync("server/expense-payments.ts", "utf8");
+const routes = fs.readFileSync("server/routes.ts", "utf8");
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => {
@@ -93,18 +97,17 @@ ok("issuance still posts to /cut-check with an Idempotency-Key header",
 ok("the user still cannot type a check number (allocated on issue)",
   client.includes('value="auto — allocated on issue"'));
 
-// ── no backend / ledger / migration change in this patch ─────────
-const changed = (p: string) => {
-  try {
-    const { execSync } = require("node:child_process");
-    const out = execSync(`git diff --name-only origin/main -- ${p}`, { encoding: "utf8" });
-    return out.trim().length > 0;
-  } catch { return false; }
-};
-ok("no server file changed by this patch",
-  !changed("server/"));
-ok("migration 0017 and the expense_payments ledger definition are untouched",
-  !changed("migrations/0017_expense_payments.sql") && !changed("server/expense-payments.ts"));
+// ── the B2 check-only issuance core is preserved (extended, not rewritten) ──
+ok("migration 0017 (the B2 ledger table) is unchanged",
+  fs.readFileSync("migrations/0017_expense_payments.sql", "utf8").includes("CREATE TABLE IF NOT EXISTS expense_payments"));
+ok("the check issuance path still goes through POST /api/expenses/:id/cut-check",
+  routes.includes('app.post("/api/expenses/:id/cut-check"'));
+ok("the check-only issuance constant still names 'check' as the issued method",
+  mod.includes('EXPENSE_PAYMENT_METHOD = "check"'));
+ok("non-check methods are recorded on the SAME ledger via a separate record-payment route (no second ledger)",
+  routes.includes('app.post("/api/expenses/:id/record-payment"') &&
+  mod.includes("EXPENSE_RECORD_PAYMENT_METHODS") &&
+  !/INSERT INTO\s+(?!expense_payments)\w*payment/i.test(routes.slice(routes.indexOf('app.post("/api/expenses/:id/record-payment"'), routes.indexOf('app.post("/api/expenses/:id/record-payment"') + 4000)));
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

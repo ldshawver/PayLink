@@ -53,22 +53,39 @@ function formatCurrency(v: string | number | null | undefined) {
  * `fundingKnown=false` while that list is still loading so funding is not
  * asserted prematurely.
  */
-function cutCheckEligibility(
-  e: any,
-  fundedCompanyIds: Set<string>,
-  fundingKnown: boolean,
-): { ok: boolean; reason: string | null } {
+function baseExpensePayEligibility(e: any): { ok: boolean; reason: string | null } {
   const status = String(e?.status ?? "").toLowerCase();
   const ps = String(e?.paymentStatus ?? "unpaid").toLowerCase();
+  if (e?.contractorInvoiceId) return { ok: false, reason: "Pay via the linked contractor invoice" };
   if (ps === "paid") return { ok: false, reason: "Already paid" };
   if (ps === "voided") return { ok: false, reason: "Payment voided" };
   if (status !== "approved") return { ok: false, reason: "Approve expense first" };
   if (!String(e?.payeeName || e?.vendor || "").trim()) return { ok: false, reason: "Add vendor/payee first" };
   if (!(parseFloat(String(e?.amount ?? "0")) > 0)) return { ok: false, reason: "No unpaid balance" };
+  return { ok: true, reason: null };
+}
+
+function cutCheckEligibility(
+  e: any,
+  fundedCompanyIds: Set<string>,
+  fundingKnown: boolean,
+): { ok: boolean; reason: string | null } {
+  const base = baseExpensePayEligibility(e);
+  if (!base.ok) return base;
   if (fundingKnown && e?.companyId && !fundedCompanyIds.has(String(e.companyId))) {
     return { ok: false, reason: "Funding account required" };
   }
   return { ok: true, reason: null };
+}
+
+/**
+ * Client mirror for the non-check "Record Payment" action. No funding-account
+ * requirement (cash / ACH / trade / rent / other settle outside MyPayLink);
+ * trade / barter additionally needs an approved fair-market-value valuation,
+ * which is enforced in the dialog + on the server.
+ */
+function recordPaymentEligibility(e: any): { ok: boolean; reason: string | null } {
+  return baseExpensePayEligibility(e);
 }
 
 function extractedNumber(value: any): string {
@@ -590,6 +607,8 @@ export default function ExpensesPage() {
   const [invoicePrintTarget, setInvoicePrintTarget] = useState<any | null>(null);
   const [invoicePrintForm, setInvoicePrintForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
   const [markPaidExpenseId, setMarkPaidExpenseId] = useState<string | null>(null);
+  const [recordPayTarget, setRecordPayTarget] = useState<any | null>(null);
+  const [recordPayForm, setRecordPayForm] = useState({ method: "cash", amount: "", referenceNumber: "", description: "", tradeCompensationId: "", idempotencyKey: "" });
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: allExpenses = [], isLoading: loadingExpenses } = useQuery<any[]>({ queryKey: ["/api/expenses"], queryFn: async () => { const r = await fetch("/api/expenses", { credentials: "include" }); return r.ok ? r.json() : []; } });
@@ -638,7 +657,9 @@ export default function ExpensesPage() {
   function renderCutCheckAction(e: any) {
     if (!canCutCheck) return null;
     const { ok, reason } = cutCheckEligibility(e, fundedCompanyIds, remittanceSourcesLoaded);
+    const rp = recordPaymentEligibility(e);
     const isPaid = String(e?.paymentStatus ?? "").toLowerCase() === "paid";
+    const isPartial = String(e?.paymentStatus ?? "").toLowerCase() === "partially_paid";
     const paidLabel = isPaid && e?.checkNumber ? `Paid · #${e.checkNumber}` : reason;
     return (
       <div className="flex flex-wrap items-center gap-1" data-testid={`cut-check-action-${e.id}`}>
@@ -653,10 +674,31 @@ export default function ExpensesPage() {
             <Printer className="h-3 w-3 mr-1" /> Cut Check
           </Button>
         </span>
-        {!ok && (
+        <span title={rp.ok ? undefined : (rp.reason ?? undefined)} className="inline-flex">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!rp.ok}
+            onClick={() => openRecordPayment(e)}
+            data-testid={`button-record-payment-${e.id}`}
+          >
+            <ArrowLeftRight className="h-3 w-3 mr-1" /> Submit / Record Payment
+          </Button>
+        </span>
+        {!ok && !rp.ok && (
           <span className="text-xs text-muted-foreground" data-testid={`text-cut-check-reason-${e.id}`}>
             {paidLabel}
           </span>
+        )}
+        {(isPaid || isPartial) && (
+          <a
+            href={`/api/expenses/${e.id}/payments`}
+            onClick={(ev) => { ev.preventDefault(); openExpensePaymentReceipts(e); }}
+            className="text-xs text-primary underline inline-flex items-center gap-1"
+            data-testid={`link-expense-receipt-${e.id}`}
+          >
+            <FileText className="h-3 w-3" /> View Payment Statement / Receipt
+          </a>
         )}
         {!isPaid && String(e?.status ?? "").toLowerCase() === "approved" && (
           <Button size="sm" variant="ghost" onClick={() => setMarkPaidExpenseId(e.id)} data-testid={`button-mark-paid-expense-${e.id}`}>
@@ -665,6 +707,16 @@ export default function ExpensesPage() {
         )}
       </div>
     );
+  }
+
+  async function openExpensePaymentReceipts(e: any) {
+    try {
+      const r = await fetch(`/api/expenses/${e.id}/payments`, { credentials: "include" });
+      const rows = r.ok ? await r.json() : [];
+      const latest = (Array.isArray(rows) ? rows : []).find((p: any) => p.status !== "void");
+      if (!latest) { toast({ title: "No payment on file yet" }); return; }
+      window.open(`/api/expense-payments/${latest.id}/document?copy=payee`, "_blank");
+    } catch { toast({ title: "Could not open payment receipt", variant: "destructive" }); }
   }
 
   // Expenses this user could cut a check for right now (mirrors the per-row gate).
@@ -845,6 +897,58 @@ export default function ExpensesPage() {
     });
     setPrintCheckTarget(expense);
   }
+
+  // Non-check expense payment (cash | ACH | trade/barter | rent credit | other).
+  // Same expense_payments ledger the Cut Check path uses — no second ledger.
+  const RECORD_PAY_DESCRIPTION_REQUIRED = new Set(["trade_credit", "rent_credit", "other"]);
+  function openRecordPayment(expense: any) {
+    setRecordPayForm({ method: "cash", amount: expense.amount || "", referenceNumber: "", description: "", tradeCompensationId: "", idempotencyKey: crypto.randomUUID() });
+    setRecordPayTarget(expense);
+  }
+
+  // Only approved, unused, fair-market-value valuations that are provably tied to
+  // THIS expense's payee — the valuation's contractor must be the worker who
+  // submitted the expense. Unrelated same-company valuations are never offered,
+  // and the server enforces the identical worker-id link on record-payment.
+  const { data: recordPayTradeComps = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-trade-compensation", recordPayTarget?.companyId, recordPayTarget?.submitterId, "expense-payable"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-trade-compensation?companyId=${recordPayTarget?.companyId || ""}`, { credentials: "include" });
+      if (!r.ok) return [];
+      const rows = await r.json();
+      const payeeWorkerId = recordPayTarget?.submitterId;
+      return (Array.isArray(rows) ? rows : []).filter((t: any) =>
+        t.approvedAt && !t.contractorPaymentId && !t.expensePaymentId &&
+        String(t.valuationMethod || "").toLowerCase() === "fair_market_value" &&
+        !!payeeWorkerId && t.contractorUserId === payeeWorkerId);
+    },
+    enabled: !!recordPayTarget && recordPayForm.method === "trade_credit",
+  });
+
+  const recordPaymentMutation = useMutation({
+    mutationFn: async ({ id, form }: { id: string; form: typeof recordPayForm }) => {
+      const body: Record<string, unknown> = {
+        paymentMethod: form.method, amount: parseFloat(form.amount),
+        referenceNumber: form.referenceNumber, idempotencyKey: form.idempotencyKey,
+      };
+      if (RECORD_PAY_DESCRIPTION_REQUIRED.has(form.method)) body.description = form.description.trim();
+      if (form.method === "trade_credit") body.tradeCompensationId = form.tradeCompensationId;
+      const res = await fetch(`/api/expenses/${id}/record-payment`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": form.idempotencyKey },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || e.error || "Failed to record payment"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Payment recorded", description: "The expense balance was reduced. A payment receipt is available." });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-trade-compensation"] });
+      setRecordPayTarget(null);
+    },
+    onError: (e: any) => toast({ title: "Record payment failed", description: e.message, variant: "destructive" }),
+  });
 
   const invoicePrintMutation = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: typeof invoicePrintForm }) => {
@@ -1467,6 +1571,92 @@ export default function ExpensesPage() {
               {printCheckMutation.isPending
                 ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Cutting check…</>
                 : <><Printer className="h-4 w-4 mr-1" />Cut Check</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Non-check "Submit / Record Payment" — cash / ACH / trade / rent credit / other */}
+      <Dialog open={!!recordPayTarget} onOpenChange={(v) => { if (!v) setRecordPayTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> Submit / Record Payment</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <p className="text-sm text-muted-foreground">
+              Records a payment made outside MyPayLink against this approved expense. It reduces the expense balance and generates a payment receipt (vendor copy + company copy). To issue a printed check instead, use <strong>Cut Check</strong>.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Method</Label>
+                <Select value={recordPayForm.method} onValueChange={v => setRecordPayForm(f => ({ ...f, method: v, tradeCompensationId: "" }))}>
+                  <SelectTrigger data-testid="select-record-payment-method"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="ach">ACH / Bank Transfer</SelectItem>
+                    <SelectItem value="trade_credit">Trade / Barter</SelectItem>
+                    <SelectItem value="rent_credit">Rent Credit</SelectItem>
+                    <SelectItem value="other">Other / Manual</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Amount ($) <span className="text-destructive">*</span></Label>
+                <Input type="number" step="0.01" value={recordPayForm.amount}
+                  onChange={e => setRecordPayForm(f => ({ ...f, amount: e.target.value }))}
+                  data-testid="input-record-payment-amount" />
+              </div>
+              {recordPayForm.method === "trade_credit" && (
+                <div className="col-span-2 space-y-1">
+                  <Label>Approved trade / barter valuation (fair market value) <span className="text-destructive">*</span></Label>
+                  <Select value={recordPayForm.tradeCompensationId} onValueChange={v => setRecordPayForm(f => ({ ...f, tradeCompensationId: v }))}>
+                    <SelectTrigger data-testid="select-record-payment-trade">
+                      <SelectValue placeholder={recordPayTradeComps.length ? "Select a valuation…" : "No approved valuation available"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {recordPayTradeComps.map((t: any) => (
+                        <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {formatCurrency(t.totalValue)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!recordPayTradeComps.length && (
+                    <p className="text-xs text-muted-foreground">Missing approved trade/barter valuation. Create one in <Link href="/app/trade-compensation" className="text-primary underline">Trade Compensation</Link>.</p>
+                  )}
+                </div>
+              )}
+              {RECORD_PAY_DESCRIPTION_REQUIRED.has(recordPayForm.method) ? (
+                <div className="col-span-2 space-y-1">
+                  <Label>Description <span className="text-destructive">*</span></Label>
+                  <Input value={recordPayForm.description}
+                    onChange={e => setRecordPayForm(f => ({ ...f, description: e.target.value }))}
+                    placeholder="Describe the trade / barter / rent credit / other payment"
+                    data-testid="input-record-payment-description" />
+                </div>
+              ) : (
+                <div className="col-span-2 space-y-1">
+                  <Label>Reference # (optional)</Label>
+                  <Input value={recordPayForm.referenceNumber}
+                    onChange={e => setRecordPayForm(f => ({ ...f, referenceNumber: e.target.value }))}
+                    placeholder="Transaction ID, confirmation #..."
+                    data-testid="input-record-payment-ref" />
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRecordPayTarget(null)} data-testid="button-cancel-record-payment">Cancel</Button>
+            <Button
+              onClick={() => { if (recordPayTarget) recordPaymentMutation.mutate({ id: String(recordPayTarget.id), form: recordPayForm }); }}
+              disabled={
+                recordPaymentMutation.isPending || !recordPayForm.amount ||
+                (RECORD_PAY_DESCRIPTION_REQUIRED.has(recordPayForm.method) && !recordPayForm.description.trim()) ||
+                (recordPayForm.method === "trade_credit" && !recordPayForm.tradeCompensationId)
+              }
+              data-testid="button-confirm-record-payment"
+            >
+              {recordPaymentMutation.isPending
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Recording…</>
+                : <><DollarSign className="h-4 w-4 mr-1" />Record Payment</>}
             </Button>
           </DialogFooter>
         </DialogContent>

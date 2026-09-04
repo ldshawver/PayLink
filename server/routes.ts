@@ -48,7 +48,10 @@ import {
 import {
   EXPENSE_PAYMENT_METHOD, EXPENSE_VOID_STOP_PAYMENT_NOTE, recomputeExpensePaymentStatus,
   expensePaymentFingerprint, checkExpenseEligibility,
+  EXPENSE_RECORD_PAYMENT_METHODS, EXPENSE_DESCRIPTION_REQUIRED_METHODS,
+  normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable,
 } from "./expense-payments";
+import { renderPaymentDocumentPdf, type PaymentDocInput } from "./payment-documents";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -11025,6 +11028,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const voided = epRow(await tx.execute(sql`
             UPDATE expense_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason}
             WHERE id = ${paymentId} AND status <> 'void' RETURNING *`));
+          // Release any trade / barter valuation linked to this payment so its
+          // approved value is not lost or double-spent (migration 0018).
+          await tx.execute(sql`UPDATE contractor_trade_compensation SET expense_payment_id = NULL, updated_at = NOW() WHERE expense_payment_id = ${paymentId}`);
           const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${pay.expense_id} AND status <> 'void'`));
           const totalCents = toCents(expense?.amount);
           const paidCents = toCents(paidRow?.paid);
@@ -11148,6 +11154,272 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) {
       console.error("[expense-payment] reissue failed:", e?.message || e);
       return res.status(500).json({ message: "Failed to reissue expense check" });
+    }
+  });
+
+  // ══ End of Release B2 (vendor/expense Cut Check) issuance / void / reissue block ══
+  //
+  // Everything below (payment-document helpers, non-check record-payment,
+  // proof-of-payment document routes) is the combined MyPayLink contractor/vendor
+  // payment usability release — it extends the SAME expense_payments ledger
+  // additively (migration 0018); it does not modify the B2 issuance core above.
+
+  // ── Payment-document helpers (proof of payment for every method) ────────────
+  const paymentDocDate = (d: unknown): string => {
+    const dt = d ? new Date(d as string) : new Date();
+    return Number.isNaN(dt.getTime())
+      ? new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      : dt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  };
+  const PAYMENT_METHOD_LABELS: Record<string, string> = {
+    check: "Check", cash: "Cash", ach: "ACH / Bank Transfer",
+    trade_credit: "Trade / Barter", rent_credit: "Rent Credit", other: "Other / Manual",
+  };
+  const paymentMethodLabel = (m: unknown): string => {
+    const key = String(m ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    return PAYMENT_METHOD_LABELS[key] || String(m ?? "Payment").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+  async function companyAddressLines(companyId: string | null | undefined): Promise<{ name: string; lines: string[] }> {
+    if (!companyId) return { name: "", lines: [] };
+    const co = epRow(await db.execute(sql`SELECT name, address, city, state, zip FROM companies WHERE id = ${companyId} LIMIT 1`));
+    if (!co) return { name: "", lines: [] };
+    const cityStateZip = [[co.city, co.state].filter(Boolean).join(", "), co.zip].filter(Boolean).join(" ");
+    return { name: String(co.name ?? ""), lines: [co.address, cityStateZip].filter(Boolean).map(String) };
+  }
+  function parsePaymentDocLineItems(raw: unknown): PaymentDocInput["reference"]["lineItems"] {
+    let arr: any[] = [];
+    try { arr = typeof raw === "string" ? JSON.parse(raw) : Array.isArray(raw) ? raw : []; } catch { arr = []; }
+    return (Array.isArray(arr) ? arr : []).map((li: any) => ({
+      name: String(li?.name || li?.description || ""),
+      quantity: li?.quantity ?? li?.qty ?? 1,
+      unitPrice: li?.unit_price ?? li?.unitPrice ?? 0,
+      lineTotal: li?.line_total ?? li?.lineTotal ?? li?.amount ?? 0,
+    }));
+  }
+  const sendPaymentDocPdf = async (res: any, input: PaymentDocInput, filename: string) => {
+    const bytes = await renderPaymentDocumentPdf(input);
+    res.set("Content-Type", "application/pdf");
+    res.set("Content-Disposition", `inline; filename="${filename}"`);
+    res.set("Content-Length", String(bytes.length));
+    return res.send(Buffer.from(bytes));
+  };
+
+  // GET /api/expenses/:id/payments — the expense's payment ledger (non-void first).
+  app.get("/api/expenses/:id/payments", requireAuth, async (req, res) => {
+    try {
+      const scope = epRow(await db.execute(sql`SELECT company_id, submitter_id FROM expenses WHERE id = ${req.params.id}`));
+      if (!scope) return res.status(404).json({ message: "Expense not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (scope.company_id && !(await canAccessCompany(user!, scope.company_id))) return res.status(403).json({ message: "Access denied" });
+      // Same object-level gate every sibling expense sub-resource route enforces
+      // (GET /api/expenses/:id, /attachments, …): managers see any expense in the
+      // company; everyone else only the expense they submitted.
+      const isManager = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || user?.role === "supervisor";
+      if (!isManager && user?.workerId !== scope.submitter_id) return res.status(403).json({ message: "Not authorized" });
+      // Explicit projection — the internal replay-guard columns are never sent to a client.
+      const rows = epRows(await db.execute(sql`
+        SELECT id, expense_id, company_id, amount, payment_method, status, reference_number,
+               notes, payment_date, issued_at, trade_compensation_id, payee_user_id,
+               voided_at, void_reason, created_by_user_id
+        FROM expense_payments WHERE expense_id = ${req.params.id}
+        ORDER BY status = 'void', COALESCE(payment_date, issued_at) DESC`));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch expense payments" }); }
+  });
+
+  // POST /api/expenses/:id/record-payment — record a NON-CHECK vendor/expense
+  // payment (cash | ACH | trade_credit | rent_credit | other) against the same
+  // expense_payments ledger the Cut Check path uses. Check issuance stays on
+  // POST /api/expenses/:id/cut-check. Atomic (SELECT ... FOR UPDATE on the
+  // expense), Idempotency-Key required, trade/barter links one approved
+  // fair-market-value valuation exactly once.
+  app.post("/api/expenses/:id/record-payment", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    const expenseId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      const expPre = epRow(await db.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId}`));
+      if (!expPre) return res.status(404).json({ message: "Expense not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && expPre.company_id && sessionCompanyId !== expPre.company_id) return res.status(403).json({ message: "Access denied" });
+      if (expPre.company_id && !(await canAccessCompany(user!, expPre.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      const method = normalizeExpensePaymentMethod((req.body as any)?.paymentMethod);
+      if (!method || !(EXPENSE_RECORD_PAYMENT_METHODS as readonly string[]).includes(method)) {
+        return res.status(400).json({ error: "INVALID_PAYMENT_METHOD", message: `payment method must be one of: ${EXPENSE_RECORD_PAYMENT_METHODS.join(", ")} (issue a check with /cut-check)` });
+      }
+      const description = String((req.body as any)?.description ?? (req.body as any)?.notes ?? "").trim();
+      if (EXPENSE_DESCRIPTION_REQUIRED_METHODS.has(method) && !description) {
+        return res.status(400).json({ error: "DESCRIPTION_REQUIRED", message: `A description is required for "${method}" payments.` });
+      }
+      const tradeCompensationId = method === "trade_credit"
+        ? (String((req.body as any)?.tradeCompensationId ?? "").trim() || null)
+        : null;
+      if (method === "trade_credit" && !tradeCompensationId) {
+        return res.status(400).json({ error: "TRADE_COMPENSATION_REQUIRED", message: "trade / barter payments require an approved fair-market-value valuation (tradeCompensationId)." });
+      }
+
+      const requestedCents = toCents((req.body as any)?.amount);
+      if (!Number.isFinite(requestedCents) || requestedCents <= 0) {
+        return res.status(400).json({ error: "INVALID_AMOUNT", message: "Payment amount must be a positive number." });
+      }
+      const payeeName = String(expPre.payee_name || expPre.vendor || "").trim();
+      const fingerprint = expensePaymentFingerprint({ companyId: expPre.company_id, expenseId, amountCents: requestedCents, method, fundingAccountId: null, payeeName, tradeCompensationId });
+
+      const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${expPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json(priorByKey)
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+      }
+
+      const referenceNumber = String((req.body as any)?.referenceNumber ?? "").trim() || null;
+      const paymentDate = (req.body as any)?.paymentDate ? new Date(String((req.body as any).paymentDate)) : new Date();
+
+      let created: any;
+      try {
+        created = await db.transaction(async (tx) => {
+          const e = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId} FOR UPDATE`));
+          if (!e) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+
+          const elig = checkExpenseEligibility(
+            { companyId: e.company_id, status: e.status, paymentStatus: e.payment_status, vendor: e.vendor, payeeName: e.payee_name, isArchived: e.is_archived, archivedAt: e.archived_at, amount: e.amount, contractorInvoiceId: e.contractor_invoice_id },
+            { companyId: expPre.company_id },
+          );
+          if (!elig.ok) {
+            const status = elig.code === "EXPENSE_CROSS_COMPANY" ? 403 : elig.code === "EXPENSE_NOT_FOUND" ? 404 : 422;
+            throw new ExpenseRuleError(status, elig.code, elig.message);
+          }
+
+          const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${expenseId} AND status <> 'void'`));
+          const totalCents = toCents(e.amount);
+          const balanceDueCents = totalCents - toCents(paidRow?.paid);
+          if (balanceDueCents <= 0) throw new ExpenseRuleError(422, "NO_UNPAID_BALANCE", "This expense has no unpaid balance.");
+
+          const amt = checkPaymentAmount((req.body as any)?.amount, balanceDueCents);
+          if (!amt.ok) throw new ExpenseRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          let payeeUserId: string | null = null;
+          if (method === "trade_credit" && tradeCompensationId) {
+            const tc = epRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
+            // The valuation must be auditable-linked to this expense: its contractor
+            // must be the worker who submitted the expense. A free-text payee / vendor
+            // name is not a provable link and is never accepted.
+            const chk = checkExpenseTradeCreditApplicable(
+              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id } : null,
+              {
+                companyId: e.company_id,
+                paymentCents: amt.cents,
+                expensePayeeWorkerId: e.submitter_id ?? null,
+              },
+            );
+            if (!chk.ok) throw new ExpenseRuleError(422, chk.code, chk.message);
+            payeeUserId = tc?.contractor_user_id ?? null;
+          }
+
+          const payment = epRow(await tx.execute(sql`
+            INSERT INTO expense_payments
+              (company_id, expense_id, amount, payment_method, status, reference_number, notes, payment_date, trade_compensation_id, payee_user_id, idempotency_key, idempotency_fingerprint, created_by_user_id, issued_at)
+            VALUES (${e.company_id}, ${expenseId}, ${fromCents(amt.cents)}, ${method}, 'completed', ${referenceNumber}, ${description || String((req.body as any)?.notes ?? "").trim() || null}, ${paymentDate.toISOString()}, ${tradeCompensationId}, ${payeeUserId}, ${idem.key}, ${fingerprint}, ${req.session.userId}, NOW())
+            RETURNING *`));
+
+          if (method === "trade_credit" && tradeCompensationId) {
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET expense_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND expense_payment_id IS NULL AND contractor_payment_id IS NULL`);
+          }
+
+          const newPaidCents = toCents(paidRow?.paid) + amt.cents;
+          const newStatus = recomputeExpensePaymentStatus(totalCents, newPaidCents);
+          await tx.execute(sql`
+            UPDATE expenses
+            SET payment_status = ${newStatus}, payee_name = ${e.payee_name ?? elig.payeeName},
+                paid_by_user_id = ${req.session.userId},
+                paid_at = ${newStatus === "paid" ? sql`NOW()` : sql`paid_at`},
+                payment_method_used = ${method}, updated_at = NOW()
+            WHERE id = ${expenseId}`);
+
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, previous_status, new_status, metadata_json)
+            VALUES ('expense', ${expenseId}, 'payment_recorded', ${req.session.userId}, ${e.company_id}, ${e.payment_status ?? 'unpaid'}, ${newStatus}, ${JSON.stringify({ expensePaymentId: payment.id, method, amount: fromCents(amt.cents), tradeCompensationId })})`);
+
+          return payment;
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${expPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            return committed.idempotency_fingerprint === fingerprint
+              ? res.status(200).json(committed)
+              : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+          }
+        }
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      notifyExpenseAfterCommit(created.id, {
+        workerId: expPre.submitter_id, companyId: expPre.company_id, notificationType: "expense_payment_recorded",
+        title: `Payment recorded: $${fromCents(toCents(created.amount)).toFixed(2)}`,
+        body: "A payment has been recorded for an approved expense.",
+        entityType: "expense", entityId: expenseId, actionUrl: `/app/expenses?id=${expenseId}`,
+      });
+      return res.status(201).json(created);
+    } catch (e: any) {
+      console.error("[expense-payment] record failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to record expense payment" });
+    }
+  });
+
+  // GET /api/expense-payments/:id/document?copy=payee|company — proof of payment.
+  // Zero financial writes.
+  app.get("/api/expense-payments/:id/document", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
+    try {
+      const pay = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${req.params.id}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (pay.company_id && !(await canAccessCompany(user!, pay.company_id))) return res.status(403).json({ message: "Access denied" });
+      const exp = epRow(await db.execute(sql`SELECT * FROM expenses WHERE id = ${pay.expense_id}`));
+      const copy = String(req.query.copy ?? "payee") === "company" ? "company" : "payee";
+      const co = await companyAddressLines(pay.company_id);
+      const paidRow = epRow(await db.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${pay.expense_id} AND status <> 'void'`));
+      const totalCents = toCents(exp?.amount);
+      const paidToDate = toCents(paidRow?.paid);
+      let tradeValuation: number | null = null;
+      if (pay.trade_compensation_id) {
+        const tc = epRow(await db.execute(sql`SELECT total_value FROM contractor_trade_compensation WHERE id = ${pay.trade_compensation_id}`));
+        tradeValuation = tc ? Number(tc.total_value) : null;
+      }
+      const style = await resolveDocStyle(null, null, pay.company_id);
+      const payeeName = String(exp?.payee_name || exp?.vendor || "Vendor").trim();
+      const input: PaymentDocInput = {
+        copy, payeeKind: "vendor", style,
+        company: { name: co.name || "Company", addressLines: co.lines },
+        payee: { name: payeeName, addressLines: [exp?.payee_address, exp?.payee_city_state_zip].filter(Boolean).map(String) },
+        reference: {
+          documentNumberLabel: `Payment on Expense ${String(exp?.check_number || pay.expense_id).slice(0, 12)}`,
+          title: exp?.description || exp?.category_name || null,
+          contractReference: exp?.contractor_invoice_id ? `Contractor invoice ${String(exp.contractor_invoice_id).slice(0, 8)}` : null,
+          invoiceNumber: exp?.check_number || null,
+          lineItems: parsePaymentDocLineItems(exp?.line_items),
+        },
+        payment: {
+          paymentId: String(pay.id), method: String(pay.payment_method), methodLabel: paymentMethodLabel(pay.payment_method),
+          amountPaid: Number(pay.amount), paymentDate: paymentDocDate(pay.payment_date || pay.issued_at),
+          checkNumber: pay.reference_number && pay.payment_method === "check" ? String(pay.reference_number) : null,
+          referenceNumber: pay.reference_number && pay.payment_method !== "check" ? String(pay.reference_number) : null,
+          description: pay.notes || null, tradeValuation,
+        },
+        balances: {
+          approvedAmount: fromCents(totalCents),
+          amountPaidToDate: fromCents(paidToDate),
+          remainingBalance: fromCents(Math.max(0, totalCents - paidToDate)),
+        },
+      };
+      return sendPaymentDocPdf(res, input, `expense-payment-${copy}-${String(pay.id).slice(0, 8)}.pdf`);
+    } catch (e: any) {
+      console.error("[expense-payment] document failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to render payment document" });
     }
   });
 
@@ -14165,6 +14437,77 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to fetch payments" }); }
   });
 
+  // GET /api/contractor-payments/:id/document?copy=payee|company — proof of
+  // payment for ANY method (check, cash, ACH, trade/barter, rent credit, other).
+  // Zero financial writes. The payee copy is the "Contractor Payment Statement —
+  // Nonemployee Compensation"; the company copy is the "Company Payment Receipt".
+  app.get("/api/contractor-payments/:id/document", requireAuth, async (req, res) => {
+    try {
+      const pay = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${req.params.id}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isManager = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
+      const wRes = cpRow(await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`));
+      // A non-manager may only fetch their OWN payment doc — and only when both
+      // sides of the identity are present (never let null === null through).
+      if (!isManager && (!wRes?.worker_id || !pay.contractor_id || pay.contractor_id !== wRes.worker_id)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (isManager && !isPlatform && pay.company_id && !(await canAccessCompany(user!, pay.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      // The company copy is a manager-only accounting artifact.
+      const copy = String(req.query.copy ?? "payee") === "company" ? "company" : "payee";
+      if (copy === "company" && !isManager) return res.status(403).json({ message: "Access denied" });
+
+      const inv = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${pay.invoice_id}`));
+      const proposal = inv?.proposal_id ? cpRow(await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${inv.proposal_id}`)) : null;
+      const worker = pay.contractor_id ? cpRow(await db.execute(sql`SELECT first_name, last_name, address, city, state, zip FROM workers WHERE id = ${pay.contractor_id}`)) : null;
+      const co = await companyAddressLines(pay.company_id);
+      const style = await resolveDocStyle(inv?.template_id, pay.contractor_id, pay.company_id);
+
+      const totalCents = toCents(inv?.amount);
+      const approvedCents = inv?.approved_amount != null ? toCents(inv.approved_amount) : totalCents;
+      const paidRow = cpRow(await db.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${pay.invoice_id} AND status <> 'void'`));
+      const paidToDate = toCents(paidRow?.paid);
+      let tradeValuation: number | null = null;
+      const tc = cpRow(await db.execute(sql`SELECT total_value FROM contractor_trade_compensation WHERE contractor_payment_id = ${pay.id} LIMIT 1`));
+      if (tc) tradeValuation = Number(tc.total_value);
+
+      const workerName = worker ? `${worker.first_name || ""} ${worker.last_name || ""}`.trim() : "";
+      const workerCsz = worker ? [[worker.city, worker.state].filter(Boolean).join(", "), worker.zip].filter(Boolean).join(" ") : "";
+      const input: PaymentDocInput = {
+        copy, payeeKind: "contractor", style,
+        company: { name: co.name || "Company", addressLines: co.lines },
+        payee: { name: workerName || "Contractor", addressLines: [worker?.address, workerCsz].filter(Boolean).map(String) },
+        reference: {
+          documentNumberLabel: `Payment on Invoice #${inv?.invoice_number || String(pay.invoice_id).slice(0, 8)}`,
+          title: proposal?.title || inv?.title || inv?.description || null,
+          contractReference: proposal ? `Proposal ${proposal.proposal_number || String(proposal.id).slice(0, 8)}` : (inv?.proposal_id ? `Proposal ${String(inv.proposal_id).slice(0, 8)}` : null),
+          invoiceNumber: inv?.invoice_number || null,
+          lineItems: parsePaymentDocLineItems(inv?.line_items),
+        },
+        payment: {
+          paymentId: String(pay.id), method: String(pay.payment_method || "other"), methodLabel: paymentMethodLabel(pay.payment_method),
+          amountPaid: Number(pay.amount), paymentDate: paymentDocDate(pay.paid_at),
+          checkNumber: pay.reference_number && pay.payment_method === "check" ? String(pay.reference_number) : null,
+          referenceNumber: pay.reference_number && pay.payment_method !== "check" ? String(pay.reference_number) : null,
+          description: pay.notes || null, tradeValuation,
+        },
+        balances: {
+          approvedAmount: fromCents(approvedCents),
+          amountPaidToDate: fromCents(paidToDate),
+          remainingBalance: fromCents(Math.max(0, totalCents - paidToDate)),
+        },
+      };
+      return sendPaymentDocPdf(res, input, `contractor-payment-${copy}-${String(pay.id).slice(0, 8)}.pdf`);
+    } catch (e: any) {
+      console.error("[contractor-payment] document failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to render payment document" });
+    }
+  });
+
   // POST /api/contractor-invoices/:id/payments — record a payment.
   // Atomic (SELECT ... FOR UPDATE on the invoice), idempotent (Idempotency-Key
   // required), normalized payment method, and links approved fair-market-value
@@ -14249,7 +14592,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (method === "trade_credit" && tradeCompensationId) {
             const tc = cpRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
             const chk = checkTradeCreditApplicable(
-              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id } : null,
+              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id } : null,
               { companyId: inv.company_id, contractorId: inv.contractor_id, paymentCents: amt.cents },
             );
             if (!chk.ok) throw new PaymentRuleError(422, chk.code, chk.message);
@@ -14262,7 +14605,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             RETURNING *`));
 
           if (method === "trade_credit" && tradeCompensationId) {
-            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL`);
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL AND expense_payment_id IS NULL`);
           }
 
           const newPaidCents = paidCents + amt.cents;

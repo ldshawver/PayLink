@@ -3889,6 +3889,15 @@ Thank you,
     await runInv("expense_payments expense_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_expense_id ON expense_payments (expense_id)`);
     await runInv("expense_payments company_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_company_id ON expense_payments (company_id)`);
 
+    // ── Non-check expense payment methods + payment-document linkage (migration 0018) ──
+    await runInv("expense_payments.notes",                 sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS notes TEXT`);
+    await runInv("expense_payments.payment_date",          sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS payment_date TIMESTAMP`);
+    await runInv("expense_payments.trade_compensation_id", sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS trade_compensation_id VARCHAR REFERENCES contractor_trade_compensation(id)`);
+    await runInv("expense_payments.payee_user_id",         sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS payee_user_id VARCHAR`);
+    await runInv("contractor_trade_compensation.expense_payment_id", sqlInv`ALTER TABLE contractor_trade_compensation ADD COLUMN IF NOT EXISTS expense_payment_id VARCHAR`);
+    await runInv("contractor_trade_comp expense_payment unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_trade_comp_expense_payment_id ON contractor_trade_compensation (expense_payment_id) WHERE expense_payment_id IS NOT NULL`);
+    await runInv("expense_payments trade_compensation_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_trade_compensation_id ON expense_payments (trade_compensation_id) WHERE trade_compensation_id IS NOT NULL`);
+
     await runInv("invoice_term_settings table", sqlInv`CREATE TABLE IF NOT EXISTS invoice_term_settings (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id VARCHAR NOT NULL UNIQUE REFERENCES companies(id),
