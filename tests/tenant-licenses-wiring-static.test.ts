@@ -39,8 +39,8 @@ const ok = (name: string, cond: boolean) => {
 console.log("migration + schema — additive only");
 {
   const numbered = fs.readdirSync("migrations").filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
-  ok("0022_tenant_licenses.sql is the highest numbered migration",
-    numbered[numbered.length - 1] === "0022_tenant_licenses.sql");
+  // 0022 is the tenant-licenses migration; later PRs add higher-numbered files.
+  ok("0022_tenant_licenses.sql exists and is not renumbered", numbered.includes("0022_tenant_licenses.sql"));
 }
 {
   const forward = migration.split("ROLLBACK")[0];

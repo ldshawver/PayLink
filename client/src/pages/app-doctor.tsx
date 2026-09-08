@@ -46,6 +46,15 @@ type AppDoctorReport = {
   rollback_plan?: string | null;
   created_at: string;
   updated_at?: string | null;
+  // Revalidation / refresh / archive (migration 0023)
+  revalidation_status?: string | null; // reproduced | not_reproduced | inconclusive
+  last_revalidated_at?: string | null;
+  last_seen_at?: string | null;
+  revalidation_evidence?: string | null;
+  archived_at?: string | null;
+  archived_reason?: string | null;
+  ai_last_error?: string | null;
+  ai_last_error_at?: string | null;
 };
 
 type RepairTicket = {
@@ -272,6 +281,36 @@ export default function AppDoctorPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/reports"] });
       toast({ title: "Report updated" });
     },
+  });
+
+  const revalidateMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/app-doctor/reports/${id}/revalidate`, {}).then(r => r.json()),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/reports"] });
+      const s = data?.revalidationStatus;
+      toast({
+        title: data?.archived
+          ? "Issue archived — no longer reproduces"
+          : s === "reproduced" ? "Still reproduces — review refreshed" : "Revalidated (inconclusive)",
+        description: data?.aiLastError ? "External AI unavailable; local review kept." : undefined,
+        variant: data?.archived ? "default" : undefined,
+      });
+    },
+    onError: (e: any) => toast({ title: "Revalidation failed", description: e.message, variant: "destructive" }),
+  });
+
+  const revalidateAllMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/app-doctor/reports/revalidate-active",
+        isPlatform && selectedCompanyId ? { companyId: selectedCompanyId } : {}).then(r => r.json()),
+    onSuccess: (d) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/reports"] });
+      toast({
+        title: `Revalidated ${d?.checked ?? 0} active issue${d?.checked === 1 ? "" : "s"}`,
+        description: `${d?.archived ?? 0} archived · ${d?.reproduced ?? 0} still reproduce · ${d?.inconclusive ?? 0} inconclusive${d?.ai_errors ? ` · ${d.ai_errors} AI errors` : ""}`,
+      });
+    },
+    onError: (e: any) => toast({ title: "Bulk revalidation failed", description: e.message, variant: "destructive" }),
   });
 
   const createTicketMutation = useMutation({
@@ -643,11 +682,25 @@ export default function AppDoctorPage() {
             {/* Issue list */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Bug className="h-4 w-4" />
-                  Detected Issues
-                </CardTitle>
-                <CardDescription>{reports.length} recent report{reports.length === 1 ? "" : "s"}</CardDescription>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Bug className="h-4 w-4" />
+                    Detected Issues
+                  </CardTitle>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => revalidateAllMutation.mutate()}
+                    disabled={revalidateAllMutation.isPending || reports.length === 0}
+                    data-testid="button-revalidate-all-active"
+                  >
+                    {revalidateAllMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                    Revalidate All Active
+                  </Button>
+                </div>
+                <CardDescription>
+                  {reports.length} active issue{reports.length === 1 ? "" : "s"} — archived issues that no longer reproduce are hidden.
+                </CardDescription>
               </CardHeader>
               <CardContent className="p-0">
                 {reportsQuery.isError && (() => {
@@ -826,6 +879,29 @@ export default function AppDoctorPage() {
                       </details>
                     )}
 
+                    {/* Revalidation state */}
+                    {(selected.revalidation_status || selected.ai_last_error) && (
+                      <div className="rounded-md border p-2 text-xs space-y-1" data-testid="app-doctor-revalidation-state">
+                        {selected.revalidation_status && (
+                          <p>
+                            <span className="font-medium">Revalidation:</span>{" "}
+                            <Badge variant={selected.revalidation_status === "reproduced" ? "destructive" : selected.revalidation_status === "not_reproduced" ? "secondary" : "outline"} className="capitalize">
+                              {selected.revalidation_status.replace(/_/g, " ")}
+                            </Badge>
+                            {selected.last_revalidated_at && <span className="text-muted-foreground ml-2">checked {new Date(selected.last_revalidated_at).toLocaleString()}</span>}
+                          </p>
+                        )}
+                        {selected.archived_at && (
+                          <p className="text-muted-foreground">Archived ({selected.archived_reason || "manual"}) — hidden from the active list.</p>
+                        )}
+                        {selected.ai_last_error && (
+                          <p className="text-amber-600" data-testid="app-doctor-ai-last-error">
+                            External AI unavailable{selected.ai_last_error_at ? ` (${new Date(selected.ai_last_error_at).toLocaleString()})` : ""}; showing local review. This does not affect whether the issue is still valid.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {/* Actions */}
                     <div className="flex flex-wrap gap-2 pt-2 border-t">
                       <Button
@@ -836,6 +912,16 @@ export default function AppDoctorPage() {
                       >
                         {analyzeMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
                         Analyze
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => revalidateMutation.mutate(selected.id)}
+                        disabled={revalidateMutation.isPending}
+                        data-testid="button-revalidate-report"
+                      >
+                        {revalidateMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                        Revalidate
                       </Button>
                       <Button
                         size="sm"

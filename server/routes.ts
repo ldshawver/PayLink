@@ -23,6 +23,13 @@ import {
   CompanyNotFoundError,
 } from "./licensing/license-service";
 import { requireLicenseNotBlocked } from "./licensing/license-gate";
+import {
+  decideRevalidation,
+  extractAssetHashes,
+  escalatedSeverity,
+  type RevalidationEvidence,
+  type EndpointReproResult,
+} from "./app-doctor/revalidation-logic";
 import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
@@ -29457,7 +29464,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             max_tokens: 1800,
           });
           const parsed = parseAppDoctorAiJson(completion.choices?.[0]?.message?.content);
-          return await saveAppDoctorAnalysis(reportId, {
+          const saved = await saveAppDoctorAnalysis(reportId, {
             summary: parsed.summary,
             rootCause: parsed.rootCause,
             suggestedFix: parsed.suggestedFix,
@@ -29471,6 +29478,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             testPlan: parsed.testPlan,
             rollbackPlan: parsed.rollbackPlan,
           });
+          // External AI succeeded — clear any previously recorded AI-outage state.
+          await db.execute(sql`UPDATE app_doctor_reports SET ai_last_error = NULL, ai_last_error_at = NULL WHERE id = ${reportId}::varchar`).catch(() => {});
+          return saved;
         } catch (aiError: any) {
           const reason = `${attempt.provider}:${attempt.model} failed (${aiError?.message || aiError})`;
           failureReasons.push(reason);
@@ -29480,8 +29490,232 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
 
     const localReason = failureReasons.join("; ") || "AI providers failed";
+    // Record the AI outage SEPARATELY from issue validity — a failed AI call must
+    // never archive an issue or block the local diagnostic path.
+    await db.execute(sql`
+      UPDATE app_doctor_reports
+      SET ai_last_error = ${localReason.slice(0, 2000)}, ai_last_error_at = NOW()
+      WHERE id = ${reportId}::varchar
+    `).catch((e) => console.error("[AppDoctor] failed to record ai_last_error:", e?.message || e));
     return await saveAppDoctorAnalysis(reportId, buildLocalAppDoctorAnalysis(report, localReason));
   }
+
+  // ── App Doctor: issue revalidation / refresh / archive ───────────────────────
+  // Re-check an EXISTING report against the current deployed app. If it still
+  // reproduces, refresh its review content + evidence and keep it active. If it
+  // no longer reproduces, archive it (never hard-delete) with reason
+  // `no_longer_reproduces` so the active window clears. Company/tenant scoping is
+  // unchanged — callers pass a report the requester is already authorized to see.
+
+  /** Current build's asset-hash stems from dist/public/assets (+ the app shell). */
+  function currentBuildAssetHashes(): string[] {
+    const stems = new Set<string>();
+    try {
+      const dir = path.resolve(process.cwd(), "dist/public/assets");
+      for (const f of fs.readdirSync(dir)) {
+        const m = f.match(/^(.+-[A-Za-z0-9_-]{6,12})\.(?:js|css|mjs)$/);
+        if (m) stems.add(m[1]);
+      }
+    } catch { /* dev mode / no build — evidence just omits current hashes */ }
+    return [...stems];
+  }
+
+  /** Read-only server probe of an /api GET route. Never touches non-GET routes. */
+  async function probeAppDoctorRoute(route: string | null): Promise<EndpointReproResult> {
+    if (!route) return "unknown";
+    const clean = route.split("?")[0].trim();
+    if (!clean.startsWith("/api/")) return "not_applicable"; // frontend path
+    // Deliberately conservative: only probe obviously-safe read endpoints.
+    const SAFE_PREFIXES = ["/api/app-doctor/diagnostics", "/api/health", "/api/version", "/api/dashboard/", "/api/analytics/"];
+    if (!SAFE_PREFIXES.some((p) => clean === p || clean.startsWith(p))) return "unknown";
+    try {
+      const port = process.env.PORT || process.env.APP_PORT || "5000";
+      const resp = await fetch(`http://127.0.0.1:${port}${clean}`, {
+        method: "GET",
+        headers: { "x-app-doctor-revalidate": "1" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (resp.status >= 500) return "error";
+      return "ok";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  async function collectRevalidationEvidence(report: any): Promise<{ evidence: RevalidationEvidence; scope: { companyId: string | null; userId: string | null } }> {
+    const since = report.updated_at || report.created_at;
+    const newerRow = pgRow<any>(await db.execute(sql`
+      SELECT COUNT(*)::int AS cnt, MAX(severity) AS max_sev
+      FROM app_doctor_reports
+      WHERE fingerprint = ${report.fingerprint}
+        AND id <> ${report.id}
+        AND created_at > ${since}
+        AND (${report.company_id}::varchar IS NULL OR company_id = ${report.company_id})
+    `));
+    // A same-fingerprint report whose occurrence_count grew after `since` also counts.
+    const bumpedRow = pgRow<any>(await db.execute(sql`
+      SELECT COUNT(*)::int AS cnt
+      FROM app_doctor_reports
+      WHERE fingerprint = ${report.fingerprint}
+        AND id = ${report.id}
+        AND updated_at > ${since}
+        AND occurrence_count > 1
+        AND status = 'reopened'
+    `));
+
+    const referencedAssetHashes = extractAssetHashes(report.route, report.error_message, report.stack_trace, report.context_json);
+    const currentAssetHashes = currentBuildAssetHashes();
+    const endpointRepro = await probeAppDoctorRoute(report.route);
+
+    let recentLogMatches = 0;
+    try {
+      const { getLogDir } = await import("./diagnostics");
+      const logDir = getLogDir();
+      const needle = String(report.error_message || "").slice(0, 120).toLowerCase();
+      if (needle && fs.existsSync(logDir)) {
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        for (const f of fs.readdirSync(logDir).slice(-8)) {
+          const full = path.join(logDir, f);
+          try {
+            if (fs.statSync(full).mtimeMs < cutoff) continue;
+            const body = fs.readFileSync(full, "utf8").toLowerCase();
+            if (body.includes(needle)) recentLogMatches++;
+          } catch { /* skip unreadable log */ }
+        }
+      }
+    } catch { /* diagnostics logs optional */ }
+
+    const reportVersion = (() => { try { return JSON.parse(report.context_json || "{}")?.appVersion || null; } catch { return null; } })();
+    const buildChangedSinceReport = !!reportVersion && reportVersion !== getAppVersion();
+
+    return {
+      evidence: {
+        newerOccurrences: (newerRow?.cnt || 0) + (bumpedRow?.cnt || 0),
+        referencedAssetHashes,
+        currentAssetHashes,
+        endpointRepro,
+        recentLogMatches,
+        buildChangedSinceReport,
+      },
+      scope: { companyId: report.company_id || null, userId: report.user_id || null },
+    };
+  }
+
+  async function revalidateAppDoctorReport(reportId: string, actor: { userId: string | null; role: string | null }): Promise<any | null> {
+    const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+    if (!report) return null;
+
+    const { evidence, scope } = await collectRevalidationEvidence(report);
+    const decision = decideRevalidation(evidence);
+    const newerSev = pgRow<any>(await db.execute(sql`
+      SELECT MAX(severity) AS max_sev FROM app_doctor_reports
+      WHERE fingerprint = ${report.fingerprint} AND created_at > ${report.updated_at || report.created_at}
+    `))?.max_sev || null;
+
+    const evidenceBundle = JSON.stringify({
+      app: { version: getAppVersion(), commit: getCommitHash(), environment: getAppEnvironment() },
+      decision: decision.status,
+      reasons: decision.reasons,
+      evidence,
+      scope,
+      checkedAt: new Date().toISOString(),
+      checkedByUserId: actor.userId || "system",
+    });
+
+    if (decision.status === "not_reproduced") {
+      // Archive — never hard-delete. Leaves full history in place.
+      return pgRow<any>(await db.execute(sql`
+        UPDATE app_doctor_reports
+        SET revalidation_status = 'not_reproduced',
+            revalidation_evidence = ${evidenceBundle},
+            last_revalidated_at = NOW(),
+            archived_at = NOW(),
+            archived_by_user_id = ${actor.userId || "system"},
+            archived_reason = 'no_longer_reproduces',
+            status = 'resolved',
+            updated_at = NOW()
+        WHERE id = ${reportId}::varchar
+        RETURNING *
+      `));
+    }
+
+    // Still active (reproduced or inconclusive) — refresh review content + evidence.
+    const bumpSeverity = decision.status === "reproduced" ? escalatedSeverity(report.severity, newerSev) : null;
+    await db.execute(sql`
+      UPDATE app_doctor_reports
+      SET revalidation_status = ${decision.status},
+          revalidation_evidence = ${evidenceBundle},
+          last_revalidated_at = NOW(),
+          last_seen_at = ${decision.status === "reproduced" ? sql`NOW()` : sql`last_seen_at`},
+          severity = COALESCE(${bumpSeverity}, severity),
+          archived_at = NULL,
+          archived_by_user_id = NULL,
+          archived_reason = NULL,
+          status = CASE WHEN status = 'resolved' THEN 'reopened' ELSE status END,
+          updated_at = NOW()
+      WHERE id = ${reportId}::varchar
+    `);
+    // Regenerate the AI/local review package against the current app. A failed
+    // AI call records ai_last_error* and keeps the local review — it does NOT
+    // change revalidation_status (validity ≠ AI health).
+    await analyzeAppDoctorReport(reportId).catch((e) => console.error("[AppDoctor] revalidate refresh analyze failed:", e?.message || e));
+    return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
+  }
+
+  app.post("/api/app-doctor/reports/:id/revalidate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const reportId = String(req.params.id);
+      const user = (req.user as any) || await storage.getUser(req.session.userId!);
+      // Tenant scoping: a non-platform requester may only revalidate a report in their own company.
+      const target = pgRow<any>(await db.execute(sql`SELECT id, company_id FROM app_doctor_reports WHERE id = ${reportId}`));
+      if (!target) return res.status(404).json({ message: "Report not found" });
+      if (!isPlatformUser(user?.role) && target.company_id !== user?.companyId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const result = await revalidateAppDoctorReport(reportId, { userId: user?.id || null, role: user?.role || null });
+      if (!result) return res.status(404).json({ message: "Report not found" });
+      res.json({
+        report: result,
+        revalidationStatus: result.revalidation_status,
+        archived: !!result.archived_at,
+        aiLastError: result.ai_last_error || null,
+      });
+    } catch (e: any) {
+      console.error("[AppDoctor] revalidate failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Revalidation failed") });
+    }
+  });
+
+  app.post("/api/app-doctor/reports/revalidate-active", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = (req.user as any) || await storage.getUser(req.session.userId!);
+      const requestedCompanyId = typeof req.body?.companyId === "string" ? req.body.companyId : undefined;
+      const companyId = isPlatformUser(user?.role) ? requestedCompanyId : user?.companyId;
+      if (!companyId && !isPlatformUser(user?.role)) return res.status(400).json({ message: "No company context" });
+      if (requestedCompanyId && !isPlatformUser(user?.role) && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const MAX = 25;
+      const active = companyId
+        ? pgRows<any>(await db.execute(sql`SELECT id FROM app_doctor_reports WHERE company_id = ${companyId} AND archived_at IS NULL ORDER BY created_at DESC LIMIT ${MAX}`))
+        : pgRows<any>(await db.execute(sql`SELECT id FROM app_doctor_reports WHERE archived_at IS NULL ORDER BY created_at DESC LIMIT ${MAX}`));
+      const summary = { checked: 0, reproduced: 0, not_reproduced: 0, inconclusive: 0, archived: 0, ai_errors: 0 };
+      for (const row of active) {
+        const r = await revalidateAppDoctorReport(row.id, { userId: user?.id || null, role: user?.role || null }).catch(() => null);
+        if (!r) continue;
+        summary.checked++;
+        const s = r.revalidation_status as string;
+        if (s === "reproduced") summary.reproduced++;
+        else if (s === "not_reproduced") { summary.not_reproduced++; summary.archived++; }
+        else summary.inconclusive++;
+        if (r.ai_last_error) summary.ai_errors++;
+      }
+      res.json({ ...summary, limit: MAX, note: active.length === MAX ? "Reached the per-run limit; run again for the rest." : undefined });
+    } catch (e: any) {
+      console.error("[AppDoctor] revalidate-active failed:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Bulk revalidation failed") });
+    }
+  });
 
   app.get("/api/app-doctor/reports", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     const userId = req.session.userId;
@@ -29495,10 +29729,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         console.log(`[AppDoctor] 400 — no company context for role=${user?.role}`);
         return res.status(400).json({ message: "No company context" });
       }
+      // Active issue window = archived_at IS NULL. `?includeArchived=true` returns
+      // everything (history is never deleted, only archived).
+      const includeArchived = String(req.query.includeArchived || "") === "true";
       const rows = companyId
-        ? pgRows<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE company_id = ${companyId} ORDER BY created_at DESC LIMIT 100`))
-        : pgRows<any>(await db.execute(sql`SELECT * FROM app_doctor_reports ORDER BY created_at DESC LIMIT 100`));
-      console.log(`[AppDoctor] 200 — returning ${rows.length} reports`);
+        ? pgRows<any>(await db.execute(sql`
+            SELECT * FROM app_doctor_reports
+            WHERE company_id = ${companyId} AND (${includeArchived} OR archived_at IS NULL)
+            ORDER BY created_at DESC LIMIT 100`))
+        : pgRows<any>(await db.execute(sql`
+            SELECT * FROM app_doctor_reports
+            WHERE (${includeArchived} OR archived_at IS NULL)
+            ORDER BY created_at DESC LIMIT 100`));
+      console.log(`[AppDoctor] 200 — returning ${rows.length} reports${includeArchived ? " (incl. archived)" : ""}`);
       res.json(rows);
     } catch (e: any) {
       console.error(`[AppDoctor] 500 — ${e?.message}`);
@@ -29547,7 +29790,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const reportId = String(req.params.id);
       const { status, prUrl } = req.body || {};
-      const allowedStatus = ["open", "ai_review_ready", "reviewed", "pr_requested", "fixed", "ignored", "reopened"];
+      const allowedStatus = ["open", "ai_review_ready", "reviewed", "pr_requested", "fixed", "ignored", "reopened", "resolved"];
       const result = pgRow<any>(await db.execute(sql`
         UPDATE app_doctor_reports
         SET status = COALESCE(${allowedStatus.includes(status) ? status : null}, status),
