@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Component, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { buildWorkerCreatedConfirmation } from "@/lib/worker-created-confirmation";
 import { normalizeWorkerPayRate } from "@shared/worker-pay-rate-rules";
+import { asList, selectableOptions } from "@/lib/employee-lookup-guards";
 import type {
   Worker, Company, EmployeeContact, PayMethod,
   EmployeeTitle, EmployeeGroup, WageHistory, NewHireDefault,
@@ -42,6 +43,45 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
     setLocation(`/app/employee?tab=${newTab}`);
   };
   return [tab, setTab];
+}
+
+/**
+ * Local error boundary for the Add / Edit Employee dialogs (employee-add freeze
+ * hardening). A throw during render inside a modal that has no local boundary
+ * propagates to the app-shell boundary and unmounts the whole page — the user
+ * sees a frozen / blank app. This keeps the failure inside the dialog and gives
+ * the user a working Close button. The `asList` / `selectableOptions` guards
+ * (see @/lib/employee-lookup-guards) prevent the two throws we know about; this
+ * is the backstop for anything else.
+ */
+class EmployeeDialogBoundary extends Component<
+  { onClose: () => void; children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    console.error("[EmployeeDialog] render error:", error);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="py-8 text-center space-y-4" data-testid="employee-dialog-error">
+          <p className="text-sm font-medium">This form couldn't be displayed.</p>
+          <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+            A configuration value for this company looks invalid. Close this dialog and try again, or
+            contact support if it keeps happening.
+          </p>
+          <Button variant="outline" size="sm" onClick={this.props.onClose} data-testid="button-employee-dialog-error-close">
+            Close
+          </Button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function cleanFormData(data: Record<string, any>) {
@@ -285,14 +325,16 @@ function EmployeeTab() {
     setEditOpen(true);
   }
 
-  const workers = workersQuery.data || [];
-  const companies = companiesQuery.data || [];
-  const branches = branchesQuery.data || [];
-  const deptList = departmentsQuery.data || [];
-  const titlesList = titlesQuery.data || [];
-  const groupsList = groupsQuery.data || [];
-  const policyGroupsList = policyGroupsQuery.data || [];
-  const payPeriodSchedulesList = payPeriodSchedulesQuery.data || [];
+  const workers = asList<Worker>(workersQuery.data);
+  // Company/branch/dept/title/group/policy/schedule feed <SelectItem value={id}> —
+  // only options with a real non-empty id are kept (see selectableOptions).
+  const companies = selectableOptions<Company>(companiesQuery.data);
+  const branches = selectableOptions<Branch>(branchesQuery.data);
+  const deptList = selectableOptions<Department>(departmentsQuery.data);
+  const titlesList = selectableOptions<EmployeeTitle>(titlesQuery.data);
+  const groupsList = selectableOptions<EmployeeGroup>(groupsQuery.data);
+  const policyGroupsList = selectableOptions<PolicyGroup>(policyGroupsQuery.data);
+  const payPeriodSchedulesList = selectableOptions<PayPeriodSchedule>(payPeriodSchedulesQuery.data);
 
   function renderForm(isEdit: boolean) {
     return (
@@ -737,7 +779,9 @@ function EmployeeTab() {
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Employee</DialogTitle></DialogHeader>
-            {renderForm(false)}
+            <EmployeeDialogBoundary onClose={() => { setAddOpen(false); resetForm(); }}>
+              {renderForm(false)}
+            </EmployeeDialogBoundary>
           </DialogContent>
         </Dialog>
       </div>
@@ -832,7 +876,9 @@ function EmployeeTab() {
       <Dialog open={editOpen} onOpenChange={v => { setEditOpen(v); if (!v) { setEditWorker(null); resetForm(); } }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Employee</DialogTitle></DialogHeader>
-          {renderForm(true)}
+          <EmployeeDialogBoundary onClose={() => { setEditOpen(false); setEditWorker(null); resetForm(); }}>
+            {renderForm(true)}
+          </EmployeeDialogBoundary>
         </DialogContent>
       </Dialog>
     </div>
