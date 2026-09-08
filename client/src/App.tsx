@@ -55,6 +55,7 @@ const EngagementFeedPage = lazy(() => import("@/pages/engagement-feed"));
 const LicenseRequestsPage = lazy(() => import("@/pages/license-requests"));
 const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
 const LoginPage = lazy(() => import("@/pages/login"));
+const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
 const NotificationSettingsPage = lazy(() => import("@/pages/notification-settings"));
 const NotificationTemplatesPage = lazy(() => import("@/pages/notification-templates"));
 const MessagesPage = lazy(() => import("@/pages/messages"));
@@ -703,6 +704,16 @@ function AppContent() {
           <LoginPage />
         </Suspense>
       </BiometricGate>
+    );
+  }
+
+  // Public invite acceptance (PR 1 — SaaS identity/onboarding). No session yet;
+  // the raw token in the query string is the credential.
+  if (location === "/accept-invite") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <AcceptInvitePage />
+      </Suspense>
     );
   }
 

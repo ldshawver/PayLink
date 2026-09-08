@@ -70,16 +70,51 @@ export function reconcileProposalContractor(
   return { ok: true, workerId: targetWorker.id, companyId: targetWorker.companyId };
 }
 
+import { resolveSignerEmail, type SignerEmailSources } from "./identity/identity-resolver";
+
 export interface ContractorProfileLike {
   id: string;
   firstName: string | null;
   lastName: string | null;
   email: string | null;
   workEmail: string | null;
+  /**
+   * Optional additional identity sources for the shared resolver (PR 1). When
+   * present, the signer email is resolved deterministically across worker
+   * email → work email → home email → linked login account email → linked
+   * global person email, instead of only `email || workEmail`. Callers that
+   * do not (yet) load these keep the original two-field behaviour.
+   */
+  homeEmail?: string | null;
+  linkedUserEmail?: string | null;
+  linkedPersonEmail?: string | null;
 }
 
 export function normalizeEmailForCompare(email: string | null | undefined): string {
   return (email || "").trim().toLowerCase();
+}
+
+/**
+ * The single authoritative email for a contractor profile, resolved across
+ * every known identity source (see server/identity/identity-resolver.ts).
+ * Returns `null` only when no source anywhere has an email — which is what the
+ * "No email on file" UI and the signature-request guard key off. Also returns
+ * any conflicting values found, for cleanup/audit (never a reason to block).
+ */
+export function resolveContractorProfileEmail(profile: ContractorProfileLike | undefined): {
+  email: string | null;
+  conflicts: string[];
+} {
+  if (!profile) return { email: null, conflicts: [] };
+  const sources: SignerEmailSources = {
+    workerEmail: profile.email ?? null,
+    workerWorkEmail: profile.workEmail ?? null,
+    workerHomeEmail: profile.homeEmail ?? null,
+    linkedUserEmail: profile.linkedUserEmail ?? null,
+    linkedPersonEmail: profile.linkedPersonEmail ?? null,
+  };
+  const r = resolveSignerEmail(sources);
+  return { email: r.email, conflicts: r.conflicts };
 }
 
 export type SignerIdentityResult =
@@ -102,7 +137,7 @@ export function resolveContractorSignerIdentity(
   if (!contractContractorId || !contractorProfile) {
     return { ok: false, status: 400, message: "Contract has no linked contractor profile to derive a signer from." };
   }
-  const profileEmail = contractorProfile.email || contractorProfile.workEmail || null;
+  const profileEmail = resolveContractorProfileEmail(contractorProfile).email;
   if (!profileEmail) {
     return {
       ok: false,

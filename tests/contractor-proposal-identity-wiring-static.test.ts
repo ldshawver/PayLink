@@ -40,11 +40,15 @@ ok(
 console.log("\nContract signer identity");
 ok(
   "addContractSigner calls resolveContractorSignerIdentity for the contractor role",
-  /signerRole === "contractor"[\s\S]{0,500}?resolveContractorSignerIdentity\(/.test(routesSrc),
+  /signerRole === "contractor"[\s\S]{0,900}?resolveContractorSignerIdentity\(/.test(routesSrc),
 );
 ok(
-  "GET /api/contractor-contracts/:id projects contractor_email",
-  /COALESCE\(w\.email, w\.work_email\) AS contractor_email FROM contractor_contracts cc LEFT JOIN workers w ON w\.id = cc\.contractor_id WHERE cc\.id = \$\{req\.params\.id\}/.test(routesSrc),
+  "addContractSigner loads the broader identity email set (PR 1 shared resolver)",
+  /signerRole === "contractor"[\s\S]{0,900}?loadWorkerSignerIdentity\(contract\.contractor_id, contract\.company_id\)/.test(routesSrc),
+);
+ok(
+  "GET /api/contractor-contracts/:id projects contractor_email across every identity source",
+  /COALESCE\(w\.email, w\.work_email, w\.home_email, u\.email, p\.email\) AS contractor_email FROM contractor_contracts cc LEFT JOIN workers w ON w\.id = cc\.contractor_id LEFT JOIN users u ON u\.worker_id = w\.id LEFT JOIN persons p ON p\.id = w\.person_id WHERE cc\.id = \$\{req\.params\.id\}/.test(routesSrc),
 );
 
 console.log("\nToken hygiene");
