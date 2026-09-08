@@ -3372,6 +3372,53 @@ Thank you,
     await run("users.mfa_enforced_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enforced_at TIMESTAMP`);
     await run("users.email",           sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
 
+    // ── SaaS identity/onboarding — PR 1 (migration 0019) ───────────────────
+    // Additive only. See docs/saas-identity-onboarding-architecture.md and
+    // migrations/0019_identity_links_and_invites.sql.
+    await run("users.invite_status",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_status TEXT DEFAULT 'none'`);
+    await run("users.last_login_at",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP`);
+    await run("users.email_verified_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`);
+    await run("account_invites table", sql`CREATE TABLE IF NOT EXISTS account_invites (
+      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id         VARCHAR,
+      email              TEXT NOT NULL,
+      relationship_kind  TEXT NOT NULL DEFAULT 'employee',
+      relationship_id    VARCHAR,
+      role               TEXT NOT NULL DEFAULT 'employee',
+      token_hash         TEXT NOT NULL,
+      status             TEXT NOT NULL DEFAULT 'pending',
+      invited_by_user_id VARCHAR,
+      invited_user_id    VARCHAR,
+      expires_at         TIMESTAMP NOT NULL,
+      accepted_at        TIMESTAMP,
+      revoked_at         TIMESTAMP,
+      last_sent_at       TIMESTAMP DEFAULT NOW(),
+      created_at         TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("account_invites.token_hash uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_account_invites_token_hash ON account_invites (token_hash)`);
+    await run("account_invites.email idx", sql`CREATE INDEX IF NOT EXISTS idx_account_invites_email ON account_invites (LOWER(email))`);
+    await run("account_invites.company idx", sql`CREATE INDEX IF NOT EXISTS idx_account_invites_company ON account_invites (company_id)`);
+    await run("account_invites.relationship idx", sql`CREATE INDEX IF NOT EXISTS idx_account_invites_relationship ON account_invites (relationship_kind, relationship_id)`);
+    await run("account_invites.pending target uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_account_invites_pending_target ON account_invites (company_id, relationship_kind, relationship_id) WHERE status = 'pending' AND relationship_id IS NOT NULL`);
+    await run("identity_links table", sql`CREATE TABLE IF NOT EXISTS identity_links (
+      id                VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subject_type      TEXT NOT NULL,
+      subject_id        VARCHAR NOT NULL,
+      company_id        VARCHAR,
+      tenant_id         VARCHAR,
+      link_status       TEXT NOT NULL DEFAULT 'active',
+      verified_email    TEXT,
+      linked_by_user_id VARCHAR,
+      review_reason     TEXT,
+      created_at        TIMESTAMP DEFAULT NOW(),
+      revoked_at        TIMESTAMP
+    )`);
+    await run("identity_links.user_subject uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_links_user_subject ON identity_links (user_id, subject_type, subject_id)`);
+    await run("identity_links.subject idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_subject ON identity_links (subject_type, subject_id)`);
+    await run("identity_links.company idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_company ON identity_links (company_id)`);
+    await run("identity_links.email idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_email ON identity_links (LOWER(verified_email))`);
+
     // Legal basis + purpose description on document retention policies
     await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);
     await run("document_retention_policies.purpose_description", sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS purpose_description TEXT`);

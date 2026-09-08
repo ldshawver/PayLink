@@ -348,6 +348,17 @@ export const users = pgTable("users", {
   mfaEnabled: boolean("mfa_enabled").default(false),
   /** ISO timestamp at which the company admin enforced MFA for all users. */
   mfaEnforcedAt: timestamp("mfa_enforced_at"),
+  /**
+   * SaaS identity/onboarding (migration 0019). Additive, nullable — existing
+   * accounts keep working with these unset. `invite_status` tracks how the
+   * account came to exist: 'none' (created directly / legacy), 'invited'
+   * (an account_invites row is outstanding, no password yet — there is no
+   * users row until the invite is accepted, so in practice a users row is
+   * only ever 'active' or 'suspended'), 'active', 'suspended'.
+   */
+  inviteStatus: text("invite_status").default("none"), // none | invited | active | suspended
+  lastLoginAt: timestamp("last_login_at"),
+  emailVerifiedAt: timestamp("email_verified_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -5173,3 +5184,66 @@ export const companyUserAccess = pgTable("company_user_access", {
 export const insertCompanyUserAccessSchema = createInsertSchema(companyUserAccess).omit({ id: true, createdAt: true, updatedAt: true });
 export type CompanyUserAccess = typeof companyUserAccess.$inferSelect;
 export type InsertCompanyUserAccess = z.infer<typeof insertCompanyUserAccessSchema>;
+
+// ── SaaS identity/onboarding — Phase 1 / PR 1 (migration 0019) ─────────────────
+// Additive only. These tables introduce the "one login identity, many
+// relationships" model without touching users / workers / customers / the two
+// existing company-access tables. See
+// docs/saas-identity-onboarding-architecture.md.
+
+/**
+ * account_invites — an outstanding invitation to create (or bind) a login
+ * account. The invite carries a hashed token only; the raw token lives only in
+ * the emailed link. Accepting the invite is what creates the `users` row and
+ * lets the invitee set their own password — no admin ever types a password for
+ * someone else. `relationship_kind` records what the account is being onboarded
+ * as so the accept handler can wire the right links/grants.
+ */
+export const accountInvites = pgTable("account_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"), // null only for platform-level invites (not used in PR 1)
+  email: text("email").notNull(), // stored lower-cased; the invite is bound to this address
+  relationshipKind: text("relationship_kind").notNull().default("employee"), // employee | contractor | vendor | customer_owner | platform
+  relationshipId: varchar("relationship_id"), // worker_id / vendor_id / customer_id this invite will link on accept
+  role: text("role").notNull().default("employee"), // role to grant on the resulting users row
+  tokenHash: text("token_hash").notNull(), // sha256(rawToken) — raw token is never stored
+  status: text("status").notNull().default("pending"), // pending | accepted | revoked | expired
+  invitedByUserId: varchar("invited_by_user_id"),
+  invitedUserId: varchar("invited_user_id"), // set once the users row exists (accept, or link-to-existing)
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  revokedAt: timestamp("revoked_at"),
+  lastSentAt: timestamp("last_sent_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAccountInviteSchema = createInsertSchema(accountInvites).omit({ id: true, createdAt: true });
+export type AccountInvite = typeof accountInvites.$inferSelect;
+export type InsertAccountInvite = z.infer<typeof insertAccountInviteSchema>;
+
+/**
+ * identity_links — the backing table for the shared identity resolver. One
+ * `users` row ⇄ many domain relationships (worker / vendor / customer / person),
+ * without duplicating the email onto each. Email matching that produces a link
+ * is always deterministic and company/tenant-scoped; a conflicting email
+ * creates a `pending_review` row instead of silently merging. Never matched on
+ * name.
+ */
+export const identityLinks = pgTable("identity_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  subjectType: text("subject_type").notNull(), // worker | vendor | customer | person
+  subjectId: varchar("subject_id").notNull(),
+  companyId: varchar("company_id"),
+  tenantId: varchar("tenant_id"),
+  linkStatus: text("link_status").notNull().default("active"), // active | pending_review | revoked
+  verifiedEmail: text("verified_email"), // lower-cased email the link was established on
+  linkedByUserId: varchar("linked_by_user_id"),
+  reviewReason: text("review_reason"), // why this needs admin review (e.g. conflicting emails)
+  createdAt: timestamp("created_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+});
+
+export const insertIdentityLinkSchema = createInsertSchema(identityLinks).omit({ id: true, createdAt: true });
+export type IdentityLink = typeof identityLinks.$inferSelect;
+export type InsertIdentityLink = z.infer<typeof insertIdentityLinkSchema>;

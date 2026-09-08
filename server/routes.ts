@@ -31,6 +31,8 @@ import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUuid } from "./contractor-proposal-identity";
+import { loadWorkerSignerIdentity, loadWorkerAccountStates, loadWorkerAccountState, createOrRefreshInvite, getLiveInviteByToken, findLinkableUserByEmail, upsertIdentityLink, acceptInviteWithUser, setWorkerAccountEnabled } from "./identity/identity-db";
+import { normalizeEmail } from "./identity/identity-resolver";
 import { normalizeWorkerPayRate, isValidWorkerType, isValidContractorType } from "@shared/worker-pay-rate-rules";
 import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
@@ -101,6 +103,27 @@ function getAppBaseUrl(req: Pick<Request, "headers" | "protocol">): string {
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
   return `${proto}://${host}`;
+}
+
+/**
+ * Email the sign-up link for an account invite (PR 1 — SaaS identity/onboarding).
+ * The raw token appears only in this link; the DB stores only its sha256.
+ */
+async function sendAccountInviteEmail(
+  req: Pick<Request, "headers" | "protocol">,
+  email: string,
+  recipientName: string,
+  rawToken: string,
+): Promise<void> {
+  const url = `${getAppBaseUrl(req)}/accept-invite?token=${encodeURIComponent(rawToken)}`;
+  const { sendGenericNotificationEmail } = await import("./notifications.js");
+  await sendGenericNotificationEmail({
+    recipientName: recipientName || "there",
+    email,
+    title: "You've been invited to MyPayLink",
+    body: "Your organization created an account for you. Click below to set your password and sign in. This link expires in 14 days.",
+    actionUrl: url,
+  });
 }
 
 
@@ -1845,6 +1868,8 @@ export async function registerRoutes(
 
       req.session.userId = user.id;
       req.session.username = user.username;
+      // PR 1: record last sign-in (additive column; best-effort, never blocks login).
+      db.execute(sql`UPDATE users SET last_login_at = NOW() WHERE id = ${user.id}`).catch(() => {});
       let workerInfo = null;
       if (user.workerId) {
         const w = await storage.getWorker(user.workerId);
@@ -1902,6 +1927,8 @@ export async function registerRoutes(
       delete req.session.pendingMfaUserId;
       req.session.userId = user.id;
       req.session.username = user.username;
+      // PR 1: record last sign-in (additive column; best-effort, never blocks login).
+      db.execute(sql`UPDATE users SET last_login_at = NOW() WHERE id = ${user.id}`).catch(() => {});
       let workerInfo = null;
       if (user.workerId) {
         const w = await storage.getWorker(user.workerId);
@@ -2107,6 +2134,7 @@ function hashSigningToken(token: string): string {
       || req.path === "/analytics/event"
       || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
+      || req.path === "/account-invites/validate" || req.path === "/account-invites/accept"
       || req.path.startsWith("/portal/")) {
       return next();
     }
@@ -2439,6 +2467,29 @@ function hashSigningToken(token: string): string {
     }
   });
 
+  // Batch account/access status for a company's workers (one query), so the
+  // Employee list can show a status chip per row without an N+1 fetch.
+  // Registered before "/api/workers/:id" so "accounts" is not captured as an id.
+  app.get("/api/workers/accounts", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const qCompany = queryStr(req.query.companyId);
+      const companyId = isPlatformUser(actingUser?.role)
+        ? (qCompany && qCompany !== "all" ? qCompany : null)
+        : (actingUser?.companyId || null);
+      if (!companyId) return res.json({});
+      const map = await loadWorkerAccountStates(companyId);
+      const out: Record<string, { status: string; username: string | null; inviteId: string | null; inviteEmail: string | null }> = {};
+      for (const [workerId, s] of map) {
+        out[workerId] = { status: s.status, username: s.username, inviteId: s.inviteId, inviteEmail: s.inviteEmail };
+      }
+      res.json(out);
+    } catch (e) {
+      console.error("GET /api/workers/accounts failed:", e);
+      res.status(500).json({ message: "Failed to load account statuses" });
+    }
+  });
+
   // GET /api/workers/:id — fetch a single worker with tenant isolation
   app.get("/api/workers/:id", requireAuth, async (req, res) => {
     try {
@@ -2512,6 +2563,11 @@ function hashSigningToken(token: string): string {
       if (req.body.workerType === "employee") {
         req.body.contractorType = null;
       }
+      // SaaS identity/onboarding (PR 1): optional one-step account provisioning.
+      // `account` is not a workers column — pull it off the body before the insert.
+      const accountReq: { mode?: string; email?: string; role?: string } | undefined =
+        req.body.account && typeof req.body.account === "object" ? req.body.account : undefined;
+      delete req.body.account;
       const payRateResult = normalizeWorkerPayRate(req.body);
       if (!payRateResult.ok) {
         return res.status(400).json({ message: payRateResult.message });
@@ -2535,7 +2591,61 @@ function hashSigningToken(token: string): string {
         afterValue: `${worker.firstName} ${worker.lastName} (${worker.employeeNumber})`,
         note: `Worker created`, companyId: worker.companyId, targetUserId: worker.id,
       });
-      res.status(201).json(worker);
+
+      // ── One-step account provisioning (PR 1) ─────────────────────────────
+      // Never fails the worker creation — an employee without a login is valid.
+      // The response carries an `account` block describing what happened so the
+      // UI can toast it. No raw password is ever accepted here; 'invite' sends a
+      // sign-up link, 'link' binds an existing verified account.
+      let account: any = { mode: accountReq?.mode || "none", status: "no_login" };
+      try {
+        const relKind = worker.workerType === "contractor" ? "contractor" : "employee";
+        const grantRole = accountReq?.role === "manager" ? "manager" : (relKind === "contractor" ? "contractor" : "employee");
+        const targetEmail = normalizeEmail(accountReq?.email || worker.email || worker.workEmail);
+
+        if (accountReq?.mode === "invite") {
+          if (!targetEmail) {
+            account = { mode: "invite", status: "skipped", reason: "No email address — add one to send an invite." };
+          } else {
+            const inv = await createOrRefreshInvite({
+              companyId: worker.companyId, email: targetEmail, relationshipKind: relKind,
+              relationshipId: worker.id, role: grantRole, invitedByUserId: req.session.userId!,
+            });
+            await sendAccountInviteEmail(req, targetEmail, `${worker.firstName} ${worker.lastName}`.trim(), inv.rawToken).catch(() => {});
+            await writeAuditLog({
+              actorUserId: req.session.userId!, targetResource: "account_invites", changeType: "account_invite_sent",
+              afterValue: targetEmail, note: `Invite for ${relKind} ${worker.id}`, companyId: worker.companyId, targetUserId: worker.id,
+            });
+            account = { mode: "invite", status: "invited", email: targetEmail, expiresAt: inv.expiresAt };
+          }
+        } else if (accountReq?.mode === "link") {
+          const lookup = await findLinkableUserByEmail(targetEmail, worker.companyId);
+          if (lookup.outcome === "none") {
+            account = { mode: "link", status: "skipped", reason: "No existing account in this company matches that email." };
+          } else if (lookup.outcome === "ambiguous") {
+            account = { mode: "link", status: "skipped", reason: `${lookup.count} accounts share that email — resolve manually.` };
+          } else {
+            const conflict = lookup.alreadyLinkedWorkerId && lookup.alreadyLinkedWorkerId !== worker.id;
+            await upsertIdentityLink({
+              userId: lookup.userId, subjectType: "worker", subjectId: worker.id, companyId: worker.companyId,
+              linkStatus: conflict ? "pending_review" : "active", verifiedEmail: targetEmail,
+              linkedByUserId: req.session.userId!,
+              reviewReason: conflict ? `Account already linked to worker ${lookup.alreadyLinkedWorkerId}` : null,
+            });
+            if (!conflict) {
+              await db.execute(sql`UPDATE users SET worker_id = ${worker.id} WHERE id = ${lookup.userId} AND worker_id IS NULL`);
+            }
+            account = conflict
+              ? { mode: "link", status: "review", reason: "That account is already linked to another employee — flagged for review." }
+              : { mode: "link", status: "linked", username: lookup.username };
+          }
+        }
+      } catch (acctErr) {
+        console.error("[worker account provisioning]", acctErr);
+        account = { mode: accountReq?.mode || "none", status: "error", reason: "Account step failed; the employee was still created." };
+      }
+
+      res.status(201).json({ ...worker, account });
     } catch (error: any) {
       console.error("Failed to create worker:", error);
       if (error?.code === "23502" && error?.column) {
@@ -2544,6 +2654,133 @@ function hashSigningToken(token: string): string {
         return res.status(400).json({ message: `Missing required field: ${error.column}` });
       }
       res.status(500).json({ message: "Failed to create worker" });
+    }
+  });
+
+  // ── Worker account/access (PR 1 — SaaS identity/onboarding) ────────────────
+  // Shared company-scope guard for the worker-account routes: loads the worker
+  // and, for a tenant user, refuses any worker outside their own company.
+  async function loadWorkerForAccountRoute(req: Request, res: Response): Promise<{ worker: any; companyId: string } | null> {
+    const worker = await storage.getWorker(req.params.id as string);
+    if (!worker) { res.status(404).json({ message: "Worker not found" }); return null; }
+    const actingUser = await storage.getUser(req.session.userId!);
+    const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+    if (isTenant && worker.companyId !== actingUser!.companyId) {
+      res.status(403).json({ message: "Forbidden" }); return null;
+    }
+    return { worker, companyId: worker.companyId };
+  }
+
+  app.get("/api/workers/:id/account", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const ctx = await loadWorkerForAccountRoute(req, res);
+      if (!ctx) return;
+      const state = await loadWorkerAccountState(ctx.worker.id, ctx.companyId);
+      res.json({
+        status: state.status,
+        userId: state.userId,
+        username: state.username,
+        inviteId: state.inviteId,
+        inviteEmail: state.inviteEmail,
+        inviteExpiresAt: state.inviteExpiresAt,
+        canInviteEmail: normalizeEmail(ctx.worker.email || ctx.worker.workEmail) || null,
+      });
+    } catch (e) {
+      console.error("GET /api/workers/:id/account failed:", e);
+      res.status(500).json({ message: "Failed to load account status" });
+    }
+  });
+
+  app.post("/api/workers/:id/resend-invite", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const ctx = await loadWorkerForAccountRoute(req, res);
+      if (!ctx) return;
+      const state = await loadWorkerAccountState(ctx.worker.id, ctx.companyId);
+      if (state.status === "active" || state.status === "suspended") {
+        return res.status(409).json({ message: "This employee already has a login account." });
+      }
+      const email = normalizeEmail(req.body?.email || state.inviteEmail || ctx.worker.email || ctx.worker.workEmail);
+      if (!email) return res.status(400).json({ message: "Add an email address before sending an invite." });
+      const relKind = ctx.worker.workerType === "contractor" ? "contractor" : "employee";
+      const inv = await createOrRefreshInvite({
+        companyId: ctx.companyId, email, relationshipKind: relKind, relationshipId: ctx.worker.id,
+        role: relKind === "contractor" ? "contractor" : "employee", invitedByUserId: req.session.userId!,
+      });
+      await sendAccountInviteEmail(req, email, `${ctx.worker.firstName} ${ctx.worker.lastName}`.trim(), inv.rawToken).catch(() => {});
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "account_invites", changeType: "account_invite_resent",
+        afterValue: email, note: `Resent invite for ${relKind} ${ctx.worker.id}`, companyId: ctx.companyId, targetUserId: ctx.worker.id,
+      });
+      res.json({ status: "invited", email, expiresAt: inv.expiresAt });
+    } catch (e) {
+      console.error("POST /api/workers/:id/resend-invite failed:", e);
+      res.status(500).json({ message: "Failed to resend invite" });
+    }
+  });
+
+  app.post("/api/workers/:id/account/:action", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const action = req.params.action;
+      if (action !== "disable" && action !== "enable") return res.status(400).json({ message: "Unknown action" });
+      const ctx = await loadWorkerForAccountRoute(req, res);
+      if (!ctx) return;
+      const result = await setWorkerAccountEnabled(ctx.worker.id, ctx.companyId, action === "enable");
+      if (result === null) return res.status(409).json({ message: "This employee has no login account." });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "users", changeType: action === "enable" ? "account_access_enabled" : "account_access_disabled",
+        afterValue: result, note: `Worker ${ctx.worker.id}`, companyId: ctx.companyId, targetUserId: ctx.worker.id,
+      });
+      res.json({ status: result });
+    } catch (e) {
+      console.error("POST /api/workers/:id/account/:action failed:", e);
+      res.status(500).json({ message: "Failed to change account access" });
+    }
+  });
+
+  // ── Account invites — public accept flow (PR 1) ───────────────────────────
+  // No auth: the raw token IS the credential. Never reveals whether an email or
+  // company exists beyond what the token itself unlocks.
+  app.get("/api/account-invites/validate", async (req, res) => {
+    try {
+      const token = queryStr(req.query.token);
+      const invite = token ? await getLiveInviteByToken(token) : null;
+      if (!invite) return res.status(404).json({ valid: false, message: "This invite link is invalid or has expired." });
+      let companyName: string | null = null;
+      if (invite.companyId) {
+        const c = await storage.getCompany(invite.companyId).catch(() => undefined);
+        companyName = c?.name ?? null;
+      }
+      res.json({ valid: true, email: invite.email, relationshipKind: invite.relationshipKind, companyName });
+    } catch (e) {
+      console.error("GET /api/account-invites/validate failed:", e);
+      res.status(500).json({ valid: false, message: "Could not validate the invite." });
+    }
+  });
+
+  app.post("/api/account-invites/accept", async (req, res) => {
+    try {
+      const { token, username, password } = req.body || {};
+      if (!token || !username || !password) {
+        return res.status(400).json({ message: "Token, username, and password are required." });
+      }
+      if (String(password).length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters." });
+      }
+      if (!/^[a-zA-Z0-9._-]{3,40}$/.test(String(username))) {
+        return res.status(400).json({ message: "Username must be 3–40 characters (letters, numbers, . _ -)." });
+      }
+      const hashed = await bcrypt.hash(String(password), 10);
+      const result = await acceptInviteWithUser(String(token), String(username), hashed);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      // Establish the session immediately so the invitee lands signed in.
+      req.session.userId = result.userId;
+      (req.session as any).username = username;
+      req.session.save(() => {
+        res.status(201).json({ id: result.userId, username, companyId: result.companyId, redirect: "/app" });
+      });
+    } catch (e) {
+      console.error("POST /api/account-invites/accept failed:", e);
+      res.status(500).json({ message: "Could not complete sign-up." });
     }
   });
 
@@ -15293,7 +15530,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
-      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, COALESCE(w.email, w.work_email) AS contractor_email FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
+      // contractor_email is resolved across every identity source in the same
+      // precedence the shared resolver uses (server/identity/identity-resolver.ts):
+      // worker email → work email → home email → linked login account → linked
+      // global person. Keeps the Add Signer dialog from showing "No email on
+      // file" when the address is on the linked user/person record.
+      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, COALESCE(w.email, w.work_email, w.home_email, u.email, p.email) AS contractor_email FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN users u ON u.worker_id = w.id LEFT JOIN persons p ON p.id = w.person_id WHERE cc.id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
       const contract = result.rows[0] as any;
       // Ownership check: admin sees company contracts; contractor sees own
@@ -16276,6 +16518,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // so any mismatch is blocked outright (see contractor-proposal-identity.ts).
       if (signerRole === "contractor") {
         const contractorProfile = contract.contractor_id ? await storage.getWorker(contract.contractor_id) : undefined;
+        // Shared identity resolver (PR 1): also consider the worker's home email,
+        // the linked login account's email, and the linked global person's
+        // email — all loaded scoped to this contract's company. Fixes the
+        // "No email on file" false negative when the address lives on the
+        // linked user/person record rather than workers.email/work_email.
+        const signerIdentity = await loadWorkerSignerIdentity(contract.contractor_id, contract.company_id);
         const resolved = resolveContractorSignerIdentity(
           contract.contractor_id,
           workerId || null,
@@ -16287,6 +16535,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                 lastName: contractorProfile.lastName,
                 email: contractorProfile.email,
                 workEmail: contractorProfile.workEmail,
+                homeEmail: signerIdentity.sources.workerHomeEmail ?? (contractorProfile as any).homeEmail ?? null,
+                linkedUserEmail: signerIdentity.sources.linkedUserEmail ?? null,
+                linkedPersonEmail: signerIdentity.sources.linkedPersonEmail ?? null,
               }
             : undefined,
         );
@@ -16344,10 +16595,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractRes = await db.execute(sql`
         SELECT cc.*,
           w.first_name || ' ' || w.last_name AS contractor_name,
-          COALESCE(w.email, w.work_email) AS contractor_email,
+          COALESCE(w.email, w.work_email, w.home_email, u.email, p.email) AS contractor_email,
           co.name AS company_name
         FROM contractor_contracts cc
         LEFT JOIN workers w ON w.id = cc.contractor_id
+        LEFT JOIN users u ON u.worker_id = w.id
+        LEFT JOIN persons p ON p.id = w.person_id
         LEFT JOIN companies co ON co.id = cc.company_id
         WHERE cc.id = ${contractId}
       `);
