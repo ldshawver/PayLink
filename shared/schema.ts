@@ -3237,6 +3237,17 @@ export const appDoctorReports = pgTable("app_doctor_reports", {
   requiredApproverRole: text("required_approver_role"), // admin|global_admin
   testPlan: text("test_plan"),
   rollbackPlan: text("rollback_plan"),
+  // ── Revalidation / refresh / archive (migration 0023) ──────────────────────
+  // Additive. `companies.subscription_status`-style enforcement is not involved.
+  lastSeenAt: timestamp("last_seen_at"),               // last observed reproducing
+  lastRevalidatedAt: timestamp("last_revalidated_at"), // last revalidation pass
+  revalidationStatus: text("revalidation_status"),     // reproduced | not_reproduced | inconclusive
+  revalidationEvidence: text("revalidation_evidence"), // JSON evidence bundle
+  archivedAt: timestamp("archived_at"),                // active window = archived_at IS NULL
+  archivedByUserId: varchar("archived_by_user_id"),
+  archivedReason: text("archived_reason"),             // no_longer_reproduces | manual | ...
+  aiLastError: text("ai_last_error"),                  // AI-outage state, tracked SEPARATELY from validity
+  aiLastErrorAt: timestamp("ai_last_error_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -3786,6 +3786,21 @@ Thank you,
     await run("app_doctor_reports.required_approver_role",sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS required_approver_role TEXT`);
     await run("app_doctor_reports.test_plan",             sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS test_plan TEXT`);
     await run("app_doctor_reports.rollback_plan",         sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS rollback_plan TEXT`);
+    // ── App Doctor issue revalidation / refresh / archive — migration 0023 ──
+    // Additive. Lets an existing issue be re-checked against the current deployed
+    // app, refreshed if still valid, or archived (never hard-deleted) if it no
+    // longer reproduces. AI-outage state (ai_last_error*) is tracked SEPARATELY
+    // from issue validity. The active window = archived_at IS NULL.
+    await run("app_doctor_reports.last_seen_at",          sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP`);
+    await run("app_doctor_reports.last_revalidated_at",   sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS last_revalidated_at TIMESTAMP`);
+    await run("app_doctor_reports.revalidation_status",   sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS revalidation_status TEXT`);
+    await run("app_doctor_reports.revalidation_evidence", sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS revalidation_evidence TEXT`);
+    await run("app_doctor_reports.archived_at",           sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`);
+    await run("app_doctor_reports.archived_by_user_id",   sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS archived_by_user_id VARCHAR`);
+    await run("app_doctor_reports.archived_reason",       sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS archived_reason TEXT`);
+    await run("app_doctor_reports.ai_last_error",         sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS ai_last_error TEXT`);
+    await run("app_doctor_reports.ai_last_error_at",      sql`ALTER TABLE app_doctor_reports ADD COLUMN IF NOT EXISTS ai_last_error_at TIMESTAMP`);
+    await run("app_doctor_reports active-window index",   sql`CREATE INDEX IF NOT EXISTS idx_app_doctor_reports_active ON app_doctor_reports (company_id, created_at DESC) WHERE archived_at IS NULL`);
     await run("app_doctor_repair_tickets table", sql`CREATE TABLE IF NOT EXISTS app_doctor_repair_tickets (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       report_id VARCHAR,
