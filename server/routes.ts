@@ -2517,17 +2517,17 @@ function hashSigningToken(token: string): string {
         return res.status(400).json({ message: payRateResult.message });
       }
       req.body.payRate = payRateResult.payRate;
-      // Auto-generate employee number if not provided
+      // Auto-generate employee number if not provided. Scoped to the target
+      // company (companyId is required above) — never load every tenant's
+      // workers; reduce (not a Math.max variadic spread) avoids a RangeError.
       if (!req.body.employeeNumber) {
-        const allWorkers = await storage.getWorkers();
-        const companyWorkers = req.body.companyId
-          ? allWorkers.filter((w: any) => w.companyId === req.body.companyId)
-          : allWorkers;
-        const existing = companyWorkers
-          .map((w: any) => parseInt(w.employeeNumber || "0", 10))
-          .filter((n: number) => !isNaN(n) && n > 0);
-        const next = existing.length > 0 ? Math.max(...existing) + 1 : 1001;
-        req.body.employeeNumber = String(next);
+        const companyWorkers = await storage.getWorkers(req.body.companyId);
+        const highest = companyWorkers.reduce((max: number, w: any) => {
+          const n = parseInt(w.employeeNumber || "0", 10);
+          return !isNaN(n) && n > max ? n : max;
+        }, 0);
+        const nextNum = highest > 0 ? highest + 1 : 1001;
+        req.body.employeeNumber = String(nextNum);
       }
       const worker = await storage.createWorker(req.body);
       await writeAuditLog({
