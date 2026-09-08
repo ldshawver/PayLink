@@ -147,6 +147,10 @@ ok("STATUS_TO_COMPANY maps every normalized status to a companies.subscription_s
   /trialing: "trial_active"/.test(service) && /active: "active_paid"/.test(service)
   && /expired: "trial_expired"/.test(service) && /suspended: "suspended"/.test(service)
   && /cancelled: "cancelled"/.test(service));
+ok("adminUpsertLicense validates admin status input STRICTLY (unknown → LicenseValidationError, never coerced to a blocking status)",
+  /STRICT_STATUS_INPUT/.test(service)
+  && /if \(!\(key in STRICT_STATUS_INPUT\)\)/.test(service)
+  && /throw new LicenseValidationError\(\s*`Invalid license status/.test(service));
 
 console.log("\ntrial onboarding + client wiring");
 ok("trial signup creates a tenant_licenses row inside its transaction (ensureTrialLicense)",

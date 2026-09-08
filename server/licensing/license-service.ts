@@ -354,9 +354,26 @@ export async function adminUpsertLicense(
   patch: AdminLicensePatch,
   actor: ActorInfo,
 ): Promise<{ record: TenantLicenseRow; companyStatusChanged: boolean; companyStatus: string | null }> {
-  const wantStatus = patch.status ? normalizeLicenseStatus(patch.status) : undefined;
-  if (patch.status && !(LICENSE_STATUSES as string[]).includes(wantStatus as string)) {
-    throw new LicenseValidationError(`Invalid license status: ${patch.status}`);
+  // Admin input is validated STRICTLY against the canonical vocabulary (plus a
+  // couple of legacy spellings). Unlike the resolver's defensive
+  // normalizeLicenseStatus() — which coerces an unknown *stored* value to
+  // 'inactive' so a bad row still reads conservatively — a bad value from an
+  // admin form must be rejected, never silently coerced into a blocking status.
+  const STRICT_STATUS_INPUT: Record<string, (typeof LICENSE_STATUSES)[number]> = {
+    trialing: "trialing", active: "active", expired: "expired",
+    suspended: "suspended", cancelled: "cancelled", inactive: "inactive",
+    trial: "trialing", trial_active: "trialing", trial_expired: "expired",
+    active_paid: "active", canceled: "cancelled",
+  };
+  let wantStatus: (typeof LICENSE_STATUSES)[number] | undefined;
+  if (patch.status != null && `${patch.status}`.trim() !== "") {
+    const key = `${patch.status}`.trim().toLowerCase();
+    if (!(key in STRICT_STATUS_INPUT)) {
+      throw new LicenseValidationError(
+        `Invalid license status: ${patch.status}. Expected one of: ${LICENSE_STATUSES.join(", ")}`,
+      );
+    }
+    wantStatus = STRICT_STATUS_INPUT[key];
   }
   if (patch.planType != null && !`${patch.planType}`.trim()) {
     throw new LicenseValidationError("planType cannot be blank");
