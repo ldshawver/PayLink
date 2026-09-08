@@ -56,6 +56,8 @@ const LicenseRequestsPage = lazy(() => import("@/pages/license-requests"));
 const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
 const LoginPage = lazy(() => import("@/pages/login"));
 const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
+const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
+const ContractorAccessRequestsPage = lazy(() => import("@/pages/contractor-access-requests"));
 const NotificationSettingsPage = lazy(() => import("@/pages/notification-settings"));
 const NotificationTemplatesPage = lazy(() => import("@/pages/notification-templates"));
 const MessagesPage = lazy(() => import("@/pages/messages"));
@@ -297,6 +299,7 @@ function AuthenticatedRouter() {
         <Route path="/app/biz-docs" component={BizDocsPage} />
         <Route path="/app/contractor-hub/contracts/:id/sign">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorContractSigningPage /></FeatureGate>}</Route>
         <Route path="/app/contractor-hub">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
+        <Route path="/app/contractor-access-requests">{() => <RoleGuard roles={["admin", "manager"]}><ContractorAccessRequestsPage /></RoleGuard>}</Route>
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><FeatureGate featureKey="tenant.finance.treasury" featureName="Stripe Treasury"><TreasuryPage /></FeatureGate></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
         <Route path="/app/settings/email">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><EmailSettingsPage /></StrictRoleGuard>}</Route>
@@ -713,6 +716,16 @@ function AppContent() {
     return (
       <Suspense fallback={<PageLoader />}>
         <AcceptInvitePage />
+      </Suspense>
+    );
+  }
+
+  // Public contractor access request (PR 2). No session; only ever creates a
+  // pending request — never an account.
+  if (location === "/contractor-signup") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ContractorSignupPage />
       </Suspense>
     );
   }

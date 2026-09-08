@@ -199,6 +199,7 @@ const MAIN_NAV: NavGroup[] = [
           { title: "Payments",            url: "/app/contractor-hub?section=payments",         icon: CreditCard },
           { title: "Messages",            url: "/app/contractor-hub?section=messages",         icon: MessageSquare },
           { title: "Profile & Branding",  url: "/app/contractor-hub?section=branding",         icon: Palette },
+          { title: "Access Requests",     url: "/app/contractor-access-requests",              icon: UserCheck, roles: ["admin", "manager"] },
           { title: "Settings",            url: "/app/contractor-hub?section=settings",         icon: Settings },
         ],
       },

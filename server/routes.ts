@@ -33,6 +33,7 @@ import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contracto
 import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUuid } from "./contractor-proposal-identity";
 import { loadWorkerSignerIdentity, loadWorkerAccountStates, loadWorkerAccountState, createOrRefreshInvite, getLiveInviteByToken, findLinkableUserByEmail, upsertIdentityLink, acceptInviteWithUser, setWorkerAccountEnabled } from "./identity/identity-db";
 import { normalizeEmail } from "./identity/identity-resolver";
+import { normalizeAccessRequestInput, isRateLimited, submitAccessRequest, listAccessRequestsForCompany, approveAccessRequest, rejectAccessRequest } from "./identity/contractor-access-requests";
 import { normalizeWorkerPayRate, isValidWorkerType, isValidContractorType } from "@shared/worker-pay-rate-rules";
 import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
@@ -2135,6 +2136,7 @@ function hashSigningToken(token: string): string {
       || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
       || req.path === "/account-invites/validate" || req.path === "/account-invites/accept"
+      || req.path === "/contractor-signup"
       || req.path.startsWith("/portal/")) {
       return next();
     }
@@ -2781,6 +2783,87 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/account-invites/accept failed:", e);
       res.status(500).json({ message: "Could not complete sign-up." });
+    }
+  });
+
+  // ── Contractor access requests — PR 2 ─────────────────────────────────────
+  // PUBLIC contractor sign-up: create (or coalesce onto) a `pending` request.
+  // Never creates a login account. Allowlisted in the global /api auth-gate as
+  // the exact path "/contractor-signup". IP abuse-guarded + email-dedup'd.
+  // Returns only a generic acknowledgement — no ids, no "exists" signal.
+  app.post("/api/contractor-signup", async (req, res) => {
+    try {
+      const ip = ((req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "").split(",")[0].trim();
+      if (isRateLimited(ip)) {
+        return res.status(429).json({ message: "Too many requests. Please try again later." });
+      }
+      const parsed = normalizeAccessRequestInput(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      await submitAccessRequest(parsed.value, { sourceIp: ip || null, userAgent: (req.get("user-agent") || "").slice(0, 400) || null });
+      res.status(202).json({ status: "received", message: "Thanks — your request has been submitted. A company administrator will review it." });
+    } catch (e) {
+      console.error("POST /api/contractor-signup failed:", e);
+      res.status(500).json({ message: "Could not submit your request. Please try again." });
+    }
+  });
+
+  // ADMIN review queue (company/tenant-scoped).
+  app.get("/api/contractor-access-requests", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = actingUser?.companyId || null;
+      if (!companyId) return res.json([]); // platform users manage per-company elsewhere
+      const status = queryStr(req.query.status);
+      const rows = await listAccessRequestsForCompany(companyId, status);
+      // Strip nothing sensitive here — these are already tenant-scoped admin rows;
+      // but source_ip / user_agent are intentionally not projected by mapRow.
+      res.json(rows);
+    } catch (e) {
+      console.error("GET /api/contractor-access-requests failed:", e);
+      res.status(500).json({ message: "Failed to load access requests" });
+    }
+  });
+
+  app.post("/api/contractor-access-requests/:id/approve", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = actingUser?.companyId;
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to approve requests." });
+      const result = await approveAccessRequest(req.params.id as string, companyId, req.session.userId!);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      if (result.invite) {
+        const name = `${result.email}`;
+        await sendAccountInviteEmail(req, result.email, name, result.invite.rawToken).catch(() => {});
+      }
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "contractor_access_requests", changeType: "contractor_access_request_approved",
+        afterValue: `${result.outcome} · ${result.email}`, note: result.reviewNote || `worker ${result.workerId}`,
+        companyId, targetUserId: result.workerId,
+      });
+      // Never return the raw invite token.
+      res.json({ outcome: result.outcome, workerId: result.workerId, needsReview: result.outcome === "needs_review", reviewNote: result.reviewNote });
+    } catch (e) {
+      console.error("POST /api/contractor-access-requests/:id/approve failed:", e);
+      res.status(500).json({ message: "Failed to approve request" });
+    }
+  });
+
+  app.post("/api/contractor-access-requests/:id/reject", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = actingUser?.companyId;
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to reject requests." });
+      const reason = (typeof req.body?.reason === "string" ? req.body.reason : "").trim().slice(0, 500) || "Not approved";
+      const result = await rejectAccessRequest(req.params.id as string, companyId, req.session.userId!, reason);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "contractor_access_requests", changeType: "contractor_access_request_rejected",
+        afterValue: reason, companyId,
+      });
+      res.json({ status: "rejected" });
+    } catch (e) {
+      console.error("POST /api/contractor-access-requests/:id/reject failed:", e);
+      res.status(500).json({ message: "Failed to reject request" });
     }
   });
 

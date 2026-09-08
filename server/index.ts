@@ -3419,6 +3419,37 @@ Thank you,
     await run("identity_links.company idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_company ON identity_links (company_id)`);
     await run("identity_links.email idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_email ON identity_links (LOWER(verified_email))`);
 
+    // ── Contractor access requests — PR 2 (migration 0020) ─────────────────
+    await run("contractor_access_requests table", sql`CREATE TABLE IF NOT EXISTS contractor_access_requests (
+      id                     VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id             VARCHAR,
+      email                  TEXT NOT NULL,
+      first_name             TEXT NOT NULL,
+      last_name              TEXT NOT NULL,
+      phone                  TEXT,
+      business_name          TEXT,
+      trade_type             TEXT,
+      license_number         TEXT,
+      requested_company_hint TEXT,
+      message                TEXT,
+      status                 TEXT NOT NULL DEFAULT 'pending',
+      reviewed_by_user_id    VARCHAR,
+      reviewed_at            TIMESTAMP,
+      rejection_reason       TEXT,
+      created_worker_id      VARCHAR,
+      account_invite_id      VARCHAR,
+      linked_user_id         VARCHAR,
+      review_note            TEXT,
+      source_ip              TEXT,
+      user_agent             TEXT,
+      created_at             TIMESTAMP DEFAULT NOW(),
+      updated_at             TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("contractor_access_requests.email idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_email ON contractor_access_requests (LOWER(email))`);
+    await run("contractor_access_requests.status idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_status ON contractor_access_requests (status)`);
+    await run("contractor_access_requests.company idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_company ON contractor_access_requests (company_id)`);
+    await run("contractor_access_requests.pending email uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_access_requests_pending_email ON contractor_access_requests (LOWER(email)) WHERE status = 'pending'`);
+
     // Legal basis + purpose description on document retention policies
     await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);
     await run("document_retention_policies.purpose_description", sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS purpose_description TEXT`);
