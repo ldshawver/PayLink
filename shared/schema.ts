@@ -5380,3 +5380,71 @@ export const vendorInvoices = pgTable("vendor_invoices", {
 export const insertVendorInvoiceSchema = createInsertSchema(vendorInvoices).omit({ id: true, createdAt: true, updatedAt: true });
 export type VendorInvoice = typeof vendorInvoices.$inferSelect;
 export type InsertVendorInvoice = z.infer<typeof insertVendorInvoiceSchema>;
+
+// ── Tenant licenses — PR 4 (migration 0022) ──────────────────────────────────
+// Additive structured license/trial record + append-only audit trail.
+//
+// This is NOT the enforcement source of truth. `companies.subscription_status`
+// / `trial_start` / `trial_end` / `billing_active` / `grace_period_*` /
+// `gate_override_reason`, read by server/tenant-enforcement.ts `checkTenantGate()`
+// and the `requireActiveSubscription` middleware, remain authoritative and are
+// unchanged by PR 4. `tenant_licenses` adds a normalized status vocabulary, an
+// explicit plan/type, a trial window, and a who-changed-what history that the
+// scattered `companies` columns never captured.
+//
+// A company with NO `tenant_licenses` row resolves exactly as it does today
+// (server/licensing/license-resolver.ts falls back to the `companies` gate
+// columns, then to a safe legacy-active default). A missing row never blocks.
+//
+// Scoping keys (`company_id`, `tenant_id`) are plain `varchar` with no FK
+// constraint — matching the recent-table convention (`vendors`,
+// `contractor_access_requests`, `account_invites`).
+export const tenantLicenses = pgTable("tenant_licenses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(), // unique — at most one license per company
+  tenantId: varchar("tenant_id"),
+  planType: text("plan_type").notNull().default("starter"),
+  // trialing | active | expired | suspended | cancelled | inactive
+  status: text("status").notNull().default("active"),
+  trialStart: timestamp("trial_start"),
+  trialEnd: timestamp("trial_end"),
+  currentPeriodStart: timestamp("current_period_start"),
+  currentPeriodEnd: timestamp("current_period_end"),
+  // legacy_backfill | trial_signup | admin | system
+  source: text("source").notNull().default("system"),
+  externalRef: text("external_ref"), // reserved; unused in PR 4 (no billing-processor integration)
+  notes: text("notes"),
+  statusReason: text("status_reason"),
+  statusChangedAt: timestamp("status_changed_at"),
+  statusChangedByUserId: varchar("status_changed_by_user_id"),
+  createdByUserId: varchar("created_by_user_id"),
+  updatedByUserId: varchar("updated_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertTenantLicenseSchema = createInsertSchema(tenantLicenses).omit({ id: true, createdAt: true, updatedAt: true });
+export type TenantLicense = typeof tenantLicenses.$inferSelect;
+export type InsertTenantLicense = z.infer<typeof insertTenantLicenseSchema>;
+
+/** Append-only audit of every license change (who / when / from → to / why). */
+export const tenantLicenseEvents = pgTable("tenant_license_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  licenseId: varchar("license_id"),
+  companyId: varchar("company_id").notNull(),
+  // created | status_changed | plan_changed | updated | trial_resolved
+  eventType: text("event_type").notNull(),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status"),
+  fromPlan: text("from_plan"),
+  toPlan: text("to_plan"),
+  reason: text("reason"),
+  actorUserId: text("actor_user_id"),
+  actorRole: text("actor_role"),
+  metadata: text("metadata"), // JSON string
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantLicenseEventSchema = createInsertSchema(tenantLicenseEvents).omit({ id: true, createdAt: true });
+export type TenantLicenseEvent = typeof tenantLicenseEvents.$inferSelect;
+export type InsertTenantLicenseEvent = z.infer<typeof insertTenantLicenseEventSchema>;

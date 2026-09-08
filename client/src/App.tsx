@@ -16,6 +16,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useTrial } from "@/hooks/use-trial";
 import { TrialBanner } from "@/components/trial-banner";
+import { LicenseStatusBanner } from "@/components/license-status-banner";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { ApiHealthBanner } from "@/components/api-health-banner";
@@ -93,6 +94,7 @@ const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
 const PlatformTenantsPage = lazy(() => import("@/pages/platform-tenants"));
+const PlatformLicensesPage = lazy(() => import("@/pages/platform-licenses"));
 const MarketingHomePage = lazy(() => import("@/pages/marketing-home"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -381,6 +383,7 @@ function AuthenticatedLayout() {
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
             <ApiHealthBanner />
             <TrialBanner />
+            <LicenseStatusBanner />
             <MobileHeader />
             <main className="flex-1 overflow-y-auto overflow-x-hidden">
               <div ref={containerRef} className="page-transition-container">
@@ -486,6 +489,7 @@ function PlatformRouter() {
           <Route path="/platform/permissions" component={PermissionsPage} />
           <Route path="/platform/audit-log" component={AuditLogPage} />
           <Route path="/platform/billing" component={BillingPage} />
+          <Route path="/platform/licenses" component={PlatformLicensesPage} />
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
           <Route path="/platform/audit" component={PlatformAuditPage} />
           <Route path="/platform/app-doctor" component={AppDoctorPage} />
