@@ -3484,6 +3484,10 @@ Thank you,
       file_size           INTEGER,
       mime_type           TEXT,
       notes               TEXT,
+      status              TEXT NOT NULL DEFAULT 'received',
+      review_note         TEXT,
+      reviewed_by_user_id VARCHAR,
+      reviewed_at         TIMESTAMP,
       uploaded_by_user_id VARCHAR NOT NULL,
       created_at          TIMESTAMP DEFAULT NOW()
     )`);

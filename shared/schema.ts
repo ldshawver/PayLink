@@ -5336,7 +5336,11 @@ export const vendorDocuments = pgTable("vendor_documents", {
   fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),
   mimeType: text("mime_type"),
-  notes: text("notes"),
+  notes: text("notes"), // the vendor's own note on upload — never overwritten by a review
+  status: text("status").notNull().default("received"), // received | approved | rejected
+  reviewNote: text("review_note"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
   uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });

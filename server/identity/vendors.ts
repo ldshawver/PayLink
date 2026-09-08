@@ -416,7 +416,7 @@ export async function listSubmissionsForVendor(ctx: VendorContext): Promise<{ in
     ORDER BY created_at DESC LIMIT 500
   `)).rows || [];
   const documents = (await db.execute(sql`
-    SELECT id, document_type, file_name, notes, created_at
+    SELECT id, document_type, file_name, notes, status, review_note, reviewed_at, created_at
     FROM vendor_documents WHERE vendor_id = ${ctx.vendorId} AND company_id = ${ctx.companyId}
     ORDER BY created_at DESC LIMIT 500
   `)).rows || [];
@@ -478,11 +478,11 @@ export async function reviewVendorDocument(
     SELECT id FROM vendor_documents WHERE id = ${documentId} AND company_id = ${companyId} LIMIT 1
   `));
   if (!existing) return { ok: false, status: 404, message: "Document not found" };
-  // vendor_documents has no status column in 0021 (documents are simple records);
-  // record the review as a note prefix so PR 3 stays strictly additive.
+  // Review writes status / review_note / reviewer only — the vendor's own
+  // `notes` from upload is left untouched. No ledger/payment effect.
   const row = firstRow<any>(await db.execute(sql`
     UPDATE vendor_documents
-    SET notes = ${(note ? `[${status}] ${note}` : `[${status}]`)}
+    SET status = ${status}, review_note = ${note}, reviewed_by_user_id = ${reviewerUserId}, reviewed_at = NOW()
     WHERE id = ${documentId} AND company_id = ${companyId}
     RETURNING *
   `));

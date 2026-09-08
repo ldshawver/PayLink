@@ -130,6 +130,9 @@ ok("vendors.ts touches no expense / expense_payment / check / contractor_payment
   !/\b(INSERT INTO|UPDATE)\s+(expenses|expense_payments|checks|check_runs|contractor_payments|payroll_runs|ledger|general_ledger|journal_entries|invoices|documenso)/i.test(mod));
 ok("reviewVendorInvoice only writes vendor_invoices (status / reviewer / note)",
   /UPDATE vendor_invoices\s*\n\s*SET status = \$\{status\}, review_note = \$\{note\}, reviewed_by_user_id/.test(mod));
+ok("reviewVendorDocument writes status/review_note/reviewer and leaves the vendor's own `notes` untouched",
+  /UPDATE vendor_documents\s*\n\s*SET status = \$\{status\}, review_note = \$\{note\}, reviewed_by_user_id = \$\{reviewerUserId\}, reviewed_at = NOW\(\)\s*\n\s*WHERE/.test(mod)
+  && !/UPDATE vendor_documents[\s\S]{0,120}SET notes =/.test(mod));
 
 console.log("\nclient wiring");
 ok("/app/vendors is RoleGuard admin/manager",

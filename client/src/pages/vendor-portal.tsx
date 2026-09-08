@@ -21,7 +21,7 @@ type Invoice = {
   id: string; invoice_number: string | null; amount: string | null; currency: string | null;
   status: string; description: string | null; review_note: string | null; created_at: string | null;
 };
-type Doc = { id: string; document_type: string; file_name: string; notes: string | null; created_at: string | null };
+type Doc = { id: string; document_type: string; file_name: string; notes: string | null; status: string | null; review_note: string | null; created_at: string | null };
 
 /** Logged-in vendor's own portal (PR 3). Shows only this vendor's records. */
 export default function VendorPortalPage() {
@@ -196,8 +196,8 @@ export default function VendorPortalPage() {
                   {documents.map(d => (
                     <TableRow key={d.id} data-testid={`row-my-doc-${d.id}`}>
                       <TableCell className="uppercase">{d.document_type}</TableCell>
-                      <TableCell className="text-sm">{d.file_name}{d.notes ? ` · ${d.notes}` : ""}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-xs">submitted</Badge></TableCell>
+                      <TableCell className="text-sm">{d.file_name}{d.review_note ? ` · ${d.review_note}` : d.notes ? ` · ${d.notes}` : ""}</TableCell>
+                      <TableCell><Badge variant={d.status === "approved" ? "default" : d.status === "rejected" ? "destructive" : "outline"} className="text-xs">{d.status || "received"}</Badge></TableCell>
                     </TableRow>
                   ))}
                 </>

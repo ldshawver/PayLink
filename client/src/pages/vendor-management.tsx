@@ -232,7 +232,7 @@ type SubInvoice = {
   id: string; business_name: string; invoice_number: string | null; amount: string | null;
   currency: string | null; status: string; description: string | null; review_note: string | null; created_at: string | null;
 };
-type SubDoc = { id: string; business_name: string; document_type: string; file_name: string; notes: string | null; created_at: string | null };
+type SubDoc = { id: string; business_name: string; document_type: string; file_name: string; notes: string | null; status: string; created_at: string | null };
 
 function VendorSubmissionsReview() {
   const { toast } = useToast();
@@ -300,7 +300,8 @@ function VendorSubmissionsReview() {
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader><TableRow>
-                      <TableHead>Vendor</TableHead><TableHead>Type</TableHead><TableHead>File</TableHead><TableHead className="w-40"></TableHead>
+                      <TableHead>Vendor</TableHead><TableHead>Type</TableHead><TableHead>File</TableHead>
+                      <TableHead>Status</TableHead><TableHead className="w-40"></TableHead>
                     </TableRow></TableHeader>
                     <TableBody>
                       {documents.map(d => (
@@ -308,13 +309,16 @@ function VendorSubmissionsReview() {
                           <TableCell>{d.business_name}</TableCell>
                           <TableCell className="text-sm uppercase">{d.document_type}</TableCell>
                           <TableCell className="text-sm">{d.file_name}{d.notes ? ` · ${d.notes}` : ""}</TableCell>
+                          <TableCell><Badge variant={d.status === "approved" ? "default" : d.status === "rejected" ? "destructive" : "secondary"} className="text-xs">{d.status || "received"}</Badge></TableCell>
                           <TableCell>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant="outline" data-testid={`button-approve-doc-${d.id}`}
-                                disabled={reviewDoc.isPending} onClick={() => reviewDoc.mutate({ id: d.id, action: "approve" })}>Approve</Button>
-                              <Button size="sm" variant="ghost" className="text-red-600" data-testid={`button-reject-doc-${d.id}`}
-                                disabled={reviewDoc.isPending} onClick={() => reviewDoc.mutate({ id: d.id, action: "reject" })}>Reject</Button>
-                            </div>
+                            {(d.status === "received" || !d.status) && (
+                              <div className="flex gap-2">
+                                <Button size="sm" variant="outline" data-testid={`button-approve-doc-${d.id}`}
+                                  disabled={reviewDoc.isPending} onClick={() => reviewDoc.mutate({ id: d.id, action: "approve" })}>Approve</Button>
+                                <Button size="sm" variant="ghost" className="text-red-600" data-testid={`button-reject-doc-${d.id}`}
+                                  disabled={reviewDoc.isPending} onClick={() => reviewDoc.mutate({ id: d.id, action: "reject" })}>Reject</Button>
+                              </div>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}

@@ -79,6 +79,16 @@ async function main() {
     ok("vendor_invoices defaults: status='submitted', currency='USD', amount IS NULL",
       inv.rows[0].status === "submitted" && inv.rows[0].currency === "USD" && inv.rows[0].amount === null);
 
+    const doc = await pool.query(
+      `INSERT INTO vendor_documents (vendor_id, company_id, file_name, file_url, uploaded_by_user_id, notes)
+       VALUES ($1,$2,'w9.pdf','/uploads/x.pdf','u-vendor','my upload note') RETURNING id, status, document_type`,
+      [v1.rows[0].id, co]);
+    ok("vendor_documents defaults: status='received', document_type='w9'",
+      doc.rows[0].status === "received" && doc.rows[0].document_type === "w9");
+    await pool.query(`UPDATE vendor_documents SET status='approved', review_note='ok', reviewed_by_user_id='u-admin', reviewed_at=NOW() WHERE id=$1`, [doc.rows[0].id]);
+    ok("a document review leaves the vendor's own `notes` intact",
+      (await pool.query(`SELECT notes, status, review_note FROM vendor_documents WHERE id=$1`, [doc.rows[0].id])).rows[0].notes === "my upload note");
+
     // 3. A review UPDATE writes ONLY vendor_invoices — vendors + vendor_documents counts unchanged.
     const before = {
       vendors: (await pool.query(`SELECT count(*)::int c FROM vendors WHERE company_id=$1`, [co])).rows[0].c,
