@@ -181,6 +181,13 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
           { title: "Platform Invoices", url: "/platform/billing", icon: FileText },
         ],
       },
+      {
+        label: "Tenant Licenses",
+        icon: FileBadge,
+        url: "/platform/licenses",
+        module: "platform_finance",
+        items: [],
+      },
     ],
   },
   {

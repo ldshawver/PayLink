@@ -13,6 +13,16 @@ import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
+import {
+  resolveCompanyLicense,
+  listCompanyLicenses,
+  getLicenseEvents,
+  adminUpsertLicense,
+  ensureTrialLicense,
+  LicenseValidationError,
+  CompanyNotFoundError,
+} from "./licensing/license-service";
+import { requireLicenseNotBlocked } from "./licensing/license-gate";
 import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
@@ -2035,7 +2045,25 @@ function hashSigningToken(token: string): string {
     if (user.companyId) {
       tenantGate = await checkTenantGate(user.companyId);
     }
-    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate });
+    // PR 4 — additive, advisory only. `license` describes the structured license
+    // record (normalized status, trial window, plan) for badge display. It does
+    // NOT drive access — `tenantGate` above (unchanged) remains authoritative.
+    let license: { status: string; source: string; isLegacy: boolean; planType: string | null; trial: any } | null = null;
+    if (user.companyId) {
+      try {
+        const view = await resolveCompanyLicense(user.companyId);
+        license = {
+          status: view.resolved.effectiveStatus,
+          source: view.resolved.source,
+          isLegacy: view.resolved.isLegacy,
+          planType: view.resolved.planType,
+          trial: view.resolved.trial,
+        };
+      } catch (e) {
+        console.error("[auth/me] license resolve failed (non-fatal):", e);
+      }
+    }
+    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate, license });
   });
 
   // GET /api/auth/effective-access — debug endpoint showing a user's resolved company access (admin only)
@@ -25987,6 +26015,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           VALUES (${companyId}, ${userId})
         `);
 
+        // PR 4 — give the new trial company a structured tenant_licenses record
+        // (status 'trialing'). Additive: it mirrors the trial window we just
+        // wrote to `companies`; it does not change access. ON CONFLICT DO
+        // NOTHING keeps this idempotent if the row somehow already exists.
+        await ensureTrialLicense(
+          companyId,
+          {
+            tenantId,
+            planType: "starter",
+            trialStart: now,
+            trialEnd,
+            source: "trial_signup",
+            actor: { userId, role: "admin" },
+          },
+          db,
+        );
+
         await db.execute(sql`
           INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
           VALUES ('signup_completed', ${userId}, ${companyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
@@ -26911,7 +26956,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch customer") }); }
   });
 
-  app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+  app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, requireLicenseNotBlocked, async (req, res) => {
     // Company scope is resolved server-side, never trusted from an arbitrary
     // body companyId:
     //  - a tenant user's company comes exclusively from the session;
@@ -27066,7 +27111,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice") }); }
   });
 
-  app.post("/api/invoices", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+  app.post("/api/invoices", requireAuth, requireRole("admin", "manager"), blockDemoWrites, requireLicenseNotBlocked, async (req, res) => {
     try {
       const { lineItems, ...invoiceData } = req.body;
       const invoice = await storage.createInvoice(invoiceData);
@@ -28254,7 +28299,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch document") }); }
   });
 
-  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
+  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, requireLicenseNotBlocked, enforceCompanyScope("body"), async (req, res) => {
     try {
       const companyId = (req as any)._companyId;
       const r = await storage.createDocument({ ...req.body, companyId });
@@ -33387,6 +33432,111 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         total: Object.values(statusCounts).reduce((a, b) => a + b, 0),
       });
     } catch (e) { res.status(500).json({ message: "Failed to fetch lifecycle overview" }); }
+  });
+
+  // ── Tenant licenses — PR 4 (migration 0022) ────────────────────────────────
+  // `tenant_licenses` is an ADDITIVE structured record. `companies` gate columns
+  // + checkTenantGate() remain authoritative for access and are unchanged here.
+  //
+  //   GET  /api/license/status                      any authenticated tenant user — advisory badge data
+  //   GET  /api/platform/licenses                   platform admin — every company's resolved license
+  //   GET  /api/platform/companies/:id/license      platform admin — one company (+ recent events)
+  //   PUT  /api/platform/companies/:id/license      platform admin — mutate (keeps companies + mirror consistent)
+
+  // Advisory: the caller's own workspace license. Never blocks; safe to poll.
+  app.get("/api/license/status", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (!user.companyId) {
+        return res.json({ scoped: false, license: null, gate: { allowed: true } });
+      }
+      const view = await resolveCompanyLicense(user.companyId);
+      res.json({
+        scoped: true,
+        companyId: view.companyId,
+        license: {
+          status: view.resolved.effectiveStatus,
+          label: view.resolved.label,
+          source: view.resolved.source,
+          isLegacy: view.resolved.isLegacy,
+          hasLicenseRecord: view.resolved.hasLicenseRecord,
+          planType: view.resolved.planType,
+          trial: view.resolved.trial,
+          gateBlocks: view.resolved.gateBlocks,
+        },
+        // Authoritative access decision (unchanged legacy gate), echoed for the UI.
+        gate: { allowed: view.gate.allowed, reason: view.gate.reason ?? null, code: view.gate.code ?? null },
+      });
+    } catch (e) {
+      console.error("[GET /api/license/status] failed:", e);
+      res.status(500).json({ message: "Failed to resolve license status" });
+    }
+  });
+
+  app.get("/api/platform/licenses", requireAuth, requirePlatformAdminRole(), async (_req, res) => {
+    try {
+      const rows = await listCompanyLicenses();
+      const summary = rows.reduce(
+        (acc, r) => {
+          acc.total++;
+          acc.byStatus[r.resolved.effectiveStatus] = (acc.byStatus[r.resolved.effectiveStatus] ?? 0) + 1;
+          if (r.resolved.hasLicenseRecord) acc.withRecord++;
+          else acc.legacy++;
+          return acc;
+        },
+        { total: 0, withRecord: 0, legacy: 0, byStatus: {} as Record<string, number> },
+      );
+      res.json({ licenses: rows, summary, generatedAt: new Date().toISOString() });
+    } catch (e) {
+      console.error("[GET /api/platform/licenses] failed:", e);
+      res.status(500).json({ message: "Failed to load licenses" });
+    }
+  });
+
+  app.get("/api/platform/companies/:companyId/license", requireAuth, requirePlatformAdminRole(), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const view = await resolveCompanyLicense(companyId);
+      const events = await getLicenseEvents(companyId, 50);
+      res.json({
+        companyId,
+        record: view.record,
+        resolved: view.resolved,
+        gate: { allowed: view.gate.allowed, reason: view.gate.reason ?? null, code: view.gate.code ?? null },
+        events,
+      });
+    } catch (e) {
+      console.error("[GET /api/platform/companies/:companyId/license] failed:", e);
+      res.status(500).json({ message: "Failed to load company license" });
+    }
+  });
+
+  app.put("/api/platform/companies/:companyId/license", requireAuth, requirePlatformAdminRole(), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const actorUser = await storage.getUser(req.session.userId!);
+      const { status, planType, trialEnd, notes, reason } = req.body ?? {};
+      const result = await adminUpsertLicense(
+        companyId,
+        { status, planType, trialEnd, notes, reason },
+        { userId: actorUser?.id ?? null, role: actorUser?.role ?? null },
+      );
+      const view = await resolveCompanyLicense(companyId);
+      res.json({
+        message: "License updated",
+        record: result.record,
+        companyStatusChanged: result.companyStatusChanged,
+        companyStatus: result.companyStatus,
+        resolved: view.resolved,
+        gate: { allowed: view.gate.allowed, reason: view.gate.reason ?? null, code: view.gate.code ?? null },
+      });
+    } catch (e: any) {
+      if (e instanceof LicenseValidationError) return res.status(400).json({ message: e.message });
+      if (e instanceof CompanyNotFoundError) return res.status(404).json({ message: e.message });
+      console.error("[PUT /api/platform/companies/:companyId/license] failed:", e);
+      res.status(500).json({ message: "Failed to update license" });
+    }
   });
 
   app.get("/api/permissions/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {

@@ -33,8 +33,11 @@ ok("vendors / vendor_documents / vendor_invoices tables defined",
   && /export const vendorInvoices = pgTable\("vendor_invoices"/.test(schema));
 {
   const numbered = fs.readdirSync("migrations").filter(f => /^\d{4}_.*\.sql$/.test(f)).sort();
-  ok("0021_vendor_portal.sql is the highest numbered migration",
-    numbered[numbered.length - 1] === "0021_vendor_portal.sql");
+  // 0021 is the vendor-portal migration; later PRs add higher-numbered files
+  // (0022 = tenant licenses, …). Pin that 0021 exists and that nothing
+  // renumbered it.
+  ok("0021_vendor_portal.sql exists and no migration below it is unnumbered/renamed",
+    numbered.includes("0021_vendor_portal.sql"));
 }
 {
   const forward = migration.split("ROLLBACK")[0];

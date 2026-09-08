@@ -3518,6 +3518,55 @@ Thank you,
     await run("vendor_invoices.vendor idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_invoices_vendor ON vendor_invoices (vendor_id)`);
     await run("vendor_invoices.company_status idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_invoices_company_status ON vendor_invoices (company_id, status)`);
 
+    // ── Tenant licenses — PR 4 (migration 0022) ───────────────────────────
+    // Additive structured license record + audit trail. `companies`
+    // subscription/trial/gate columns and checkTenantGate() remain the
+    // AUTHORITATIVE enforcement path — unchanged. A company with no
+    // tenant_licenses row resolves exactly as it does today (no lock-out).
+    // Scoping keys are plain VARCHAR (no FK) per the recent-table convention.
+    await run("tenant_licenses table", sql`CREATE TABLE IF NOT EXISTS tenant_licenses (
+      id                        VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id                VARCHAR NOT NULL,
+      tenant_id                 VARCHAR,
+      plan_type                 TEXT NOT NULL DEFAULT 'starter',
+      status                    TEXT NOT NULL DEFAULT 'active',
+      trial_start               TIMESTAMP,
+      trial_end                 TIMESTAMP,
+      current_period_start      TIMESTAMP,
+      current_period_end        TIMESTAMP,
+      source                    TEXT NOT NULL DEFAULT 'system',
+      external_ref              TEXT,
+      notes                     TEXT,
+      status_reason             TEXT,
+      status_changed_at         TIMESTAMP,
+      status_changed_by_user_id VARCHAR,
+      created_by_user_id        VARCHAR,
+      updated_by_user_id        VARCHAR,
+      created_at                TIMESTAMP DEFAULT NOW(),
+      updated_at                TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("tenant_licenses.company uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_licenses_company ON tenant_licenses (company_id)`);
+    await run("tenant_licenses.status idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_licenses_status ON tenant_licenses (status)`);
+    await run("tenant_licenses.tenant idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_licenses_tenant ON tenant_licenses (tenant_id)`);
+    await run("tenant_license_events table", sql`CREATE TABLE IF NOT EXISTS tenant_license_events (
+      id            VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      license_id    VARCHAR,
+      company_id    VARCHAR NOT NULL,
+      event_type    TEXT NOT NULL,
+      from_status   TEXT,
+      to_status     TEXT,
+      from_plan     TEXT,
+      to_plan       TEXT,
+      reason        TEXT,
+      actor_user_id TEXT,
+      actor_role    TEXT,
+      metadata      TEXT,
+      created_at    TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("tenant_license_events.license idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_license_events_license ON tenant_license_events (license_id)`);
+    await run("tenant_license_events.company idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_license_events_company ON tenant_license_events (company_id)`);
+    await run("tenant_license_events.created idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_license_events_created ON tenant_license_events (created_at)`);
+
     // Legal basis + purpose description on document retention policies
     await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);
     await run("document_retention_policies.purpose_description", sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS purpose_description TEXT`);
