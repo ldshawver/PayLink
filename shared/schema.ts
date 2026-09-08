@@ -5247,3 +5247,45 @@ export const identityLinks = pgTable("identity_links", {
 export const insertIdentityLinkSchema = createInsertSchema(identityLinks).omit({ id: true, createdAt: true });
 export type IdentityLink = typeof identityLinks.$inferSelect;
 export type InsertIdentityLink = z.infer<typeof insertIdentityLinkSchema>;
+
+/**
+ * contractor_access_requests — PR 2 (migration 0020). A contractor's public
+ * request to be given logged-in Contractor Hub access. Public submission only
+ * ever creates a `pending` row — never a login account. A company admin/manager
+ * reviews and approves (→ create/link the contractor worker + an account_invite
+ * from the PR 1 system) or rejects (→ status + reason, row kept). Additive; no
+ * changes to workers / users / the invite tables.
+ */
+export const contractorAccessRequests = pgTable("contractor_access_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** Set once an admin claims/approves the request for their company; null while unassigned. */
+  companyId: varchar("company_id"),
+  email: text("email").notNull(), // stored lower-cased
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  phone: text("phone"),
+  businessName: text("business_name"),
+  tradeType: text("trade_type"),
+  licenseNumber: text("license_number"),
+  /** Free-text: which company/client the contractor believes they're requesting access to. */
+  requestedCompanyHint: text("requested_company_hint"),
+  message: text("message"),
+  status: text("status").notNull().default("pending"), // pending | approved | rejected | withdrawn
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  rejectionReason: text("rejection_reason"),
+  /** Populated on approval. */
+  createdWorkerId: varchar("created_worker_id"),
+  accountInviteId: varchar("account_invite_id"),
+  /** Set when approval links to an already-existing login account instead of inviting. */
+  linkedUserId: varchar("linked_user_id"),
+  reviewNote: text("review_note"), // e.g. "cross-company — manual review" ambiguity marker
+  sourceIp: text("source_ip"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorAccessRequestSchema = createInsertSchema(contractorAccessRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorAccessRequest = typeof contractorAccessRequests.$inferSelect;
+export type InsertContractorAccessRequest = z.infer<typeof insertContractorAccessRequestSchema>;
