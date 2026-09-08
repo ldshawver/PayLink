@@ -275,6 +275,15 @@ const MAIN_NAV: NavGroup[] = [
           { title: "Payments", url: "/app/invoices?tab=payments", icon: DollarSign },
         ],
       },
+      {
+        label: "Vendor Portal",
+        icon: Building2,
+        url: "/app/vendors",
+        items: [
+          { title: "Vendors", url: "/app/vendors", icon: Building2, roles: ["admin", "manager"] },
+          { title: "My Vendor Portal", url: "/app/vendor-portal", icon: Receipt, roles: ["vendor"] },
+        ],
+      },
     ],
   },
   {

@@ -58,6 +58,8 @@ const LoginPage = lazy(() => import("@/pages/login"));
 const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
 const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
 const ContractorAccessRequestsPage = lazy(() => import("@/pages/contractor-access-requests"));
+const VendorManagementPage = lazy(() => import("@/pages/vendor-management"));
+const VendorPortalPage = lazy(() => import("@/pages/vendor-portal"));
 const NotificationSettingsPage = lazy(() => import("@/pages/notification-settings"));
 const NotificationTemplatesPage = lazy(() => import("@/pages/notification-templates"));
 const MessagesPage = lazy(() => import("@/pages/messages"));
@@ -300,6 +302,8 @@ function AuthenticatedRouter() {
         <Route path="/app/contractor-hub/contracts/:id/sign">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorContractSigningPage /></FeatureGate>}</Route>
         <Route path="/app/contractor-hub">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
         <Route path="/app/contractor-access-requests">{() => <RoleGuard roles={["admin", "manager"]}><ContractorAccessRequestsPage /></RoleGuard>}</Route>
+        <Route path="/app/vendors">{() => <RoleGuard roles={["admin", "manager"]}><VendorManagementPage /></RoleGuard>}</Route>
+        <Route path="/app/vendor-portal">{() => <RoleGuard roles={["vendor"]}><VendorPortalPage /></RoleGuard>}</Route>
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><FeatureGate featureKey="tenant.finance.treasury" featureName="Stripe Treasury"><TreasuryPage /></FeatureGate></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
         <Route path="/app/settings/email">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><EmailSettingsPage /></StrictRoleGuard>}</Route>

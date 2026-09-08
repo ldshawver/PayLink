@@ -34,6 +34,13 @@ import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUu
 import { loadWorkerSignerIdentity, loadWorkerAccountStates, loadWorkerAccountState, createOrRefreshInvite, getLiveInviteByToken, findLinkableUserByEmail, upsertIdentityLink, acceptInviteWithUser, setWorkerAccountEnabled } from "./identity/identity-db";
 import { normalizeEmail } from "./identity/identity-resolver";
 import { normalizeAccessRequestInput, isRateLimited, submitAccessRequest, listAccessRequestsForCompany, approveAccessRequest, rejectAccessRequest } from "./identity/contractor-access-requests";
+import {
+  normalizeVendorInput, normalizeVendorPatch, normalizeVendorInvoiceInput, normalizeVendorDocumentType,
+  createVendor, updateVendorContact, listVendorsForCompany, getVendorForCompany, setVendorAccessEnabled,
+  inviteVendorUser, resolveVendorForUser, createVendorInvoiceSubmission, createVendorDocumentSubmission,
+  listSubmissionsForVendor, listPendingVendorSubmissionsForCompany, reviewVendorInvoice, reviewVendorDocument,
+  type VendorContext,
+} from "./identity/vendors";
 import { normalizeWorkerPayRate, isValidWorkerType, isValidContractorType } from "@shared/worker-pay-rate-rules";
 import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
@@ -2866,6 +2873,290 @@ function hashSigningToken(token: string): string {
       res.status(500).json({ message: "Failed to reject request" });
     }
   });
+
+  // ── Vendor portal — PR 3 ────────────────────────────────────────────────────
+  // Admin/manager vendor management + a logged-in vendor's own portal. Vendor
+  // login reuses the PR 1 account_invites + identity_links system
+  // (relationship_kind='vendor' / subject_type='vendor'); NO new public endpoint
+  // and NO auth-gate allowlist entry — vendors accept via the existing
+  // /api/account-invites/accept. A review (approve/reject/status) sets a status
+  // and nothing else: no expense, expense_payment, check, contractor_payment, or
+  // any ledger row is created in PR 3.
+
+  const VENDOR_DOC_MAX_BYTES = 10 * 1024 * 1024;
+
+  /** Resolve (and require) the single vendor the acting user is bound to. 403 otherwise. */
+  async function requireVendorContext(req: any, res: Response): Promise<VendorContext | null> {
+    const ctx = await resolveVendorForUser(req.session.userId as string);
+    if (!ctx) {
+      res.status(403).json({ message: "This area is for vendor portal accounts." });
+      return null;
+    }
+    return ctx;
+  }
+
+  async function actingCompanyId(req: any): Promise<string | null> {
+    const u = await storage.getUser(req.session.userId!);
+    return u?.companyId || null;
+  }
+
+  // -- Admin/manager: vendor management (tenant-scoped) --
+  app.get("/api/vendors", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.json([]);
+      res.json(await listVendorsForCompany(companyId));
+    } catch (e) {
+      console.error("GET /api/vendors failed:", e);
+      res.status(500).json({ message: "Failed to load vendors" });
+    }
+  });
+
+  app.get("/api/vendors/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const vendor = await getVendorForCompany(req.params.id as string, companyId);
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      const all = await listVendorsForCompany(companyId);
+      const withPortal = all.find(v => v.id === vendor.id);
+      res.json(withPortal || vendor);
+    } catch (e) {
+      console.error("GET /api/vendors/:id failed:", e);
+      res.status(500).json({ message: "Failed to load vendor" });
+    }
+  });
+
+  app.post("/api/vendors", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to create vendors." });
+      const parsed = normalizeVendorInput(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const vendor = await createVendor(companyId, parsed.value, req.session.userId!);
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors", changeType: "vendor_created",
+        afterValue: vendor.businessName, companyId,
+      });
+      res.status(201).json(vendor);
+    } catch (e) {
+      console.error("POST /api/vendors failed:", e);
+      res.status(500).json({ message: "Failed to create vendor" });
+    }
+  });
+
+  app.patch("/api/vendors/:id", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const parsed = normalizeVendorPatch(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const vendor = await updateVendorContact(req.params.id as string, companyId, parsed.value);
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors", changeType: "vendor_updated",
+        afterValue: Object.keys(parsed.value).join(","), companyId,
+      });
+      res.json(vendor);
+    } catch (e) {
+      console.error("PATCH /api/vendors/:id failed:", e);
+      res.status(500).json({ message: "Failed to update vendor" });
+    }
+  });
+
+  app.post("/api/vendors/:id/status", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const enabled = req.body?.enabled === true || req.body?.enabled === "true";
+      const vendor = await setVendorAccessEnabled(req.params.id as string, companyId, enabled);
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors",
+        changeType: enabled ? "vendor_access_enabled" : "vendor_access_disabled",
+        afterValue: vendor.businessName, companyId,
+      });
+      res.json(vendor);
+    } catch (e) {
+      console.error("POST /api/vendors/:id/status failed:", e);
+      res.status(500).json({ message: "Failed to update vendor access" });
+    }
+  });
+
+  app.post("/api/vendors/:id/invite", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to invite vendors." });
+      const result = await inviteVendorUser(req.params.id as string, companyId, req.session.userId!);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      const vendor = await getVendorForCompany(req.params.id as string, companyId);
+      await sendAccountInviteEmail(req, result.email, vendor?.contactName || vendor?.businessName || "there", result.rawToken).catch(() => {});
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors", changeType: "vendor_user_invited",
+        afterValue: result.email, companyId,
+      });
+      // Never return the raw invite token.
+      res.json({ status: "invited", email: result.email });
+    } catch (e) {
+      console.error("POST /api/vendors/:id/invite failed:", e);
+      res.status(500).json({ message: "Failed to invite vendor user" });
+    }
+  });
+
+  // -- Admin/manager: review vendor submissions (status only) --
+  app.get("/api/vendor-submissions", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.json({ invoices: [], documents: [] });
+      res.json(await listPendingVendorSubmissionsForCompany(companyId));
+    } catch (e) {
+      console.error("GET /api/vendor-submissions failed:", e);
+      res.status(500).json({ message: "Failed to load vendor submissions" });
+    }
+  });
+
+  app.post("/api/vendor-invoices/:id/review", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const action = String(req.body?.action || "");
+      const status = action === "approve" ? "approved" : action === "reject" ? "rejected"
+        : action === "status" ? String(req.body?.status || "") : "";
+      const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 1000) || null : null;
+      const result = await reviewVendorInvoice(req.params.id as string, companyId, req.session.userId!, status, note);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendor_invoices",
+        changeType: `vendor_invoice_${status}`, afterValue: result.row?.id || req.params.id, companyId,
+      });
+      res.json(result.row);
+    } catch (e) {
+      console.error("POST /api/vendor-invoices/:id/review failed:", e);
+      res.status(500).json({ message: "Failed to review invoice" });
+    }
+  });
+
+  app.post("/api/vendor-documents/:id/review", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const action = String(req.body?.action || "");
+      const status = action === "approve" ? "approved" : action === "reject" ? "rejected" : "received";
+      const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 1000) || null : null;
+      const result = await reviewVendorDocument(req.params.id as string, companyId, req.session.userId!, status, note);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendor_documents",
+        changeType: `vendor_document_${status}`, afterValue: req.params.id, companyId,
+      });
+      res.json(result.row);
+    } catch (e) {
+      console.error("POST /api/vendor-documents/:id/review failed:", e);
+      res.status(500).json({ message: "Failed to review document" });
+    }
+  });
+
+  // -- Logged-in vendor: own portal (vendor-scoped, never cross-vendor) --
+  app.get("/api/vendor-portal/profile", requireAuth, async (req: any, res) => {
+    try {
+      const ctx = await requireVendorContext(req, res);
+      if (!ctx) return;
+      const vendor = await getVendorForCompany(ctx.vendorId, ctx.companyId);
+      if (!vendor) return res.status(404).json({ message: "Vendor profile not found" });
+      const company = await storage.getCompany(ctx.companyId);
+      res.json({ vendor, company: company ? { id: company.id, name: company.name } : null });
+    } catch (e) {
+      console.error("GET /api/vendor-portal/profile failed:", e);
+      res.status(500).json({ message: "Failed to load profile" });
+    }
+  });
+
+  app.patch("/api/vendor-portal/profile", requireAuth, blockDemoWrites, async (req: any, res) => {
+    try {
+      const ctx = await requireVendorContext(req, res);
+      if (!ctx) return;
+      const parsed = normalizeVendorPatch(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      // A vendor can edit their own contact fields but not their business name.
+      delete parsed.value.businessName;
+      const vendor = await updateVendorContact(ctx.vendorId, ctx.companyId, parsed.value);
+      res.json(vendor);
+    } catch (e) {
+      console.error("PATCH /api/vendor-portal/profile failed:", e);
+      res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
+  app.get("/api/vendor-portal/submissions", requireAuth, async (req: any, res) => {
+    try {
+      const ctx = await requireVendorContext(req, res);
+      if (!ctx) return;
+      res.json(await listSubmissionsForVendor(ctx));
+    } catch (e) {
+      console.error("GET /api/vendor-portal/submissions failed:", e);
+      res.status(500).json({ message: "Failed to load submissions" });
+    }
+  });
+
+  app.post(
+    "/api/vendor-portal/invoices",
+    requireAuth,
+    blockDemoWrites,
+    singleFileUpload(documentUpload, "file", { maxBytes: VENDOR_DOC_MAX_BYTES }),
+    async (req: any, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      try {
+        const ctx = await requireVendorContext(req, res);
+        if (!ctx) { await discardUploadedFile(file); return; }
+        const parsed = normalizeVendorInvoiceInput(req.body || {});
+        if (!parsed.ok) { await discardUploadedFile(file); return res.status(400).json({ message: parsed.message }); }
+        const stored = file
+          ? { fileName: file.originalname, fileUrl: `/uploads/${file.filename}`, fileSize: file.size, mimeType: file.mimetype }
+          : null;
+        let row;
+        try {
+          row = await createVendorInvoiceSubmission(ctx, req.session.userId as string, parsed.value, stored);
+        } catch (dbErr) {
+          await discardUploadedFile(file);
+          throw dbErr;
+        }
+        res.status(201).json({ id: row.id, status: row.status });
+      } catch (e) {
+        console.error("POST /api/vendor-portal/invoices failed:", e);
+        res.status(500).json({ message: "Failed to submit invoice" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/vendor-portal/documents",
+    requireAuth,
+    blockDemoWrites,
+    singleFileUpload(documentUpload, "file", { maxBytes: VENDOR_DOC_MAX_BYTES }),
+    async (req: any, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      try {
+        const ctx = await requireVendorContext(req, res);
+        if (!ctx) { await discardUploadedFile(file); return; }
+        if (!file) return res.status(400).json({ error: "NO_FILE", message: "Attach a file to upload." });
+        const documentType = normalizeVendorDocumentType(req.body?.documentType);
+        const notes = typeof req.body?.notes === "string" ? req.body.notes.trim().slice(0, 2000) || null : null;
+        let row;
+        try {
+          row = await createVendorDocumentSubmission(ctx, req.session.userId as string, documentType, notes, {
+            fileName: file.originalname, fileUrl: `/uploads/${file.filename}`, fileSize: file.size, mimeType: file.mimetype,
+          });
+        } catch (dbErr) {
+          await discardUploadedFile(file);
+          throw dbErr;
+        }
+        res.status(201).json({ id: row.id, documentType: row.document_type });
+      } catch (e) {
+        console.error("POST /api/vendor-portal/documents failed:", e);
+        res.status(500).json({ message: "Failed to upload document" });
+      }
+    },
+  );
 
   app.patch("/api/workers/:id", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
