@@ -3450,6 +3450,74 @@ Thank you,
     await run("contractor_access_requests.company idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_company ON contractor_access_requests (company_id)`);
     await run("contractor_access_requests.pending email uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_access_requests_pending_email ON contractor_access_requests (LOWER(email)) WHERE status = 'pending'`);
 
+    // ── Vendor portal — PR 3 (migration 0021) ─────────────────────────────
+    // Scoping keys are plain VARCHAR (no FK) per the recent-table convention
+    // (contractor_documents / contractor_access_requests / account_invites).
+    await run("vendors table", sql`CREATE TABLE IF NOT EXISTS vendors (
+      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id         VARCHAR NOT NULL,
+      business_name      TEXT NOT NULL,
+      contact_name       TEXT,
+      email              TEXT,
+      phone              TEXT,
+      address            TEXT,
+      city               TEXT,
+      state              TEXT,
+      zip                TEXT,
+      tax_id             TEXT,
+      service_type       TEXT,
+      notes              TEXT,
+      status             TEXT NOT NULL DEFAULT 'active',
+      created_by_user_id VARCHAR,
+      created_at         TIMESTAMP DEFAULT NOW(),
+      updated_at         TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("vendors.company idx", sql`CREATE INDEX IF NOT EXISTS idx_vendors_company ON vendors (company_id)`);
+    await run("vendors.email idx", sql`CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (LOWER(email))`);
+    await run("vendor_documents table", sql`CREATE TABLE IF NOT EXISTS vendor_documents (
+      id                  VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      vendor_id           VARCHAR NOT NULL,
+      company_id          VARCHAR NOT NULL,
+      document_type       TEXT NOT NULL DEFAULT 'w9',
+      file_name           TEXT NOT NULL,
+      file_url            TEXT NOT NULL,
+      file_size           INTEGER,
+      mime_type           TEXT,
+      notes               TEXT,
+      status              TEXT NOT NULL DEFAULT 'received',
+      review_note         TEXT,
+      reviewed_by_user_id VARCHAR,
+      reviewed_at         TIMESTAMP,
+      uploaded_by_user_id VARCHAR NOT NULL,
+      created_at          TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("vendor_documents.vendor idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_documents_vendor ON vendor_documents (vendor_id)`);
+    await run("vendor_documents.company idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_documents_company ON vendor_documents (company_id)`);
+    await run("vendor_invoices table", sql`CREATE TABLE IF NOT EXISTS vendor_invoices (
+      id                   VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      vendor_id            VARCHAR NOT NULL,
+      company_id           VARCHAR NOT NULL,
+      invoice_number       TEXT,
+      amount               NUMERIC,
+      currency             TEXT DEFAULT 'USD',
+      invoice_date         DATE,
+      due_date             DATE,
+      description          TEXT,
+      status               TEXT NOT NULL DEFAULT 'submitted',
+      file_name            TEXT,
+      file_url             TEXT,
+      file_size            INTEGER,
+      mime_type            TEXT,
+      submitted_by_user_id VARCHAR,
+      reviewed_by_user_id  VARCHAR,
+      reviewed_at          TIMESTAMP,
+      review_note          TEXT,
+      created_at           TIMESTAMP DEFAULT NOW(),
+      updated_at           TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("vendor_invoices.vendor idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_invoices_vendor ON vendor_invoices (vendor_id)`);
+    await run("vendor_invoices.company_status idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_invoices_company_status ON vendor_invoices (company_id, status)`);
+
     // Legal basis + purpose description on document retention policies
     await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);
     await run("document_retention_policies.purpose_description", sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS purpose_description TEXT`);

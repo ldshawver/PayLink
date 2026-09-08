@@ -113,6 +113,17 @@ export const INVITE_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days, matches contr
 
 export type RelationshipKind = "employee" | "contractor" | "vendor" | "customer_owner" | "platform";
 
+/**
+ * The `identity_links.subject_type` an accepted invite of a given relationship
+ * kind should link to. employee/contractor bind to the `worker` subject; vendor
+ * binds to the `vendor` subject; anything else records no subject link.
+ */
+export function inviteSubjectType(relationshipKind: string): "worker" | "vendor" | null {
+  if (relationshipKind === "vendor") return "vendor";
+  if (relationshipKind === "employee" || relationshipKind === "contractor") return "worker";
+  return null;
+}
+
 export interface CreateInviteInput {
   companyId: string;
   email: string;
@@ -410,12 +421,15 @@ export async function acceptInviteWithUser(
       WHERE id = ${invite.id}
     `);
 
-    if (invite.relationshipId && (invite.relationshipKind === "employee" || invite.relationshipKind === "contractor")) {
+    // Record the identity link for the relationship this invite is for.
+    // employee/contractor → a `worker` subject; vendor → a `vendor` subject.
+    const subjectType = inviteSubjectType(invite.relationshipKind);
+    if (invite.relationshipId && subjectType) {
       await db.execute(sql`
         INSERT INTO identity_links
           (user_id, subject_type, subject_id, company_id, link_status, verified_email, linked_by_user_id)
         VALUES
-          (${userId}, 'worker', ${invite.relationshipId}, ${invite.companyId}, 'active', ${invite.email}, ${userId})
+          (${userId}, ${subjectType}, ${invite.relationshipId}, ${invite.companyId}, 'active', ${invite.email}, ${userId})
         ON CONFLICT (user_id, subject_type, subject_id) DO NOTHING
       `);
     }

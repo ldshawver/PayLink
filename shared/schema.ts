@@ -5289,3 +5289,94 @@ export const contractorAccessRequests = pgTable("contractor_access_requests", {
 export const insertContractorAccessRequestSchema = createInsertSchema(contractorAccessRequests).omit({ id: true, createdAt: true, updatedAt: true });
 export type ContractorAccessRequest = typeof contractorAccessRequests.$inferSelect;
 export type InsertContractorAccessRequest = z.infer<typeof insertContractorAccessRequestSchema>;
+
+// ── Vendor portal — PR 3 (migration 0021) ────────────────────────────────────
+// Additive only. Vendors are a FIRST-CLASS entity — NOT `customers` (customers
+// are SaaS tenants/AR; vendors are AP payees/service providers). Portal login
+// is the PR 1 account_invites + identity_links system (subject_type='vendor');
+// no separate access table is needed. Invoice/W-9 uploads create REVIEWABLE
+// records only — no ledger / check / payment side effects in PR 3.
+//
+// Scoping keys (`company_id`, `vendor_id`) are plain `varchar` with no FK
+// constraint — matching the recent-table convention in this repo
+// (`contractor_documents`, `contractor_access_requests`, `account_invites`).
+// Every query in server/identity/vendors.ts is explicitly company/vendor-scoped.
+
+export const vendors = pgTable("vendors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  businessName: text("business_name").notNull(),
+  contactName: text("contact_name"),
+  email: text("email"), // stored lower-cased; the address a portal invite is sent to
+  phone: text("phone"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  taxId: text("tax_id"),
+  serviceType: text("service_type"),
+  notes: text("notes"),
+  status: text("status").notNull().default("active"), // active | inactive
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertVendorSchema = createInsertSchema(vendors).omit({ id: true, createdAt: true, updatedAt: true });
+export type Vendor = typeof vendors.$inferSelect;
+export type InsertVendor = z.infer<typeof insertVendorSchema>;
+
+/** Vendor-uploaded tax / compliance files (W-9, insurance certs, …). Mirrors contractor_documents. */
+export const vendorDocuments = pgTable("vendor_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  documentType: text("document_type").notNull().default("w9"), // w9 | tax | insurance | license | other
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  notes: text("notes"), // the vendor's own note on upload — never overwritten by a review
+  status: text("status").notNull().default("received"), // received | approved | rejected
+  reviewNote: text("review_note"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertVendorDocumentSchema = createInsertSchema(vendorDocuments).omit({ id: true, createdAt: true });
+export type VendorDocument = typeof vendorDocuments.$inferSelect;
+export type InsertVendorDocument = z.infer<typeof insertVendorDocumentSchema>;
+
+/**
+ * Vendor-submitted invoices. A submission is a REVIEWABLE record — never a
+ * payment. `status` in PR 3 is only submitted | approved | rejected | needs_info;
+ * no check/ledger/expense-payment row is created here.
+ */
+export const vendorInvoices = pgTable("vendor_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  invoiceNumber: text("invoice_number"),
+  amount: numeric("amount"),
+  currency: text("currency").default("USD"),
+  invoiceDate: date("invoice_date"),
+  dueDate: date("due_date"),
+  description: text("description"),
+  status: text("status").notNull().default("submitted"), // submitted | approved | rejected | needs_info
+  fileName: text("file_name"),
+  fileUrl: text("file_url"),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  submittedByUserId: varchar("submitted_by_user_id"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNote: text("review_note"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertVendorInvoiceSchema = createInsertSchema(vendorInvoices).omit({ id: true, createdAt: true, updatedAt: true });
+export type VendorInvoice = typeof vendorInvoices.$inferSelect;
+export type InsertVendorInvoice = z.infer<typeof insertVendorInvoiceSchema>;
