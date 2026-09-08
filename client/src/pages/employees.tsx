@@ -838,7 +838,10 @@ function AddWorkerDialog() {
       payRate: "",
       payType: "hourly",
       hireDate: "",
-      companyId: companies?.[0]?.id || "",
+      // Never default to "whichever company loaded first" — an unnoticed wrong
+      // default here is how a contractor ends up created under the wrong
+      // tenant. Company must always be an explicit, deliberate selection.
+      companyId: "",
       address: "",
       city: "",
       state: "",
@@ -850,13 +853,25 @@ function AddWorkerDialog() {
   });
 
   const createWorker = useMutation({
-    mutationFn: async (data: WorkerFormValues) => {
-      await apiRequest("POST", "/api/workers", data);
+    mutationFn: async (data: WorkerFormValues): Promise<Worker> => {
+      const res = await apiRequest("POST", "/api/workers", data);
+      const created = await res.json();
+      // The UI must never report success without a real, server-persisted
+      // record: require the authoritative id back from the server before
+      // this resolves. A network-level 2xx with no usable id is not proof
+      // the contractor was actually saved.
+      if (!created || typeof created.id !== "string" || !created.id) {
+        throw new Error("The server did not confirm the new worker was saved. Please try again.");
+      }
+      return created as Worker;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      toast({ title: "Worker added successfully" });
+      toast({
+        title: "Worker added successfully",
+        description: `${created.firstName} ${created.lastName} · ID ${created.id.slice(0, 8)}…`,
+      });
       form.reset();
       setOpen(false);
     },

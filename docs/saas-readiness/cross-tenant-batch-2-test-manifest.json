@@ -1,0 +1,296 @@
+{
+  "generatedAt": "2026-08-24",
+  "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
+  "summary": {
+    "PASS": 44,
+    "FAIL": 0,
+    "INCONCLUSIVE": 0,
+    "EXPECTED GLOBAL": 0,
+    "N/A": 0
+  },
+  "routes": [
+    {
+      "id": "GET /api/payroll-runs/:id/summary",
+      "source": "server/routes.ts:5714",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads a Tenant A payroll run's summary (own data, not Tenant B's)",
+          "disposition": "PASS",
+          "detail": "status=200 totalGross=1111.11"
+        },
+        {
+          "case": "2. Tenant A admin reads a Tenant B payroll run's summary by ID",
+          "disposition": "PASS",
+          "detail": "status=404 totalGrossLeaked=false"
+        },
+        {
+          "case": "3. Nonexistent payroll run id — indistinguishable from a foreign-tenant id (both 404)",
+          "disposition": "PASS",
+          "detail": "status=404 (foreign-tenant case status was 404)"
+        },
+        {
+          "case": "4. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/payroll-runs/:id",
+      "source": "server/routes.ts:8209",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates a Tenant A payroll run",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates a Tenant B payroll run by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowUnchanged=true"
+        },
+        {
+          "case": "3. Tenant A's own payroll run ID + Tenant B's companyId in the update body",
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403) — reassignment not reproducible."
+        },
+        {
+          "case": "4. Nonexistent payroll run id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/payroll-runs/:id",
+      "source": "server/routes.ts:5752",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin deletes a Tenant B payroll run by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowStillExists=true"
+        },
+        {
+          "case": "2. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "4. Tenant A admin deletes a Tenant A payroll run",
+          "disposition": "PASS",
+          "detail": "status=200"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/invoices/:id",
+      "source": "server/routes.ts:24833",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates a Tenant A invoice",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates a Tenant B invoice by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowUnchanged=true"
+        },
+        {
+          "case": "3. Nonexistent invoice id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "4. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/invoices/:id",
+      "source": "server/routes.ts:24849",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin deletes a Tenant B invoice by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowStillExists=true"
+        },
+        {
+          "case": "2. Nonexistent invoice id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "3. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "5. Tenant A admin deletes a Tenant A invoice",
+          "disposition": "PASS",
+          "detail": "status=200"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/contractor-invoices/:id/mark-paid",
+      "source": "server/routes.ts:10866",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin marks a Tenant A contractor invoice paid",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin marks a Tenant B contractor invoice paid by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowUnchanged=true"
+        },
+        {
+          "case": "3. Nonexistent contractor invoice id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "4. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/contractor-trade-compensation/:id/approve",
+      "source": "server/routes.ts:22524",
+      "storageScopeTraceDisposition": "needs-negative-test",
+      "cases": [
+        {
+          "case": "1. Tenant A admin approves a Tenant A trade-compensation item",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin approves a Tenant B trade-compensation item by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowUnchanged=true"
+        },
+        {
+          "case": "3. Unauthorized same-tenant role (employee) — already approved by case 1, expect a role/state rejection either way",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/dam-documents/:id",
+      "source": "server/routes.ts:16609",
+      "storageScopeTraceDisposition": "needs-negative-test",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads a Tenant A document (own data, not Tenant B's)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin reads a Tenant B document by ID",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Same-tenant employee reads a company-owned (not their own) document",
+          "disposition": "PASS",
+          "detail": "status=403 — expected 403: employee is neither the doc's worker_id/related_contractor_id nor an admin/manager/tenant_*/platform_* role (server/routes.ts:16617-16620)"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/companies/:id",
+      "source": "server/routes.ts:2128",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates their own company (Tenant A)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates Tenant B's company record directly by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowUnchanged=true"
+        },
+        {
+          "case": "3. Nonexistent company id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "4. Platform-owner updates Tenant B's company directly (tenant-admin vs platform-owner boundary)",
+          "disposition": "PASS",
+          "detail": "status=200 rowChanged=true"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    }
+  ]
+}

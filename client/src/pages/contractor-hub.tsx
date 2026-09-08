@@ -33,7 +33,7 @@ import {
   UserCheck
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { canShowContractSignatureActions, getDocumensoDisabledReason, buildContractorHubProposalRoute, buildContractorHubInvoiceRoute } from "@/lib/contractSignatureActions";
+import { canShowContractSignatureActions, getDocumensoDisabledReason, buildContractorHubProposalRoute, buildContractorHubInvoiceRoute, isDocumensoManagedContract, canManuallyActivateContract } from "@/lib/contractSignatureActions";
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 class ProposalErrorBoundary extends Component<
@@ -259,6 +259,7 @@ interface Contract {
   contractType?: string;
   contractorId: string;
   contractorName?: string;
+  contractorEmail?: string;
   companyId?: string;
   companyName?: string;
   proposalId?: string;
@@ -2458,6 +2459,15 @@ function TemplateTabContent({
 
 // ─── Proposal Builder ─────────────────────────────────────────────────────────
 
+function contractorDisplayName(w: any): string {
+  if (!w) return "";
+  return (
+    w.fullName || w.full_name ||
+    `${w.firstName || w.first_name || ""} ${w.lastName || w.last_name || ""}`.trim() ||
+    (w.id ? String(w.id).slice(0, 8) : "")
+  );
+}
+
 function ProposalBuilder({
   open, onClose, proposal, isAdmin
 }: {
@@ -2535,11 +2545,19 @@ function ProposalBuilder({
     },
     enabled: isAdmin && isNew,
   });
-  const contractorWorkers = allWorkers.filter((w: any) =>
-    (w.workerType || w.worker_type) === "contractor"
-  );
-
   const current = { ...proposal, ...form };
+
+  // Scoped to the selected company: a contractor from a different company must
+  // never be selectable here, even though /api/workers can return contractors
+  // across every company this admin can see. This is what previously let a
+  // proposal silently resolve to an unrelated contractor (e.g. "LUX
+  // Contractor") that had nothing to do with the company shown in the form.
+  const selectedCompanyId = form.companyId ?? current.companyId ?? "";
+  const contractorWorkers = allWorkers.filter((w: any) =>
+    (w.workerType || w.worker_type) === "contractor" &&
+    (!selectedCompanyId || (w.companyId || w.company_id) === selectedCompanyId)
+  );
+  const selectedContractorIsValid = !!form.contractorId && contractorWorkers.some((w: any) => w.id === form.contractorId);
 
   function handleBuilderTabChange(nextTab: string) {
     setTab(nextTab);
@@ -2548,13 +2566,46 @@ function ProposalBuilder({
 
   const saveMutation = useMutation({
     mutationFn: async (data: any) => {
-      if (isNew) return apiRequest("POST", "/api/contractor-proposals", data);
-      return apiRequest("PATCH", `/api/contractor-proposals/${proposalId}`, data);
+      if (isNew && isAdmin) {
+        // Revalidate immediately before send — the contractor must still be a
+        // valid, in-scope-for-the-selected-company selection at submit time,
+        // not just whenever it was originally picked.
+        if (!data.contractorId || !contractorWorkers.some((w: any) => w.id === data.contractorId)) {
+          throw new Error("Select a contractor that belongs to the chosen company before saving.");
+        }
+      }
+      const res = isNew
+        ? await apiRequest("POST", "/api/contractor-proposals", data)
+        : await apiRequest("PATCH", `/api/contractor-proposals/${proposalId}`, data);
+      return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (saved: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
-      toast({ title: isNew ? "Proposal created" : "Proposal saved" });
-      if (isNew) onClose();
+      if (isNew) {
+        // Show the authoritative, server-persisted identity — not just what
+        // was selected in the form — so a mismatch between what was picked
+        // and what was actually saved is impossible to miss.
+        const savedContractorId = saved?.contractor_id ?? saved?.contractorId;
+        const savedContractor = contractorWorkers.find((w: any) => w.id === savedContractorId);
+        const contractorName = contractorDisplayName(savedContractor);
+        const contractorEmail = savedContractor?.email;
+        const companyName = companies.find((c: any) => c.id === (saved?.company_id ?? saved?.companyId))?.name;
+        const proposalNumber = saved?.proposal_number ?? saved?.proposalNumber;
+        const savedId = saved?.id as string | undefined;
+        toast({
+          title: "Proposal created",
+          description: [
+            proposalNumber,
+            `Contractor: ${contractorName || "unknown"}${contractorEmail ? ` <${contractorEmail}>` : ""}`,
+            companyName ? `Company: ${companyName}` : null,
+            savedContractorId ? `Contractor ID: ${String(savedContractorId).slice(0, 8)}…` : null,
+            savedId ? `Proposal ID: ${savedId.slice(0, 8)}…` : null,
+          ].filter(Boolean).join(" · "),
+        });
+        onClose();
+      } else {
+        toast({ title: "Proposal saved" });
+      }
     },
     onError: (e: any) => toast({ title: e?.message || "Save failed", variant: "destructive" }),
   });
@@ -2815,13 +2866,23 @@ function ProposalBuilder({
             <div className="flex items-center gap-2 shrink-0">
               {canEdit && (() => {
                 const isDraftOrNew = isNew || !proposal?.status || proposal.status === "draft";
+                // A new admin-created proposal cannot be saved without an
+                // authoritative, in-scope contractor selection — no silent
+                // fallback to whatever contractor happened to be selected.
+                const blockedByMissingContractor = isNew && isAdmin && !selectedContractorIsValid;
                 return (
-                  <Button size="sm" onClick={() => saveMutation.mutate({
-                    ...form,
-                    ...(isDraftOrNew ? { status: "draft" } : {}),
-                    issueDate: form.issueDate || current.issueDate || new Date().toISOString().split("T")[0],
-                    companyId: form.companyId || current.companyId,
-                  })} disabled={saveMutation.isPending} data-testid="btn-save-proposal">
+                  <Button
+                    size="sm"
+                    onClick={() => saveMutation.mutate({
+                      ...form,
+                      ...(isDraftOrNew ? { status: "draft" } : {}),
+                      issueDate: form.issueDate || current.issueDate || new Date().toISOString().split("T")[0],
+                      companyId: form.companyId || current.companyId,
+                    })}
+                    disabled={saveMutation.isPending || blockedByMissingContractor}
+                    title={blockedByMissingContractor ? "Select a company and a contractor that belongs to it first" : undefined}
+                    data-testid="btn-save-proposal"
+                  >
                     {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                     {isDraftOrNew ? "Save Draft" : "Save"}
                   </Button>
@@ -3068,37 +3129,49 @@ function ProposalBuilder({
                 </div>
                 {isAdmin && isNew && (
                   <div className="col-span-2">
-                    <Label>Contractor <span className="text-destructive">*</span></Label>
+                    <Label>Client / Company <span className="text-destructive">*</span></Label>
                     <Select
-                      value={form.contractorId ?? ""}
-                      onValueChange={v => setForm(f => ({ ...f, contractorId: v }))}
+                      value={selectedCompanyId}
+                      onValueChange={v => setForm(f => ({
+                        ...f,
+                        companyId: v,
+                        // Clear contractor + recipient state together — a
+                        // contractor (and any client name/email typed against
+                        // the old company) must never silently carry over
+                        // into a different company's proposal.
+                        contractorId: "",
+                        clientName: "",
+                        clientEmail: "",
+                      }))}
                       disabled={!canEdit}
                     >
-                      <SelectTrigger data-testid="select-proposal-contractor">
-                        <SelectValue placeholder="Select contractor to create on behalf of…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {contractorWorkers.length === 0
-                          ? <SelectItem value="_none" disabled>No contractors found</SelectItem>
-                          : contractorWorkers.map((w: any) => {
-                              const name = w.fullName || w.full_name ||
-                                `${w.firstName || w.first_name || ""} ${w.lastName || w.last_name || ""}`.trim() ||
-                                w.id.slice(0, 8);
-                              return <SelectItem key={w.id} value={w.id}>{name}</SelectItem>;
-                            })
-                        }
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">Select the contractor this proposal will be created on behalf of.</p>
-                  </div>
-                )}
-                {isNew && (
-                  <div className="col-span-2">
-                    <Label>Client / Company</Label>
-                    <Select value={form.companyId ?? current.companyId ?? ""} onValueChange={v => setForm(f => ({ ...f, companyId: v }))} disabled={!canEdit}>
                       <SelectTrigger data-testid="select-proposal-company"><SelectValue placeholder="Select company" /></SelectTrigger>
                       <SelectContent>{companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
                     </Select>
+                    <p className="text-xs text-muted-foreground mt-1">Changing company clears the contractor selection below.</p>
+                  </div>
+                )}
+                {isAdmin && isNew && (
+                  <div className="col-span-2">
+                    <Label>Contractor <span className="text-destructive">*</span></Label>
+                    <Select
+                      value={selectedContractorIsValid ? (form.contractorId as string) : ""}
+                      onValueChange={v => setForm(f => ({ ...f, contractorId: v }))}
+                      disabled={!canEdit || !selectedCompanyId}
+                    >
+                      <SelectTrigger data-testid="select-proposal-contractor">
+                        <SelectValue placeholder={selectedCompanyId ? "Select contractor to create on behalf of…" : "Select a company first…"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {contractorWorkers.length === 0
+                          ? <SelectItem value="_none" disabled>No contractors found for this company</SelectItem>
+                          : contractorWorkers.map((w: any) => (
+                              <SelectItem key={w.id} value={w.id}>{contractorDisplayName(w)}</SelectItem>
+                            ))
+                        }
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">Only contractors belonging to the selected company are shown. Select the contractor this proposal will be created on behalf of.</p>
                   </div>
                 )}
                 <div>
@@ -3911,14 +3984,30 @@ function InvoiceDetailPanel({
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("check");
   const [payRef, setPayRef] = useState("");
+  const [payDescription, setPayDescription] = useState("");
+  const [payTradeCompId, setPayTradeCompId] = useState("");
+  const [payIdemKey, setPayIdemKey] = useState(() => crypto.randomUUID());
+  const [cuttingCheck, setCuttingCheck] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [attUploading, setAttUploading] = useState(false);
+  const DESCRIPTION_REQUIRED = new Set(["trade_credit", "rent_credit", "other"]);
 
   const { data: payments = [], refetch: refetchPayments } = useQuery<Payment[]>({
     queryKey: ["/api/contractor-invoices", invoice.id, "payments"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-invoices/${invoice.id}/payments`, { credentials: "include" });
-      return r.ok ? r.json() : [];
+      if (!r.ok) return [];
+      const rows = await r.json();
+      // The endpoint returns raw rows (snake_case) — normalize the fields the UI reads.
+      return (Array.isArray(rows) ? rows : []).map((p: any) => ({
+        ...p,
+        amount: p.amount,
+        paymentMethod: p.paymentMethod ?? p.payment_method,
+        referenceNumber: p.referenceNumber ?? p.reference_number,
+        notes: p.notes,
+        paidAt: p.paidAt ?? p.paid_at,
+        status: p.status,
+      }));
     },
   });
 
@@ -3978,18 +4067,72 @@ function InvoiceDetailPanel({
     finally { setAttUploading(false); e.target.value = ""; }
   }
 
+  // Approved fair-market-value trade / barter valuations available to apply as a
+  // trade_credit payment on this invoice.
+  const { data: tradeComps = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-trade-compensation", invoice.companyId, invoice.contractorId, "payable"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-trade-compensation?companyId=${invoice.companyId || ""}`, { credentials: "include" });
+      if (!r.ok) return [];
+      const rows = await r.json();
+      return (Array.isArray(rows) ? rows : []).filter((t: any) =>
+        t.approvedAt && !t.contractorPaymentId && !t.expensePaymentId &&
+        String(t.valuationMethod || "").toLowerCase() === "fair_market_value" &&
+        (!invoice.contractorId || t.contractorUserId === invoice.contractorId || t.contractorId === invoice.contractorId));
+    },
+    enabled: isAdmin && payMethod === "trade_credit",
+  });
+
   const payMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-invoices/${invoice.id}/payments`, {
-      amount: parseFloat(payAmount), paymentMethod: payMethod, referenceNumber: payRef,
-    }),
+    mutationFn: async () => {
+      const body: Record<string, unknown> = {
+        amount: parseFloat(payAmount), paymentMethod: payMethod, referenceNumber: payRef,
+        idempotencyKey: payIdemKey,
+      };
+      if (DESCRIPTION_REQUIRED.has(payMethod)) body.description = payDescription.trim();
+      if (payMethod === "trade_credit") body.tradeCompensationId = payTradeCompId;
+      const res = await fetch(`/api/contractor-invoices/${invoice.id}/payments`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": payIdemKey },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || `Payment failed (${res.status})`);
+      return res.json();
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-trade-compensation"] });
       refetchPayments();
-      setPayAmount(""); setPayRef("");
+      setPayAmount(""); setPayRef(""); setPayDescription(""); setPayTradeCompId("");
+      setPayIdemKey(crypto.randomUUID());
       toast({ title: "Payment recorded" });
     },
     onError: (e: any) => toast({ title: e?.message || "Payment failed", variant: "destructive" }),
   });
+
+  async function handleCutCheck() {
+    setCuttingCheck(true);
+    const idem = crypto.randomUUID();
+    try {
+      const res = await fetch(`/api/contractor-invoices/${invoice.id}/cut-check`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idem },
+        body: JSON.stringify({ idempotencyKey: idem, amount: payAmount ? parseFloat(payAmount) : undefined }),
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => ({}))).message || `Cut Check failed (${res.status})`;
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      window.open(URL.createObjectURL(blob), "_blank");
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      refetchPayments();
+      setPayAmount("");
+      toast({ title: "Check issued" });
+    } catch (e: any) {
+      toast({ title: e?.message || "Cut Check failed", variant: "destructive" });
+    } finally { setCuttingCheck(false); }
+  }
 
   const reminderMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-invoices/${invoice.id}/send-reminder`, {}),
@@ -4223,7 +4366,7 @@ function InvoiceDetailPanel({
               )}
               {isAdmin && !["paid", "voided", "voided_duplicate", "rejected_duplicate", "rejected"].includes(invoice.status) && !proposalBlocked && balance > 0 && (
                 <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm">Record Payment</CardTitle></CardHeader>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm">Submit / Record Payment</CardTitle></CardHeader>
                   <CardContent className="space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <div>
@@ -4233,27 +4376,75 @@ function InvoiceDetailPanel({
                       </div>
                       <div>
                         <Label className="text-xs">Method</Label>
-                        <Select value={payMethod} onValueChange={setPayMethod}>
+                        <Select value={payMethod} onValueChange={v => { setPayMethod(v); setPayTradeCompId(""); }}>
                           <SelectTrigger data-testid="select-payment-method"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="check">Check</SelectItem>
-                            <SelectItem value="ach">ACH / Bank Transfer</SelectItem>
-                            <SelectItem value="wire">Wire Transfer</SelectItem>
-                            <SelectItem value="credit_card">Credit Card</SelectItem>
                             <SelectItem value="cash">Cash</SelectItem>
-                            <SelectItem value="other">Other</SelectItem>
+                            <SelectItem value="ach">ACH / Bank Transfer</SelectItem>
+                            <SelectItem value="trade_credit">Trade / Barter</SelectItem>
+                            <SelectItem value="rent_credit">Rent Credit</SelectItem>
+                            <SelectItem value="other">Other / Manual</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                     </div>
-                    <div>
-                      <Label className="text-xs">Reference # (optional)</Label>
-                      <Input value={payRef} onChange={e => setPayRef(e.target.value)} placeholder="Check #, transaction ID..." data-testid="input-payment-ref" />
-                    </div>
-                    <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending || !payAmount} className="w-full" data-testid="btn-record-payment">
-                      {payMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}
-                      Record Payment
-                    </Button>
+                    {payMethod === "trade_credit" && (
+                      <div>
+                        <Label className="text-xs">Approved trade / barter valuation (fair market value)</Label>
+                        <Select value={payTradeCompId} onValueChange={setPayTradeCompId}>
+                          <SelectTrigger data-testid="select-trade-compensation">
+                            <SelectValue placeholder={tradeComps.length ? "Select a valuation…" : "No approved valuation available"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {tradeComps.map((t: any) => (
+                              <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {fmt(t.totalValue)}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {!tradeComps.length && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Requires an approved fair-market-value valuation. <a href="/app/trade-compensation" className="text-primary underline">Create one in Trade Compensation.</a>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {DESCRIPTION_REQUIRED.has(payMethod) ? (
+                      <div>
+                        <Label className="text-xs">Description <span className="text-red-500">*</span></Label>
+                        <Input value={payDescription} onChange={e => setPayDescription(e.target.value)}
+                          placeholder="Describe the trade / barter / rent credit / other payment" data-testid="input-payment-description" />
+                      </div>
+                    ) : (
+                      <div>
+                        <Label className="text-xs">Reference # (optional)</Label>
+                        <Input value={payRef} onChange={e => setPayRef(e.target.value)} placeholder="Check #, transaction ID..." data-testid="input-payment-ref" />
+                      </div>
+                    )}
+                    {payMethod === "check" ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button variant="outline" onClick={handleCutCheck} disabled={cuttingCheck} data-testid="btn-cut-check">
+                          {cuttingCheck ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <FileCheck className="h-4 w-4 mr-2" />}
+                          Cut Check
+                        </Button>
+                        <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending || !payAmount || !payRef.trim()} data-testid="btn-record-payment">
+                          {payMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}
+                          Record Check
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button onClick={() => payMutation.mutate()}
+                        disabled={payMutation.isPending || !payAmount ||
+                          (DESCRIPTION_REQUIRED.has(payMethod) && !payDescription.trim()) ||
+                          (payMethod === "trade_credit" && !payTradeCompId)}
+                        className="w-full" data-testid="btn-record-payment">
+                        {payMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <DollarSign className="h-4 w-4 mr-2" />}
+                        Record Payment
+                      </Button>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Cut Check issues and prints a check now. Record Payment logs a payment made outside MyPayLink. Both reduce the invoice balance and produce a payment statement + company receipt.
+                    </p>
                   </CardContent>
                 </Card>
               )}
@@ -4264,13 +4455,25 @@ function InvoiceDetailPanel({
                 ) : (
                   <div className="space-y-2">
                     {payments.map(p => (
-                      <div key={p.id} className="flex justify-between items-center p-3 border rounded-lg text-sm">
-                        <div>
+                      <div key={p.id} className="flex justify-between items-start p-3 border rounded-lg text-sm gap-3">
+                        <div className="min-w-0">
                           <p className="font-medium">{fmt(p.amount)}</p>
                           <p className="text-xs text-muted-foreground capitalize">{p.paymentMethod?.replace(/_/g, " ")} · {fmtDate(p.paidAt)}</p>
                           {p.referenceNumber && <p className="text-xs text-muted-foreground">Ref: {p.referenceNumber}</p>}
+                          {p.status !== "void" && (
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                              <a href={`/api/contractor-payments/${p.id}/document?copy=payee`} target="_blank" rel="noreferrer"
+                                className="text-xs text-primary underline" data-testid={`link-payment-statement-${p.id}`}>View Payment Statement</a>
+                              {isAdmin && (
+                                <a href={`/api/contractor-payments/${p.id}/document?copy=company`} target="_blank" rel="noreferrer"
+                                  className="text-xs text-primary underline" data-testid={`link-payment-receipt-${p.id}`}>Company Receipt</a>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <Badge variant="outline" className="text-green-600">Recorded</Badge>
+                        <Badge variant="outline" className={p.status === "void" ? "text-muted-foreground" : "text-green-600"}>
+                          {p.status === "void" ? "Voided" : "Recorded"}
+                        </Badge>
                       </div>
                     ))}
                   </div>
@@ -4484,6 +4687,10 @@ function ContractDetailPanel({
   const [signerName, setSignerName] = useState("");
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState("");
+  const [activateOpen, setActivateOpen] = useState(false);
+  const [activateReason, setActivateReason] = useState("");
+  const [legacySendOpen, setLegacySendOpen] = useState(false);
+  const [legacySendReason, setLegacySendReason] = useState("");
   const [addSignerOpen, setAddSignerOpen] = useState(false);
   const [newSignerName, setNewSignerName] = useState("");
   const [newSignerEmail, setNewSignerEmail] = useState("");
@@ -4491,6 +4698,8 @@ function ContractDetailPanel({
   const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [editingSigner, setEditingSigner] = useState<Signer | null>(null);
   const [reminderMessage, setReminderMessage] = useState("Please sign this contract when you have a moment.");
+  const [signerMismatchInfo, setSignerMismatchInfo] = useState<{ missingRemotely: string[]; unexpectedRemotely: string[] } | null>(null);
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
 
   const { data: contract, refetch } = useQuery<Contract>({
     queryKey: ["/api/contractor-contracts", initialContract.id],
@@ -4513,9 +4722,15 @@ function ContractDetailPanel({
   const invoiceId = (contract as any).invoiceId || (contract as any).invoice_id;
   const invoiceStatus = (contract as any).invoiceStatus || (contract as any).invoice_status;
   const documensoSigningUrl = (contract as any).documensoSigningUrl || (contract as any).documenso_signing_url || (contract as any).signingUrl || (contract as any).signing_url;
+  const signerSigningUrl = (s: any): string | null => s?.documensoSigningUrl || s?.documenso_signing_url || null;
+  // Documenso signing URLs are per-recipient (distinct token per signer). A single contract-level
+  // link is only unambiguous when there's exactly one signer — for 2+ signers this is always null,
+  // even if a top-level URL happens to be present, since it can't be attributed to one signer.
+  // Per-signer actions (below) are the only signing-link affordance for multi-signer contracts.
+  const contractLevelSigningUrl = signers.length === 1 ? (documensoSigningUrl || signerSigningUrl(signers[0])) : null;
   const signedDocumentUrl = (contract as any).signedDocumentUrl || (contract as any).signed_document_url || (contract as any).archivedDocumentUrl || ((contract as any).archivedDocumentId ? `/api/dam-documents/${(contract as any).archivedDocumentId}/download` : null);
   const usesDocumenso = !!documensoSigningUrl || !!(contract as any).documensoDocumentId || signers.some(s => !!(s as any).documensoSigningUrl || !!(s as any).documenso_signing_url || !!(s as any).documensoRecipientId || !!(s as any).documenso_recipient_id);
-  const terminalSigningStatuses = ["fully_signed", "completed", "void", "terminated", "expired", "canceled", "cancelled"];
+  const terminalSigningStatuses = ["active", "fully_signed", "completed", "void", "terminated", "expired", "canceled", "cancelled"];
 
   const daysUntilExpiry = contract?.endDate
     ? Math.round((new Date(contract.endDate).getTime() - Date.now()) / 86400000)
@@ -4536,8 +4751,8 @@ function ContractDetailPanel({
   });
 
   const sendMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/send`, {}),
-    onSuccess: () => { refetch(); toast({ title: "Contract sent for signing" }); onRefresh(); },
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/send`, { reason: legacySendReason }),
+    onSuccess: () => { refetch(); setLegacySendOpen(false); setLegacySendReason(""); toast({ title: "Contract sent for signing" }); onRefresh(); },
     onError: (e: any) => toast({ title: e?.message || "Failed to send", variant: "destructive" }),
   });
 
@@ -4546,13 +4761,25 @@ function ContractDetailPanel({
     onSuccess: (data: any) => {
       refetch();
       const recipients = Array.isArray(data?.recipients) ? data.recipients : [];
+      const accepted = data?.accepted ?? data?.sentCount ?? 0;
+      const requested = data?.requested ?? data?.targetedCount ?? recipients.length ?? 0;
+      const refreshed = data?.refreshed ?? recipients.filter((recipient: any) => recipient.refreshed).length;
       const recipientSummary = recipients.length
-        ? recipients.map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.resendResult || "unknown"}${recipient.reason || recipient.error ? ` (${recipient.reason || recipient.error})` : recipient.documensoStatus ? ` (${recipient.documensoStatus})` : recipient.documensoRecipientId ? " (accepted by Documenso)" : " (Recipient missing remotely)"}`).join("; ")
+        ? recipients
+            .filter((recipient: any) => !data?.success || recipient.reason || recipient.error)
+            .map((recipient: any) => `${recipient.email || "unknown"}: ${recipient.reason || recipient.error || recipient.status || recipient.resendResult || "resent"}`)
+            .join("; ")
         : "No pending signer recipients were targeted.";
+      const title = data?.success
+        ? "Documenso reminders resent"
+        : accepted > 0
+          ? "Documenso resend partially completed"
+          : "Documenso resend needs review";
+      const refreshLine = refreshed > 0 ? " Recipient mappings were refreshed automatically." : "";
       toast({
-        title: data?.success ? "Signing request re-sent" : "Documenso resend needs review",
-        description: `${data?.sentCount ?? 0}/${data?.targetedCount ?? recipients.length ?? 0} recipient(s) accepted by Documenso. ${recipientSummary}`,
-        variant: data?.success ? "default" : "destructive",
+        title,
+        description: `${accepted}/${requested} recipients accepted.${refreshLine} ${recipientSummary}`,
+        variant: data?.success || accepted > 0 ? "default" : "destructive",
       });
       onRefresh();
     },
@@ -4573,16 +4800,59 @@ function ContractDetailPanel({
 
   const sendViaDocumensoMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/contractor-contracts/${contract.id}/send-for-signature`, {});
-      return response.json();
+      // Raw fetch (not apiRequest) so a 409 signer-set-mismatch response body can be read — apiRequest
+      // throws on any non-2xx before the body is available.
+      const res = await fetch(`/api/contractor-contracts/${contract.id}/send-for-signature`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body?.code === "documenso_signer_set_mismatch") {
+        return { mismatch: true, missingRemotely: body.missingRemotely || [], unexpectedRemotely: body.unexpectedRemotely || [] };
+      }
+      if (!res.ok) throw new Error(body?.message || `Request failed (${res.status})`);
+      return { mismatch: false, ...body };
     },
-    onSuccess: () => { refetch(); toast({ title: "Sent via Documenso", description: "Signing request sent. Signers will receive an email with the signing link." }); onRefresh(); },
+    onSuccess: (data: any) => {
+      if (data?.mismatch) {
+        setSignerMismatchInfo({ missingRemotely: data.missingRemotely, unexpectedRemotely: data.unexpectedRemotely });
+        toast({
+          title: "Signer list changed",
+          description: "The signer list changed after this signing request was created. Create a replacement signing request to include the current signers.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setSignerMismatchInfo(null);
+      refetch();
+      toast({ title: "Sent via Documenso", description: "Signing request sent. Signers will receive an email with the signing link." });
+      onRefresh();
+    },
     onError: (e: any) => toast({ title: "Documenso send failed", description: e?.message || "Unable to send for signature", variant: "destructive" }),
   });
 
+  const replaceSigningRequestMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/contractor-contracts/${contract.id}/replace-signing-request`, { confirm: true })).json(),
+    onSuccess: (data: any) => {
+      setSignerMismatchInfo(null);
+      setReplaceConfirmOpen(false);
+      refetch();
+      toast({
+        title: data?.alreadyReplaced ? "Already up to date" : "Replacement signing request created",
+        description: data?.alreadyReplaced
+          ? "The current signing request already matches the active signer set."
+          : "A new Documenso envelope was created for the current signers.",
+      });
+      onRefresh();
+    },
+    onError: (e: any) => { toast({ title: e?.message || "Failed to create replacement signing request", variant: "destructive" }); setReplaceConfirmOpen(false); },
+  });
+
   const activateMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/activate`, {}),
-    onSuccess: () => { refetch(); toast({ title: "Contract activated" }); onRefresh(); },
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/activate`, { reason: activateReason }),
+    onSuccess: () => { refetch(); setActivateOpen(false); setActivateReason(""); toast({ title: "Contract activated" }); onRefresh(); },
     onError: (e: any) => toast({ title: e?.message || "Failed to activate", variant: "destructive" }),
   });
 
@@ -4610,8 +4880,17 @@ function ContractDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Failed to replace signer", variant: "destructive" }),
   });
 
+  // For the "contractor" role, identity always comes from the contract's own
+  // contractor profile — never from the free-text fields below. The server
+  // independently enforces this too; this just keeps the UI from offering an
+  // input that would only ever be rejected.
+  const contractContractorName = contract?.contractorName || "";
+  const contractContractorEmail = contract?.contractorEmail || "";
+  const isContractorRoleSigner = newSignerRole === "contractor";
   const addSignerMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers`, { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/signers`, isContractorRoleSigner
+      ? { name: contractContractorName, email: contractContractorEmail, role: newSignerRole, workerId: contract.contractorId }
+      : { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
     onSuccess: () => { refetch(); setAddSignerOpen(false); setNewSignerName(""); setNewSignerEmail(""); toast({ title: "Signer added" }); },
     onError: (e: any) => toast({ title: e?.message || "Failed to add signer", variant: "destructive" }),
   });
@@ -4631,12 +4910,20 @@ function ContractDetailPanel({
     signerEmailCount,
     isPending: sendViaDocumensoMutation.isPending,
   });
-  const canActivate = isAdmin && ["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status);
+  // Manual Activate is reserved for imported/manual (non-Documenso) contracts — a Documenso-backed
+  // contract activates automatically once signing is verified (see activateContractAfterVerifiedCompletion
+  // server-side). Offering manual Activate here as a "stuck" workaround was the root cause of one of
+  // the live sync defects, so it is hidden entirely once usesDocumenso is true.
+  const canActivate = canManuallyActivateContract({ role: currentUserRole, status: contract.status, documensoManaged: usesDocumenso });
   const canVoid = isAdmin && !["void", "terminated"].includes(contract.status);
   const canSign = canShowSignatureActions && !usesDocumenso;
   const canCreateInvoice = ["active", "fully_signed", "completed"].includes(contract.status) && !invoiceId;
   const canResendSigningRequest = canShowSignatureActions && !terminalSigningStatuses.includes(contract.status) && ["sent", "awaiting_signatures", "partially_signed", "pending"].includes(contract.status) && signers.some(s => ["pending", "sent", "viewed", "unsent", "draft"].includes(s.status));
-  const canShowDocumensoLaunch = !!documensoSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
+  // Legacy/manual actions (non-Documenso "Send for Signing" and "Sign Internally") are only ever
+  // relevant for contracts with no Documenso data at all — once Documenso is in play, "Send via
+  // Documenso" is the single normal signing action.
+  const showLegacyActionsMenu = isAdmin && !usesDocumenso && (canSend || canSign);
+  const canShowDocumensoLaunch = !!contractLevelSigningUrl && !["completed", "fully_signed", "void", "terminated"].includes(contract.status);
 
   return (
     <Sheet open onOpenChange={v => !v && onClose()}>
@@ -4652,36 +4939,11 @@ function ContractDetailPanel({
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-              {canSign && (
-                <Button size="sm" className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => setSignOpen(true)} data-testid="btn-sign-contract">
-                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign Internally (legacy/manual)
-                </Button>
-              )}
-              {canSend && (
-                <Button size="sm" onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending} data-testid="btn-send-contract">
-                  <Send className="h-3.5 w-3.5 mr-1" /> Send for Signing
-                </Button>
-              )}
-              {canActivate && (
-                <Button size="sm" variant="outline" className="border-green-300 text-green-700" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending} data-testid="btn-activate-contract">
-                  <CheckCircle className="h-3.5 w-3.5 mr-1" /> Activate
-                </Button>
-              )}
-              {canCreateInvoice && (
-                <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-invoice-from-contract">
-                  <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
-                </Button>
-              )}
-              {canVoid && (
-                <Button size="sm" variant="outline" className="border-red-300 text-red-700" onClick={() => setVoidOpen(true)} data-testid="btn-void-contract">
-                  <XCircle className="h-3.5 w-3.5 mr-1" /> Void
-                </Button>
-              )}
+              {/* Single primary signing action. */}
               {canSendViaDocumenso && (
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-400"
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
                   onClick={() => sendViaDocumensoMutation.mutate()}
                   disabled={sendViaDocumensoMutation.isPending || !!documensoDisabledReason}
                   data-testid="btn-send-via-documenso"
@@ -4690,8 +4952,18 @@ function ContractDetailPanel({
                   <PenLine className="h-3.5 w-3.5 mr-1" /> {sendViaDocumensoMutation.isPending ? "Sending…" : "Send via Documenso"}
                 </Button>
               )}
+              {canActivate && (
+                <Button size="sm" variant="outline" className="border-green-300 text-green-700" onClick={() => setActivateOpen(true)} data-testid="btn-activate-contract">
+                  <CheckCircle className="h-3.5 w-3.5 mr-1" /> Activate
+                </Button>
+              )}
+              {canCreateInvoice && (
+                <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-invoice-from-contract">
+                  <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
+                </Button>
+              )}
               {canShowDocumensoLaunch && (
-                <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="link-sign-with-documenso">
+                <a href={contractLevelSigningUrl || undefined} target="_blank" rel="noreferrer" data-testid="link-sign-with-documenso">
                   <Button size="sm" variant="outline" className="border-teal-300 text-teal-700">
                     <ExternalLink className="h-3.5 w-3.5 mr-1" /> Sign with Documenso
                   </Button>
@@ -4707,6 +4979,31 @@ function ContractDetailPanel({
                   <Download className="h-3.5 w-3.5 mr-1" /> Download PDF
                 </Button>
               </a>
+              {/* Overflow: legacy/manual actions (non-Documenso contracts only) and destructive Void. */}
+              {(showLegacyActionsMenu || canVoid) && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="ghost" data-testid="btn-contract-more-actions"><MoreHorizontal className="h-3.5 w-3.5" /></Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {showLegacyActionsMenu && canSend && (
+                      <DropdownMenuItem data-testid="btn-send-contract" onClick={() => setLegacySendOpen(true)}>
+                        <Send className="h-3.5 w-3.5 mr-2" /> Send for Signing (legacy/manual)
+                      </DropdownMenuItem>
+                    )}
+                    {showLegacyActionsMenu && canSign && (
+                      <DropdownMenuItem data-testid="btn-sign-contract" onClick={() => setSignOpen(true)}>
+                        <CheckSquare className="h-3.5 w-3.5 mr-2" /> Sign Internally (legacy/manual)
+                      </DropdownMenuItem>
+                    )}
+                    {canVoid && (
+                      <DropdownMenuItem data-testid="btn-void-contract" className="text-red-600 focus:text-red-600" onClick={() => setVoidOpen(true)}>
+                        <XCircle className="h-3.5 w-3.5 mr-2" /> Void
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </div>
         </SheetHeader>
@@ -4729,7 +5026,7 @@ function ContractDetailPanel({
               {hasUnsignedSigners && ["sent","partially_signed"].includes(contract.status) && (
                 <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center gap-2">
                   <Clock className="h-4 w-4 text-amber-600 shrink-0" />
-                  <p className="text-sm text-amber-700 dark:text-amber-400">Awaiting signatures from {signers.filter(s => s.status === "pending").length} signer(s).</p>
+                  <p className="text-sm text-amber-700 dark:text-amber-400">Awaiting signatures from {signers.filter(s => ["pending", "sent", "viewed"].includes(s.status)).length} signer(s).</p>
                 </div>
               )}
 
@@ -4787,23 +5084,55 @@ function ContractDetailPanel({
                 </div>
               )}
 
+              {signerMismatchInfo && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg space-y-2 text-sm" data-testid="alert-documenso-signer-mismatch">
+                  <p className="text-red-700 dark:text-red-400 font-medium">The signer list changed after this signing request was created. Create a replacement signing request to include the current signers.</p>
+                  {signerMismatchInfo.missingRemotely.length > 0 && <p className="text-xs text-red-600">Missing remotely: {signerMismatchInfo.missingRemotely.join(", ")}</p>}
+                  {signerMismatchInfo.unexpectedRemotely.length > 0 && <p className="text-xs text-red-600">Unexpected remotely: {signerMismatchInfo.unexpectedRemotely.join(", ")}</p>}
+                  {canSendViaDocumenso && !replaceConfirmOpen && (
+                    <Button size="sm" variant="destructive" onClick={() => setReplaceConfirmOpen(true)} data-testid="btn-create-replacement-signing-request">Create Replacement Signing Request</Button>
+                  )}
+                  {canSendViaDocumenso && replaceConfirmOpen && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-red-700 dark:text-red-400">This creates a new Documenso envelope for the current signers; any prior signing link becomes invalid. Continue?</span>
+                      <Button size="sm" variant="destructive" onClick={() => replaceSigningRequestMutation.mutate()} disabled={replaceSigningRequestMutation.isPending} data-testid="btn-confirm-replacement-signing-request">Confirm &amp; Create</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setReplaceConfirmOpen(false)} data-testid="btn-cancel-replacement-signing-request">Cancel</Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="p-4 border rounded-lg space-y-3" data-testid="panel-documenso-signing-workflow">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold flex items-center gap-2"><PenLine className="h-4 w-4" /> Documenso signing</h3>
-                    <p className="text-xs text-muted-foreground">View status, launch in-app signing, copy links, or re-send pending requests.</p>
+                    <p className="text-xs text-muted-foreground">Progress and status only — use the header action bar above to send, sign, or re-send.</p>
                   </div>
                   <Badge variant="outline" data-testid="badge-documenso-status">{contract.status}</Badge>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => sendViaDocumensoMutation.mutate()} disabled={!canSendViaDocumenso || sendViaDocumensoMutation.isPending || !!documensoDisabledReason} data-testid="btn-documenso-panel-send">Send via Documenso</Button>
-                  {canShowDocumensoLaunch && <a href={documensoSigningUrl} target="_blank" rel="noreferrer" data-testid="btn-documenso-panel-launch"><Button size="sm" variant="outline">Sign with Documenso</Button></a>}
-                  <Button size="sm" variant="outline" onClick={() => resendSigningMutation.mutate()} disabled={!canResendSigningRequest || resendSigningMutation.isPending || signerEmailCount === 0} data-testid="btn-documenso-panel-resend" title={!canResendSigningRequest ? "Reminders stop after signature, completion, cancellation, or when no active Documenso document exists." : "Re-send through Documenso"}>Re-send signing request</Button>
-                  <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(documensoSigningUrl || window.location.href)} disabled={!documensoSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
+                  {signers.length <= 1 && (
+                    <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(contractLevelSigningUrl || window.location.href)} disabled={!contractLevelSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
+                  )}
                   {signedDocumentUrl && <a href={signedDocumentUrl} target="_blank" rel="noreferrer" data-testid="link-view-signed-document"><Button size="sm" variant="outline">View signed document</Button></a>}
                 </div>
                 <div className="space-y-1">
-                  {signers.map(s => <div key={s.id} className="flex items-center justify-between text-xs" data-testid={`documenso-signer-status-${s.id}`}><span>{s.name || s.email} {s.email ? `• ${s.email}` : ""} • {(s.role || "signer").replace(/_/g, " ")}</span><span className="capitalize">{s.status}{s.signedAt ? ` • signed ${fmtDate(s.signedAt)}` : ""}</span></div>)}
+                  {signers.map(s => {
+                    const url = signerSigningUrl(s);
+                    return (
+                      <div key={s.id} className="flex items-center justify-between text-xs" data-testid={`documenso-signer-status-${s.id}`}>
+                        <span>{s.name || s.email} {s.email ? `• ${s.email}` : ""} • {(s.role || "signer").replace(/_/g, " ")}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="capitalize">{s.status}{s.signedAt ? ` • signed ${fmtDate(s.signedAt)}` : ""}</span>
+                          {signers.length > 1 && (
+                            <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => url && navigator.clipboard?.writeText(url)} disabled={!url} data-testid={`btn-copy-signing-link-${s.id}`} title="Copy this signer's signing link">
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -4936,13 +5265,8 @@ function ContractDetailPanel({
                 </div>
               )}
 
-              {canSign && (
-                <div className="pt-2 border-t">
-                  <Button onClick={() => setSignOpen(true)} className="w-full bg-teal-600 hover:bg-teal-700 text-white" data-testid="btn-sign-contract-tab">
-                    <CheckSquare className="h-4 w-4 mr-2" /> Sign This Contract (legacy/manual)
-                  </Button>
-                </div>
-              )}
+              {/* "Sign Internally (legacy/manual)" lives only in the header overflow menu now —
+                  this tab no longer duplicates it (see Overlap #6 in the action-location audit). */}
             </TabsContent>
 
             <TabsContent value="terms" className="m-0 p-6 space-y-4">
@@ -5017,20 +5341,47 @@ function ContractDetailPanel({
           </DialogContent>
         </Dialog>
 
+        {/* Activate Dialog (imported/manual contracts only — Documenso contracts activate automatically) */}
+        <Dialog open={activateOpen} onOpenChange={v => !v && setActivateOpen(false)}>
+          <DialogContent data-testid="dialog-activate-contract">
+            <DialogHeader><DialogTitle>Activate Contract</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-muted-foreground">This contract has no Documenso signing data. Provide a reason confirming the required signing evidence is already recorded before activating manually.</p>
+              <Textarea value={activateReason} onChange={e => setActivateReason(e.target.value)} placeholder="Reason for manual activation..." rows={3} data-testid="textarea-activate-reason" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setActivateOpen(false)}>Cancel</Button>
+              <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending || !activateReason.trim()} data-testid="btn-confirm-activate">
+                {activateMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                Activate Contract
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Legacy Send Dialog (non-Documenso contracts only) */}
+        <Dialog open={legacySendOpen} onOpenChange={v => !v && setLegacySendOpen(false)}>
+          <DialogContent data-testid="dialog-legacy-send-contract">
+            <DialogHeader><DialogTitle>Send for Signing (legacy/manual)</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-muted-foreground">This bypasses Documenso. Provide a reason this contract is being sent through the legacy/manual path instead of Send via Documenso.</p>
+              <Textarea value={legacySendReason} onChange={e => setLegacySendReason(e.target.value)} placeholder="Reason for using legacy send..." rows={3} data-testid="textarea-legacy-send-reason" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setLegacySendOpen(false)}>Cancel</Button>
+              <Button onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending || !legacySendReason.trim()} data-testid="btn-confirm-legacy-send">
+                {sendMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                Send for Signing
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Add Signer Dialog */}
         <Dialog open={addSignerOpen} onOpenChange={v => !v && setAddSignerOpen(false)}>
           <DialogContent data-testid="dialog-add-signer">
             <DialogHeader><DialogTitle>Add Signer</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
-              <div className="space-y-1.5">
-                <Label>Full Name</Label>
-                <Input value={newSignerName} onChange={e => setNewSignerName(e.target.value)} placeholder="John Doe" data-testid="input-new-signer-name" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Email</Label>
-                <Input type="email" value={newSignerEmail} onChange={e => setNewSignerEmail(e.target.value)} placeholder="john@example.com" data-testid="input-new-signer-email" />
-                {hasDuplicateSignerEmail(newSignerEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
-              </div>
               <div className="space-y-1.5">
                 <Label>Role</Label>
                 <Select value={newSignerRole} onValueChange={setNewSignerRole}>
@@ -5043,10 +5394,42 @@ function ContractDetailPanel({
                   </SelectContent>
                 </Select>
               </div>
+              {isContractorRoleSigner ? (
+                <div className="rounded-md border bg-muted/30 p-3 space-y-1" data-testid="text-contractor-signer-derived">
+                  <p className="text-xs font-medium text-muted-foreground">Derived from the contractor record — cannot be changed here</p>
+                  <p className="text-sm font-medium">{contractContractorName || "Unknown contractor"}</p>
+                  <p className="text-sm text-muted-foreground">{contractContractorEmail || "No email on file"}</p>
+                  {!contractContractorEmail && (
+                    <p className="text-xs text-red-600">This contractor has no email on file. Add one to the contractor's profile before requesting a signature.</p>
+                  )}
+                  {hasDuplicateSignerEmail(contractContractorEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>Full Name</Label>
+                    <Input value={newSignerName} onChange={e => setNewSignerName(e.target.value)} placeholder="John Doe" data-testid="input-new-signer-name" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Email</Label>
+                    <Input type="email" value={newSignerEmail} onChange={e => setNewSignerEmail(e.target.value)} placeholder="john@example.com" data-testid="input-new-signer-email" />
+                    {hasDuplicateSignerEmail(newSignerEmail) && <p className="text-xs text-red-600" data-testid="text-add-signer-duplicate">This signer is already assigned to this contract.</p>}
+                  </div>
+                </>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setAddSignerOpen(false)}>Cancel</Button>
-              <Button onClick={() => addSignerMutation.mutate()} disabled={addSignerMutation.isPending || !newSignerName.trim() || hasDuplicateSignerEmail(newSignerEmail)} data-testid="btn-confirm-add-signer">
+              <Button
+                onClick={() => addSignerMutation.mutate()}
+                disabled={
+                  addSignerMutation.isPending ||
+                  (isContractorRoleSigner
+                    ? !contractContractorEmail || hasDuplicateSignerEmail(contractContractorEmail)
+                    : !newSignerName.trim() || hasDuplicateSignerEmail(newSignerEmail))
+                }
+                data-testid="btn-confirm-add-signer"
+              >
                 {addSignerMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
                 Add Signer
               </Button>
@@ -5561,12 +5944,11 @@ function isImmutable(type: string, status: string) {
 function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle }: {
   open: boolean; onClose: () => void; entityType: string; entityId: string; entityTitle: string;
 }) {
-  const supportsVersions = entityType === "contract" || entityType === "proposal";
   const { data: versions = [], isLoading } = useQuery<any[]>({
-    queryKey: [`/api/contractor-${entityType}s/${entityId}/versions`],
-    enabled: open && !!entityId && supportsVersions,
+    queryKey: ["/api/contractor-documents", entityType, entityId, "archived-versions"],
+    enabled: open && !!entityId,
     queryFn: async () => {
-      const r = await fetch(`/api/contractor-${entityType}s/${entityId}/versions`, { credentials: "include" });
+      const r = await fetch(`/api/contractor-documents/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}/archived-versions`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
   });
@@ -5581,13 +5963,7 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
           <p className="text-xs text-muted-foreground truncate">{entityTitle}</p>
         </SheetHeader>
         <ScrollArea className="h-[calc(100vh-120px)] mt-4">
-          {!supportsVersions ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
-              <p className="text-sm font-medium">No version history</p>
-              <p className="text-xs mt-1">{entityType.charAt(0).toUpperCase() + entityType.slice(1)}s are single-revision documents. Each record represents a final artifact.</p>
-            </div>
-          ) : isLoading ? (
+          {isLoading ? (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           ) : versions.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
@@ -5598,15 +5974,35 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
           ) : (
             <div className="space-y-3 pr-2">
               {versions.map((v: any, i: number) => (
-                <div key={v.id || i} className={cn("border rounded-lg p-3", i === 0 ? "border-primary/30 bg-primary/5" : "")}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-semibold">Version {v.version_number ?? v.version ?? (versions.length - i)}</span>
-                    {i === 0 && <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5">Current</span>}
-                    {i > 0 && <span className="text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5">Superseded</span>}
+                <div key={`${v.source || "version"}-${v.id || i}`} className={cn("border rounded-lg p-3", v.current ? "border-primary/40 bg-primary/5" : "bg-muted/10")} data-testid={`row-archived-version-${v.id || i}`}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold truncate">{v.title || entityTitle}</p>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className="text-xs bg-muted rounded px-1.5 py-0.5">{v.versionNumber ? `Version ${v.versionNumber}` : fmtDate(v.createdAt)}</span>
+                        {v.current ? <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5">Current</span> : <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 rounded px-1.5 py-0.5">Archived</span>}
+                        <span className="text-xs bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-300 rounded px-1.5 py-0.5">Read-only</span>
+                      </div>
+                    </div>
+                    <Badge variant="outline" className="capitalize shrink-0">{String(v.status || "unknown").replace(/_/g, " ")}</Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">{fmtDate(v.created_at || v.createdAt)}</p>
-                  {(v.reason || v.change_notes) && <p className="text-xs mt-1 italic text-foreground/70">{v.reason || v.change_notes}</p>}
-                  {v.changed_by && <p className="text-xs text-muted-foreground mt-0.5">By: {v.changed_by}</p>}
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>Created: {fmtDate(v.createdAt || v.created_at)}</span>
+                    <span>Archived: {v.archivedAt || v.archived_at ? fmtDate(v.archivedAt || v.archived_at) : "—"}</span>
+                    <span>Signed/completed: {v.signedAt || v.completedAt ? fmtDate(v.signedAt || v.completedAt) : "—"}</span>
+                    <span>Reason: {v.archiveReason || v.reason || v.change_notes || "—"}</span>
+                  </div>
+                  {(v.proposalId || v.contractId || v.invoiceId) && (
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[10px]">
+                      {v.proposalId && <span className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 rounded-full px-2 py-0.5">Proposal {String(v.proposalId).slice(0, 8)}</span>}
+                      {v.contractId && <span className="bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-full px-2 py-0.5">Contract {String(v.contractId).slice(0, 8)}</span>}
+                      {v.invoiceId && <span className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 rounded-full px-2 py-0.5">Invoice {String(v.invoiceId).slice(0, 8)}</span>}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 mt-3">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!v.viewUrl} onClick={() => v.viewUrl && window.open(v.viewUrl, "_blank")} data-testid={`btn-view-archived-version-${v.id || i}`}><ExternalLink className="h-3 w-3 mr-1" /> View</Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!v.downloadUrl} onClick={() => v.downloadUrl && window.open(v.downloadUrl, "_blank")} data-testid={`btn-download-archived-version-${v.id || i}`}><Download className="h-3 w-3 mr-1" /> Download PDF</Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -5859,7 +6255,7 @@ function DocumentsSection() {
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
       status: i.status, date: i.createdAt, amount: i.amount,
-      immutable: isImmutable("invoice", i.status), hasVersions: false,
+      immutable: isImmutable("invoice", i.status), hasVersions: true,
       contractorId: i.contractorId,
       companyId: (i as any).companyId,
       companyName: (i as any).companyName,
@@ -5877,7 +6273,7 @@ function DocumentsSection() {
       id: String(d.id), type: "file",
       title: d.name || d.documentType || "Document",
       status: "on_file", date: d.createdAt || new Date().toISOString(),
-      immutable: true, hasVersions: false,
+      immutable: true, hasVersions: true,
       fileUrl: d.fileUrl || d.file_url,
       documentType: d.documentType || d.document_type,
     })),
@@ -6211,7 +6607,7 @@ function DocumentsSection() {
                   )}
                   {doc.hasVersions && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Version history"
-                      onClick={() => setVersionDrawer({ type: doc.type as "contract"|"proposal", id: doc.id, title: doc.title })}
+                      onClick={() => setVersionDrawer({ type: doc.type === "file" ? "dam" : doc.type as any, id: doc.id, title: doc.title })}
                       data-testid={`btn-history-${doc.id}`}>
                       <History className="h-3.5 w-3.5" />
                     </Button>
@@ -8958,6 +9354,12 @@ export default function ContractorHubPage() {
       {/* Proposal Builder Sheet */}
       {builderOpen && (
         <ProposalBuilder
+          // Force a fresh mount (fresh internal form state) whenever we switch
+          // which proposal is open, including edit -> new-proposal without an
+          // intervening close. Without this, a stale contractorId/companyId
+          // from whatever was previously open in this same dialog instance
+          // could silently carry over into a new proposal.
+          key={newProposal ? "new" : editingProposal?.id ?? "new"}
           open={builderOpen}
           onClose={() => { setBuilderOpen(false); setEditingProposal(null); setNewProposal(false); }}
           proposal={newProposal ? null : editingProposal}

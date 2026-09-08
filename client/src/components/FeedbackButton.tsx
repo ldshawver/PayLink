@@ -38,11 +38,29 @@ if (typeof window !== "undefined") {
   });
 }
 
+
+function scrubSensitiveText(value: string): string {
+  return value
+    .replace(/(password|passwd|pwd|token|secret|api[-_ ]?key|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[redacted-ssn]")
+    .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[redacted-number]");
+}
+
+function sanitizedErrorBuffer() {
+  return _errBuf.map(error => ({
+    ...error,
+    msg: scrubSensitiveText(error.msg).slice(0, 500),
+    source: error.source ? scrubSensitiveText(error.source).slice(0, 200) : undefined,
+    stack: error.stack ? scrubSensitiveText(error.stack).slice(0, 400) : undefined,
+  }));
+}
+
 const TYPE_OPTIONS = [
   { value: "bug", label: "Bug Report", icon: "🐛", desc: "Something isn't working correctly" },
   { value: "ux", label: "UX / Improvement", icon: "✨", desc: "The experience could be better" },
   { value: "feature", label: "Feature Request", icon: "💡", desc: "Suggest something new" },
   { value: "change_request", label: "Change Request", icon: "🔄", desc: "Request a change to existing behavior" },
+  { value: "hr", label: "HR / Workplace Concern", icon: "🛡️", desc: "Harassment, employee issues, safety, or workplace concerns" },
   { value: "general", label: "General Feedback", icon: "💬", desc: "Other comments or suggestions" },
 ];
 
@@ -68,11 +86,13 @@ export function FeedbackButton() {
   const [expectedBehavior, setExpectedBehavior] = useState("");
   const [actualBehavior, setActualBehavior] = useState("");
   const [screenshots, setScreenshots] = useState<File[]>([]);
+  const [capturedAt, setCapturedAt] = useState(() => new Date());
   const screenshotInputRef = useRef<HTMLInputElement>(null);
 
   if (!user) return null;
 
   const isBug = type === "bug";
+  const isHr = type === "hr";
 
   const reset = () => {
     setType("bug"); setSeverity("medium"); setTitle(""); setDescription("");
@@ -87,6 +107,27 @@ export function FeedbackButton() {
   };
 
   const removeScreenshot = (idx: number) => setScreenshots(prev => prev.filter((_, i) => i !== idx));
+
+  const openFeedbackForm = () => {
+    setCapturedAt(new Date());
+    setOpen(true);
+  };
+
+  const buildClientContext = () => {
+    if (typeof window === "undefined") return {};
+    return {
+      capturedAt: capturedAt.toISOString(),
+      url: window.location.href,
+      path: window.location.pathname + window.location.search + window.location.hash,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      screen: typeof window.screen !== "undefined" ? { width: window.screen.width, height: window.screen.height, pixelRatio: window.devicePixelRatio } : null,
+      scroll: { x: window.scrollX, y: window.scrollY },
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      language: navigator.language,
+      platform: navigator.platform,
+      online: navigator.onLine,
+    };
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,7 +147,7 @@ export function FeedbackButton() {
       if (stepsToReproduce.trim()) fd.append("stepsToReproduce", stepsToReproduce.trim());
       if (expectedBehavior.trim()) fd.append("expectedBehavior", expectedBehavior.trim());
       if (actualBehavior.trim()) fd.append("actualBehavior", actualBehavior.trim());
-      if (_errBuf.length > 0) fd.append("consoleErrors", JSON.stringify(_errBuf));
+      fd.append("consoleErrors", JSON.stringify({ recentErrors: sanitizedErrorBuffer(), clientContext: buildClientContext() }));
       screenshots.forEach(f => fd.append("screenshots", f));
 
       const r = await fetch("/api/feedback", { method: "POST", body: fd, credentials: "include" });
@@ -135,9 +176,9 @@ export function FeedbackButton() {
     <>
       <Button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openFeedbackForm}
         data-testid="button-feedback-open"
-        className="fixed bottom-4 right-4 z-50 shadow-lg rounded-full h-12 w-12 p-0 sm:h-auto sm:w-auto sm:px-4 sm:py-2 sm:rounded-full bg-gradient-to-br from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white"
+        className="fixed bottom-5 left-5 sm:bottom-6 sm:left-6 z-[2147483647] shadow-xl rounded-full h-12 w-12 p-0 sm:h-auto sm:w-auto sm:px-4 sm:py-2 sm:rounded-full bg-gradient-to-br from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white"
         aria-label="Send feedback"
       >
         <MessageSquarePlus className="h-5 w-5 sm:mr-2" />
@@ -145,11 +186,11 @@ export function FeedbackButton() {
       </Button>
 
       <Dialog open={open} onOpenChange={v => { if (!v) setOpen(false); }}>
-        <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto z-[2147483647]">
           <DialogHeader>
-            <DialogTitle>Submit Feedback or Bug Report</DialogTitle>
+            <DialogTitle>Submit Feedback</DialogTitle>
             <DialogDescription>
-              Help us improve PayLink. Page URL, browser, timestamp, and any recent JS errors are captured automatically.
+              Share bugs, user experience feedback, feature requests, or HR/workplace concerns. Page URL, browser, timestamp, viewport, scroll position, and recent JS errors are captured automatically to reduce what you need to type. Your submission is visible in your Feedback tab and to authorized reviewers.
             </DialogDescription>
           </DialogHeader>
 
@@ -186,7 +227,7 @@ export function FeedbackButton() {
                   data-testid="input-feedback-title"
                   value={title}
                   onChange={e => setTitle(e.target.value)}
-                  placeholder={isBug ? "Short summary of the bug" : "Short summary"}
+                  placeholder={isBug ? "Short summary of the bug" : isHr ? "Short summary of the workplace concern" : "Short summary"}
                   maxLength={200}
                   required
                 />
@@ -214,7 +255,9 @@ export function FeedbackButton() {
                 onChange={e => setDescription(e.target.value)}
                 placeholder={isBug
                   ? "Describe what happened. What were you doing when it occurred?"
-                  : "Describe your feedback in detail."}
+                  : isHr
+                    ? "Describe the concern, who was involved, dates/times, location, and any immediate safety needs."
+                    : "Describe your feedback in detail."}
                 rows={4}
                 required
               />
@@ -325,8 +368,9 @@ export function FeedbackButton() {
               </p>
               <div className="grid grid-cols-2 gap-x-6 gap-y-1 mt-1">
                 <span>📍 <span className="text-foreground font-mono">{pageDisplay}</span></span>
-                <span>🕐 {new Date().toLocaleString()}</span>
+                <span>🕐 {capturedAt.toLocaleString()}</span>
                 <span>🌐 {browserDisplay}{platform ? ` · ${platform}` : ""}</span>
+                <span>📐 {typeof window !== "undefined" ? `${window.innerWidth}×${window.innerHeight}` : "Viewport"}</span>
                 <span>⚠️ {_errBuf.length} recent JS error{_errBuf.length !== 1 ? "s" : ""} captured</span>
               </div>
             </div>

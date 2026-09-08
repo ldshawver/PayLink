@@ -1,0 +1,190 @@
+{
+  "generatedAt": "2026-08-24",
+  "version": 1,
+  "sourceStorageScopeTraceManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
+  "routesTested": 5,
+  "summary": {
+    "PASS": 25,
+    "FAIL": 0,
+    "INCONCLUSIVE": 0,
+    "EXPECTED GLOBAL": 0,
+    "N/A": 3
+  },
+  "routes": [
+    {
+      "id": "GET /api/workers",
+      "source": "server/routes.ts:2161",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin lists workers (own-tenant access)",
+          "disposition": "PASS",
+          "detail": "status=200 containsOwnRecord=true leaksTenantB=false"
+        },
+        {
+          "case": "3. Tenant A admin submits Tenant B companyId as a query param",
+          "disposition": "PASS",
+          "detail": "Non-platform role: session-derived companyId is used, client-supplied ?companyId is ignored per source (server/routes.ts:2186-2198). status=200 leaksTenantB=false"
+        },
+        {
+          "case": "2. by-ID access / 4. ID+companyId combos",
+          "disposition": "N/A",
+          "detail": "Route has no :id param — not applicable to a list endpoint."
+        },
+        {
+          "case": "5. Non-manager role (employee) within the correct tenant",
+          "disposition": "PASS",
+          "detail": "No role rejection is used here — the route instead filters to the caller's own worker record only (server/routes.ts:2169-2173). status=200 selfOnly=true returnedCount=1"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/workers",
+      "source": "server/routes.ts:2260",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "1. Tenant A admin creates a worker in Tenant A",
+          "disposition": "PASS",
+          "detail": "status=201"
+        },
+        {
+          "case": "3. Tenant A admin submits Tenant B companyId in the create body",
+          "disposition": "PASS",
+          "detail": "Guarded by an inline ownership check (server/routes.ts:2266-2270). status=403 noWriteOccurred=true errorBodySafe=true"
+        },
+        {
+          "case": "2. / 4. by-ID combos",
+          "disposition": "N/A",
+          "detail": "Create has no existing-record ID to combine."
+        },
+        {
+          "case": "5. Unauthorized role (employee) within the correct tenant",
+          "disposition": "PASS",
+          "detail": "requireRole(\"admin\",\"manager\") — employee is neither. status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/workers/:id",
+      "source": "server/routes.ts:2315",
+      "storageScopeTraceDisposition": "repaired — companyId immutable through this endpoint",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates a Tenant A worker",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "Omitting companyId preserves the worker's existing company",
+          "disposition": "PASS",
+          "detail": "status=200 companyId=0e9f8b91-36d1-47ec-8042-f8b0d1ffebed lastNameUpdated=true"
+        },
+        {
+          "case": "Submitting the same (current) companyId succeeds and does not change tenancy",
+          "disposition": "PASS",
+          "detail": "status=200 companyId=0e9f8b91-36d1-47ec-8042-f8b0d1ffebed"
+        },
+        {
+          "case": "2. Tenant A admin accesses a Tenant B worker by ID",
+          "disposition": "PASS",
+          "detail": "Guarded by an inline ownership check (server/routes.ts:2317-2326). status=403 rowUnchanged=true"
+        },
+        {
+          "case": "4a. Tenant A's own worker ID + Tenant B's companyId in the update body — rejected, no partial update",
+          "disposition": "PASS",
+          "detail": "Repaired: companyId is immutable through this endpoint (server/routes.ts:2317-2340) — rejected before any mutation. status=403 companyIdUnchanged=true lastNameUnchanged=true"
+        },
+        {
+          "case": "4b. Tenant B's worker ID + Tenant A's companyId in the update body",
+          "disposition": "PASS",
+          "detail": "status=403 companyIdUnchanged=true"
+        },
+        {
+          "case": "5. Unauthorized role (employee) within the correct tenant",
+          "disposition": "PASS",
+          "detail": "requireRole(\"admin\",\"manager\"). status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/workers/:id",
+      "source": "server/routes.ts:2343",
+      "storageScopeTraceDisposition": "needs-runtime-hardening",
+      "cases": [
+        {
+          "case": "2. Tenant A admin deletes a Tenant B worker by ID",
+          "disposition": "PASS",
+          "detail": "Guarded by an inline ownership check (server/routes.ts:2349-2354). status=403 stillExists=true"
+        },
+        {
+          "case": "5. Unauthorized role (employee) within the correct tenant",
+          "disposition": "PASS",
+          "detail": "requireRole(\"admin\") only — even \"manager\" would be rejected here. status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "1. Tenant A admin deletes a Tenant A worker",
+          "disposition": "PASS",
+          "detail": "status=200 rowGone=true"
+        },
+        {
+          "case": "4. by-ID+companyId combos",
+          "disposition": "N/A",
+          "detail": "DELETE takes no request body — the companyId-in-body combo tested for PATCH does not apply here."
+        }
+      ]
+    },
+    {
+      "id": "GET /api/workers/:id/ytd-taxes",
+      "source": "server/routes.ts:7795",
+      "storageScopeTraceDisposition": "repaired — tenant-scoped, admin/manager only",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads a Tenant A worker's YTD taxes (and the aggregation includes no Tenant B data)",
+          "disposition": "PASS",
+          "detail": "status=200 grossPay=0"
+        },
+        {
+          "case": "2. Tenant A admin reads a Tenant B worker's YTD taxes by ID — rejected",
+          "disposition": "PASS",
+          "detail": "Repaired: tenant ownership is checked before any aggregation (server/routes.ts:7795-7815). status=404 grossPayLeaked=false"
+        },
+        {
+          "case": "Foreign-tenant response is indistinguishable from a genuinely nonexistent worker",
+          "disposition": "PASS",
+          "detail": "foreignTenantStatus=404 nonexistentStatus=404 identicalBody=true"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee) is rejected",
+          "disposition": "PASS",
+          "detail": "Repaired: role gate narrowed to requireRole(\"admin\",\"manager\") to match the sibling GET /api/companies/:id/ytd-taxes route (server/routes.ts:7795, 7812) — a payroll/tax report is not an ordinary self-service view. status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    }
+  ]
+}

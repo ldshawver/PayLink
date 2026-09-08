@@ -1,0 +1,405 @@
+{
+  "generatedAt": "2026-08-24",
+  "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
+  "summary": {
+    "PASS": 61,
+    "FAIL": 0,
+    "INCONCLUSIVE": 0,
+    "EXPECTED GLOBAL": 3,
+    "N/A": 0
+  },
+  "routes": [
+    {
+      "id": "GET /api/feature-registry/tenant/:companyId",
+      "source": "server/routes.ts:35715",
+      "cases": [
+        {
+          "case": "1. Platform super admin reads Tenant A's feature overrides by companyId",
+          "disposition": "PASS",
+          "detail": "status=200 overrideEnabled=true"
+        },
+        {
+          "case": "2. Same platform super admin reads Tenant B's feature overrides via a different companyId path segment",
+          "disposition": "EXPECTED GLOBAL",
+          "detail": "status=200 overrideEnabled=null — this route is an intentional platform-console cross-tenant view; correctly returns B's own (empty) override state, not A's, confirming the companyId path segment is honored as a real filter rather than ignored."
+        },
+        {
+          "case": "3. Role-gate breadth: lowest-trust platform role (platform_billing) can also read any tenant's feature-override state",
+          "disposition": "EXPECTED GLOBAL",
+          "detail": "status=200 — requirePlatformRole() (server/routes.ts:306-324) accepts all 7 platform roles for this read-only route with no inline narrowing; documented as expected/by-design for a read, not a defect, since no tenant-scoped role can reach this route at all (case 4)."
+        },
+        {
+          "case": "4. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Nonexistent companyId — no company-existence check; LEFT JOIN yields default (non-overridden) feature state rather than an error, no data leaked",
+          "disposition": "PASS",
+          "detail": "status=200 count=36"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/feature-registry/activate",
+      "source": "server/routes.ts:35813",
+      "cases": [
+        {
+          "case": "1. Platform super admin activates a feature for Tenant A (explicit target, by design)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Role-gate check: platform_billing is blocked by requirePlatformAdminRole() (platform_super_admin/platform_admin only, centralized — server/routes.ts) despite passing the outer requirePlatformRole() route family",
+          "disposition": "PASS",
+          "detail": "status=403 — same centralized helper now also applied to #6/#7/#8 below (previously the only routes in this batch with no such narrowing)."
+        },
+        {
+          "case": "3. REGRESSION (batch-5 audit finding 1, was FAIL): nonexistent companyId now 404s via an explicit storage.getCompany(companyId) existence check before writing, instead of silently creating an orphaned feature_overrides row (feature_overrides.company_id still has no FK constraint — the guard is at the route level)",
+          "disposition": "PASS",
+          "detail": "status=404, orphanCreated=false"
+        },
+        {
+          "case": "4. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/feature-registry/bulk-activate",
+      "source": "server/routes.ts:35864",
+      "cases": [
+        {
+          "case": "1. Platform super admin bulk-activates a feature for Tenant A",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Role-gate check: platform_auditor is blocked by requirePlatformAdminRole() (centralized platform_super_admin/platform_admin-only helper)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "5. Hardening: nonexistent companyId now 404s (same existence-check pattern applied to the sibling .../activate route, finding 1)",
+          "disposition": "PASS",
+          "detail": "status=404, orphanCreated=false"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/provisioning/tenants/:companyId",
+      "source": "server/routes.ts:31433",
+      "cases": [
+        {
+          "case": "1. Platform super admin reads Tenant A's provisioning status",
+          "disposition": "PASS",
+          "detail": "status=200 gate.companyId=88d71245-2eb0-41ad-92bc-c4f5bb8e8c35"
+        },
+        {
+          "case": "2. Same session reads Tenant B's provisioning status via a different companyId — correctly returns B's own (null, no gate row yet) state rather than A's",
+          "disposition": "PASS",
+          "detail": "status=200 gate=null"
+        },
+        {
+          "case": "3. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Nonexistent companyId — returns { gate: null, auditLogs: [], implementationProject: null } gracefully, no error, no leak",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/provisioning/tenants/:companyId/audit",
+      "source": "server/routes.ts:31440",
+      "cases": [
+        {
+          "case": "1. Platform super admin reads Tenant A's provisioning audit log",
+          "disposition": "PASS",
+          "detail": "status=200 count=1"
+        },
+        {
+          "case": "2. Same session reads Tenant B's provisioning audit log via a different companyId — must not carry Tenant A's row",
+          "disposition": "PASS",
+          "detail": "status=200 count=0"
+        },
+        {
+          "case": "3. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/provisioning/tenants/:companyId/retry",
+      "source": "server/routes.ts:31456",
+      "cases": [
+        {
+          "case": "1. REGRESSION (batch-5 audit finding 6, was FAIL): platform_auditor is now blocked by requirePlatformAdminRole() — must remain read-only, cannot trigger provisioning/activation for any tenant, and denial leaves zero side effects (gate lifecycle_state, provisioned_at, and audit-log row count all unchanged)",
+          "disposition": "PASS",
+          "detail": "status=403 noSideEffect=true (lifecycle_state before=\"pending_activation\" after=\"pending_activation\")"
+        },
+        {
+          "case": "1b. Authorized narrow platform-role behavior: platform_admin (the second role requirePlatformAdminRole() admits) can still trigger provisioning for Tenant A",
+          "disposition": "PASS",
+          "detail": "status=200 provisioned=true"
+        },
+        {
+          "case": "2. Nonexistent companyId — storage.getTenantCommercialGate returns undefined and this route explicitly 404s (unlike most other routes in this batch)",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "3. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/provisioning/tenants/:companyId/gates",
+      "source": "server/routes.ts:31466",
+      "cases": [
+        {
+          "case": "1. Platform super admin patches Tenant A's own gate notes",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. REGRESSION (batch-5 audit finding 2, was FAIL): client-supplied companyId reassignment via the update branch — PATCH targets Tenant A's gate row via the URL, request body also carries companyId=Tenant B; storage.upsertTenantCommercialGate now forces `{ ...data, companyId, updatedAt }` (companyId always last/wins, server/storage.ts) so the body's companyId can no longer override the URL's tenant scoping, while every other field in the body (notes) still applies",
+          "disposition": "PASS",
+          "detail": "status=200, company_id unchanged (88d71245-2eb0-41ad-92bc-c4f5bb8e8c35), notes applied (CT5 reassignment attempt)"
+        },
+        {
+          "case": "3. Hardening: PATCH .../gates now validates the target company exists (storage.getCompany) before calling upsertTenantCommercialGate — a nonexistent companyId 404s instead of silently creating (or, per finding 2, misdirecting) a gate row. This also closes the insert-branch companyId-override code path noted in the original audit (server/storage.ts's insert `values({ ...data, companyId })` uses the same companyId-always-wins ordering as the update branch fixed in case 2), since the insert branch can now only be reached for a companyId that has already been confirmed to exist.",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "4. REGRESSION (batch-5 audit finding 3, was FAIL): platform_billing is now blocked by requirePlatformAdminRole() from mutating any tenant's commercial/subscription gates, and denial leaves zero side effects (notes unchanged)",
+          "disposition": "PASS",
+          "detail": "status=403 noSideEffect=true"
+        },
+        {
+          "case": "5. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/provisioning/event",
+      "source": "server/routes.ts:31447",
+      "cases": [
+        {
+          "case": "1. REGRESSION (batch-5 audit finding 4, was FAIL): platform_billing is now blocked by requirePlatformAdminRole() from suspending any tenant's subscription via event=\"tenant.suspended\", and denial leaves zero side effects (subscription_status unchanged)",
+          "disposition": "PASS",
+          "detail": "status=403 noSideEffect=true"
+        },
+        {
+          "case": "2. REGRESSION (batch-5 audit finding 5, was FAIL): platform_billing is now blocked by requirePlatformAdminRole() from flipping any tenant's commercial subscription-gate via event=\"subscription.activated\", and denial leaves zero side effects (no gate row created for Tenant B)",
+          "disposition": "PASS",
+          "detail": "status=403 noSideEffect=true"
+        },
+        {
+          "case": "2b. Authorized narrow platform-role behavior: platform_admin can still fire a legitimate provisioning event for Tenant B",
+          "disposition": "PASS",
+          "detail": "status=200 agreementStatus=signed"
+        },
+        {
+          "case": "3. Hardening: POST /api/provisioning/event now validates the target company exists before calling handleProvisioningEvent — a nonexistent companyId 404s explicitly instead of relying on an internal FK-violation catch that returned a 200 with success:false",
+          "disposition": "PASS",
+          "detail": "status=404 body={\"message\":\"Company not found\"}"
+        },
+        {
+          "case": "4. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/platform/audit/contracts/:companyId/sign",
+      "source": "server/routes.ts:33289",
+      "cases": [
+        {
+          "case": "1. Platform super admin signs Tenant A's agreement (explicit target, by design)",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. REGRESSION (batch-5 audit finding 7, was FAIL): a nonexistent companyId now checks the UPDATE's rowCount and 404s truthfully, instead of reporting { success: true } for zero affected rows",
+          "disposition": "PASS",
+          "detail": "status=404 body={\"message\":\"Company not found\"}"
+        },
+        {
+          "case": "3. Role-gate check: requirePlatformAudit correctly excludes platform_billing (platform_super_admin only) — positive control contrasting with #6/#7/#8's broad requirePlatformRole()",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/platform/audit/licensing/:companyId/gate-override",
+      "source": "server/routes.ts:33306",
+      "cases": [
+        {
+          "case": "1. Platform super admin overrides Tenant B's licensing gate — verifies the correct company is targeted and Tenant A is untouched (expected/by-design platform action, not a leak)",
+          "disposition": "EXPECTED GLOBAL",
+          "detail": "status=200 targetedCorrectly=true aUnaffected=true"
+        },
+        {
+          "case": "2. REGRESSION (batch-5 audit finding 8, was FAIL): same rowCount-check fix as POST .../contracts/:companyId/sign, applied here — a nonexistent companyId now 404s instead of reporting { success: true }",
+          "disposition": "PASS",
+          "detail": "status=404 body={\"message\":\"Company not found\"}"
+        },
+        {
+          "case": "3. Role-gate check: requirePlatformAudit correctly excludes platform_auditor too (platform_super_admin only) — positive control",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/tenants/:id/companies/:companyId",
+      "source": "server/routes.ts:31404",
+      "cases": [
+        {
+          "case": "1. Mismatched tenant/company pair (real Tenant X + Tenant B's companyId, but B actually belongs to Tenant Y) does not delete Tenant Y's real association",
+          "disposition": "PASS",
+          "detail": "status=404 — WHERE tenant_id=X AND company_id=B matches no row since B belongs to Y, so Y's real (tenant_id,company_id) tuple is untouched. rowExistsBefore=true rowExistsAfter=true"
+        },
+        {
+          "case": "2. REGRESSION (batch-5 audit finding 9, was FAIL): the mismatched-pair (no-op) request from case 1 now checks the DELETE's rowCount and 404s truthfully instead of reporting { ok: true } for zero affected rows — an API consumer can now distinguish \"deleted\" from \"no matching association existed\"",
+          "disposition": "PASS",
+          "detail": "status=404 body={\"message\":\"Tenant-company association not found\"}"
+        },
+        {
+          "case": "3. Platform super admin deletes the real, correctly-matched Tenant X ↔ Tenant A's companyId association",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "4. Role-gate check: requireSuperAdmin correctly excludes platform_billing (platform_super_admin only) — positive control",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Tenant-scoped (non-platform) admin is blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/audit-log",
+      "source": "server/routes.ts:31089",
+      "cases": [
+        {
+          "case": "1. Tenant A admin (legacy \"admin\" role) reads the audit log — force-scoped to their own company regardless of the resolvedCompanyId branch, does not see Tenant B's row",
+          "disposition": "PASS",
+          "detail": "status=200 count=1 onlyOwnCompany=true"
+        },
+        {
+          "case": "2. Tenant A admin attempts to override scope via ?companyId=Tenant B — resolvedCompanyId ignores the query param for non-platform_super_admin roles (server/routes.ts:31097-31099)",
+          "disposition": "PASS",
+          "detail": "status=200 count=1 (force-scoped to caller's own company)"
+        },
+        {
+          "case": "3. REGRESSION (batch-5 audit finding 10, was FAIL): platform_admin (NOT platform_super_admin) is now blocked outright rather than silently falling through to an unfiltered cross-tenant read — role-alias escalation via expandRoleForGuard()'s \"admin\" alias (server/routes.ts:260-280) is closed by an explicit isSuperAdmin-or-has-own-companyId check before resolvedCompanyId is computed. Same code path also now blocks platform_support/platform_implementation (not independently re-tested here — see the batch-5 findings doc for why one representative role is sufficient).",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3b. Authorized platform-owner behavior, preserved: platform_super_admin with no ?companyId= still sees both Tenant A's and Tenant B's rows",
+          "disposition": "PASS",
+          "detail": "status=200 seesBoth=true"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "5. Unrelated platform role (platform_billing) not aliased to \"admin\" by expandRoleForGuard is correctly blocked",
+          "disposition": "PASS",
+          "detail": "status=403"
+        }
+      ]
+    }
+  ]
+}

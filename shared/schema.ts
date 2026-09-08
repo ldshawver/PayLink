@@ -348,6 +348,17 @@ export const users = pgTable("users", {
   mfaEnabled: boolean("mfa_enabled").default(false),
   /** ISO timestamp at which the company admin enforced MFA for all users. */
   mfaEnforcedAt: timestamp("mfa_enforced_at"),
+  /**
+   * SaaS identity/onboarding (migration 0019). Additive, nullable — existing
+   * accounts keep working with these unset. `invite_status` tracks how the
+   * account came to exist: 'none' (created directly / legacy), 'invited'
+   * (an account_invites row is outstanding, no password yet — there is no
+   * users row until the invite is accepted, so in practice a users row is
+   * only ever 'active' or 'suspended'), 'active', 'suspended'.
+   */
+  inviteStatus: text("invite_status").default("none"), // none | invited | active | suspended
+  lastLoginAt: timestamp("last_login_at"),
+  emailVerifiedAt: timestamp("email_verified_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1848,6 +1859,40 @@ export const insertExpenseAttachmentSchema = createInsertSchema(expenseAttachmen
 export type ExpenseAttachment = typeof expenseAttachments.$inferSelect;
 export type InsertExpenseAttachment = z.infer<typeof insertExpenseAttachmentSchema>;
 
+// ── Expense Payments ledger (migration 0017 / Release B2) ────────────────────
+// Vendor/expense Cut Check disbursements. The expense's authoritative unpaid
+// balance is amount - SUM(non-void expense_payments). The original row is never
+// deleted or overwritten — void/reissue append audit + linkage fields.
+export const expensePayments = pgTable("expense_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  expenseId: varchar("expense_id").notNull().references(() => expenses.id),
+  remittanceSourceId: varchar("remittance_source_id").references(() => remittanceSources.id),
+  amount: numeric("amount").notNull(),
+  paymentMethod: text("payment_method").notNull().default("check"), // check | cash | ach | trade_credit | rent_credit | other (migration 0018)
+  status: text("status").notNull().default("completed"), // completed | void
+  referenceNumber: text("reference_number"), // check number
+  idempotencyKey: text("idempotency_key"),
+  idempotencyFingerprint: text("idempotency_fingerprint"),
+  issuedAt: timestamp("issued_at").defaultNow(),
+  // ── Non-check payment methods + document linkage (migration 0018) ──
+  notes: text("notes"), // free-text description; required by the app for trade_credit / rent_credit / other
+  paymentDate: timestamp("payment_date"), // effective date the money changed hands (independent of check issuance)
+  tradeCompensationId: varchar("trade_compensation_id").references(() => contractorTradeCompensation.id), // one approved FMV trade record
+  payeeUserId: varchar("payee_user_id"), // contractor user, when the vendor/payee is a known contractor
+  createdByUserId: varchar("created_by_user_id"),
+  voidedAt: timestamp("voided_at"),
+  voidedByUserId: varchar("voided_by_user_id"),
+  voidReason: text("void_reason"),
+  reversesPaymentId: varchar("reverses_payment_id"),
+  reissuedByPaymentId: varchar("reissued_by_payment_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertExpensePaymentSchema = createInsertSchema(expensePayments).omit({ id: true, createdAt: true });
+export type ExpensePayment = typeof expensePayments.$inferSelect;
+export type InsertExpensePayment = z.infer<typeof insertExpensePaymentSchema>;
+
 // ── Contractor Invoices ──────────────────────────────────────────────────
 export const contractorInvoices = pgTable("contractor_invoices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1895,6 +1940,12 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   aiExtractedJson: text("ai_extracted_json"),
   aiConfidenceScore: numeric("ai_confidence_score"),
   duplicateHash: text("duplicate_hash"),
+  // Set only by the Documenso-completion exactly-once auto-invoice path (never by
+  // manual invoice submission, which may legitimately create multiple invoices per
+  // contract for deposit/progress/final/change-order billing). Backed by a partial
+  // unique index on (company_id, documenso_completion_idempotency_key) — see
+  // migrations/0014_contractor_invoice_exactly_once.sql.
+  documensoCompletionIdempotencyKey: text("documenso_completion_idempotency_key"),
   notes: text("notes"),
   isArchived: boolean("is_archived").default(false),
   archivedAt: timestamp("archived_at"),
@@ -2456,13 +2507,59 @@ export const contractorPayments = pgTable("contractor_payments", {
   paymentMethod: text("payment_method"),
   paymentProvider: text("payment_provider"),
   externalPaymentId: text("external_payment_id"),
-  status: text("status").notNull().default("completed"),
+  status: text("status").notNull().default("completed"), // completed | void
   paidAt: timestamp("paid_at").defaultNow(),
   referenceNumber: text("reference_number"),
   notes: text("notes"),
   recordedByUserId: varchar("recorded_by_user_id"),
+  // ── Idempotency (migration 0016) — company-scoped partial unique on (company_id, idempotency_key) ──
+  idempotencyKey: text("idempotency_key"),
+  idempotencyFingerprint: text("idempotency_fingerprint"),
+  // ── Void / reversal audit (migration 0016) — the original row is never deleted or overwritten ──
+  voidedAt: timestamp("voided_at"),
+  voidedByUserId: varchar("voided_by_user_id"),
+  voidReason: text("void_reason"),
+  // ── Reissue / reversal linkage (migration 0016) ──
+  reversesPaymentId: varchar("reverses_payment_id"),
+  reissuedByPaymentId: varchar("reissued_by_payment_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+
+export const contractorTradeCompensation = pgTable("contractor_trade_compensation", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull(),
+  contractorUserId: varchar("contractor_user_id").notNull(),
+  contractorPaymentId: varchar("contractor_payment_id"),
+  expensePaymentId: varchar("expense_payment_id"), // mirror of contractorPaymentId for expense/AP trade payments (migration 0018)
+  contractorStatementId: varchar("contractor_statement_id"),
+  settlementId: varchar("settlement_id"),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  payrollItemId: varchar("payroll_item_id").references(() => payrollItems.id),
+  itemName: text("item_name").notNull(),
+  itemSku: text("item_sku"),
+  description: text("description"),
+  quantity: numeric("quantity").notNull().default("1"),
+  unitValue: numeric("unit_value").notNull().default("0"),
+  totalValue: numeric("total_value").notNull().default("0"),
+  valuationMethod: text("valuation_method").notNull().default("fair_market_value"),
+  tradeAgreementId: text("trade_agreement_id"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  approvedAt: timestamp("approved_at"),
+  deliveryStatus: text("delivery_status").notNull().default("pending"),
+  deliveryReference: text("delivery_reference"),
+  includedIn1099: boolean("included_in_1099").notNull().default(true),
+  notes: text("notes"),
+  // ── Idempotency (migration 0016) — company-scoped partial unique on (company_id, idempotency_key) ──
+  idempotencyKey: text("idempotency_key"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorTradeCompensationSchema = createInsertSchema(contractorTradeCompensation).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorTradeCompensation = typeof contractorTradeCompensation.$inferSelect;
+export type InsertContractorTradeCompensation = z.infer<typeof insertContractorTradeCompensationSchema>;
 
 export const insertContractorPaymentSchema = createInsertSchema(contractorPayments).omit({ id: true, createdAt: true });
 export type ContractorPayment = typeof contractorPayments.$inferSelect;
@@ -3712,12 +3809,63 @@ export const insertTradeAuditLogSchema = createInsertSchema(tradeAuditLogs).omit
 export type TradeAuditLog = typeof tradeAuditLogs.$inferSelect;
 export type InsertTradeAuditLog = z.infer<typeof insertTradeAuditLogSchema>;
 
-// ── Contractor Documents (W-9, W-8BEN, etc.) ─────────────────────────────
+// ── Contractor Documents (W-9, contractor agreement, insurance, etc.) ─────
+//
+// Canonical store for a contractor's compliance documents, surfaced in the
+// contractor profile (Trade Compensation → Contractors). Independent
+// contractors are `workers` rows with worker_type = 'contractor'; the same
+// worker's ad-hoc profile documents also live in `worker_documents` (shared
+// by every worker type). `documentType` is kept as free text for forward
+// compatibility, but new writes normalize to CONTRACTOR_DOCUMENT_TYPES.
+export const CONTRACTOR_DOCUMENT_TYPES = [
+  "w9",
+  "contractor_agreement",
+  "amendment",
+  "insurance_certificate",
+  "license_certification",
+  "invoice_support",
+  "other",
+] as const;
+export type ContractorDocumentType = (typeof CONTRACTOR_DOCUMENT_TYPES)[number];
+
+/** Coerce an arbitrary/legacy document-type string to a canonical contractor type. */
+export function normalizeContractorDocumentType(raw: string | null | undefined): ContractorDocumentType {
+  const s = (raw || "").trim().toLowerCase();
+  if ((CONTRACTOR_DOCUMENT_TYPES as readonly string[]).includes(s)) return s as ContractorDocumentType;
+  if (/\bw-?9\b/.test(s)) return "w9";
+  if (/(contractor|independent).*agreement|agreement.*(contractor|independent)|contractor_agreement/.test(s)) return "contractor_agreement";
+  if (/amendment|addend/.test(s)) return "amendment";
+  if (/insurance|certificate of insurance|\bcoi\b/.test(s)) return "insurance_certificate";
+  if (/licen[sc]e|certification|permit/.test(s)) return "license_certification";
+  if (/invoice|receipt|supporting doc/.test(s)) return "invoice_support";
+  return "other";
+}
+
+/**
+ * Classify a `worker_documents` row (free-text type + name) as a specific
+ * contractor-compliance document, or null when it is just a generic worker
+ * document that should NOT surface in the contractor compliance view.
+ * Deliberately conservative — only rows unambiguously identifiable as
+ * contractor compliance are unified into the contractor profile.
+ */
+export function classifyContractorComplianceDoc(
+  rawType: string | null | undefined,
+  rawName: string | null | undefined,
+): ContractorDocumentType | null {
+  const hay = `${rawType || ""} ${rawName || ""}`.toLowerCase();
+  if (/\bw-?9\b/.test(hay)) return "w9";
+  if (/(contractor|independent contractor).*agreement|contractor_agreement/.test(hay)) return "contractor_agreement";
+  if (/contractor.*amendment|agreement amendment/.test(hay)) return "amendment";
+  if (/insurance|certificate of insurance|\bcoi\b/.test(hay)) return "insurance_certificate";
+  if (/contractor licen[sc]e|licen[sc]e\/cert|certification/.test(hay)) return "license_certification";
+  return null;
+}
+
 export const contractorDocuments = pgTable("contractor_documents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull(),
   workerId: varchar("worker_id").notNull(),
-  documentType: text("document_type").notNull().default("w9"), // w9 | w8ben | other
+  documentType: text("document_type").notNull().default("w9"), // CONTRACTOR_DOCUMENT_TYPES
   fileName: text("file_name").notNull(),
   fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),
@@ -3729,6 +3877,16 @@ export const contractorDocuments = pgTable("contractor_documents", {
 export const insertContractorDocumentSchema = createInsertSchema(contractorDocuments).omit({ id: true, createdAt: true });
 export type ContractorDocument = typeof contractorDocuments.$inferSelect;
 export type InsertContractorDocument = z.infer<typeof insertContractorDocumentSchema>;
+
+/**
+ * A contractor compliance document as surfaced in the contractor profile.
+ * `source` records which table the canonical record lives in — a
+ * `worker_document` entry is an existing profile document classified as
+ * contractor compliance and shown here without copying the binary.
+ */
+export type ContractorComplianceDocument = ContractorDocument & {
+  source: "contractor_document" | "worker_document";
+};
 
 // ── Authorization Audit Log ────────────────────────────────────────────────
 export const authorizationAuditLog = pgTable("authorization_audit_log", {
@@ -5026,3 +5184,267 @@ export const companyUserAccess = pgTable("company_user_access", {
 export const insertCompanyUserAccessSchema = createInsertSchema(companyUserAccess).omit({ id: true, createdAt: true, updatedAt: true });
 export type CompanyUserAccess = typeof companyUserAccess.$inferSelect;
 export type InsertCompanyUserAccess = z.infer<typeof insertCompanyUserAccessSchema>;
+
+// ── SaaS identity/onboarding — Phase 1 / PR 1 (migration 0019) ─────────────────
+// Additive only. These tables introduce the "one login identity, many
+// relationships" model without touching users / workers / customers / the two
+// existing company-access tables. See
+// docs/saas-identity-onboarding-architecture.md.
+
+/**
+ * account_invites — an outstanding invitation to create (or bind) a login
+ * account. The invite carries a hashed token only; the raw token lives only in
+ * the emailed link. Accepting the invite is what creates the `users` row and
+ * lets the invitee set their own password — no admin ever types a password for
+ * someone else. `relationship_kind` records what the account is being onboarded
+ * as so the accept handler can wire the right links/grants.
+ */
+export const accountInvites = pgTable("account_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"), // null only for platform-level invites (not used in PR 1)
+  email: text("email").notNull(), // stored lower-cased; the invite is bound to this address
+  relationshipKind: text("relationship_kind").notNull().default("employee"), // employee | contractor | vendor | customer_owner | platform
+  relationshipId: varchar("relationship_id"), // worker_id / vendor_id / customer_id this invite will link on accept
+  role: text("role").notNull().default("employee"), // role to grant on the resulting users row
+  tokenHash: text("token_hash").notNull(), // sha256(rawToken) — raw token is never stored
+  status: text("status").notNull().default("pending"), // pending | accepted | revoked | expired
+  invitedByUserId: varchar("invited_by_user_id"),
+  invitedUserId: varchar("invited_user_id"), // set once the users row exists (accept, or link-to-existing)
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  revokedAt: timestamp("revoked_at"),
+  lastSentAt: timestamp("last_sent_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAccountInviteSchema = createInsertSchema(accountInvites).omit({ id: true, createdAt: true });
+export type AccountInvite = typeof accountInvites.$inferSelect;
+export type InsertAccountInvite = z.infer<typeof insertAccountInviteSchema>;
+
+/**
+ * identity_links — the backing table for the shared identity resolver. One
+ * `users` row ⇄ many domain relationships (worker / vendor / customer / person),
+ * without duplicating the email onto each. Email matching that produces a link
+ * is always deterministic and company/tenant-scoped; a conflicting email
+ * creates a `pending_review` row instead of silently merging. Never matched on
+ * name.
+ */
+export const identityLinks = pgTable("identity_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  subjectType: text("subject_type").notNull(), // worker | vendor | customer | person
+  subjectId: varchar("subject_id").notNull(),
+  companyId: varchar("company_id"),
+  tenantId: varchar("tenant_id"),
+  linkStatus: text("link_status").notNull().default("active"), // active | pending_review | revoked
+  verifiedEmail: text("verified_email"), // lower-cased email the link was established on
+  linkedByUserId: varchar("linked_by_user_id"),
+  reviewReason: text("review_reason"), // why this needs admin review (e.g. conflicting emails)
+  createdAt: timestamp("created_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+});
+
+export const insertIdentityLinkSchema = createInsertSchema(identityLinks).omit({ id: true, createdAt: true });
+export type IdentityLink = typeof identityLinks.$inferSelect;
+export type InsertIdentityLink = z.infer<typeof insertIdentityLinkSchema>;
+
+/**
+ * contractor_access_requests — PR 2 (migration 0020). A contractor's public
+ * request to be given logged-in Contractor Hub access. Public submission only
+ * ever creates a `pending` row — never a login account. A company admin/manager
+ * reviews and approves (→ create/link the contractor worker + an account_invite
+ * from the PR 1 system) or rejects (→ status + reason, row kept). Additive; no
+ * changes to workers / users / the invite tables.
+ */
+export const contractorAccessRequests = pgTable("contractor_access_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** Set once an admin claims/approves the request for their company; null while unassigned. */
+  companyId: varchar("company_id"),
+  email: text("email").notNull(), // stored lower-cased
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  phone: text("phone"),
+  businessName: text("business_name"),
+  tradeType: text("trade_type"),
+  licenseNumber: text("license_number"),
+  /** Free-text: which company/client the contractor believes they're requesting access to. */
+  requestedCompanyHint: text("requested_company_hint"),
+  message: text("message"),
+  status: text("status").notNull().default("pending"), // pending | approved | rejected | withdrawn
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  rejectionReason: text("rejection_reason"),
+  /** Populated on approval. */
+  createdWorkerId: varchar("created_worker_id"),
+  accountInviteId: varchar("account_invite_id"),
+  /** Set when approval links to an already-existing login account instead of inviting. */
+  linkedUserId: varchar("linked_user_id"),
+  reviewNote: text("review_note"), // e.g. "cross-company — manual review" ambiguity marker
+  sourceIp: text("source_ip"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorAccessRequestSchema = createInsertSchema(contractorAccessRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorAccessRequest = typeof contractorAccessRequests.$inferSelect;
+export type InsertContractorAccessRequest = z.infer<typeof insertContractorAccessRequestSchema>;
+
+// ── Vendor portal — PR 3 (migration 0021) ────────────────────────────────────
+// Additive only. Vendors are a FIRST-CLASS entity — NOT `customers` (customers
+// are SaaS tenants/AR; vendors are AP payees/service providers). Portal login
+// is the PR 1 account_invites + identity_links system (subject_type='vendor');
+// no separate access table is needed. Invoice/W-9 uploads create REVIEWABLE
+// records only — no ledger / check / payment side effects in PR 3.
+//
+// Scoping keys (`company_id`, `vendor_id`) are plain `varchar` with no FK
+// constraint — matching the recent-table convention in this repo
+// (`contractor_documents`, `contractor_access_requests`, `account_invites`).
+// Every query in server/identity/vendors.ts is explicitly company/vendor-scoped.
+
+export const vendors = pgTable("vendors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  businessName: text("business_name").notNull(),
+  contactName: text("contact_name"),
+  email: text("email"), // stored lower-cased; the address a portal invite is sent to
+  phone: text("phone"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  taxId: text("tax_id"),
+  serviceType: text("service_type"),
+  notes: text("notes"),
+  status: text("status").notNull().default("active"), // active | inactive
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertVendorSchema = createInsertSchema(vendors).omit({ id: true, createdAt: true, updatedAt: true });
+export type Vendor = typeof vendors.$inferSelect;
+export type InsertVendor = z.infer<typeof insertVendorSchema>;
+
+/** Vendor-uploaded tax / compliance files (W-9, insurance certs, …). Mirrors contractor_documents. */
+export const vendorDocuments = pgTable("vendor_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  documentType: text("document_type").notNull().default("w9"), // w9 | tax | insurance | license | other
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  notes: text("notes"), // the vendor's own note on upload — never overwritten by a review
+  status: text("status").notNull().default("received"), // received | approved | rejected
+  reviewNote: text("review_note"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertVendorDocumentSchema = createInsertSchema(vendorDocuments).omit({ id: true, createdAt: true });
+export type VendorDocument = typeof vendorDocuments.$inferSelect;
+export type InsertVendorDocument = z.infer<typeof insertVendorDocumentSchema>;
+
+/**
+ * Vendor-submitted invoices. A submission is a REVIEWABLE record — never a
+ * payment. `status` in PR 3 is only submitted | approved | rejected | needs_info;
+ * no check/ledger/expense-payment row is created here.
+ */
+export const vendorInvoices = pgTable("vendor_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendorId: varchar("vendor_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  invoiceNumber: text("invoice_number"),
+  amount: numeric("amount"),
+  currency: text("currency").default("USD"),
+  invoiceDate: date("invoice_date"),
+  dueDate: date("due_date"),
+  description: text("description"),
+  status: text("status").notNull().default("submitted"), // submitted | approved | rejected | needs_info
+  fileName: text("file_name"),
+  fileUrl: text("file_url"),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  submittedByUserId: varchar("submitted_by_user_id"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNote: text("review_note"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertVendorInvoiceSchema = createInsertSchema(vendorInvoices).omit({ id: true, createdAt: true, updatedAt: true });
+export type VendorInvoice = typeof vendorInvoices.$inferSelect;
+export type InsertVendorInvoice = z.infer<typeof insertVendorInvoiceSchema>;
+
+// ── Tenant licenses — PR 4 (migration 0022) ──────────────────────────────────
+// Additive structured license/trial record + append-only audit trail.
+//
+// This is NOT the enforcement source of truth. `companies.subscription_status`
+// / `trial_start` / `trial_end` / `billing_active` / `grace_period_*` /
+// `gate_override_reason`, read by server/tenant-enforcement.ts `checkTenantGate()`
+// and the `requireActiveSubscription` middleware, remain authoritative and are
+// unchanged by PR 4. `tenant_licenses` adds a normalized status vocabulary, an
+// explicit plan/type, a trial window, and a who-changed-what history that the
+// scattered `companies` columns never captured.
+//
+// A company with NO `tenant_licenses` row resolves exactly as it does today
+// (server/licensing/license-resolver.ts falls back to the `companies` gate
+// columns, then to a safe legacy-active default). A missing row never blocks.
+//
+// Scoping keys (`company_id`, `tenant_id`) are plain `varchar` with no FK
+// constraint — matching the recent-table convention (`vendors`,
+// `contractor_access_requests`, `account_invites`).
+export const tenantLicenses = pgTable("tenant_licenses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(), // unique — at most one license per company
+  tenantId: varchar("tenant_id"),
+  planType: text("plan_type").notNull().default("starter"),
+  // trialing | active | expired | suspended | cancelled | inactive
+  status: text("status").notNull().default("active"),
+  trialStart: timestamp("trial_start"),
+  trialEnd: timestamp("trial_end"),
+  currentPeriodStart: timestamp("current_period_start"),
+  currentPeriodEnd: timestamp("current_period_end"),
+  // legacy_backfill | trial_signup | admin | system
+  source: text("source").notNull().default("system"),
+  externalRef: text("external_ref"), // reserved; unused in PR 4 (no billing-processor integration)
+  notes: text("notes"),
+  statusReason: text("status_reason"),
+  statusChangedAt: timestamp("status_changed_at"),
+  statusChangedByUserId: varchar("status_changed_by_user_id"),
+  createdByUserId: varchar("created_by_user_id"),
+  updatedByUserId: varchar("updated_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertTenantLicenseSchema = createInsertSchema(tenantLicenses).omit({ id: true, createdAt: true, updatedAt: true });
+export type TenantLicense = typeof tenantLicenses.$inferSelect;
+export type InsertTenantLicense = z.infer<typeof insertTenantLicenseSchema>;
+
+/** Append-only audit of every license change (who / when / from → to / why). */
+export const tenantLicenseEvents = pgTable("tenant_license_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  licenseId: varchar("license_id"),
+  companyId: varchar("company_id").notNull(),
+  // created | status_changed | plan_changed | updated | trial_resolved
+  eventType: text("event_type").notNull(),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status"),
+  fromPlan: text("from_plan"),
+  toPlan: text("to_plan"),
+  reason: text("reason"),
+  actorUserId: text("actor_user_id"),
+  actorRole: text("actor_role"),
+  metadata: text("metadata"), // JSON string
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantLicenseEventSchema = createInsertSchema(tenantLicenseEvents).omit({ id: true, createdAt: true });
+export type TenantLicenseEvent = typeof tenantLicenseEvents.$inferSelect;
+export type InsertTenantLicenseEvent = z.infer<typeof insertTenantLicenseEventSchema>;

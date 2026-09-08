@@ -12,6 +12,11 @@
 import { runContractorReminderScheduler } from "../contractor-scheduler";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
+import {
+  runDemoCleanup,
+  type DemoCleanupCandidate,
+  type DemoCleanupThrottleState,
+} from "./demo-cleanup";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
 const HOUR_MS  = 60 * 60 * 1000;
@@ -88,24 +93,51 @@ async function jobContractorReminders(): Promise<void> {
  * their trial_end has passed (with a 2-hour grace window so active sessions
  * can still finish). Protects named canonical demo companies from deletion.
  *
- * Safety guard: only deletes rows where:
+ * Base eligibility (the SQL predicate below): a company is a cleanup candidate
+ * only where
  *   - is_demo = TRUE
  *   - trial_end IS NOT NULL (the singleton /api/demo/login company has no trial_end)
  *   - trial_end < NOW() - 2 hours
  *   - name is not one of the protected canonical names
+ *
+ * Companies whose gate_override_reason begins with "integrity-repair" are inert
+ * historical parents restored by an integrity repair. They are excluded from
+ * eligibility in runDemoCleanup() and are never deleted or mutated; their
+ * dependent records and the NO ACTION foreign keys stay intact. Each remaining
+ * candidate is deleted in its own statement so one FK-blocked company cannot
+ * abort the others. See server/workers/demo-cleanup.ts.
  */
+const demoCleanupThrottle: DemoCleanupThrottleState = { lastProtectedSignature: null };
+
 async function jobDemoCleanup(): Promise<void> {
-  const result = await db.execute(sql`
-    DELETE FROM companies
-    WHERE  is_demo    = TRUE
-      AND  trial_end  IS NOT NULL
-      AND  trial_end  < NOW() - INTERVAL '2 hours'
-      AND  name NOT IN ('Demo Corp', '__demo_provision__')
-  `);
-  const deleted = (result as any).rowCount ?? 0;
-  if (deleted > 0) {
-    console.log(`[Orchestrator][DemoCleanup] Removed ${deleted} expired demo tenant(s).`);
-  }
+  await runDemoCleanup({
+    selectCandidates: async () => {
+      const result = await db.execute(sql`
+        SELECT id, name, gate_override_reason
+        FROM   companies
+        WHERE  is_demo    = TRUE
+          AND  trial_end  IS NOT NULL
+          AND  trial_end  < NOW() - INTERVAL '2 hours'
+          AND  name NOT IN ('Demo Corp', '__demo_provision__')
+      `);
+      return ((result as any).rows ?? []) as DemoCleanupCandidate[];
+    },
+    deleteCompany: async (id: string) => {
+      const result = await db.execute(sql`
+        DELETE FROM companies
+        WHERE  id         = ${id}
+          AND  is_demo    = TRUE
+          AND  trial_end  IS NOT NULL
+          AND  trial_end  < NOW() - INTERVAL '2 hours'
+          AND  name NOT IN ('Demo Corp', '__demo_provision__')
+          AND  (gate_override_reason IS NULL OR gate_override_reason NOT LIKE 'integrity-repair%')
+      `);
+      return (result as any).rowCount ?? 0;
+    },
+    log:  (message: string) => console.log(`[Orchestrator][DemoCleanup] ${message}`),
+    warn: (message: string) => console.warn(`[Orchestrator][DemoCleanup] ${message}`),
+    throttle: demoCleanupThrottle,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

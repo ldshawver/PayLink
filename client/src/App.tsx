@@ -16,6 +16,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useTrial } from "@/hooks/use-trial";
 import { TrialBanner } from "@/components/trial-banner";
+import { LicenseStatusBanner } from "@/components/license-status-banner";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { ApiHealthBanner } from "@/components/api-health-banner";
@@ -55,6 +56,11 @@ const EngagementFeedPage = lazy(() => import("@/pages/engagement-feed"));
 const LicenseRequestsPage = lazy(() => import("@/pages/license-requests"));
 const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
 const LoginPage = lazy(() => import("@/pages/login"));
+const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
+const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
+const ContractorAccessRequestsPage = lazy(() => import("@/pages/contractor-access-requests"));
+const VendorManagementPage = lazy(() => import("@/pages/vendor-management"));
+const VendorPortalPage = lazy(() => import("@/pages/vendor-portal"));
 const NotificationSettingsPage = lazy(() => import("@/pages/notification-settings"));
 const NotificationTemplatesPage = lazy(() => import("@/pages/notification-templates"));
 const MessagesPage = lazy(() => import("@/pages/messages"));
@@ -88,6 +94,7 @@ const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 const AppDoctorPage = lazy(() => import("@/pages/app-doctor"));
 const PlatformTenantsPage = lazy(() => import("@/pages/platform-tenants"));
+const PlatformLicensesPage = lazy(() => import("@/pages/platform-licenses"));
 const MarketingHomePage = lazy(() => import("@/pages/marketing-home"));
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -296,6 +303,9 @@ function AuthenticatedRouter() {
         <Route path="/app/biz-docs" component={BizDocsPage} />
         <Route path="/app/contractor-hub/contracts/:id/sign">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorContractSigningPage /></FeatureGate>}</Route>
         <Route path="/app/contractor-hub">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
+        <Route path="/app/contractor-access-requests">{() => <RoleGuard roles={["admin", "manager"]}><ContractorAccessRequestsPage /></RoleGuard>}</Route>
+        <Route path="/app/vendors">{() => <RoleGuard roles={["admin", "manager"]}><VendorManagementPage /></RoleGuard>}</Route>
+        <Route path="/app/vendor-portal">{() => <RoleGuard roles={["vendor"]}><VendorPortalPage /></RoleGuard>}</Route>
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><FeatureGate featureKey="tenant.finance.treasury" featureName="Stripe Treasury"><TreasuryPage /></FeatureGate></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
         <Route path="/app/settings/email">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><EmailSettingsPage /></StrictRoleGuard>}</Route>
@@ -373,6 +383,7 @@ function AuthenticatedLayout() {
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
             <ApiHealthBanner />
             <TrialBanner />
+            <LicenseStatusBanner />
             <MobileHeader />
             <main className="flex-1 overflow-y-auto overflow-x-hidden">
               <div ref={containerRef} className="page-transition-container">
@@ -478,6 +489,7 @@ function PlatformRouter() {
           <Route path="/platform/permissions" component={PermissionsPage} />
           <Route path="/platform/audit-log" component={AuditLogPage} />
           <Route path="/platform/billing" component={BillingPage} />
+          <Route path="/platform/licenses" component={PlatformLicensesPage} />
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
           <Route path="/platform/audit" component={PlatformAuditPage} />
           <Route path="/platform/app-doctor" component={AppDoctorPage} />
@@ -703,6 +715,26 @@ function AppContent() {
           <LoginPage />
         </Suspense>
       </BiometricGate>
+    );
+  }
+
+  // Public invite acceptance (PR 1 — SaaS identity/onboarding). No session yet;
+  // the raw token in the query string is the credential.
+  if (location === "/accept-invite") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <AcceptInvitePage />
+      </Suspense>
+    );
+  }
+
+  // Public contractor access request (PR 2). No session; only ever creates a
+  // pending request — never an account.
+  if (location === "/contractor-signup") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ContractorSignupPage />
+      </Suspense>
     );
   }
 

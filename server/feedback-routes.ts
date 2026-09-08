@@ -8,7 +8,9 @@
  *   - All routes require an authenticated session.
  *   - Regular users can only see/comment on their own submissions
  *     (also via GET /api/feedback/mine).
- *   - Tenant admins/managers see all tickets within their company.
+ *   - Tenant admins see all non-HR tickets within their company.
+ *   - HR/workplace-concern tickets are visible only to the submitter, platform/global admins,
+ *     tenant/admin HR reviewers, or roles explicitly granted feedback_hr visibility.
  *   - Platform admins see every ticket across every tenant.
  *   - Status changes, assignment, priority-fix, and internal comments
  *     are admin-only.
@@ -20,7 +22,7 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { sendGenericNotificationEmail } from "./notifications";
 
-const ALLOWED_TYPES = new Set(["bug", "ux", "feature", "change_request", "general"]);
+const ALLOWED_TYPES = new Set(["bug", "ux", "feature", "change_request", "hr", "general"]);
 const ALLOWED_SEVERITIES = new Set(["low", "medium", "high", "critical"]);
 const ALLOWED_STATUSES = new Set([
   "new", "reviewed", "priority_fix", "in_progress",
@@ -90,6 +92,53 @@ function isAdminRole(role: string | undefined | null): boolean {
     role === "admin" || role === "manager" || role === "system_admin" ||
     role.startsWith("tenant_") || role.startsWith("platform_")
   );
+}
+
+function hasBuiltInHrFeedbackAccess(role: string | undefined | null): boolean {
+  if (!role) return false;
+  return (
+    role === "admin" || role === "system_admin" || role === "global_admin" ||
+    role === "tenant_owner" || role === "tenant_admin" || role === "tenant_hr_admin" ||
+    role.startsWith("platform_")
+  );
+}
+
+async function canReviewHrFeedback(user: { role?: string | null }): Promise<boolean> {
+  if (hasBuiltInHrFeedbackAccess(user.role)) return true;
+  if (!user.role) return false;
+
+  try {
+    const result = await db.execute(sql`
+      SELECT 1
+      FROM role_permissions rp
+      JOIN roles r ON r.id = rp.role_id
+      WHERE r.name = ${user.role}
+        AND rp.resource IN ('feedback_hr', 'hr_feedback')
+        AND (
+          rp.can_view = TRUE OR rp.can_view_company = TRUE OR
+          rp.can_edit = TRUE OR rp.can_approve = TRUE
+        )
+      LIMIT 1
+    `);
+    return allRows(result).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function assertFeedbackTicketAccess(
+  user: { id: string; role?: string | null; companyId?: string | null },
+  ticket: FeedbackTicketRow,
+  action: "view" | "update" | "comment",
+): Promise<boolean> {
+  const platform = isPlatformRole(user.role);
+  const admin = isAdminRole(user.role);
+  const submitter = ticket.submitter_user_id === user.id;
+
+  if (submitter && action !== "update") return true;
+  if (!platform && admin && ticket.company_id !== user.companyId) return false;
+  if (ticket.type === "hr") return canReviewHrFeedback(user);
+  return platform || admin;
 }
 
 function buildBrowserInfo(req: Request): string {
@@ -214,9 +263,17 @@ export function registerFeedbackRoutes(
               FROM users u
               WHERE u.company_id = ${resolvedCompanyId}
                 AND (
-                  u.role IN ('admin','manager','system_admin')
-                  OR u.role LIKE 'tenant_%'
+                  u.role IN ('admin','system_admin')
+                  OR u.role IN ('tenant_owner','tenant_admin','tenant_hr_admin')
+                  OR (${type} <> 'hr' AND u.role LIKE 'tenant_%')
                   OR u.role LIKE 'platform_%'
+                  OR EXISTS (
+                    SELECT 1 FROM role_permissions rp
+                    JOIN roles r ON r.id = rp.role_id
+                    WHERE r.name = u.role
+                      AND rp.resource IN ('feedback_hr', 'hr_feedback')
+                      AND (rp.can_view = TRUE OR rp.can_view_company = TRUE OR rp.can_edit = TRUE OR rp.can_approve = TRUE)
+                  )
                 )
               LIMIT 25
             `);
@@ -277,6 +334,7 @@ export function registerFeedbackRoutes(
       if (!user) return res.status(401).json({ message: "User not found" });
       const platform = isPlatformRole(user.role);
       const admin = isAdminRole(user.role);
+      const hrReviewer = await canReviewHrFeedback(user);
 
       const {
         companyId: filterCompanyId, type: filterType, status: filterStatus,
@@ -311,6 +369,7 @@ export function registerFeedbackRoutes(
       } else {
         conditions.push(sql`submitter_user_id = ${user.id}`);
       }
+      if (!hrReviewer) conditions.push(sql`(type <> 'hr' OR submitter_user_id = ${user.id})`);
       if (filterType && ALLOWED_TYPES.has(filterType)) conditions.push(sql`type = ${filterType}`);
       if (filterStatus && ALLOWED_STATUSES.has(filterStatus)) conditions.push(sql`status = ${filterStatus}`);
       if (filterSeverity && ALLOWED_SEVERITIES.has(filterSeverity)) conditions.push(sql`severity = ${filterSeverity}`);
@@ -347,14 +406,8 @@ export function registerFeedbackRoutes(
       const result = await db.execute(sql`SELECT * FROM feedback_tickets WHERE id = ${req.params.id}`);
       const ticket = firstRow<FeedbackTicketRow>(result);
       if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-      const platform = isPlatformRole(user.role);
-      const admin = isAdminRole(user.role);
-      if (!platform) {
-        if (admin) {
-          if (ticket.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
-        } else if (ticket.submitter_user_id !== user.id) {
-          return res.status(403).json({ message: "Access denied" });
-        }
+      if (!(await assertFeedbackTicketAccess(user, ticket, "view"))) {
+        return res.status(403).json({ message: "Access denied" });
       }
       res.json(ticket);
     } catch (e) {
@@ -370,12 +423,11 @@ export function registerFeedbackRoutes(
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Admin access required" });
       }
-      const platform = isPlatformRole(user.role);
       const existingRes = await db.execute(sql`SELECT * FROM feedback_tickets WHERE id = ${req.params.id}`);
       const existing = firstRow<FeedbackTicketRow>(existingRes);
       if (!existing) return res.status(404).json({ message: "Ticket not found" });
-      if (!platform && existing.company_id !== user.companyId) {
-        return res.status(403).json({ message: "Access denied: ticket belongs to another company" });
+      if (!(await assertFeedbackTicketAccess(user, existing, "update"))) {
+        return res.status(403).json({ message: "Access denied: ticket belongs to another company or restricted HR feedback" });
       }
 
       const { status, priorityFix, assignedUserId } = req.body as {
@@ -445,20 +497,16 @@ export function registerFeedbackRoutes(
       const ticketRes = await db.execute(sql`SELECT * FROM feedback_tickets WHERE id = ${req.params.id}`);
       const ticket = firstRow<FeedbackTicketRow>(ticketRes);
       if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-      const platform = isPlatformRole(user.role);
-      const admin = isAdminRole(user.role);
-      if (!platform) {
-        if (admin) {
-          if (ticket.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
-        } else if (ticket.submitter_user_id !== user.id) {
-          return res.status(403).json({ message: "Access denied" });
-        }
+      if (!(await assertFeedbackTicketAccess(user, ticket, "view"))) {
+        return res.status(403).json({ message: "Access denied" });
       }
       const result = await db.execute(sql`
         SELECT * FROM feedback_ticket_comments
         WHERE ticket_id = ${req.params.id}
         ORDER BY created_at ASC
       `);
+      const admin = isAdminRole(user.role);
+      const platform = isPlatformRole(user.role);
       const comments = allRows<FeedbackCommentRow>(result);
       res.json(admin || platform ? comments : comments.filter(c => !c.is_internal));
     } catch (e) {
@@ -475,17 +523,13 @@ export function registerFeedbackRoutes(
       const ticketRes = await db.execute(sql`SELECT * FROM feedback_tickets WHERE id = ${req.params.id}`);
       const ticket = firstRow<FeedbackTicketRow>(ticketRes);
       if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-      const platform = isPlatformRole(user.role);
-      const admin = isAdminRole(user.role);
-      if (!platform) {
-        if (admin) {
-          if (ticket.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
-        } else if (ticket.submitter_user_id !== user.id) {
-          return res.status(403).json({ message: "Access denied" });
-        }
+      if (!(await assertFeedbackTicketAccess(user, ticket, "view"))) {
+        return res.status(403).json({ message: "Access denied" });
       }
       const { body, isInternal } = req.body as { body?: string; isInternal?: boolean };
       if (!body || !body.trim()) return res.status(400).json({ message: "Comment body is required" });
+      const admin = isAdminRole(user.role);
+      const platform = isPlatformRole(user.role);
       const internalFlag = !!isInternal && (admin || platform);
       const authorName =
         [(user as any).firstName, (user as any).lastName].filter(Boolean).join(" ") ||

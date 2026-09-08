@@ -165,7 +165,8 @@ import {
   type TradeAttachment, type InsertTradeAttachment,
   type TradeAuditLog, type InsertTradeAuditLog,
   contractorDocuments, contractor1099Summaries,
-  type ContractorDocument, type InsertContractorDocument,
+  classifyContractorComplianceDoc, normalizeContractorDocumentType,
+  type ContractorDocument, type InsertContractorDocument, type ContractorComplianceDocument,
   type Contractor1099Summary, type InsertContractor1099Summary,
   locations, teams, employeeManagerRelations,
   platformModules, permissionGroups, permissions, enterpriseRolePermissions,
@@ -557,6 +558,7 @@ export interface IStorage {
   deleteWorkerLanguage(id: string): Promise<void>;
 
   getWorkerMemberships(companyId?: string): Promise<WorkerMembership[]>;
+  getWorkerMembership(id: string): Promise<WorkerMembership | undefined>;
   createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership>;
   updateWorkerMembership(id: string, data: Partial<WorkerMembership>): Promise<WorkerMembership | undefined>;
   deleteWorkerMembership(id: string): Promise<void>;
@@ -622,6 +624,7 @@ export interface IStorage {
   }>;
 
   getPayrollPaymentMethods(companyId?: string): Promise<PayrollPaymentMethod[]>;
+  getPayrollPaymentMethod(id: string): Promise<PayrollPaymentMethod | undefined>;
   createPayrollPaymentMethod(data: InsertPayrollPaymentMethod): Promise<PayrollPaymentMethod>;
   updatePayrollPaymentMethod(id: string, data: Partial<PayrollPaymentMethod>): Promise<PayrollPaymentMethod | undefined>;
   deletePayrollPaymentMethod(id: string): Promise<void>;
@@ -843,9 +846,28 @@ export interface IStorage {
   createTradeAuditLog(data: InsertTradeAuditLog): Promise<TradeAuditLog>;
   getTradeReportingSummary(companyId: string, year: number): Promise<{ counterpartyId: string | null; counterpartyName: string; totalFairMarketValue: string; transactionCount: number }[]>;
 
-  // Contractor documents (W-9, W-8BEN)
+  // Contractor documents (W-9, contractor agreement, insurance, etc.)
   getContractorDocuments(companyId: string, workerId?: string): Promise<ContractorDocument[]>;
+  /**
+   * Contractor compliance view: `contractor_documents` unified with the
+   * contractor-compliance subset of `worker_documents` (same worker, no
+   * binary duplication). This is the canonical read for the contractor
+   * profile and for W-9 status.
+   */
+  getContractorComplianceDocuments(companyId: string, workerId?: string): Promise<ContractorComplianceDocument[]>;
+  getContractorComplianceDocumentById(id: string): Promise<ContractorComplianceDocument | undefined>;
+  contractorHasCurrentW9(companyId: string, workerId: string): Promise<boolean>;
   createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument>;
+  /**
+   * Insert a new contractor W-9 and, in the same transaction, supersede any
+   * prior *native* (`contractor_documents`) W-9 rows for the same company +
+   * worker so the contractor profile shows exactly one current W-9.
+   * `worker_documents` rows are never modified. Returns the fileUrls of
+   * superseded rows whose stored blob is no longer referenced anywhere.
+   */
+  replaceContractorW9(data: InsertContractorDocument): Promise<{ doc: ContractorDocument; supersededFileUrls: string[] }>;
+  /** True when `fileUrl` is still referenced by any contractor_documents or worker_documents row. */
+  isCanonicalFileReferenced(fileUrl: string, opts?: { excludeContractorDocumentId?: string }): Promise<boolean>;
   deleteContractorDocument(id: string): Promise<void>;
 
   // 1099 summaries
@@ -2574,6 +2596,10 @@ export class DatabaseStorage implements IStorage {
     if (companyId) return db.select().from(workerMemberships).where(eq(workerMemberships.companyId, companyId)).orderBy(workerMemberships.organization);
     return db.select().from(workerMemberships).orderBy(workerMemberships.organization);
   }
+  async getWorkerMembership(id: string): Promise<WorkerMembership | undefined> {
+    const [r] = await db.select().from(workerMemberships).where(eq(workerMemberships.id, id));
+    return r;
+  }
   async createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership> {
     const [r] = await db.insert(workerMemberships).values(data).returning();
     return r;
@@ -2728,6 +2754,10 @@ export class DatabaseStorage implements IStorage {
   async getPayrollPaymentMethods(companyId?: string): Promise<PayrollPaymentMethod[]> {
     if (companyId) return db.select().from(payrollPaymentMethods).where(or(eq(payrollPaymentMethods.companyId, companyId), isNull(payrollPaymentMethods.companyId))).orderBy(payrollPaymentMethods.sortOrder);
     return db.select().from(payrollPaymentMethods).orderBy(payrollPaymentMethods.sortOrder);
+  }
+  async getPayrollPaymentMethod(id: string): Promise<PayrollPaymentMethod | undefined> {
+    const [r] = await db.select().from(payrollPaymentMethods).where(eq(payrollPaymentMethods.id, id));
+    return r;
   }
   async createPayrollPaymentMethod(data: InsertPayrollPaymentMethod): Promise<PayrollPaymentMethod> {
     const [r] = await db.insert(payrollPaymentMethods).values(data).returning();
@@ -3839,10 +3869,154 @@ export class DatabaseStorage implements IStorage {
     if (workerId) conds.push(eq(contractorDocuments.workerId, workerId));
     return db.select().from(contractorDocuments).where(and(...conds)).orderBy(desc(contractorDocuments.createdAt));
   }
+
+  /**
+   * `contractor_documents` for the company/worker, unified with the
+   * contractor-compliance subset of `worker_documents` for the same
+   * contractor-type workers. A `worker_documents` row is dropped from the
+   * union when a `contractor_documents` row already points at the same
+   * file (post-reconciliation), so the binary is never represented twice.
+   */
+  async getContractorComplianceDocuments(companyId: string, workerId?: string): Promise<ContractorComplianceDocument[]> {
+    const native = await this.getContractorDocuments(companyId, workerId);
+    const nativeUrls = new Set(native.map(d => d.fileUrl));
+
+    // Contractor-type workers in this company (optionally a single worker).
+    const workerConds = [eq(workers.companyId, companyId), eq(workers.workerType, "contractor" as any)];
+    if (workerId) workerConds.push(eq(workers.id, workerId));
+    const contractorWorkers = await db.select({ id: workers.id }).from(workers).where(and(...workerConds));
+    const contractorWorkerIds = new Set(contractorWorkers.map(w => w.id));
+    if (contractorWorkerIds.size === 0) {
+      return native.map(d => ({ ...d, source: "contractor_document" as const }));
+    }
+
+    const wd = await db.select().from(workerDocuments)
+      .where(inArray(workerDocuments.workerId, Array.from(contractorWorkerIds)))
+      .orderBy(desc(workerDocuments.uploadedAt));
+
+    const unified: ContractorComplianceDocument[] = wd
+      .map(d => {
+        const canonicalType = classifyContractorComplianceDoc(d.documentType, d.name);
+        if (!canonicalType) return null;
+        if (nativeUrls.has(d.fileUrl)) return null; // already represented natively
+        return {
+          id: d.id,
+          companyId,
+          workerId: d.workerId,
+          documentType: canonicalType,
+          fileName: d.name,
+          fileUrl: d.fileUrl,
+          fileSize: null,
+          mimeType: null,
+          notes: d.notes ?? null,
+          uploadedBy: "",
+          createdAt: d.uploadedAt ?? null,
+          source: "worker_document" as const,
+        } as ContractorComplianceDocument;
+      })
+      .filter((d): d is ContractorComplianceDocument => d !== null);
+
+    return [
+      ...native.map(d => ({ ...d, source: "contractor_document" as const })),
+      ...unified,
+    ].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+  }
+
+  async getContractorComplianceDocumentById(id: string): Promise<ContractorComplianceDocument | undefined> {
+    const [native] = await db.select().from(contractorDocuments).where(eq(contractorDocuments.id, id));
+    if (native) return { ...native, source: "contractor_document" };
+    const [wd] = await db.select().from(workerDocuments).where(eq(workerDocuments.id, id));
+    if (!wd) return undefined;
+    const [w] = await db.select().from(workers).where(eq(workers.id, wd.workerId));
+    if (!w || w.workerType !== "contractor") return undefined;
+    const canonicalType = classifyContractorComplianceDoc(wd.documentType, wd.name);
+    if (!canonicalType) return undefined;
+    return {
+      id: wd.id,
+      companyId: w.companyId,
+      workerId: wd.workerId,
+      documentType: canonicalType,
+      fileName: wd.name,
+      fileUrl: wd.fileUrl,
+      fileSize: null,
+      mimeType: null,
+      notes: wd.notes ?? null,
+      uploadedBy: "",
+      createdAt: wd.uploadedAt ?? null,
+      source: "worker_document",
+    };
+  }
+
+  async contractorHasCurrentW9(companyId: string, workerId: string): Promise<boolean> {
+    const docs = await this.getContractorComplianceDocuments(companyId, workerId);
+    return docs.some(d => d.documentType === "w9");
+  }
+
   async createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument> {
-    const [r] = await db.insert(contractorDocuments).values(data).returning();
+    const [r] = await db.insert(contractorDocuments).values({
+      ...data,
+      documentType: normalizeContractorDocumentType(data.documentType),
+    }).returning();
     return r;
   }
+
+  async replaceContractorW9(
+    data: InsertContractorDocument,
+  ): Promise<{ doc: ContractorDocument; supersededFileUrls: string[] }> {
+    const documentType = normalizeContractorDocumentType(data.documentType);
+    return db.transaction(async (tx) => {
+      // Serialize concurrent W-9 replacements for the same contractor so two
+      // simultaneous uploads can never each observe "no prior row" and both
+      // keep their own — the lock is held only for this transaction.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`contractor-w9:${data.companyId}:${data.workerId}`}, 0))`,
+      );
+
+      const [doc] = await tx.insert(contractorDocuments).values({ ...data, documentType }).returning();
+
+      const priors = await tx.select().from(contractorDocuments).where(and(
+        eq(contractorDocuments.companyId, data.companyId),
+        eq(contractorDocuments.workerId, data.workerId),
+        eq(contractorDocuments.documentType, documentType),
+        ne(contractorDocuments.id, doc.id),
+      ));
+      if (priors.length === 0) return { doc, supersededFileUrls: [] };
+
+      await tx.delete(contractorDocuments).where(inArray(contractorDocuments.id, priors.map(p => p.id)));
+
+      // A superseded blob is removable only when nothing else — a remaining
+      // contractor_documents row (incl. the new one) or ANY worker_documents
+      // row — still points at that file_url.
+      const superseded: string[] = [];
+      for (const p of priors) {
+        if (!p.fileUrl || p.fileUrl === doc.fileUrl || superseded.includes(p.fileUrl)) continue;
+        const [cd] = await tx.select({ id: contractorDocuments.id }).from(contractorDocuments)
+          .where(eq(contractorDocuments.fileUrl, p.fileUrl)).limit(1);
+        if (cd) continue;
+        const [wd] = await tx.select({ id: workerDocuments.id }).from(workerDocuments)
+          .where(eq(workerDocuments.fileUrl, p.fileUrl)).limit(1);
+        if (wd) continue;
+        superseded.push(p.fileUrl);
+      }
+      return { doc, supersededFileUrls: superseded };
+    });
+  }
+
+  async isCanonicalFileReferenced(
+    fileUrl: string,
+    opts?: { excludeContractorDocumentId?: string },
+  ): Promise<boolean> {
+    if (!fileUrl) return false;
+    const cdConds = [eq(contractorDocuments.fileUrl, fileUrl)];
+    if (opts?.excludeContractorDocumentId) cdConds.push(ne(contractorDocuments.id, opts.excludeContractorDocumentId));
+    const [cd] = await db.select({ id: contractorDocuments.id }).from(contractorDocuments)
+      .where(and(...cdConds)).limit(1);
+    if (cd) return true;
+    const [wd] = await db.select({ id: workerDocuments.id }).from(workerDocuments)
+      .where(eq(workerDocuments.fileUrl, fileUrl)).limit(1);
+    return !!wd;
+  }
+
   async deleteContractorDocument(id: string): Promise<void> {
     await db.delete(contractorDocuments).where(eq(contractorDocuments.id, id));
   }
@@ -3898,8 +4072,9 @@ export class DatabaseStorage implements IStorage {
       .filter(t => t.taxYear === year)
       .reduce((sum, t) => sum + parseFloat(t.fairMarketValue), 0);
 
-    const docs = await this.getContractorDocuments(companyId, workerId);
-    const hasW9 = docs.some(d => d.documentType === "w9");
+    // W-9 status is derived from the canonical contractor-compliance view,
+    // which includes an existing W-9 that only lives in worker_documents.
+    const hasW9 = await this.contractorHasCurrentW9(companyId, workerId);
 
     return { cashTotal, tradeTotal, total: cashTotal + tradeTotal, missingW9: !hasW9 };
   }
@@ -4287,15 +4462,21 @@ export class DatabaseStorage implements IStorage {
 
   async upsertTenantCommercialGate(companyId: string, data: Partial<InsertTenantCommercialGate>): Promise<TenantCommercialGate> {
     const existing = await this.getTenantCommercialGate(companyId);
+    // companyId is sourced exclusively from the `companyId` parameter — the
+    // caller's own explicit target — never from `data`. Spreading `data`
+    // after `companyId` here would let a `companyId` key inside `data`
+    // silently win and reassign or misdirect the write to a different
+    // tenant's row (batch 5 audit, verified defect 2: a client-supplied
+    // companyId in the request body overrode the URL's tenant scoping).
     if (existing) {
       const [updated] = await db.update(tenantCommercialGates)
-        .set({ ...data, updatedAt: new Date() })
+        .set({ ...data, companyId, updatedAt: new Date() })
         .where(eq(tenantCommercialGates.companyId, companyId))
         .returning();
       return updated;
     } else {
       const [created] = await db.insert(tenantCommercialGates)
-        .values({ companyId, ...data })
+        .values({ ...data, companyId })
         .returning();
       return created;
     }

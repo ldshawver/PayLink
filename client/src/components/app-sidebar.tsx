@@ -199,6 +199,7 @@ const MAIN_NAV: NavGroup[] = [
           { title: "Payments",            url: "/app/contractor-hub?section=payments",         icon: CreditCard },
           { title: "Messages",            url: "/app/contractor-hub?section=messages",         icon: MessageSquare },
           { title: "Profile & Branding",  url: "/app/contractor-hub?section=branding",         icon: Palette },
+          { title: "Access Requests",     url: "/app/contractor-access-requests",              icon: UserCheck, roles: ["admin", "manager"] },
           { title: "Settings",            url: "/app/contractor-hub?section=settings",         icon: Settings },
         ],
       },
@@ -272,6 +273,15 @@ const MAIN_NAV: NavGroup[] = [
           { title: "Invoices", url: "/app/invoices?tab=invoices", icon: FileText },
           { title: "Recurring Billing", url: "/app/invoices?tab=recurring", icon: Repeat },
           { title: "Payments", url: "/app/invoices?tab=payments", icon: DollarSign },
+        ],
+      },
+      {
+        label: "Vendor Portal",
+        icon: Building2,
+        url: "/app/vendors",
+        items: [
+          { title: "Vendors", url: "/app/vendors", icon: Building2, roles: ["admin", "manager"] },
+          { title: "My Vendor Portal", url: "/app/vendor-portal", icon: Receipt, roles: ["vendor"] },
         ],
       },
     ],

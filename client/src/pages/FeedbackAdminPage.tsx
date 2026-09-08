@@ -53,6 +53,7 @@ const TYPE_OPTIONS = [
   { value: "ux", label: "UX / Improvement", icon: "✨" },
   { value: "feature", label: "Feature Request", icon: "💡" },
   { value: "change_request", label: "Change Request", icon: "🔄" },
+  { value: "hr", label: "HR / Workplace Concern", icon: "🛡️" },
   { value: "general", label: "General", icon: "💬" },
 ];
 const SEVERITY_OPTIONS = [

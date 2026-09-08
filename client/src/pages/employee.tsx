@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, Component, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { buildWorkerCreatedConfirmation } from "@/lib/worker-created-confirmation";
+import { normalizeWorkerPayRate } from "@shared/worker-pay-rate-rules";
+import { asList, selectableOptions } from "@/lib/employee-lookup-guards";
 import type {
   Worker, Company, EmployeeContact, PayMethod,
   EmployeeTitle, EmployeeGroup, WageHistory, NewHireDefault,
@@ -42,6 +45,45 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   return [tab, setTab];
 }
 
+/**
+ * Local error boundary for the Add / Edit Employee dialogs (employee-add freeze
+ * hardening). A throw during render inside a modal that has no local boundary
+ * propagates to the app-shell boundary and unmounts the whole page — the user
+ * sees a frozen / blank app. This keeps the failure inside the dialog and gives
+ * the user a working Close button. The `asList` / `selectableOptions` guards
+ * (see @/lib/employee-lookup-guards) prevent the two throws we know about; this
+ * is the backstop for anything else.
+ */
+class EmployeeDialogBoundary extends Component<
+  { onClose: () => void; children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    console.error("[EmployeeDialog] render error:", error);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="py-8 text-center space-y-4" data-testid="employee-dialog-error">
+          <p className="text-sm font-medium">This form couldn't be displayed.</p>
+          <p className="text-xs text-muted-foreground max-w-sm mx-auto">
+            A configuration value for this company looks invalid. Close this dialog and try again, or
+            contact support if it keeps happening.
+          </p>
+          <Button variant="outline" size="sm" onClick={this.props.onClose} data-testid="button-employee-dialog-error-close">
+            Close
+          </Button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function cleanFormData(data: Record<string, any>) {
   const cleaned = { ...data };
   Object.entries(cleaned).forEach(([k, v]) => {
@@ -65,6 +107,14 @@ function getStatusBadgeVariant(status: string | null | undefined): "default" | "
   if (status === "terminated") return "destructive";
   return "secondary";
 }
+
+/** PR 1 — how a worker's login/access status reads in the Employee list. */
+const ACCOUNT_STATUS_META: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
+  no_login: { label: "No login", variant: "outline" },
+  invited: { label: "Invited", variant: "secondary" },
+  active: { label: "Active", variant: "default" },
+  suspended: { label: "Suspended", variant: "destructive" },
+};
 
 function EmployeeTab() {
   const { toast } = useToast();
@@ -121,7 +171,10 @@ function EmployeeTab() {
     defaultBranchId: "", defaultDepartmentId: "", policyGroupId: "",
     payPeriodScheduleId: "", groupId: "", titleId: "",
     emergencyContactName: "", emergencyContactRelationship: "",
-    emergencyContactPhone: "", emergencyContactEmail: ""
+    emergencyContactPhone: "", emergencyContactEmail: "",
+    // PR 1 — one-step account provisioning (create dialog only; not a worker column)
+    accountMode: "none" as "none" | "invite" | "link",
+    accountEmail: "",
   };
 
   const [form, setForm] = useState(emptyForm);
@@ -142,6 +195,31 @@ function EmployeeTab() {
   const groupsQuery = useQuery<EmployeeGroup[]>({ queryKey: ["/api/employee-groups"] });
   const policyGroupsQuery = useQuery<PolicyGroup[]>({ queryKey: ["/api/policy-groups"] });
   const payPeriodSchedulesQuery = useQuery<PayPeriodSchedule[]>({ queryKey: ["/api/pay-period-schedules"] });
+  // PR 1 — per-worker login/access status, one query for the whole list.
+  type AccountState = { status: "no_login" | "invited" | "active" | "suspended"; username: string | null; inviteId: string | null; inviteEmail: string | null };
+  const accountsQuery = useQuery<Record<string, AccountState>>({
+    queryKey: ["/api/workers/accounts", companyFilter],
+    queryFn: async () => {
+      const url = companyFilter !== "all" ? `/api/workers/accounts?companyId=${companyFilter}` : "/api/workers/accounts";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+  });
+  const accounts = (accountsQuery.data && typeof accountsQuery.data === "object") ? accountsQuery.data : {};
+
+  const accountAction = useMutation({
+    mutationFn: async ({ workerId, action }: { workerId: string; action: "resend-invite" | "disable" | "enable" }) => {
+      const path = action === "resend-invite" ? `/api/workers/${workerId}/resend-invite` : `/api/workers/${workerId}/account/${action}`;
+      const resp = await apiRequest("POST", path, {});
+      return resp.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workers/accounts"] });
+      toast({ title: vars.action === "resend-invite" ? "Invite re-sent" : vars.action === "disable" ? "Access disabled" : "Access enabled" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
 
   async function saveEmergencyContact(workerId: string, data: typeof form) {
     if (!data.emergencyContactName) return;
@@ -166,17 +244,44 @@ function EmployeeTab() {
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const { isShareholder, emergencyContactName, emergencyContactRelationship,
-        emergencyContactPhone, emergencyContactEmail, ...rest } = data;
-      const resp = await apiRequest("POST", "/api/workers", cleanFormData({ ...rest, isShareholder }));
+        emergencyContactPhone, emergencyContactEmail, accountMode, accountEmail, ...rest } = data;
+      const payload: Record<string, any> = cleanFormData({ ...rest, isShareholder });
+      // Account provisioning is a nested object, not a worker column — attach it
+      // after cleanFormData so it is not flattened/nulled.
+      if (accountMode && accountMode !== "none") {
+        payload.account = { mode: accountMode, email: (accountEmail || (rest as any).email || "").trim() || undefined };
+      }
+      const resp = await apiRequest("POST", "/api/workers", payload);
       const newWorker = await resp.json();
       if (emergencyContactName && newWorker?.id) {
         await saveEmergencyContact(newWorker.id, data);
       }
+      return newWorker as Worker & { account?: { mode: string; status: string; reason?: string; email?: string } };
     },
-    onSuccess: () => {
+    onSuccess: (newWorker) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workers/accounts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/employee-contacts"] });
-      toast({ title: "Employee added successfully" });
+      // Confirmation is built only from the server's persisted response
+      // (real UUID, real companyId) and the authoritative /api/companies
+      // list — never from the client-side draft form.
+      const { title, description } = buildWorkerCreatedConfirmation(newWorker, companiesQuery.data ?? []);
+      toast({ title, description });
+      const acct = (newWorker as any).account;
+      if (acct && acct.status && acct.status !== "no_login") {
+        const msg: Record<string, string> = {
+          invited: `Invite emailed to ${acct.email || "the employee"}.`,
+          linked: `Linked to existing account "${acct.username}".`,
+          review: acct.reason || "Account link flagged for review.",
+          skipped: acct.reason || "Account step skipped.",
+          error: acct.reason || "Account step failed; the employee was still created.",
+        };
+        toast({
+          title: acct.status === "invited" || acct.status === "linked" ? "Account access" : "Account access — needs attention",
+          description: msg[acct.status] || acct.status,
+          variant: acct.status === "skipped" || acct.status === "error" || acct.status === "review" ? "destructive" : undefined,
+        });
+      }
       setAddOpen(false);
       resetForm();
     },
@@ -188,7 +293,7 @@ function EmployeeTab() {
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Partial<typeof form> }) => {
       const { emergencyContactName, emergencyContactRelationship,
-        emergencyContactPhone, emergencyContactEmail, ...rest } = data as typeof form;
+        emergencyContactPhone, emergencyContactEmail, accountMode, accountEmail, ...rest } = data as typeof form;
       await apiRequest("PATCH", `/api/workers/${id}`, cleanFormData(rest as Record<string, any>));
       await saveEmergencyContact(id, data as typeof form);
     },
@@ -273,19 +378,23 @@ function EmployeeTab() {
       emergencyContactName: ecName,
       emergencyContactRelationship: ecRelationship,
       emergencyContactPhone: ecPhone,
-      emergencyContactEmail: ecEmail
+      emergencyContactEmail: ecEmail,
+      accountMode: "none",
+      accountEmail: "",
     });
     setEditOpen(true);
   }
 
-  const workers = workersQuery.data || [];
-  const companies = companiesQuery.data || [];
-  const branches = branchesQuery.data || [];
-  const deptList = departmentsQuery.data || [];
-  const titlesList = titlesQuery.data || [];
-  const groupsList = groupsQuery.data || [];
-  const policyGroupsList = policyGroupsQuery.data || [];
-  const payPeriodSchedulesList = payPeriodSchedulesQuery.data || [];
+  const workers = asList<Worker>(workersQuery.data);
+  // Company/branch/dept/title/group/policy/schedule feed <SelectItem value={id}> —
+  // only options with a real non-empty id are kept (see selectableOptions).
+  const companies = selectableOptions<Company>(companiesQuery.data);
+  const branches = selectableOptions<Branch>(branchesQuery.data);
+  const deptList = selectableOptions<Department>(departmentsQuery.data);
+  const titlesList = selectableOptions<EmployeeTitle>(titlesQuery.data);
+  const groupsList = selectableOptions<EmployeeGroup>(groupsQuery.data);
+  const policyGroupsList = selectableOptions<PolicyGroup>(policyGroupsQuery.data);
+  const payPeriodSchedulesList = selectableOptions<PayPeriodSchedule>(payPeriodSchedulesQuery.data);
 
   function renderForm(isEdit: boolean) {
     return (
@@ -676,6 +785,38 @@ function EmployeeTab() {
           </div>
         </div>
 
+        {!isEdit && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
+              <Shield className="h-4 w-4" /> Account access
+            </h3>
+            <div className="space-y-2">
+              <Label>Login account</Label>
+              <Select value={form.accountMode} onValueChange={v => setForm(f => ({ ...f, accountMode: v as typeof f.accountMode }))}>
+                <SelectTrigger data-testid="select-accountMode"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No login account for now</SelectItem>
+                  <SelectItem value="invite">Send an email invite to set up a login</SelectItem>
+                  <SelectItem value="link">Link an existing account by verified email</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                No password is set here — the employee chooses their own from the invite link. You can also do this later from the employee's row.
+              </p>
+            </div>
+            {form.accountMode !== "none" && (
+              <div className="space-y-2">
+                <Label>{form.accountMode === "invite" ? "Send invite to" : "Existing account email"}</Label>
+                <Input data-testid="input-accountEmail" type="email"
+                  placeholder={form.email || "name@company.com"}
+                  value={form.accountEmail}
+                  onChange={e => setForm(f => ({ ...f, accountEmail: e.target.value }))} />
+                <p className="text-xs text-muted-foreground">Defaults to the employee's email above if left blank.</p>
+              </div>
+            )}
+          </div>
+        )}
+
         <Button data-testid={isEdit ? "button-update-employee" : "button-submit-employee"}
           onClick={() => {
             const submitData = { ...form };
@@ -688,6 +829,16 @@ function EmployeeTab() {
             if (isEdit && editWorker) {
               updateMutation.mutate({ id: editWorker.id, data: submitData });
             } else {
+              // Same rule the server enforces (shared/worker-pay-rate-rules.ts):
+              // only an Invoiced Contractor (1099) may leave Pay Rate blank.
+              // Checking it here avoids an unnecessary round trip and gives
+              // an immediate, type-specific message instead of a generic
+              // server error.
+              const payRateCheck = normalizeWorkerPayRate(submitData);
+              if (!payRateCheck.ok) {
+                toast({ title: "Error", description: payRateCheck.message, variant: "destructive" });
+                return;
+              }
               createMutation.mutate(submitData);
             }
           }}
@@ -720,7 +871,9 @@ function EmployeeTab() {
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Employee</DialogTitle></DialogHeader>
-            {renderForm(false)}
+            <EmployeeDialogBoundary onClose={() => { setAddOpen(false); resetForm(); }}>
+              {renderForm(false)}
+            </EmployeeDialogBoundary>
           </DialogContent>
         </Dialog>
       </div>
@@ -742,13 +895,14 @@ function EmployeeTab() {
                   <TableHead>Job Title</TableHead>
                   <TableHead>Department</TableHead>
                   <TableHead>Pay Rate</TableHead>
+                  <TableHead>Access</TableHead>
                   <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {workers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                       No employees found
                     </TableCell>
                   </TableRow>
@@ -771,6 +925,13 @@ function EmployeeTab() {
                     <TableCell>{w.department || "—"}</TableCell>
                     <TableCell>${w.payRate}</TableCell>
                     <TableCell>
+                      {(() => {
+                        const st = accounts[w.id]?.status || "no_login";
+                        const meta = ACCOUNT_STATUS_META[st] || ACCOUNT_STATUS_META.no_login;
+                        return <Badge variant={meta.variant} className="text-xs" data-testid={`badge-access-${w.id}`}>{meta.label}</Badge>;
+                      })()}
+                    </TableCell>
+                    <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="ghost" size="icon" data-testid={`button-menu-${w.id}`}>
@@ -781,6 +942,53 @@ function EmployeeTab() {
                           <DropdownMenuItem data-testid={`button-edit-${w.id}`} onClick={() => openEdit(w)}>
                             <Pencil className="mr-2 h-4 w-4" /> Edit
                           </DropdownMenuItem>
+                          {(() => {
+                            const st = accounts[w.id]?.status || "no_login";
+                            const email = (w.email || (w as any).workEmail || "").trim();
+                            if (st === "no_login") {
+                              return (
+                                <DropdownMenuItem
+                                  data-testid={`button-invite-${w.id}`}
+                                  disabled={accountAction.isPending || !email}
+                                  onClick={() => accountAction.mutate({ workerId: w.id, action: "resend-invite" })}
+                                >
+                                  <Shield className="mr-2 h-4 w-4" /> {email ? "Send login invite" : "Add an email to invite"}
+                                </DropdownMenuItem>
+                              );
+                            }
+                            if (st === "invited") {
+                              return (
+                                <DropdownMenuItem
+                                  data-testid={`button-resend-invite-${w.id}`}
+                                  disabled={accountAction.isPending}
+                                  onClick={() => accountAction.mutate({ workerId: w.id, action: "resend-invite" })}
+                                >
+                                  <Shield className="mr-2 h-4 w-4" /> Resend invite
+                                </DropdownMenuItem>
+                              );
+                            }
+                            if (st === "active") {
+                              return (
+                                <DropdownMenuItem
+                                  data-testid={`button-disable-access-${w.id}`}
+                                  className="text-red-600 focus:text-red-600"
+                                  disabled={accountAction.isPending}
+                                  onClick={() => accountAction.mutate({ workerId: w.id, action: "disable" })}
+                                >
+                                  <Shield className="mr-2 h-4 w-4" /> Disable login access
+                                </DropdownMenuItem>
+                              );
+                            }
+                            return (
+                              <DropdownMenuItem
+                                data-testid={`button-enable-access-${w.id}`}
+                                disabled={accountAction.isPending}
+                                onClick={() => accountAction.mutate({ workerId: w.id, action: "enable" })}
+                              >
+                                <Shield className="mr-2 h-4 w-4" /> Re-enable login access
+                              </DropdownMenuItem>
+                            );
+                          })()}
                           {canPii && (
                             <>
                               <DropdownMenuSeparator />
@@ -815,7 +1023,9 @@ function EmployeeTab() {
       <Dialog open={editOpen} onOpenChange={v => { setEditOpen(v); if (!v) { setEditWorker(null); resetForm(); } }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Employee</DialogTitle></DialogHeader>
-          {renderForm(true)}
+          <EmployeeDialogBoundary onClose={() => { setEditOpen(false); setEditWorker(null); resetForm(); }}>
+            {renderForm(true)}
+          </EmployeeDialogBoundary>
         </DialogContent>
       </Dialog>
     </div>
@@ -3181,8 +3391,12 @@ function UserAccountsTab() {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+        Most onboarding no longer needs this screen — create an employee and choose <span className="font-medium">Send an email invite</span>,
+        or use the access menu on an employee's row. This page stays for advanced cases (platform users, direct role changes).
+      </div>
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">User Accounts</h3>
+        <h3 className="text-lg font-semibold">Access &amp; Login</h3>
         <Dialog open={open} onOpenChange={handleDialogChange}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-user-account"><Plus className="w-4 h-4 mr-1" /> Add User Account</Button>
@@ -3365,7 +3579,7 @@ export default function EmployeePage() {
             <DollarSign className="mr-2 h-4 w-4" />Wage Groups
           </TabsTrigger>
           <TabsTrigger value="user-accounts" data-testid="tab-user-accounts">
-            <Shield className="mr-2 h-4 w-4" />User Accounts
+            <Shield className="mr-2 h-4 w-4" />Access &amp; Login
           </TabsTrigger>
           <TabsTrigger value="compliance" data-testid="tab-compliance">
             <Scale className="mr-2 h-4 w-4" />Compliance

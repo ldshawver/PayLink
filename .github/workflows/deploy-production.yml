@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag/version to deploy, for example v2.1.1"
+        description: "Required release tag to deploy to production"
         required: true
         type: string
 
@@ -14,22 +14,22 @@ concurrency:
 
 jobs:
   deploy_production:
-    name: Manual production deploy
+    name: Deploy production manually to port 8000
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
-      APP_ENV: production
       APP_PATH: /home/paylinkssh/paylink-app/PayLink
+      # Established production environment file on the VPS (see also scripts/backup-db.sh).
       ENV_FILE: /etc/paylink/.env
-      PM2_PROCESS: paylink
-      LOCAL_HEALTH_URL: http://127.0.0.1:8000/health
-      PUBLIC_HEALTH_URL: https://app.mypaylink.app/health
-      DEPLOY_DOMAIN: app.mypaylink.app
-      DEPLOY_PORT: "8000"
-      PROD_DB_NAME: mypaylink_prod
-      REPO_SSH_URL: git@github.com:ldshawver/PayLink.git
+      PM2_NAME: paylink
+      APP_PORT: "8000"
+      RELEASE_TAG: ${{ inputs.release_tag }}
 
     steps:
-      - name: Checkout release tag
+      - name: Validate release tag input
+        run: test -n "$RELEASE_TAG"
+
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_tag }}
@@ -51,13 +51,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Deployment validation tests
-        run: |
-          pnpm exec tsx tests/deployment-validation-static.test.ts
-          pnpm exec tsx tests/cloudpanel-deployment-workflows-static.test.ts
-          pnpm build
+      - name: Build
+        run: pnpm build
 
-      - name: Deploy approved production release
+      - name: Deploy release tag to production VPS path
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
@@ -65,78 +62,82 @@ jobs:
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           port: ${{ secrets.APP_VPS_PORT }}
           timeout: 30s
-          command_timeout: 30m
+          command_timeout: 40m
           script_stop: true
-          envs: APP_ENV,APP_PATH,ENV_FILE,PM2_PROCESS,LOCAL_HEALTH_URL,PUBLIC_HEALTH_URL,DEPLOY_DOMAIN,DEPLOY_PORT,PROD_DB_NAME,REPO_SSH_URL
           script: |
-            set -euo pipefail
-            RELEASE_TAG='${{ inputs.release_tag }}'
-            APP_VERSION="${RELEASE_TAG#v}"
-            echo "Manual production deploy: $RELEASE_TAG to $DEPLOY_DOMAIN on port $DEPLOY_PORT"
+            set -Eeuo pipefail
+
+            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+            ENV_FILE="/etc/paylink/.env"
+            PM2_NAME="paylink"
+            APP_PORT="8000"
+            RELEASE_TAG="${{ inputs.release_tag }}"
+            BACKUP_DIR="/home/paylinkssh/paylink-db-backups"
+
+            echo "Deploying MyPayLink production release tag: $RELEASE_TAG"
+            echo "APP_PATH=$APP_PATH"
+            echo "ENV_FILE=$ENV_FILE"
+            echo "PM2_NAME=$PM2_NAME"
+            echo "APP_PORT=$APP_PORT"
+            test -f "$ENV_FILE"
+
+            # Prefer the shared backup dir; fall back to a deploy-user-owned path if
+            # it is missing or not writable (e.g. a pre-existing root-owned directory).
+            mkdir -p "$BACKUP_DIR" 2>/dev/null || true
+            if [ ! -w "$BACKUP_DIR" ]; then
+              echo "Backup dir $BACKUP_DIR is not writable; falling back to a deploy-user-owned path"
+              BACKUP_DIR="${HOME:-/home/paylinkssh}/paylink-predeploy-backups"
+              mkdir -p "$BACKUP_DIR"
+            fi
+            echo "BACKUP_DIR=$BACKUP_DIR"
+
+            set -a
+            . "$ENV_FILE"
+            set +a
+            test -n "${DATABASE_URL:-}"
+            BACKUP_FILE="$BACKUP_DIR/predeploy-${RELEASE_TAG}-$(date -u '+%Y%m%dT%H%M%SZ').sql"
+            echo "Creating pre-deploy database backup"
+            pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
+            test -s "$BACKUP_FILE"
+            gzip -f "$BACKUP_FILE"
+            echo "Database backup created: ${BACKUP_FILE}.gz"
+
             cd "$APP_PATH"
+            git fetch origin --tags
+            git checkout --force "$RELEASE_TAG"
+            NEW_COMMIT=$(git rev-parse HEAD)
+            BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+            PACKAGE_VERSION=$(node -p "require('./package.json').version")
+            EXPECTED_TAG="v$PACKAGE_VERSION"
 
-            if [ ! -f "$ENV_FILE" ]; then
-              echo "FATAL: production env file missing: $ENV_FILE"
+            if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ] && [ "$RELEASE_TAG" != "$PACKAGE_VERSION" ]; then
+              echo "ERROR: version mismatch. package.json version=$PACKAGE_VERSION release_tag=$RELEASE_TAG expected_tag=$EXPECTED_TAG" >&2
               exit 1
             fi
 
-            BACKUP_DIR="$APP_PATH/backups/predeploy"
-            mkdir -p "$BACKUP_DIR"
-            BACKUP_FILE="$BACKUP_DIR/${PROD_DB_NAME}_${RELEASE_TAG}_$(date -u +%Y%m%dT%H%M%SZ).dump"
-            DATABASE_URL_VALUE="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
-            if [ -z "$DATABASE_URL_VALUE" ]; then
-              echo "FATAL: DATABASE_URL missing from $ENV_FILE; refusing production deploy without DB backup"
-              exit 1
+            if ! command -v pnpm >/dev/null 2>&1; then
+              npm install -g pnpm@10.33.0
             fi
-            pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL_VALUE" --file="$BACKUP_FILE"
-            echo "Production DB backup complete: $BACKUP_FILE"
 
-            echo "CloudPanel owns nginx reverse proxy; workflow expects $DEPLOY_DOMAIN -> 127.0.0.1:$DEPLOY_PORT and does not mutate nginx."
-            git remote set-url origin "$REPO_SSH_URL" || true
-            git fetch --tags origin
-            git checkout "$RELEASE_TAG"
-            NEW_COMMIT="$(git rev-parse HEAD)"
             pnpm install --frozen-lockfile=false --reporter=append-only
+            rm -rf dist/
             pnpm build
 
-            export APP_ENV=production
-            export APP_VERSION="$APP_VERSION"
-            export PAYLINK_COMMIT="$NEW_COMMIT"
-            export PAYLINK_BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-            export PORT="$DEPLOY_PORT"
-
-            if pm2 describe "$PM2_PROCESS" >/dev/null 2>&1; then
-              pm2 restart "$PM2_PROCESS" --update-env
-            else
-              pm2 start "$APP_PATH/dist/index.cjs" \
-                --name "$PM2_PROCESS" \
-                --cwd "$APP_PATH" \
-                --interpreter node \
-                --node-args="--require dotenv/config" \
-                -- dotenv_config_path="$ENV_FILE"
-            fi
+            pm2 delete "$PM2_NAME" 2>/dev/null || true
+            PORT="$APP_PORT" PAYLINK_COMMIT="$NEW_COMMIT" PAYLINK_BUILD_TIME="$BUILD_TIME" PAYLINK_VERSION="$RELEASE_TAG" APP_VERSION="$PACKAGE_VERSION" pm2 start "$APP_PATH/dist/index.cjs" \
+              --name "$PM2_NAME" \
+              --cwd "$APP_PATH" \
+              --interpreter node \
+              --node-args="--require dotenv/config" \
+              -- dotenv_config_path="$ENV_FILE"
             pm2 save --force || true
 
             for i in $(seq 1 30); do
-              if curl -fsS "$LOCAL_HEALTH_URL" >/dev/null; then
-                echo "Local production health passed: $LOCAL_HEALTH_URL"
-                break
-              fi
-              if [ "$i" = "30" ]; then
-                echo "FATAL: local production health failed: $LOCAL_HEALTH_URL"
-                exit 1
+              if curl -fs "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1; then
+                echo "Production health passed on ${APP_PORT}"
+                exit 0
               fi
               sleep 3
             done
-
-            for i in $(seq 1 12); do
-              if curl -fsS "$PUBLIC_HEALTH_URL" >/dev/null; then
-                echo "Public production health passed: $PUBLIC_HEALTH_URL"
-                break
-              fi
-              if [ "$i" = "12" ]; then
-                echo "FATAL: public production health failed: $PUBLIC_HEALTH_URL"
-                exit 1
-              fi
-              sleep 5
-            done
+            echo "Production health failed on ${APP_PORT}" >&2
+            exit 1

@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { redactDiagnosticText, redactContractorDocumentLogBody } from "./diagnostics-safety";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import session from "express-session";
@@ -8,6 +9,7 @@ import path from "path";
 import { getAppEnvironment, getAppVersion, getHealthPayload } from "./app-metadata";
 import fs from "fs";
 import { startWorkerOrchestrator, shutdownOrchestrator } from "./workers/orchestrator";
+import { requestDiagnostics, registerDiagnosticsRoutes, globalErrorHandler } from "./diagnostics";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -25,6 +27,7 @@ if (isProduction) {
 
 const app = express();
 const httpServer = createServer(app);
+app.use(requestDiagnostics);
 
 if (isProduction) {
   app.set("trust proxy", 1);
@@ -44,7 +47,7 @@ const CAPACITOR_ORIGINS = [
  */
 app.use((req, res, next) => {
   const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString().split(':')[0];
-  const isPublicSigningRoute = req.path === '/sign' || req.path.startsWith('/sign/') || req.path.startsWith('/api/signing/');
+  const isPublicSigningRoute = req.path === '/sign' || req.path.startsWith('/sign/') || req.path.startsWith('/api/signing/') || req.path.startsWith('/api/public/sign/');
   if (host === 'app.mypaylink.app' && !isPublicSigningRoute) {
     return res.redirect(301, `https://mypaylink.app${req.originalUrl}`);
   }
@@ -320,12 +323,12 @@ export function log(message: string, source = "express") {
     hour12: true,
   });
 
-  console.log(`${formattedTime} [${source}] ${message}`);
+  console.log(`${formattedTime} [${source}] ${redactDiagnosticText(message)}`);
 }
 
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const path = redactDiagnosticText(req.originalUrl || req.path);
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalResJson = res.json;
@@ -338,10 +341,17 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      // Scoped pre-pass: a contractor W-9 / compliance document's fileName can
+      // carry a real person's name and its fileUrl is an internal storage path;
+      // strip just those two fields for that route group before the response
+      // body is logged. The response itself was already sent above.
+      if (capturedJsonResponse && path.startsWith("/api/contractor-documents")) {
+        capturedJsonResponse = redactContractorDocumentLogBody(capturedJsonResponse) as Record<string, any>;
+      }
       if (capturedJsonResponse) {
         // Truncate large response bodies (e.g. bulk worker/payroll list endpoints)
         // to prevent multi-megabyte log lines that spike memory on every request.
-        const bodyStr = JSON.stringify(capturedJsonResponse);
+        const bodyStr = redactDiagnosticText(JSON.stringify(capturedJsonResponse));
         logLine += ` :: ${bodyStr.length > 500 ? bodyStr.slice(0, 500) + "…" : bodyStr}`;
       }
       log(logLine);
@@ -381,6 +391,9 @@ app.use((req, res, next) => {
     await run("contract_signers.documenso_signing_url", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
     await run("contract_signers.last_sent_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS last_sent_at TIMESTAMPTZ`);
     await run("documenso_signature_requests contract index", sql`CREATE INDEX IF NOT EXISTS idx_documenso_signature_requests_contract_sent_at ON documenso_signature_requests(document_type, related_record_id, company_id, sent_at)`);
+    // Exactly-once backstop for Documenso-completion auto-invoice creation (see migrations/0014_contractor_invoice_exactly_once.sql)
+    await run("contractor_invoices.documenso_completion_idempotency_key", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS documenso_completion_idempotency_key TEXT`);
+    await run("contractor_invoices auto-invoice unique index", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_invoices_auto_invoice_key ON contractor_invoices (company_id, documenso_completion_idempotency_key) WHERE documenso_completion_idempotency_key IS NOT NULL`);
     // time_punches additions
     await run("time_punches.approval_status", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
     await run("time_punches.approved_by", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approved_by VARCHAR`);
@@ -3359,6 +3372,201 @@ Thank you,
     await run("users.mfa_enforced_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enforced_at TIMESTAMP`);
     await run("users.email",           sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`);
 
+    // ── SaaS identity/onboarding — PR 1 (migration 0019) ───────────────────
+    // Additive only. See docs/saas-identity-onboarding-architecture.md and
+    // migrations/0019_identity_links_and_invites.sql.
+    await run("users.invite_status",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_status TEXT DEFAULT 'none'`);
+    await run("users.last_login_at",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP`);
+    await run("users.email_verified_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`);
+    await run("account_invites table", sql`CREATE TABLE IF NOT EXISTS account_invites (
+      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id         VARCHAR,
+      email              TEXT NOT NULL,
+      relationship_kind  TEXT NOT NULL DEFAULT 'employee',
+      relationship_id    VARCHAR,
+      role               TEXT NOT NULL DEFAULT 'employee',
+      token_hash         TEXT NOT NULL,
+      status             TEXT NOT NULL DEFAULT 'pending',
+      invited_by_user_id VARCHAR,
+      invited_user_id    VARCHAR,
+      expires_at         TIMESTAMP NOT NULL,
+      accepted_at        TIMESTAMP,
+      revoked_at         TIMESTAMP,
+      last_sent_at       TIMESTAMP DEFAULT NOW(),
+      created_at         TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("account_invites.token_hash uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_account_invites_token_hash ON account_invites (token_hash)`);
+    await run("account_invites.email idx", sql`CREATE INDEX IF NOT EXISTS idx_account_invites_email ON account_invites (LOWER(email))`);
+    await run("account_invites.company idx", sql`CREATE INDEX IF NOT EXISTS idx_account_invites_company ON account_invites (company_id)`);
+    await run("account_invites.relationship idx", sql`CREATE INDEX IF NOT EXISTS idx_account_invites_relationship ON account_invites (relationship_kind, relationship_id)`);
+    await run("account_invites.pending target uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_account_invites_pending_target ON account_invites (company_id, relationship_kind, relationship_id) WHERE status = 'pending' AND relationship_id IS NOT NULL`);
+    await run("identity_links table", sql`CREATE TABLE IF NOT EXISTS identity_links (
+      id                VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id           VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subject_type      TEXT NOT NULL,
+      subject_id        VARCHAR NOT NULL,
+      company_id        VARCHAR,
+      tenant_id         VARCHAR,
+      link_status       TEXT NOT NULL DEFAULT 'active',
+      verified_email    TEXT,
+      linked_by_user_id VARCHAR,
+      review_reason     TEXT,
+      created_at        TIMESTAMP DEFAULT NOW(),
+      revoked_at        TIMESTAMP
+    )`);
+    await run("identity_links.user_subject uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_links_user_subject ON identity_links (user_id, subject_type, subject_id)`);
+    await run("identity_links.subject idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_subject ON identity_links (subject_type, subject_id)`);
+    await run("identity_links.company idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_company ON identity_links (company_id)`);
+    await run("identity_links.email idx", sql`CREATE INDEX IF NOT EXISTS idx_identity_links_email ON identity_links (LOWER(verified_email))`);
+
+    // ── Contractor access requests — PR 2 (migration 0020) ─────────────────
+    await run("contractor_access_requests table", sql`CREATE TABLE IF NOT EXISTS contractor_access_requests (
+      id                     VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id             VARCHAR,
+      email                  TEXT NOT NULL,
+      first_name             TEXT NOT NULL,
+      last_name              TEXT NOT NULL,
+      phone                  TEXT,
+      business_name          TEXT,
+      trade_type             TEXT,
+      license_number         TEXT,
+      requested_company_hint TEXT,
+      message                TEXT,
+      status                 TEXT NOT NULL DEFAULT 'pending',
+      reviewed_by_user_id    VARCHAR,
+      reviewed_at            TIMESTAMP,
+      rejection_reason       TEXT,
+      created_worker_id      VARCHAR,
+      account_invite_id      VARCHAR,
+      linked_user_id         VARCHAR,
+      review_note            TEXT,
+      source_ip              TEXT,
+      user_agent             TEXT,
+      created_at             TIMESTAMP DEFAULT NOW(),
+      updated_at             TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("contractor_access_requests.email idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_email ON contractor_access_requests (LOWER(email))`);
+    await run("contractor_access_requests.status idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_status ON contractor_access_requests (status)`);
+    await run("contractor_access_requests.company idx", sql`CREATE INDEX IF NOT EXISTS idx_contractor_access_requests_company ON contractor_access_requests (company_id)`);
+    await run("contractor_access_requests.pending email uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_access_requests_pending_email ON contractor_access_requests (LOWER(email)) WHERE status = 'pending'`);
+
+    // ── Vendor portal — PR 3 (migration 0021) ─────────────────────────────
+    // Scoping keys are plain VARCHAR (no FK) per the recent-table convention
+    // (contractor_documents / contractor_access_requests / account_invites).
+    await run("vendors table", sql`CREATE TABLE IF NOT EXISTS vendors (
+      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id         VARCHAR NOT NULL,
+      business_name      TEXT NOT NULL,
+      contact_name       TEXT,
+      email              TEXT,
+      phone              TEXT,
+      address            TEXT,
+      city               TEXT,
+      state              TEXT,
+      zip                TEXT,
+      tax_id             TEXT,
+      service_type       TEXT,
+      notes              TEXT,
+      status             TEXT NOT NULL DEFAULT 'active',
+      created_by_user_id VARCHAR,
+      created_at         TIMESTAMP DEFAULT NOW(),
+      updated_at         TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("vendors.company idx", sql`CREATE INDEX IF NOT EXISTS idx_vendors_company ON vendors (company_id)`);
+    await run("vendors.email idx", sql`CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (LOWER(email))`);
+    await run("vendor_documents table", sql`CREATE TABLE IF NOT EXISTS vendor_documents (
+      id                  VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      vendor_id           VARCHAR NOT NULL,
+      company_id          VARCHAR NOT NULL,
+      document_type       TEXT NOT NULL DEFAULT 'w9',
+      file_name           TEXT NOT NULL,
+      file_url            TEXT NOT NULL,
+      file_size           INTEGER,
+      mime_type           TEXT,
+      notes               TEXT,
+      status              TEXT NOT NULL DEFAULT 'received',
+      review_note         TEXT,
+      reviewed_by_user_id VARCHAR,
+      reviewed_at         TIMESTAMP,
+      uploaded_by_user_id VARCHAR NOT NULL,
+      created_at          TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("vendor_documents.vendor idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_documents_vendor ON vendor_documents (vendor_id)`);
+    await run("vendor_documents.company idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_documents_company ON vendor_documents (company_id)`);
+    await run("vendor_invoices table", sql`CREATE TABLE IF NOT EXISTS vendor_invoices (
+      id                   VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      vendor_id            VARCHAR NOT NULL,
+      company_id           VARCHAR NOT NULL,
+      invoice_number       TEXT,
+      amount               NUMERIC,
+      currency             TEXT DEFAULT 'USD',
+      invoice_date         DATE,
+      due_date             DATE,
+      description          TEXT,
+      status               TEXT NOT NULL DEFAULT 'submitted',
+      file_name            TEXT,
+      file_url             TEXT,
+      file_size            INTEGER,
+      mime_type            TEXT,
+      submitted_by_user_id VARCHAR,
+      reviewed_by_user_id  VARCHAR,
+      reviewed_at          TIMESTAMP,
+      review_note          TEXT,
+      created_at           TIMESTAMP DEFAULT NOW(),
+      updated_at           TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("vendor_invoices.vendor idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_invoices_vendor ON vendor_invoices (vendor_id)`);
+    await run("vendor_invoices.company_status idx", sql`CREATE INDEX IF NOT EXISTS idx_vendor_invoices_company_status ON vendor_invoices (company_id, status)`);
+
+    // ── Tenant licenses — PR 4 (migration 0022) ───────────────────────────
+    // Additive structured license record + audit trail. `companies`
+    // subscription/trial/gate columns and checkTenantGate() remain the
+    // AUTHORITATIVE enforcement path — unchanged. A company with no
+    // tenant_licenses row resolves exactly as it does today (no lock-out).
+    // Scoping keys are plain VARCHAR (no FK) per the recent-table convention.
+    await run("tenant_licenses table", sql`CREATE TABLE IF NOT EXISTS tenant_licenses (
+      id                        VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id                VARCHAR NOT NULL,
+      tenant_id                 VARCHAR,
+      plan_type                 TEXT NOT NULL DEFAULT 'starter',
+      status                    TEXT NOT NULL DEFAULT 'active',
+      trial_start               TIMESTAMP,
+      trial_end                 TIMESTAMP,
+      current_period_start      TIMESTAMP,
+      current_period_end        TIMESTAMP,
+      source                    TEXT NOT NULL DEFAULT 'system',
+      external_ref              TEXT,
+      notes                     TEXT,
+      status_reason             TEXT,
+      status_changed_at         TIMESTAMP,
+      status_changed_by_user_id VARCHAR,
+      created_by_user_id        VARCHAR,
+      updated_by_user_id        VARCHAR,
+      created_at                TIMESTAMP DEFAULT NOW(),
+      updated_at                TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("tenant_licenses.company uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_licenses_company ON tenant_licenses (company_id)`);
+    await run("tenant_licenses.status idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_licenses_status ON tenant_licenses (status)`);
+    await run("tenant_licenses.tenant idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_licenses_tenant ON tenant_licenses (tenant_id)`);
+    await run("tenant_license_events table", sql`CREATE TABLE IF NOT EXISTS tenant_license_events (
+      id            VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      license_id    VARCHAR,
+      company_id    VARCHAR NOT NULL,
+      event_type    TEXT NOT NULL,
+      from_status   TEXT,
+      to_status     TEXT,
+      from_plan     TEXT,
+      to_plan       TEXT,
+      reason        TEXT,
+      actor_user_id TEXT,
+      actor_role    TEXT,
+      metadata      TEXT,
+      created_at    TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("tenant_license_events.license idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_license_events_license ON tenant_license_events (license_id)`);
+    await run("tenant_license_events.company idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_license_events_company ON tenant_license_events (company_id)`);
+    await run("tenant_license_events.created idx", sql`CREATE INDEX IF NOT EXISTS idx_tenant_license_events_created ON tenant_license_events (created_at)`);
+
     // Legal basis + purpose description on document retention policies
     await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);
     await run("document_retention_policies.purpose_description", sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS purpose_description TEXT`);
@@ -3836,6 +4044,55 @@ Thank you,
     await runInv("contractor_invoices.withheld_amount",              sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS withheld_amount NUMERIC DEFAULT 0`);
     await runInv("contractor_invoices.setoff_amount",                sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS setoff_amount NUMERIC DEFAULT 0`);
     await runInv("contractor_invoices.setoff_reason",                sqlInv`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS setoff_reason TEXT`);
+
+    // ── Contractor payment lifecycle (migration 0016): idempotency, void audit, reissue linkage ──
+    await runInv("contractor_payments.idempotency_key",         sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS idempotency_key TEXT`);
+    await runInv("contractor_payments.idempotency_fingerprint", sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS idempotency_fingerprint TEXT`);
+    await runInv("contractor_payments.voided_at",               sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP`);
+    await runInv("contractor_payments.voided_by_user_id",       sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS voided_by_user_id VARCHAR`);
+    await runInv("contractor_payments.void_reason",             sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS void_reason TEXT`);
+    await runInv("contractor_payments.reverses_payment_id",     sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS reverses_payment_id VARCHAR`);
+    await runInv("contractor_payments.reissued_by_payment_id",  sqlInv`ALTER TABLE contractor_payments ADD COLUMN IF NOT EXISTS reissued_by_payment_id VARCHAR`);
+    await runInv("contractor_trade_compensation.idempotency_key", sqlInv`ALTER TABLE contractor_trade_compensation ADD COLUMN IF NOT EXISTS idempotency_key TEXT`);
+    await runInv("contractor_payments company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_payments_company_idempotency_key ON contractor_payments (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    await runInv("contractor_trade_comp company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_trade_comp_company_idempotency_key ON contractor_trade_compensation (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    await runInv("contractor_trade_comp payment_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_contractor_trade_comp_payment_id ON contractor_trade_compensation (contractor_payment_id) WHERE contractor_payment_id IS NOT NULL`);
+
+    // ── Expense payments ledger (migration 0017 / Release B2) — vendor/expense Cut Check ──
+    await runInv("expense_payments table", sqlInv`CREATE TABLE IF NOT EXISTS expense_payments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      expense_id VARCHAR NOT NULL REFERENCES expenses(id),
+      remittance_source_id VARCHAR REFERENCES remittance_sources(id),
+      amount NUMERIC NOT NULL,
+      payment_method TEXT NOT NULL DEFAULT 'check',
+      status TEXT NOT NULL DEFAULT 'completed',
+      reference_number TEXT,
+      idempotency_key TEXT,
+      idempotency_fingerprint TEXT,
+      issued_at TIMESTAMP DEFAULT now(),
+      created_by_user_id VARCHAR,
+      voided_at TIMESTAMP,
+      voided_by_user_id VARCHAR,
+      void_reason TEXT,
+      reverses_payment_id VARCHAR,
+      reissued_by_payment_id VARCHAR,
+      created_at TIMESTAMP DEFAULT now()
+    )`);
+    await runInv("expense_payments company idempotency unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_payments_company_idempotency_key ON expense_payments (company_id, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+    await runInv("expense_payments funding+check-number unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_payments_funding_check_number ON expense_payments (remittance_source_id, reference_number) WHERE status <> 'void' AND reference_number IS NOT NULL AND remittance_source_id IS NOT NULL`);
+    await runInv("expense_payments expense_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_expense_id ON expense_payments (expense_id)`);
+    await runInv("expense_payments company_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_company_id ON expense_payments (company_id)`);
+
+    // ── Non-check expense payment methods + payment-document linkage (migration 0018) ──
+    await runInv("expense_payments.notes",                 sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS notes TEXT`);
+    await runInv("expense_payments.payment_date",          sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS payment_date TIMESTAMP`);
+    await runInv("expense_payments.trade_compensation_id", sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS trade_compensation_id VARCHAR REFERENCES contractor_trade_compensation(id)`);
+    await runInv("expense_payments.payee_user_id",         sqlInv`ALTER TABLE expense_payments ADD COLUMN IF NOT EXISTS payee_user_id VARCHAR`);
+    await runInv("contractor_trade_compensation.expense_payment_id", sqlInv`ALTER TABLE contractor_trade_compensation ADD COLUMN IF NOT EXISTS expense_payment_id VARCHAR`);
+    await runInv("contractor_trade_comp expense_payment unique index", sqlInv`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_trade_comp_expense_payment_id ON contractor_trade_compensation (expense_payment_id) WHERE expense_payment_id IS NOT NULL`);
+    await runInv("expense_payments trade_compensation_id index", sqlInv`CREATE INDEX IF NOT EXISTS idx_expense_payments_trade_compensation_id ON expense_payments (trade_compensation_id) WHERE trade_compensation_id IS NOT NULL`);
+
     await runInv("invoice_term_settings table", sqlInv`CREATE TABLE IF NOT EXISTS invoice_term_settings (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id VARCHAR NOT NULL UNIQUE REFERENCES companies(id),
@@ -3998,6 +4255,7 @@ Thank you,
   }
 
   await registerRoutes(httpServer, app);
+  registerDiagnosticsRoutes(app);
 
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
@@ -4006,20 +4264,7 @@ Thank you,
     await setupVite(httpServer, app);
   }
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    console.error("Unhandled error:", isProduction ? err.message : err);
-
-    if (res.headersSent) {
-      return next(err);
-    }
-
-    const safeMessage = isProduction
-      ? (status < 500 ? (err.message || "Bad request") : "Internal server error")
-      : (err.message || "Internal Server Error");
-
-    return res.status(status).json({ message: safeMessage });
-  });
+  app.use(globalErrorHandler);
 
   const port = parseInt(process.env.PORT || "5000", 10);
   const host = process.env.HOST || (isProduction ? "127.0.0.1" : "0.0.0.0");

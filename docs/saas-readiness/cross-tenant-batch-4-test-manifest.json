@@ -1,0 +1,354 @@
+{
+  "generatedAt": "2026-08-24",
+  "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
+  "summary": {
+    "PASS": 53,
+    "FAIL": 0,
+    "INCONCLUSIVE": 0,
+    "EXPECTED GLOBAL": 0,
+    "N/A": 2
+  },
+  "routes": [
+    {
+      "id": "GET /api/companies/:id/tax-liability",
+      "source": "server/routes.ts:7742",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads Tenant A's own tax liability",
+          "disposition": "PASS",
+          "detail": "status=200 amount=311.11"
+        },
+        {
+          "case": "2. Tenant A admin reads Tenant B's company tax liability by ID",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Nonexistent company id — no company-existence check exists; storage.getCompanyTaxLiability returns [] rather than a 404, but no data is leaked",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "4. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/companies/:id/quarterly-taxes",
+      "source": "server/routes.ts:7761",
+      "cases": [
+        {
+          "case": "1. Tenant A admin reads Tenant A's own quarterly taxes",
+          "disposition": "PASS",
+          "detail": "status=200 amount=311.11"
+        },
+        {
+          "case": "2. Tenant A admin reads Tenant B's company quarterly taxes by ID",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Nonexistent company id — no company-existence check exists; storage.getPayrollRuns returns [] rather than a 404, but no data is leaked",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "4. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/check-templates",
+      "source": "server/routes.ts:20738",
+      "cases": [
+        {
+          "case": "1. Tenant A admin lists Tenant A's own check templates",
+          "disposition": "PASS",
+          "detail": "status=200 count=1"
+        },
+        {
+          "case": "2. Tenant A admin lists Tenant B's check templates via ?companyId=",
+          "disposition": "PASS",
+          "detail": "status=200 count=1 (force-scoped to caller's own company; Tenant B not present)"
+        },
+        {
+          "case": "3. Tenant A admin omits companyId entirely",
+          "disposition": "PASS",
+          "detail": "status=200 count=1"
+        },
+        {
+          "case": "4. Role-gate check — not applicable: this route still has no requireRole (requireAuth only); tenant scoping alone closes the gap without narrowing which authenticated roles may list their own templates",
+          "disposition": "N/A",
+          "detail": "no requireRole present"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/check-templates",
+      "source": "server/routes.ts:20767",
+      "cases": [
+        {
+          "case": "1. Tenant A admin creates a check template with their own companyId",
+          "disposition": "PASS",
+          "detail": "status=201"
+        },
+        {
+          "case": "2. Tenant A admin creates a check template with Tenant B's companyId in the body",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Role-gate check — not applicable: this route still has no requireRole (requireAuth only); the companyId check above closes the tenant-isolation gap directly",
+          "disposition": "N/A",
+          "detail": "no requireRole present"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/payroll-payment-methods/:id",
+      "source": "server/routes.ts:22673",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates Tenant A's own payment method",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates Tenant B's payment method by ID",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "3. Tenant A's own payment method ID + Tenant B's companyId in the update body",
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403)."
+        },
+        {
+          "case": "4. Nonexistent payment method id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/payroll-payment-records/:id",
+      "source": "server/routes.ts:22828",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates Tenant A's own payment record",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates Tenant B's payment record by ID",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "3. Tenant A's own payment record ID + Tenant B's companyId in the update body",
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403)."
+        },
+        {
+          "case": "4. Nonexistent payment record id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "6. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/payroll-payment-records/:id",
+      "source": "server/routes.ts:22836",
+      "cases": [
+        {
+          "case": "1. Tenant A admin deletes Tenant B's payment record by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowStillExists=true"
+        },
+        {
+          "case": "2. Nonexistent payroll payment record id — storage.deletePayrollPaymentRecord has no existence check, so this always reports success rather than 404; informational, not a leak",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "3. Unauthorized same-tenant role (employee) — requireRole(\"admin\") excludes both employee and manager",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "5. Tenant A admin deletes Tenant A's own payment record",
+          "disposition": "PASS",
+          "detail": "status=200"
+        }
+      ]
+    },
+    {
+      "id": "GET /api/worker-memberships",
+      "source": "server/routes.ts:9747",
+      "cases": [
+        {
+          "case": "1. Tenant A admin lists Tenant A's own worker memberships",
+          "disposition": "PASS",
+          "detail": "status=200 count=2"
+        },
+        {
+          "case": "2. Tenant A admin lists Tenant B's worker memberships via ?companyId=",
+          "disposition": "PASS",
+          "detail": "status=200 count=2 (force-scoped to caller's own company; Tenant B not present)"
+        },
+        {
+          "case": "3. Tenant A admin omits companyId entirely",
+          "disposition": "PASS",
+          "detail": "status=200 count=2"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/worker-memberships",
+      "source": "server/routes.ts:9758",
+      "cases": [
+        {
+          "case": "1. Tenant A admin creates a worker membership with their own companyId",
+          "disposition": "PASS",
+          "detail": "status=201"
+        },
+        {
+          "case": "2. Tenant A admin creates a worker membership with Tenant B's companyId in the body",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "3. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        },
+        {
+          "case": "4. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        }
+      ]
+    },
+    {
+      "id": "PATCH /api/worker-memberships/:id",
+      "source": "server/routes.ts:9768",
+      "cases": [
+        {
+          "case": "1. Tenant A admin updates Tenant A's own worker membership",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "2. Tenant A admin updates Tenant B's worker membership by ID",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "3. Tenant A's own worker membership ID + Tenant B's companyId in the update body",
+          "disposition": "PASS",
+          "detail": "companyId in the request body did not change the row (status=403)."
+        },
+        {
+          "case": "4. Nonexistent worker membership id",
+          "disposition": "PASS",
+          "detail": "status=404"
+        },
+        {
+          "case": "5. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "6. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        }
+      ]
+    },
+    {
+      "id": "DELETE /api/worker-memberships/:id",
+      "source": "server/routes.ts:9779",
+      "cases": [
+        {
+          "case": "1. Tenant A admin deletes Tenant B's worker membership by ID",
+          "disposition": "PASS",
+          "detail": "status=403 rowStillExists=true"
+        },
+        {
+          "case": "2. Nonexistent worker membership id — storage.deleteWorkerMembership has no existence check, so this always reports success rather than 404; informational, not a leak",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "3. Missing authentication",
+          "disposition": "PASS",
+          "detail": "status=401"
+        },
+        {
+          "case": "4. Tenant A admin deletes Tenant A's own worker membership",
+          "disposition": "PASS",
+          "detail": "status=200"
+        },
+        {
+          "case": "5. Unauthorized same-tenant role (employee)",
+          "disposition": "PASS",
+          "detail": "status=403"
+        }
+      ]
+    }
+  ]
+}

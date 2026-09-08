@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import DeveloperDiagnosticsPanel from "@/components/app-doctor/developer-diagnostics-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -89,12 +90,42 @@ type Diagnostics = {
     maxRiskAutoDraft: string;
     requireApproval: boolean;
   };
+  documenso?: {
+    configuredBaseUrl: string;
+    apiBaseUrl: string;
+    baseUrlEnv: string | null;
+    apiKeyPresent: boolean;
+    webhookUrl: string;
+    webhookSecretPresent: boolean;
+    contracts: Array<{
+      localContractId: string;
+      documensoDocumentId: string | null;
+      documentIdExists: boolean;
+      localRecipientCount: number;
+      remoteRecipientCount: number;
+      recipientIdsExist: boolean;
+      recipientIdMatch: string;
+      signingUrlPresent: boolean;
+      webhookStatus: string;
+      resendEligibility: string;
+      repairActions: string[];
+    }>;
+  };
   reports: {
     last24hBySeverity: Record<string, number>;
     last7dByStatus: Record<string, number>;
     last7dByCategory: Record<string, number>;
   };
   repairTickets: { open: number; pendingApproval: number };
+  operations?: {
+    deploymentManagement: { environment: string; port: string; productionManualOnly: boolean; stagingDefaultOnPush: boolean };
+    stagingVerification: { requiredProcess: string; requiredPort: string; requiredHost: string; status: string };
+    databaseIntegrityScans: { databaseUrl: string; lastCheck: string; destructiveChecks: boolean };
+    tenantHealthScans: { companyCount: number; openReports: number; pendingRepairTickets: number };
+    pushNotificationDiagnostics: { vapidPublicKey: string; vapidPrivateKey: string; twilioConfigured: boolean };
+    releaseManagement: { version: string; releaseTagRequiredForProduction: boolean; productionPushDeploysBlocked: boolean };
+    rollbackManagement: { rollbackRequiresHumanApproval: boolean; deploymentHistoryLog: string };
+  };
 };
 
 type Company = { id: string; name: string };
@@ -103,7 +134,7 @@ type Company = { id: string; name: string };
 
 function statusVariant(status: string): "default" | "secondary" | "outline" | "destructive" {
   if (status === "ai_review_ready" || status === "fixed" || status === "approved" || status === "merged") return "default";
-  if (status === "needs_ai_config" || status === "rejected") return "destructive";
+  if (status === "needs_ai_config" || status === "rejected" || status === "pr_creation_failed") return "destructive";
   if (status === "reviewed" || status === "ignored" || status === "pr_created" || status === "pr_requested") return "secondary";
   return "outline";
 }
@@ -281,8 +312,18 @@ export default function AppDoctorPage() {
       apiRequest("POST", `/api/app-doctor/repair-tickets/${id}/create-pr`, {}).then(r => r.json()),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/app-doctor/repair-tickets"] });
+      if (data?.success === false || data?.status === "pr_creation_failed") {
+        toast({
+          title: "PR creation failed",
+          description: data?.message || `Repair ticket saved, but PR creation failed. Error ID: ${data?.correlationId || "unknown"}`,
+          variant: "destructive",
+        });
+        return;
+      }
       if (data.prUrl) {
         toast({ title: "GitHub PR created", description: data.prUrl });
+      } else if (data?.success === false || data?.status === "pr_creation_failed") {
+        toast({ title: "PR creation failed", description: data.note || "Retry PR creation after fixing GitHub configuration.", variant: "destructive" });
       } else {
         toast({ title: "Marked for manual PR", description: data.note || "GITHUB_TOKEN not configured" });
       }
@@ -459,6 +500,72 @@ export default function AppDoctorPage() {
                   </div>
                 </div>
               </div>
+
+
+              {/* Operations hub */}
+              {diag.operations && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="card-app-doctor-operations-hub">
+                  <p className="text-xs font-medium mb-3 flex items-center gap-1"><ClipboardList className="h-3 w-3" />Operational Hub</p>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+                    <div>
+                      <p className="font-medium">Deployment Management</p>
+                      <p className="text-muted-foreground">{diag.operations.deploymentManagement.environment} · port {diag.operations.deploymentManagement.port}</p>
+                      <p className="text-green-600">Production push blocked: {diag.operations.deploymentManagement.productionManualOnly ? "yes" : "check"}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Staging Verification</p>
+                      <p className="text-muted-foreground">{diag.operations.stagingVerification.requiredProcess} on {diag.operations.stagingVerification.requiredPort}</p>
+                      <p className="text-muted-foreground">{diag.operations.stagingVerification.requiredHost}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Database / Tenant Scans</p>
+                      <p className="text-muted-foreground">DB URL: {diag.operations.databaseIntegrityScans.databaseUrl}</p>
+                      <p className="text-muted-foreground">Tenants: {diag.operations.tenantHealthScans.companyCount} · open reports {diag.operations.tenantHealthScans.openReports}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Release / Rollback</p>
+                      <p className="text-muted-foreground">v{diag.operations.releaseManagement.version} · release tag required</p>
+                      <p className="text-muted-foreground">History: {diag.operations.rollbackManagement.deploymentHistoryLog}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium">Push Notification Diagnostics</p>
+                      <p className="text-muted-foreground">VAPID public: {diag.operations.pushNotificationDiagnostics.vapidPublicKey}</p>
+                      <p className="text-muted-foreground">Twilio: {diag.operations.pushNotificationDiagnostics.twilioConfigured ? "configured" : "missing"}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Documenso contract diagnostics */}
+              {diag.documenso && (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border p-3" data-testid="card-documenso-contract-diagnostics">
+                  <p className="text-xs font-medium mb-2 flex items-center gap-1"><Cpu className="h-3 w-3" />Documenso Contract Diagnostics</p>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+                    <div><span className="text-muted-foreground">Configured URL:</span> <span className="font-medium break-all">{diag.documenso.configuredBaseUrl || "missing"}</span></div>
+                    <div><span className="text-muted-foreground">Env:</span> <span className="font-medium">{diag.documenso.baseUrlEnv || "missing"}</span></div>
+                    <div><span className="text-muted-foreground">API key:</span> <span className={diag.documenso.apiKeyPresent ? "text-green-600 font-medium" : "text-destructive font-medium"}>{diag.documenso.apiKeyPresent ? "present" : "missing"}</span></div>
+                    <div><span className="text-muted-foreground">Webhook:</span> <span className="font-medium break-all">{diag.documenso.webhookUrl || "missing"}</span></div>
+                  </div>
+                  {diag.documenso.contracts.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {diag.documenso.contracts.map((contract) => (
+                        <div key={contract.localContractId} className="rounded-md bg-muted/40 p-2 text-xs" data-testid={`row-documenso-diagnostic-${contract.localContractId}`}>
+                          <div className="font-medium break-all">Contract {contract.localContractId} · Documenso {contract.documensoDocumentId || "missing"}</div>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            <Badge variant={contract.documentIdExists ? "outline" : "destructive"}>document {contract.documentIdExists ? "exists" : "missing"}</Badge>
+                            <Badge variant={contract.recipientIdsExist ? "outline" : "destructive"}>recipient IDs {contract.recipientIdsExist ? "present" : "missing"}</Badge>
+                            <Badge variant={contract.signingUrlPresent ? "outline" : "destructive"}>signing URL {contract.signingUrlPresent ? "present" : "missing"}</Badge>
+                            <Badge variant={contract.resendEligibility === "eligible" ? "outline" : "destructive"}>{contract.resendEligibility}</Badge>
+                          </div>
+                          {contract.repairActions.length > 0 && <p className="mt-1 text-muted-foreground">Repair: {contract.repairActions.join(" / ")}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="mt-2 text-xs text-muted-foreground">No recent contract Documenso records found for this scope.</p>}
+                </div>
+              )}
+
+
               {/* Repair tickets */}
               <div className="flex items-start gap-2 rounded-lg border p-3">
                 <TicketCheck className="h-4 w-4 mt-0.5 text-muted-foreground" />
@@ -505,22 +612,31 @@ export default function AppDoctorPage() {
       <Tabs defaultValue="issues">
         <TabsList data-testid="tabs-app-doctor">
           <TabsTrigger value="issues" data-testid="tab-issues">
-            <Bug className="h-4 w-4 mr-1" />
-            Detected Issues
+            <Bot className="h-4 w-4 mr-1" />
+            AI-assisted Operations
             {reports.length > 0 && <Badge variant="outline" className="ml-1.5 text-xs">{reports.length}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="diagnostics" data-testid="tab-diagnostics">
+            <Activity className="h-4 w-4 mr-1" />
+            Diagnostics
           </TabsTrigger>
           <TabsTrigger value="tickets" data-testid="tab-tickets">
             <TicketCheck className="h-4 w-4 mr-1" />
-            Repair Tickets
+            Repair Center
             {tickets.filter(t => t.status === "pending_approval").length > 0 && (
               <Badge variant="destructive" className="ml-1.5 text-xs">
                 {tickets.filter(t => t.status === "pending_approval").length}
               </Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="deployment" data-testid="tab-deployment-center"><Server className="h-4 w-4 mr-1" />Deployment Center</TabsTrigger>
+          <TabsTrigger value="releases" data-testid="tab-release-manager"><Tag className="h-4 w-4 mr-1" />Release Manager</TabsTrigger>
+          <TabsTrigger value="database" data-testid="tab-database-management"><Database className="h-4 w-4 mr-1" />Database Management</TabsTrigger>
+          <TabsTrigger value="environments" data-testid="tab-environment-comparison"><Cpu className="h-4 w-4 mr-1" />Environment Comparison</TabsTrigger>
+          <TabsTrigger value="audit" data-testid="tab-audit-center"><ClipboardList className="h-4 w-4 mr-1" />Audit Center</TabsTrigger>
         </TabsList>
 
-        {/* ── Issues Tab ─────────────────────────────────────────────────────────── */}
+        {/* ── AI-assisted Operations Tab ─────────────────────────────────────────── */}
         <TabsContent value="issues" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,540px)]">
 
@@ -760,7 +876,12 @@ export default function AppDoctorPage() {
           </div>
         </TabsContent>
 
-        {/* ── Repair Tickets Tab ──────────────────────────────────────────────────── */}
+        {/* ── Diagnostics Tab ─────────────────────────────────────────────────────── */}
+        <TabsContent value="diagnostics" className="mt-4">
+          <DeveloperDiagnosticsPanel embedded />
+        </TabsContent>
+
+        {/* ── Repair Center Tab ───────────────────────────────────────────────────── */}
         <TabsContent value="tickets" className="mt-4">
           <Card>
             <CardHeader>
@@ -844,7 +965,7 @@ export default function AppDoctorPage() {
                                 </Button>
                               </>
                             )}
-                            {ticket.status === "approved" && (
+                            {(ticket.status === "approved" || ticket.status === "pr_creation_failed") && (
                               <Button
                                 size="sm"
                                 onClick={() => createPrMutation.mutate(ticket.id)}
@@ -852,8 +973,23 @@ export default function AppDoctorPage() {
                                 data-testid={`button-create-pr-${ticket.id}`}
                               >
                                 {createPrMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitPullRequest className="h-3 w-3 mr-1" />}
-                                Create PR
+                                {ticket.status === "pr_creation_failed" ? "Retry PR Creation" : "Create PR"}
                               </Button>
+                            )}
+                            {ticket.status === "pr_creation_failed" && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-destructive">PR creation failed</span>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => createPrMutation.mutate(ticket.id)}
+                                  disabled={createPrMutation.isPending}
+                                  data-testid={`button-retry-pr-${ticket.id}`}
+                                >
+                                  {createPrMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3 mr-1" />}
+                                  Retry PR Creation
+                                </Button>
+                              </div>
                             )}
                             {ticket.pr_url && (
                               <Button size="sm" variant="outline" asChild>
@@ -913,6 +1049,22 @@ export default function AppDoctorPage() {
               </p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="deployment" className="mt-4">
+          <Card data-testid="panel-deployment-center"><CardHeader><CardTitle>Deployment Center</CardTitle><CardDescription>Staging and production deployment controls are centralized here for Platform Operations. GitHub Actions remain the execution backend.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Use the staging and production deployment workflows for controlled releases; production requires a release tag and database backup.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="releases" className="mt-4">
+          <Card data-testid="panel-release-manager"><CardHeader><CardTitle>Release Manager</CardTitle><CardDescription>Release tags, build metadata, rollback notes, and deployment evidence will be reviewed here.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Current release metadata is surfaced in Diagnostics → System Health.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="database" className="mt-4">
+          <Card data-testid="panel-database-management"><CardHeader><CardTitle>Database Management</CardTitle><CardDescription>Read-only database status and backup evidence belong here.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Production deployments run pg_dump before restart; destructive database actions are not exposed.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="environments" className="mt-4">
+          <Card data-testid="panel-environment-comparison"><CardHeader><CardTitle>Environment Comparison</CardTitle><CardDescription>Compare staging and production version, commit, DB, storage, PM2, and health signals.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">This comparison is planned as a read-only view fed by diagnostics snapshots.</CardContent></Card>
+        </TabsContent>
+        <TabsContent value="audit" className="mt-4">
+          <Card data-testid="panel-audit-center"><CardHeader><CardTitle>Audit Center</CardTitle><CardDescription>Diagnostics exports, log searches, repair retries, and deployment actions are audited here.</CardDescription></CardHeader><CardContent className="text-sm text-muted-foreground">Diagnostics export events include user, role, IP, user agent, correlation ID, and export contents.</CardContent></Card>
         </TabsContent>
       </Tabs>
 

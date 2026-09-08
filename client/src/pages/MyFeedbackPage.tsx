@@ -39,7 +39,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const TYPE_ICON: Record<string, string> = {
-  bug: "🐛", ux: "✨", feature: "💡", change_request: "🔄", general: "💬",
+  bug: "🐛", ux: "✨", feature: "💡", change_request: "🔄", hr: "🛡️", general: "💬",
 };
 
 export default function MyFeedbackPage() {
@@ -83,7 +83,7 @@ export default function MyFeedbackPage() {
     <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-4">
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-my-feedback-title">My Submissions</h1>
-        <p className="text-sm text-muted-foreground">Track the status of your bug reports and feedback.</p>
+        <p className="text-sm text-muted-foreground">Track the status, outcome, and reviewer updates for your feedback and workplace concerns.</p>
       </div>
 
       {isLoading ? (
@@ -93,7 +93,7 @@ export default function MyFeedbackPage() {
           <CardContent className="py-12 text-center text-muted-foreground">
             <MessageSquare className="h-8 w-8 mx-auto mb-3 opacity-30" />
             <p>You haven't submitted any feedback yet.</p>
-            <p className="text-sm mt-1">Use the <strong>Feedback</strong> button in the bottom-right corner to submit a report.</p>
+            <p className="text-sm mt-1">Use the <strong>Feedback</strong> button in the bottom-left corner to submit a report.</p>
           </CardContent>
         </Card>
       ) : (

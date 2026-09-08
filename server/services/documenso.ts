@@ -6,16 +6,28 @@
  */
 import crypto from "crypto";
 
-const DEFAULT_BASE_URL = "https://app.documenso.com/api/v2";
-
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+export function getDocumensoBaseUrlInfo(): { apiBaseUrl: string; publicBaseUrl: string; source: string | null; configured: boolean } {
+  const candidates: Array<[string, string | undefined]> = [
+    ["DOCUMENSO_URL", process.env.DOCUMENSO_URL],
+    ["MYPAYLINK_DOCUMENSO_BASE_URL", process.env.MYPAYLINK_DOCUMENSO_BASE_URL],
+    ["DOCUMENSO_BASE_URL", process.env.DOCUMENSO_BASE_URL],
+  ];
+  const selected = candidates.find(([, value]) => !!value?.trim());
+  if (!selected) return { apiBaseUrl: "", publicBaseUrl: "", source: null, configured: false };
+  const normalized = normalizeBaseUrl(selected[1]!.trim());
+  const publicBaseUrl = normalized.replace(/\/api\/v2$/, "");
+  const apiBaseUrl = normalized.endsWith("/api/v2") ? normalized : `${normalized}/api/v2`;
+  return { apiBaseUrl, publicBaseUrl, source: selected[0], configured: true };
+}
+
 function getBaseUrl(): string {
-  const raw = process.env.MYPAYLINK_DOCUMENSO_BASE_URL || process.env.DOCUMENSO_BASE_URL || process.env.DOCUMENSO_URL || DEFAULT_BASE_URL;
-  const normalized = normalizeBaseUrl(raw);
-  return normalized.endsWith("/api/v2") ? normalized : `${normalized}/api/v2`;
+  const info = getDocumensoBaseUrlInfo();
+  if (!info.configured) throw new Error("Documenso is not configured. Set DOCUMENSO_URL in environment settings.");
+  return info.apiBaseUrl;
 }
 
 function getApiKey(): string {
@@ -32,11 +44,14 @@ export function isDocumensoEnabled(): boolean {
 
 export function validateDocumensoConfig(): { ok: boolean; message?: string; baseUrl: string; apiKeyConfigured?: boolean; webhookSecretConfigured?: boolean } {
   try {
-    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getBaseUrl(), apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
+    if (!isDocumensoEnabled()) return { ok: false, message: "Documenso signing is disabled", baseUrl: getDocumensoBaseUrlInfo().apiBaseUrl, apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
     getApiKey();
-    return { ok: true, baseUrl: getBaseUrl(), apiKeyConfigured: true, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
+    const baseInfo = getDocumensoBaseUrlInfo();
+    if (!baseInfo.configured) throw new Error("Documenso is not configured. Set DOCUMENSO_URL in environment settings.");
+    return { ok: true, baseUrl: baseInfo.apiBaseUrl, apiKeyConfigured: true, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
   } catch (error: any) {
-    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: getBaseUrl(), apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
+    const baseInfo = getDocumensoBaseUrlInfo();
+    return { ok: false, message: error?.message || "Documenso configuration is invalid", baseUrl: baseInfo.apiBaseUrl, apiKeyConfigured: false, webhookSecretConfigured: !!(process.env.DOCUMENSO_WEBHOOK_SECRET || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_SECRET) };
   }
 }
 
@@ -128,7 +143,7 @@ export interface CreateDocumensoDocumentOptions {
 export interface DocumensoDocumentResult {
   documentId: string;
   status: string;
-  signingLinks: Array<{ name: string; email: string; signingUrl?: string; token?: string; status?: string }>;
+  signingLinks: Array<{ id?: string | null; name: string; email: string; signingUrl?: string; token?: string; status?: string }>;
   auditUrl?: string;
   rawResponse: any;
 }
@@ -214,9 +229,10 @@ export async function createDocumensoDocument({
     documentId,
     status: mapDocumensoStatus(distributed?.status || distributed?.envelope?.status || "PENDING"),
     signingLinks: (distributed?.recipients || []).map((r: any) => ({
+      id: r.id != null ? String(r.id) : null,
       name: r.name || "",
       email: r.email || "",
-      signingUrl: r.signingUrl,
+      signingUrl: r.signingUrl || (r.token ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}` : undefined),
       token: r.token,
       status: r.signingStatus || r.status,
     })),
@@ -232,12 +248,17 @@ export async function getDocumensoDocument(documentId: string) {
     status: mapDocumensoStatus(doc?.status),
     recipients: (doc?.recipients || []).map((r: any) => ({
       id: r.id,
+      token: r.token,
       name: r.name || "",
       email: r.email || "",
       role: r.role,
       status: r.signingStatus || r.status || "pending",
       signedAt: r.signedAt || r.signed_at,
-      signingUrl: r.signingUrl,
+      signingUrl:
+        r.signingUrl ??
+        (r.token
+          ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}`
+          : undefined),
     })),
     envelopeItems: doc?.envelopeItems || [],
     rawResponse: doc,
@@ -268,12 +289,30 @@ export async function voidDocumensoDocument(documentId: string): Promise<void> {
   await apiJson("POST", "/envelope/delete", { envelopeId: documentId });
 }
 
+export const DOCUMENSO_RESEND_REQUEST_CONTRACT = {
+  method: "POST",
+  endpoint: "/envelope/redistribute",
+  bodyShape: "{ envelopeId: documentId }",
+  includesRecipientIdentifiers: false,
+} as const;
+
 export async function resendDocumensoDocument(documentId: string): Promise<DocumensoDocumentResult> {
-  const res = await apiJson<any>("POST", "/envelope/redistribute", { envelopeId: documentId });
+  const res = await apiJson<any>(DOCUMENSO_RESEND_REQUEST_CONTRACT.method, DOCUMENSO_RESEND_REQUEST_CONTRACT.endpoint, { envelopeId: documentId });
   return {
     documentId,
     status: mapDocumensoStatus(res?.status || "PENDING"),
-    signingLinks: (res?.recipients || []).map((r: any) => ({ name: r.name || "", email: r.email || "", signingUrl: r.signingUrl, token: r.token || r.id || r.recipientId, status: r.signingStatus || r.status })),
+    signingLinks: (res?.recipients || []).map((r: any) => ({
+      id: r.id != null ? String(r.id) : null,
+      name: r.name || "",
+      email: r.email || "",
+      signingUrl:
+        r.signingUrl ??
+        (r.token
+          ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}`
+          : undefined),
+      token: r.token || null,
+      status: r.signingStatus || r.status,
+    })),
     auditUrl: `${getBaseUrl()}/envelope/${documentId}/audit-log`,
     rawResponse: res,
   };

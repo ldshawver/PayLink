@@ -51,8 +51,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npx tsx server/__tests__/api-json-guard.test.ts
+      - name: Run required test suite
+        run: npm run test:required
 
   typecheck:
     name: typecheck

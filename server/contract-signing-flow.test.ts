@@ -4,6 +4,8 @@ import {
   buildContractDocumensoReturnUrl,
   buildContractSigningUrl,
   canSignContract,
+  findSignerSpecificDocumensoLink,
+  resolveDocumensoSenderIdentity,
 } from "./contract-signing-flow";
 
 function run() {
@@ -75,6 +77,45 @@ function run() {
     }),
     true,
     "company admin with explicit company access can sign",
+  );
+
+  assert.deepEqual(
+    resolveDocumensoSenderIdentity({
+      user: { username: "admin", email: "ADMIN@example.com" },
+      worker: { firstName: "Alex", lastName: "Sender", workEmail: "alex@example.com" },
+      company: { name: "Example Co", email: "contracts@example.com" },
+    }),
+    { name: "Alex Sender", email: "alex@example.com", source: "worker" },
+    "linked worker identity is the preferred Documenso sender",
+  );
+
+  assert.deepEqual(
+    resolveDocumensoSenderIdentity({
+      user: { firstName: "Tenant", lastName: "Admin", email: "tenant@example.com" },
+      company: { name: "Example Co", email: "contracts@example.com" },
+    }),
+    { name: "Tenant Admin", email: "tenant@example.com", source: "user" },
+    "sender resolution supports admin users without worker records",
+  );
+
+  const signingLinks = [
+    { email: "first@example.com", token: "recipient-1", signingUrl: "https://documenso.test/sign/one" },
+    { email: "second@example.com", token: "recipient-2", signingUrl: "https://documenso.test/sign/two" },
+  ];
+  assert.equal(
+    findSignerSpecificDocumensoLink(signingLinks, { email: "SECOND@example.com" })?.signingUrl,
+    "https://documenso.test/sign/two",
+    "signing links are selected for the requested signer",
+  );
+  assert.equal(
+    findSignerSpecificDocumensoLink(signingLinks, { email: "missing@example.com" }),
+    null,
+    "a missing signer never falls back to another recipient's signing URL",
+  );
+  assert.equal(
+    findSignerSpecificDocumensoLink([...signingLinks, { ...signingLinks[1], token: "recipient-3" }], { email: "second@example.com" }),
+    null,
+    "ambiguous signer matches fail closed",
   );
 }
 

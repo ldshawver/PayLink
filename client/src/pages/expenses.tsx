@@ -45,6 +45,49 @@ function formatCurrency(v: string | number | null | undefined) {
   return `$${parseFloat(String(v)).toFixed(2)}`;
 }
 
+/**
+ * Client mirror of the server's checkExpenseEligibility (server/expense-payments.ts).
+ * Drives ONLY the disabled state + reason label for the Cut Check action — the
+ * server route stays the single source of truth on issue. `fundedCompanyIds` is
+ * the set of companies with an enabled, routable remittance source; pass
+ * `fundingKnown=false` while that list is still loading so funding is not
+ * asserted prematurely.
+ */
+function baseExpensePayEligibility(e: any): { ok: boolean; reason: string | null } {
+  const status = String(e?.status ?? "").toLowerCase();
+  const ps = String(e?.paymentStatus ?? "unpaid").toLowerCase();
+  if (e?.contractorInvoiceId) return { ok: false, reason: "Pay via the linked contractor invoice" };
+  if (ps === "paid") return { ok: false, reason: "Already paid" };
+  if (ps === "voided") return { ok: false, reason: "Payment voided" };
+  if (status !== "approved") return { ok: false, reason: "Approve expense first" };
+  if (!String(e?.payeeName || e?.vendor || "").trim()) return { ok: false, reason: "Add vendor/payee first" };
+  if (!(parseFloat(String(e?.amount ?? "0")) > 0)) return { ok: false, reason: "No unpaid balance" };
+  return { ok: true, reason: null };
+}
+
+function cutCheckEligibility(
+  e: any,
+  fundedCompanyIds: Set<string>,
+  fundingKnown: boolean,
+): { ok: boolean; reason: string | null } {
+  const base = baseExpensePayEligibility(e);
+  if (!base.ok) return base;
+  if (fundingKnown && e?.companyId && !fundedCompanyIds.has(String(e.companyId))) {
+    return { ok: false, reason: "Funding account required" };
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * Client mirror for the non-check "Record Payment" action. No funding-account
+ * requirement (cash / ACH / trade / rent / other settle outside MyPayLink);
+ * trade / barter additionally needs an approved fair-market-value valuation,
+ * which is enforced in the dialog + on the server.
+ */
+function recordPaymentEligibility(e: any): { ok: boolean; reason: string | null } {
+  return baseExpensePayEligibility(e);
+}
+
 function extractedNumber(value: any): string {
   if (value == null || value === "") return "";
   const n = Number(value);
@@ -560,10 +603,12 @@ export default function ExpensesPage() {
   const [rejectTarget, setRejectTarget] = useState<{ type: string; id: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [printCheckTarget, setPrintCheckTarget] = useState<any | null>(null);
-  const [printCheckForm, setPrintCheckForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
+  const [printCheckForm, setPrintCheckForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "", idempotencyKey: "" });
   const [invoicePrintTarget, setInvoicePrintTarget] = useState<any | null>(null);
   const [invoicePrintForm, setInvoicePrintForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
   const [markPaidExpenseId, setMarkPaidExpenseId] = useState<string | null>(null);
+  const [recordPayTarget, setRecordPayTarget] = useState<any | null>(null);
+  const [recordPayForm, setRecordPayForm] = useState({ method: "cash", amount: "", referenceNumber: "", description: "", tradeCompensationId: "", idempotencyKey: "" });
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: allExpenses = [], isLoading: loadingExpenses } = useQuery<any[]>({ queryKey: ["/api/expenses"], queryFn: async () => { const r = await fetch("/api/expenses", { credentials: "include" }); return r.ok ? r.json() : []; } });
@@ -579,8 +624,147 @@ export default function ExpensesPage() {
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
     currentUser?.role === "owner" || currentUser?.role === "supervisor" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
+  // Issuing a check is admin/manager-only server-side (POST /api/expenses/:id/cut-check),
+  // but requireRole("admin","manager") runs the role through expandRoleForGuard() first —
+  // so platform_super_admin / platform_admin / owner / system_admin and the tenant_* admin
+  // and manager roles all resolve to "admin" or "manager" server-side. Mirror that same
+  // expansion here, otherwise the action is hidden from users the server would allow
+  // (e.g. a platform_super_admin, the account most operators log in with).
+  const cutCheckRole = currentUser?.role || "";
+  const canCutCheck =
+    cutCheckRole === "admin" || cutCheckRole === "manager" ||
+    [
+      "platform_super_admin", "platform_admin", "platform_owner", "system_admin", "owner",
+      "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
+      "tenant_manager", "tenant_supervisor",
+    ].includes(cutCheckRole);
   const myWorkerId = currentUser?.workerId;
   const isContractor = currentUser?.workerType === "contractor";
+
+  // Companies with an enabled, routable remittance source — used only to explain a
+  // disabled Cut Check action ("Funding account required"). admin/manager-only route.
+  const { data: remittanceSources = [], isSuccess: remittanceSourcesLoaded } = useQuery<any[]>({
+    queryKey: ["/api/remittance-sources"],
+    queryFn: async () => { const r = await fetch("/api/remittance-sources", { credentials: "include" }); return r.ok ? r.json() : []; },
+    enabled: canCutCheck,
+  });
+  const fundedCompanyIds = new Set(
+    (remittanceSources as any[])
+      .filter(s => String(s?.status ?? "").toLowerCase() === "enabled" && s?.routingNumber && s?.accountNumber)
+      .map(s => String(s.companyId)),
+  );
+
+  function renderCutCheckAction(e: any) {
+    if (!canCutCheck) return null;
+    const { ok, reason } = cutCheckEligibility(e, fundedCompanyIds, remittanceSourcesLoaded);
+    const rp = recordPaymentEligibility(e);
+    const isPaid = String(e?.paymentStatus ?? "").toLowerCase() === "paid";
+    const isPartial = String(e?.paymentStatus ?? "").toLowerCase() === "partially_paid";
+    const paidLabel = isPaid && e?.checkNumber ? `Paid · #${e.checkNumber}` : reason;
+    return (
+      <div className="flex flex-wrap items-center gap-1" data-testid={`cut-check-action-${e.id}`}>
+        <span title={ok ? undefined : (reason ?? undefined)} className="inline-flex">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!ok}
+            onClick={() => openPrintCheck(e)}
+            data-testid={`button-cut-check-${e.id}`}
+          >
+            <Printer className="h-3 w-3 mr-1" /> Cut Check
+          </Button>
+        </span>
+        <span title={rp.ok ? undefined : (rp.reason ?? undefined)} className="inline-flex">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!rp.ok}
+            onClick={() => openRecordPayment(e)}
+            data-testid={`button-record-payment-${e.id}`}
+          >
+            <ArrowLeftRight className="h-3 w-3 mr-1" /> Submit / Record Payment
+          </Button>
+        </span>
+        {!ok && !rp.ok && (
+          <span className="text-xs text-muted-foreground" data-testid={`text-cut-check-reason-${e.id}`}>
+            {paidLabel}
+          </span>
+        )}
+        {(isPaid || isPartial) && (
+          <a
+            href={`/api/expenses/${e.id}/payments`}
+            onClick={(ev) => { ev.preventDefault(); openExpensePaymentReceipts(e); }}
+            className="text-xs text-primary underline inline-flex items-center gap-1"
+            data-testid={`link-expense-receipt-${e.id}`}
+          >
+            <FileText className="h-3 w-3" /> View Payment Statement / Receipt
+          </a>
+        )}
+        {!isPaid && String(e?.status ?? "").toLowerCase() === "approved" && (
+          <Button size="sm" variant="ghost" onClick={() => setMarkPaidExpenseId(e.id)} data-testid={`button-mark-paid-expense-${e.id}`}>
+            <BanknoteIcon className="h-3 w-3 mr-1" /> Mark Paid
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  async function openExpensePaymentReceipts(e: any) {
+    try {
+      const r = await fetch(`/api/expenses/${e.id}/payments`, { credentials: "include" });
+      const rows = r.ok ? await r.json() : [];
+      const latest = (Array.isArray(rows) ? rows : []).find((p: any) => p.status !== "void");
+      if (!latest) { toast({ title: "No payment on file yet" }); return; }
+      window.open(`/api/expense-payments/${latest.id}/document?copy=payee`, "_blank");
+    } catch { toast({ title: "Could not open payment receipt", variant: "destructive" }); }
+  }
+
+  // Expenses this user could cut a check for right now (mirrors the per-row gate).
+  const eligibleCutCheckExpenses = canCutCheck
+    ? allExpenses.filter((e: any) => cutCheckEligibility(e, fundedCompanyIds, remittanceSourcesLoaded).ok)
+    : [];
+
+  /**
+   * A page-level Cut Check entry point, shown for check-authorized users on both the
+   * My Expenses and All Expenses tabs (including their empty states) so the feature is
+   * discoverable without an eligible row on screen. When at least one eligible vendor
+   * expense exists it jumps to All Expenses (where the per-row action lives); otherwise
+   * it renders disabled with the reason. "New Expense" stays next to it.
+   */
+  function renderCutCheckEntryPoint(context: "my" | "all") {
+    if (!canCutCheck) return null;
+    const n = eligibleCutCheckExpenses.length;
+    const reason = "Create and approve a vendor expense before cutting a check.";
+    return (
+      <Card data-testid={`cut-check-entrypoint-${context}`}>
+        <CardContent className="py-4 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 mr-1">
+            <Printer className="h-4 w-4 text-muted-foreground" />
+            <span className="font-medium text-sm">Cut Check</span>
+          </div>
+          <span className="inline-flex" title={n === 0 ? reason : undefined}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={n === 0}
+              onClick={() => { if (isAdmin) setActiveTab("all-expenses"); }}
+              data-testid="button-cut-check-entry"
+            >
+              <Printer className="h-3 w-3 mr-1" /> Cut Check{n > 0 ? ` (${n})` : ""}
+            </Button>
+          </span>
+          {n === 0 && (
+            <span className="text-xs text-muted-foreground" data-testid="text-cut-check-entry-reason">
+              {reason}
+            </span>
+          )}
+          <Button size="sm" onClick={() => setExpenseDialogOpen(true)} data-testid="button-cut-check-entry-new-expense">
+            <Plus className="h-3 w-3 mr-1" /> New Expense
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const myExpenses = allExpenses.filter(e => e.submitterId === myWorkerId);
   const pendingExpenseApprovals = allExpenses.filter(e => e.status === "submitted");
@@ -660,31 +844,46 @@ export default function ExpensesPage() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Cut Check (financial issuance) — POST /cut-check, requires a stable per-operation
+  // Idempotency-Key so a retry reuses it and never double-issues. The server
+  // allocates the check number from the funding account.
   const printCheckMutation = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: typeof printCheckForm }) => {
-      const res = await fetch(`/api/expenses/${id}/print-check`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      const res = await fetch(`/api/expenses/${id}/cut-check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": form.idempotencyKey },
+        credentials: "include",
         body: JSON.stringify({
           payeeName: form.payeeName,
           payeeAddress: form.payeeAddress,
           payeeCityStateZip: form.payeeCityStateZip,
-          checkNumber: form.checkNumber || undefined,
           memo: form.memo,
           amount: parseFloat(form.amount),
         }),
       });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message || e.error || "Failed to issue check"); }
       return res.blob();
     },
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
-      toast({ title: "Check printed", description: "Expense marked as paid." });
+      toast({ title: "Check issued", description: "The expense payment was recorded and the check PDF opened." });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       setPrintCheckTarget(null);
     },
-    onError: (e: any) => toast({ title: "Print check failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Cut check failed", description: e.message, variant: "destructive" }),
   });
+
+  // Preview — GET /print-check?preview=1, render only, zero financial writes.
+  function previewExpenseCheck(id: string, form: typeof printCheckForm) {
+    const q = new URLSearchParams({
+      preview: "1",
+      payeeName: form.payeeName, payeeAddress: form.payeeAddress,
+      payeeCityStateZip: form.payeeCityStateZip, memo: form.memo,
+      ...(form.amount ? { amount: String(parseFloat(form.amount)) } : {}),
+    });
+    window.open(`/api/expenses/${id}/print-check?${q.toString()}`, "_blank");
+  }
 
   function openPrintCheck(expense: any) {
     setPrintCheckForm({
@@ -694,9 +893,62 @@ export default function ExpensesPage() {
       checkNumber: expense.checkNumber || "",
       memo: expense.memo || expense.description || "",
       amount: expense.amount || "",
+      idempotencyKey: crypto.randomUUID(),
     });
     setPrintCheckTarget(expense);
   }
+
+  // Non-check expense payment (cash | ACH | trade/barter | rent credit | other).
+  // Same expense_payments ledger the Cut Check path uses — no second ledger.
+  const RECORD_PAY_DESCRIPTION_REQUIRED = new Set(["trade_credit", "rent_credit", "other"]);
+  function openRecordPayment(expense: any) {
+    setRecordPayForm({ method: "cash", amount: expense.amount || "", referenceNumber: "", description: "", tradeCompensationId: "", idempotencyKey: crypto.randomUUID() });
+    setRecordPayTarget(expense);
+  }
+
+  // Only approved, unused, fair-market-value valuations that are provably tied to
+  // THIS expense's payee — the valuation's contractor must be the worker who
+  // submitted the expense. Unrelated same-company valuations are never offered,
+  // and the server enforces the identical worker-id link on record-payment.
+  const { data: recordPayTradeComps = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-trade-compensation", recordPayTarget?.companyId, recordPayTarget?.submitterId, "expense-payable"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-trade-compensation?companyId=${recordPayTarget?.companyId || ""}`, { credentials: "include" });
+      if (!r.ok) return [];
+      const rows = await r.json();
+      const payeeWorkerId = recordPayTarget?.submitterId;
+      return (Array.isArray(rows) ? rows : []).filter((t: any) =>
+        t.approvedAt && !t.contractorPaymentId && !t.expensePaymentId &&
+        String(t.valuationMethod || "").toLowerCase() === "fair_market_value" &&
+        !!payeeWorkerId && t.contractorUserId === payeeWorkerId);
+    },
+    enabled: !!recordPayTarget && recordPayForm.method === "trade_credit",
+  });
+
+  const recordPaymentMutation = useMutation({
+    mutationFn: async ({ id, form }: { id: string; form: typeof recordPayForm }) => {
+      const body: Record<string, unknown> = {
+        paymentMethod: form.method, amount: parseFloat(form.amount),
+        referenceNumber: form.referenceNumber, idempotencyKey: form.idempotencyKey,
+      };
+      if (RECORD_PAY_DESCRIPTION_REQUIRED.has(form.method)) body.description = form.description.trim();
+      if (form.method === "trade_credit") body.tradeCompensationId = form.tradeCompensationId;
+      const res = await fetch(`/api/expenses/${id}/record-payment`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": form.idempotencyKey },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || e.error || "Failed to record payment"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Payment recorded", description: "The expense balance was reduced. A payment receipt is available." });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-trade-compensation"] });
+      setRecordPayTarget(null);
+    },
+    onError: (e: any) => toast({ title: "Record payment failed", description: e.message, variant: "destructive" }),
+  });
 
   const invoicePrintMutation = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: typeof invoicePrintForm }) => {
@@ -825,6 +1077,7 @@ export default function ExpensesPage() {
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /> {EXPENSE_POLICY}
             </p>
           </div>
+          {renderCutCheckEntryPoint("my")}
           {myExpenses.length === 0 ? (
             <Card><CardContent className="text-center py-12 text-muted-foreground">
               <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
@@ -895,6 +1148,16 @@ export default function ExpensesPage() {
                 <Download className="h-4 w-4 mr-1" /> Export CSV
               </Button>
             </div>
+            {renderCutCheckEntryPoint("all")}
+            {!loadingExpenses && allExpenses.length === 0 && (
+              <Card>
+                <CardContent className="text-center py-12 text-muted-foreground" data-testid="empty-all-expenses">
+                  <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No expenses yet</p>
+                  <p className="text-sm">Create and approve a vendor expense before cutting a check.</p>
+                </CardContent>
+              </Card>
+            )}
             <div className="space-y-3 sm:hidden">
               {allExpenses.map((e: any) => (
                 <Card key={e.id} data-testid={`card-all-expense-${e.id}`}>
@@ -908,8 +1171,12 @@ export default function ExpensesPage() {
                     </div>
                     <div className="flex items-center gap-2 mt-2">
                       {statusBadge(e.status)}
+                      {paymentStatusBadge(e.paymentStatus)}
                       <span className="text-xs text-muted-foreground">{e.categoryName || "—"}</span>
                     </div>
+                    {canCutCheck && (
+                      <div className="mt-3 pt-3 border-t">{renderCutCheckAction(e)}</div>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -928,18 +1195,7 @@ export default function ExpensesPage() {
                       <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
                       <TableCell>{statusBadge(e.status)}</TableCell>
                       <TableCell>{paymentStatusBadge(e.paymentStatus)}{e.checkNumber && <span className="text-xs text-muted-foreground ml-1">#{e.checkNumber}</span>}</TableCell>
-                      <TableCell>
-                        {isAdmin && e.status === "approved" && e.paymentStatus !== "paid" && (
-                          <div className="flex gap-1">
-                            <Button size="sm" variant="outline" onClick={() => openPrintCheck(e)} data-testid={`button-print-check-${e.id}`}>
-                              <Printer className="h-3 w-3 mr-1" /> Print Check
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setMarkPaidExpenseId(e.id)} data-testid={`button-mark-paid-expense-${e.id}`}>
-                              <BanknoteIcon className="h-3 w-3 mr-1" /> Mark Paid
-                            </Button>
-                          </div>
-                        )}
-                      </TableCell>
+                      <TableCell>{renderCutCheckAction(e)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1219,7 +1475,7 @@ export default function ExpensesPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>Mark Expense as Paid</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This records the expense as paid without printing a check. Use <strong>Print Check</strong> instead if you want to generate a vendor check PDF at the same time.
+            This records the expense as paid without printing a check. Use <strong>Cut Check</strong> instead if you want to generate a vendor check PDF at the same time.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setMarkPaidExpenseId(null)} data-testid="button-cancel-mark-paid">Cancel</Button>
@@ -1234,15 +1490,15 @@ export default function ExpensesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Print Check for Expense ────────────────────────────────────────── */}
+      {/* ── Cut Check for Expense ──────────────────────────────────────────── */}
       <Dialog open={!!printCheckTarget} onOpenChange={(v) => { if (!v) setPrintCheckTarget(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Printer className="h-5 w-5" /> Print Vendor Check</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><Printer className="h-5 w-5" /> Cut Vendor Check</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-1">
             <p className="text-sm text-muted-foreground">
-              Generates a check PDF and marks the expense as paid. Payee details are printed on the check — ensure they match the pre-printed check stock.
+              <strong>Preview</strong> renders the check PDF only — no financial writes. <strong>Cut Check</strong> records the payment, allocates a check number from the funding account and reduces the expense balance. Payee details are printed on the check — ensure they match the pre-printed check stock.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2 space-y-1">
@@ -1283,13 +1539,8 @@ export default function ExpensesPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Check Number <span className="text-xs text-muted-foreground">(optional)</span></Label>
-                <Input
-                  value={printCheckForm.checkNumber}
-                  onChange={e => setPrintCheckForm(f => ({ ...f, checkNumber: e.target.value }))}
-                  placeholder="auto"
-                  data-testid="input-check-number"
-                />
+                <Label>Check Number</Label>
+                <Input value="auto — allocated on issue" disabled data-testid="input-check-number" />
               </div>
               <div className="col-span-2 space-y-1">
                 <Label>Memo</Label>
@@ -1305,13 +1556,107 @@ export default function ExpensesPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setPrintCheckTarget(null)} data-testid="button-cancel-print-check">Cancel</Button>
             <Button
+              variant="outline"
+              onClick={() => { if (printCheckTarget) previewExpenseCheck(String(printCheckTarget.id), printCheckForm); }}
+              disabled={!printCheckForm.payeeName}
+              data-testid="button-preview-print-check"
+            >
+              <Printer className="h-4 w-4 mr-1" />Preview
+            </Button>
+            <Button
               onClick={() => { if (printCheckTarget) printCheckMutation.mutate({ id: String(printCheckTarget.id), form: printCheckForm }); }}
               disabled={printCheckMutation.isPending || !printCheckForm.payeeName || !printCheckForm.amount}
               data-testid="button-confirm-print-check"
             >
               {printCheckMutation.isPending
-                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Generating…</>
-                : <><Printer className="h-4 w-4 mr-1" />Print Check &amp; Mark Paid</>}
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Cutting check…</>
+                : <><Printer className="h-4 w-4 mr-1" />Cut Check</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Non-check "Submit / Record Payment" — cash / ACH / trade / rent credit / other */}
+      <Dialog open={!!recordPayTarget} onOpenChange={(v) => { if (!v) setRecordPayTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> Submit / Record Payment</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <p className="text-sm text-muted-foreground">
+              Records a payment made outside MyPayLink against this approved expense. It reduces the expense balance and generates a payment receipt (vendor copy + company copy). To issue a printed check instead, use <strong>Cut Check</strong>.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Method</Label>
+                <Select value={recordPayForm.method} onValueChange={v => setRecordPayForm(f => ({ ...f, method: v, tradeCompensationId: "" }))}>
+                  <SelectTrigger data-testid="select-record-payment-method"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="ach">ACH / Bank Transfer</SelectItem>
+                    <SelectItem value="trade_credit">Trade / Barter</SelectItem>
+                    <SelectItem value="rent_credit">Rent Credit</SelectItem>
+                    <SelectItem value="other">Other / Manual</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Amount ($) <span className="text-destructive">*</span></Label>
+                <Input type="number" step="0.01" value={recordPayForm.amount}
+                  onChange={e => setRecordPayForm(f => ({ ...f, amount: e.target.value }))}
+                  data-testid="input-record-payment-amount" />
+              </div>
+              {recordPayForm.method === "trade_credit" && (
+                <div className="col-span-2 space-y-1">
+                  <Label>Approved trade / barter valuation (fair market value) <span className="text-destructive">*</span></Label>
+                  <Select value={recordPayForm.tradeCompensationId} onValueChange={v => setRecordPayForm(f => ({ ...f, tradeCompensationId: v }))}>
+                    <SelectTrigger data-testid="select-record-payment-trade">
+                      <SelectValue placeholder={recordPayTradeComps.length ? "Select a valuation…" : "No approved valuation available"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {recordPayTradeComps.map((t: any) => (
+                        <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {formatCurrency(t.totalValue)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!recordPayTradeComps.length && (
+                    <p className="text-xs text-muted-foreground">Missing approved trade/barter valuation. Create one in <Link href="/app/trade-compensation" className="text-primary underline">Trade Compensation</Link>.</p>
+                  )}
+                </div>
+              )}
+              {RECORD_PAY_DESCRIPTION_REQUIRED.has(recordPayForm.method) ? (
+                <div className="col-span-2 space-y-1">
+                  <Label>Description <span className="text-destructive">*</span></Label>
+                  <Input value={recordPayForm.description}
+                    onChange={e => setRecordPayForm(f => ({ ...f, description: e.target.value }))}
+                    placeholder="Describe the trade / barter / rent credit / other payment"
+                    data-testid="input-record-payment-description" />
+                </div>
+              ) : (
+                <div className="col-span-2 space-y-1">
+                  <Label>Reference # (optional)</Label>
+                  <Input value={recordPayForm.referenceNumber}
+                    onChange={e => setRecordPayForm(f => ({ ...f, referenceNumber: e.target.value }))}
+                    placeholder="Transaction ID, confirmation #..."
+                    data-testid="input-record-payment-ref" />
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRecordPayTarget(null)} data-testid="button-cancel-record-payment">Cancel</Button>
+            <Button
+              onClick={() => { if (recordPayTarget) recordPaymentMutation.mutate({ id: String(recordPayTarget.id), form: recordPayForm }); }}
+              disabled={
+                recordPaymentMutation.isPending || !recordPayForm.amount ||
+                (RECORD_PAY_DESCRIPTION_REQUIRED.has(recordPayForm.method) && !recordPayForm.description.trim()) ||
+                (recordPayForm.method === "trade_credit" && !recordPayForm.tradeCompensationId)
+              }
+              data-testid="button-confirm-record-payment"
+            >
+              {recordPaymentMutation.isPending
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Recording…</>
+                : <><DollarSign className="h-4 w-4 mr-1" />Record Payment</>}
             </Button>
           </DialogFooter>
         </DialogContent>

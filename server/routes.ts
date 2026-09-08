@@ -13,16 +13,26 @@ import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
+import {
+  resolveCompanyLicense,
+  listCompanyLicenses,
+  getLicenseEvents,
+  adminUpsertLicense,
+  ensureTrialLicense,
+  LicenseValidationError,
+  CompanyNotFoundError,
+} from "./licensing/license-service";
+import { requireLicenseNotBlocked } from "./licensing/license-gate";
 import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
 import { db } from "./db";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, insertEmployeeManagerRelationSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema, normalizeContractorDocumentType } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
-import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError } from "./services/documenso";
+import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError, getDocumensoBaseUrlInfo } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
@@ -30,12 +40,47 @@ import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUti
 import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
+import { reconcileProposalContractor, resolveContractorSignerIdentity, isValidUuid } from "./contractor-proposal-identity";
+import { loadWorkerSignerIdentity, loadWorkerAccountStates, loadWorkerAccountState, createOrRefreshInvite, getLiveInviteByToken, findLinkableUserByEmail, upsertIdentityLink, acceptInviteWithUser, setWorkerAccountEnabled } from "./identity/identity-db";
+import { normalizeEmail } from "./identity/identity-resolver";
+import { normalizeAccessRequestInput, isRateLimited, submitAccessRequest, listAccessRequestsForCompany, approveAccessRequest, rejectAccessRequest } from "./identity/contractor-access-requests";
+import {
+  normalizeVendorInput, normalizeVendorPatch, normalizeVendorInvoiceInput, normalizeVendorDocumentType,
+  createVendor, updateVendorContact, listVendorsForCompany, getVendorForCompany, setVendorAccessEnabled,
+  inviteVendorUser, resolveVendorForUser, createVendorInvoiceSubmission, createVendorDocumentSubmission,
+  listSubmissionsForVendor, listPendingVendorSubmissionsForCompany, reviewVendorInvoice, reviewVendorDocument,
+  type VendorContext,
+} from "./identity/vendors";
+import { normalizeWorkerPayRate, isValidWorkerType, isValidContractorType } from "@shared/worker-pay-rate-rules";
+import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
-import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract } from "./contract-signing-flow";
+import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
+import { assertContractorTradeCreditsPrintable, calculateContractorTradeSettlement } from "./contractor-trade-compensation";
+import { buildMicrString, buildFractionalRouting, formatCheckNumber } from "./check-micr";
+import {
+  CONTRACTOR_PAYMENT_METHODS, DESCRIPTION_REQUIRED_METHODS, normalizeContractorPaymentMethod,
+  toCents, fromCents, checkPaymentAmount, recomputeInvoiceStatus, paymentFingerprint,
+  requireIdempotencyKey, checkTradeCreditApplicable, tradeCompFingerprint,
+  externalSettlementDisclaimer, isUniqueConstraintViolation,
+} from "./contractor-payments";
+import {
+  EXPENSE_PAYMENT_METHOD, EXPENSE_VOID_STOP_PAYMENT_NOTE, recomputeExpensePaymentStatus,
+  expensePaymentFingerprint, checkExpenseEligibility,
+  EXPENSE_RECORD_PAYMENT_METHODS, EXPENSE_DESCRIPTION_REQUIRED_METHODS,
+  normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable,
+} from "./expense-payments";
+import { renderPaymentDocumentPdf, type PaymentDocInput } from "./payment-documents";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
+function isIndependentContractorWorker(worker: any): boolean {
+  const workerGroup = String(worker?.workerGroup || worker?.worker_group || "").toLowerCase();
+  const workerType = String(worker?.workerType || worker?.worker_type || "").toLowerCase();
+  return INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup) || workerType === "independent_contractor" || (workerType === "contractor" && INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup));
+}
 
 function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -76,6 +121,27 @@ function getAppBaseUrl(req: Pick<Request, "headers" | "protocol">): string {
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
   return `${proto}://${host}`;
+}
+
+/**
+ * Email the sign-up link for an account invite (PR 1 — SaaS identity/onboarding).
+ * The raw token appears only in this link; the DB stores only its sha256.
+ */
+async function sendAccountInviteEmail(
+  req: Pick<Request, "headers" | "protocol">,
+  email: string,
+  recipientName: string,
+  rawToken: string,
+): Promise<void> {
+  const url = `${getAppBaseUrl(req)}/accept-invite?token=${encodeURIComponent(rawToken)}`;
+  const { sendGenericNotificationEmail } = await import("./notifications.js");
+  await sendGenericNotificationEmail({
+    recipientName: recipientName || "there",
+    email,
+    title: "You've been invited to MyPayLink",
+    body: "Your organization created an account for you. Click below to set your password and sign in. This link expires in 14 days.",
+    actionUrl: url,
+  });
 }
 
 
@@ -181,6 +247,171 @@ const documentUpload = multer({
   },
 });
 
+// Contractor compliance documents (W-9, contractor agreement, insurance
+// certificates, …) are overwhelmingly PDFs or scans. The generic `upload`
+// instance above is image-only and 500s on a PDF; this instance accepts the
+// real formats and is size-capped for tax paperwork.
+const CONTRACTOR_DOC_MAX_BYTES = 15 * 1024 * 1024;
+const contractorComplianceUpload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: CONTRACTOR_DOC_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /\.(pdf|jpg|jpeg|png|tif|tiff|heic|webp)$/i;
+    if (allowed.test(path.extname(file.originalname))) cb(null, true);
+    else cb(Object.assign(new Error("Unsupported file type"), { code: "INVALID_FILE_TYPE" }));
+  },
+});
+
+/**
+ * Wrap a multer single-file middleware so a rejected upload returns a
+ * sanitized, machine-readable error code instead of falling through to the
+ * generic 500 error handler. No filenames, sizes, or paths are echoed.
+ */
+function singleFileUpload(mw: multer.Multer, field: string, opts: { maxBytes: number }) {
+  const handler = mw.single(field);
+  return (req: Request, res: Response, next: NextFunction) => {
+    handler(req, res, (err: any) => {
+      if (!err) return next();
+      if (err?.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          error: "FILE_TOO_LARGE",
+          message: `File exceeds the ${Math.round(opts.maxBytes / (1024 * 1024))} MB limit.`,
+        });
+      }
+      if (err?.code === "INVALID_FILE_TYPE" || /unsupported file type|only .* allowed/i.test(String(err?.message))) {
+        return res.status(415).json({
+          error: "INVALID_FILE_TYPE",
+          message: "Upload a PDF or image file (PDF, JPG, PNG, TIFF, HEIC).",
+        });
+      }
+      return res.status(400).json({ error: "UPLOAD_FAILED", message: "The file could not be processed." });
+    });
+  };
+}
+
+/** Best-effort removal of an uploaded temp file when a later step fails. */
+async function discardUploadedFile(file?: Express.Multer.File): Promise<void> {
+  if (!file?.path) return;
+  try { await fs.promises.unlink(file.path); } catch { /* already gone */ }
+}
+
+/**
+ * Resolve a stored `/uploads/<name>` reference to an absolute path that is
+ * strictly inside `resolvedUploadDir`. Returns null for anything else — a
+ * different URL shape, an absolute/external path, a NUL byte, or any value
+ * that normalises to a location outside the uploads root (path traversal).
+ */
+function resolveUploadPath(fileUrl: string | null | undefined): string | null {
+  if (!fileUrl || typeof fileUrl !== "string" || fileUrl.includes("\0")) return null;
+  const m = /^\/uploads\/(.+)$/.exec(fileUrl);
+  if (!m) return null;
+  const rel = m[1];
+  if (rel.split(/[\\/]/).some(seg => seg === "..")) return null;
+  const root = path.resolve(resolvedUploadDir);
+  const abs = path.resolve(root, rel);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (abs !== root && !abs.startsWith(rootWithSep)) return null;
+  return abs;
+}
+
+/**
+ * Remove a stored contractor-document blob, but only after confirming no
+ * `contractor_documents` or `worker_documents` row still references the same
+ * canonical file_url. Path is resolved safely beneath the uploads root.
+ * Best-effort: never throws, returns what happened for audit/logging.
+ */
+async function removeUnreferencedUploadFile(
+  fileUrl: string | null | undefined,
+  opts?: { excludeContractorDocumentId?: string },
+): Promise<"removed" | "retained-shared" | "skipped-unsafe-path" | "missing" | "error"> {
+  if (!fileUrl) return "skipped-unsafe-path";
+  try {
+    if (await storage.isCanonicalFileReferenced(fileUrl, opts)) return "retained-shared";
+  } catch (e) {
+    console.error("[ContractorDocs] reference check failed:", (e as Error).message);
+    return "error";
+  }
+  const abs = resolveUploadPath(fileUrl);
+  if (!abs) return "skipped-unsafe-path";
+  try {
+    await fs.promises.unlink(abs);
+    return "removed";
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "error";
+  }
+}
+
+type ResolvedWorker = NonNullable<Awaited<ReturnType<typeof storage.getWorker>>>;
+type ContractorAccess =
+  | { ok: true; worker: ResolvedWorker; companyId: string }
+  | { ok: false; status: number; body: { error: string; message: string } };
+
+/**
+ * Resolve the contractor for a contractor-document operation and authorize
+ * the caller. Company scope is derived from the target worker record and
+ * validated against the caller's own access — never trusted from the
+ * client. A client-supplied companyId is only permitted if it agrees with
+ * the contractor's actual company.
+ */
+async function resolveContractorAccess(
+  actorUserId: string,
+  workerId: string | undefined,
+  claimedCompanyId?: string | null,
+): Promise<ContractorAccess> {
+  if (!workerId) {
+    return { ok: false, status: 400, body: { error: "WORKER_ID_REQUIRED", message: "workerId is required." } };
+  }
+  const user = await storage.getUser(actorUserId);
+  if (!user) return { ok: false, status: 401, body: { error: "UNAUTHENTICATED", message: "Session user not found." } };
+  const worker = await storage.getWorker(workerId);
+  if (!worker) {
+    return { ok: false, status: 404, body: { error: "CONTRACTOR_NOT_FOUND", message: "Contractor not found." } };
+  }
+  if (worker.workerType !== "contractor") {
+    return { ok: false, status: 400, body: { error: "NOT_A_CONTRACTOR", message: "This worker is not an independent contractor." } };
+  }
+  if (!(await canAccessCompany(user, worker.companyId))) {
+    return { ok: false, status: 403, body: { error: "CROSS_TENANT", message: "You do not have access to this contractor." } };
+  }
+  if (claimedCompanyId && claimedCompanyId !== worker.companyId) {
+    return { ok: false, status: 400, body: { error: "COMPANY_MISMATCH", message: "companyId does not match the contractor's company." } };
+  }
+  return { ok: true, worker, companyId: worker.companyId };
+}
+
+/**
+ * Append a contractor-document lifecycle event to compliance_audit_events.
+ * `detail` must never contain tax data, SSNs/TINs, file URLs, or storage
+ * keys — only the event kind, canonical document type, record source, and
+ * the acting user id.
+ */
+async function recordContractorDocEvent(
+  companyId: string,
+  workerId: string,
+  detail: {
+    event: string;
+    documentType?: string | null;
+    source?: string | null;
+    docId?: string | null;
+    actorUserId?: string | null;
+    replaced?: boolean;
+    fileRemoved?: boolean;
+    fileRetained?: boolean;
+  },
+): Promise<void> {
+  try {
+    await db.execute(sql`
+      INSERT INTO compliance_audit_events
+        (company_id, worker_id, rule_type, entity_type, entity_id, severity, message, detail)
+      VALUES
+        (${companyId}, ${workerId}, 'contractor_document', 'worker', ${workerId}, 'info',
+         ${`contractor_document.${detail.event}`}, ${JSON.stringify(detail)}::jsonb)
+    `);
+  } catch (e) {
+    console.error("[ContractorDocs] audit write failed:", (e as Error).message);
+  }
+}
+
 function computeFileSha256(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");
@@ -245,16 +476,21 @@ function requireAuth<P extends ParamsDictionary>(req: Request<P>, res: Response,
  * Critical: platform_* roles are NOT tenant admins — they bypass tenant checks only
  * for platform-console operations. For tenant-scoped API routes they are treated as
  * super-admins so that platform support staff can assist tenants.
+ *
+ * platform_support and platform_implementation deliberately receive NO alias here —
+ * GET /api/platform/audit/roles documents both as `aliases: []` ("Read-only tenant
+ * data for support" / "Implementation/CS modules only"), and their actual read-only
+ * platform-console access is granted separately by requirePlatformRole()'s literal
+ * role allowlist, which does not consult this function. Aliasing them to "admin"/
+ * "manager" here silently handed them tenant-admin mutation reach on every
+ * requireRole()-gated route — see docs/saas-readiness/phase-0.5-security-convergence-report.md §2.6.
  */
-function expandRoleForGuard(role: string): string[] {
-  if (role === "platform_super_admin" || role === "platform_admin") {
+export function expandRoleForGuard(role: string): string[] {
+  if (role === "platform_super_admin" || role === "platform_admin" || role === "platform_owner") {
     return ["admin", "manager", "supervisor", role];
   }
   if (role === "system_admin") {
     return ["admin", "system_admin"];
-  }
-  if (role === "platform_support" || role === "platform_implementation") {
-    return ["admin", "manager", role];
   }
   if (role === "owner") {
     return ["admin", "owner"];
@@ -325,6 +561,42 @@ function requireSuperAdmin() {
   };
 }
 
+/**
+ * Narrower than requirePlatformRole(): admits only platform_super_admin and
+ * platform_admin. Use this — not requirePlatformRole() — for any
+ * platform-console operation that mutates tenant-owned state (commercial
+ * gates, provisioning lifecycle events, billing/subscription status).
+ * requirePlatformRole()'s broader set (platform_sales, platform_implementation,
+ * platform_support, platform_billing, platform_auditor) is appropriate for
+ * platform-console *reads* only — none of those five roles may trigger a
+ * tenant-mutating action through this helper, including platform_auditor
+ * (must remain read-only) and platform_billing (receives only the
+ * explicitly-scoped billing capabilities it already has elsewhere, not
+ * blanket commercial-gate/provisioning control).
+ *
+ * Centralizes what POST /api/feature-registry/activate and
+ * /bulk-activate already checked inline (batch 5 audit,
+ * docs/saas-readiness/phase-0.5-batch-5-cross-tenant-findings.md) so every
+ * platform-mutating route uses the same helper rather than re-deriving the
+ * same two-role list ad hoc.
+ */
+function requirePlatformAdminRole() {
+  const PLATFORM_ADMIN_ROLES = ["platform_super_admin", "platform_admin"];
+  return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+    if (!PLATFORM_ADMIN_ROLES.includes(user.role || "")) {
+      return res.status(403).json({ message: "Platform administrator access required" });
+    }
+    next();
+  };
+}
+
 function blockDemoWrites<P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) {
   if (req.session?.isDemo && req.method !== "GET") {
     return res.status(403).json({ message: "Demo mode is read-only. Sign up for a free trial to make changes." });
@@ -355,6 +627,10 @@ function isManagerRole(role: string | null | undefined): boolean {
 function isPlatformUser(role: string | null | undefined): boolean {
   if (!role) return false;
   return role.startsWith("platform_");
+}
+
+function isGlobalDiagnosticsRole(role: string | null | undefined): boolean {
+  return role === "platform_super_admin" || role === "platform_admin" || role === "platform_owner";
 }
 
 /**
@@ -1610,6 +1886,8 @@ export async function registerRoutes(
 
       req.session.userId = user.id;
       req.session.username = user.username;
+      // PR 1: record last sign-in (additive column; best-effort, never blocks login).
+      db.execute(sql`UPDATE users SET last_login_at = NOW() WHERE id = ${user.id}`).catch(() => {});
       let workerInfo = null;
       if (user.workerId) {
         const w = await storage.getWorker(user.workerId);
@@ -1667,6 +1945,8 @@ export async function registerRoutes(
       delete req.session.pendingMfaUserId;
       req.session.userId = user.id;
       req.session.username = user.username;
+      // PR 1: record last sign-in (additive column; best-effort, never blocks login).
+      db.execute(sql`UPDATE users SET last_login_at = NOW() WHERE id = ${user.id}`).catch(() => {});
       let workerInfo = null;
       if (user.workerId) {
         const w = await storage.getWorker(user.workerId);
@@ -1719,6 +1999,13 @@ export async function registerRoutes(
       if (err) return res.status(500).json({ message: "Logout failed" });
       const isProduction = process.env.NODE_ENV === "production";
 
+const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
+function isIndependentContractorWorker(worker: any): boolean {
+  const workerGroup = String(worker?.workerGroup || worker?.worker_group || "").toLowerCase();
+  const workerType = String(worker?.workerType || worker?.worker_type || "").toLowerCase();
+  return INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup) || workerType === "independent_contractor" || (workerType === "contractor" && INDEPENDENT_CONTRACTOR_GROUPS.has(workerGroup));
+}
+
 function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -1758,7 +2045,25 @@ function hashSigningToken(token: string): string {
     if (user.companyId) {
       tenantGate = await checkTenantGate(user.companyId);
     }
-    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate });
+    // PR 4 — additive, advisory only. `license` describes the structured license
+    // record (normalized status, trial window, plan) for badge display. It does
+    // NOT drive access — `tenantGate` above (unchanged) remains authoritative.
+    let license: { status: string; source: string; isLegacy: boolean; planType: string | null; trial: any } | null = null;
+    if (user.companyId) {
+      try {
+        const view = await resolveCompanyLicense(user.companyId);
+        license = {
+          status: view.resolved.effectiveStatus,
+          source: view.resolved.source,
+          isLegacy: view.resolved.isLegacy,
+          planType: view.resolved.planType,
+          trial: view.resolved.trial,
+        };
+      } catch (e) {
+        console.error("[auth/me] license resolve failed (non-fatal):", e);
+      }
+    }
+    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate, license });
   });
 
   // GET /api/auth/effective-access — debug endpoint showing a user's resolved company access (admin only)
@@ -1865,6 +2170,8 @@ function hashSigningToken(token: string): string {
       || req.path === "/analytics/event"
       || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
+      || req.path === "/account-invites/validate" || req.path === "/account-invites/accept"
+      || req.path === "/contractor-signup"
       || req.path.startsWith("/portal/")) {
       return next();
     }
@@ -1880,6 +2187,28 @@ function hashSigningToken(token: string): string {
       } catch {}
     }
     next();
+  });
+
+  // ── Vendor portal session confinement (PR 3) ─────────────────────────────
+  // A `vendor`-role account is a portal-only persona: it exists solely to
+  // submit invoices/documents for one vendor and see that vendor's own status.
+  // It has a company_id (its payer) but MUST NOT reach any other tenant API —
+  // several company-scoped GET routes are only requireAuth-gated and would
+  // otherwise return the employee roster, schedules, messages, etc. to a vendor
+  // (a vendor user has no workers.worker_id, so the per-route "self only"
+  // narrowing does not apply). Confine vendors to an explicit allowlist; every
+  // other /api path is 403. Non-vendor roles are unaffected.
+  const VENDOR_ALLOWED_API = [
+    "/vendor-portal/", "/auth/", "/account-invites/", "/notifications", "/feedback",
+  ];
+  app.use("/api", (req, res, next) => {
+    const role = (req as any).user?.role;
+    if (role !== "vendor") return next();
+    const p = req.path.split("?")[0];
+    if (VENDOR_ALLOWED_API.some(a => a.endsWith("/") ? p.startsWith(a) : p === a || p.startsWith(a + "/"))) {
+      return next();
+    }
+    return res.status(403).json({ message: "Vendor portal accounts can only access the vendor portal." });
   });
 
   app.get("/api/payroll-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
@@ -2105,25 +2434,40 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/companies/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Load the authoritative company row first — authorization and the timezone-audit
+      // comparison below both need it, and neither may run against anything unverified.
+      const existing = await storage.getCompany(req.params.id as string);
+      if (!existing) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      // Tenant admins/managers may only modify their own company. Platform-scoped roles
+      // (platform_super_admin, platform_admin, etc.) are never company-scoped and are not
+      // restricted here — the same platform-vs-tenant distinction already applied on
+      // GET /api/companies/:id (server/routes.ts:2095). No hardcoded company id or
+      // per-role exception is added beyond that existing distinction.
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && actingUser!.companyId !== req.params.id) {
+        return res.status(403).json({ message: "Forbidden: cannot modify a different company's record" });
+      }
+
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
       if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
       if (data.timezoneConfirmed !== undefined) data.timezoneConfirmed = data.timezoneConfirmed === true || data.timezoneConfirmed === "true";
       // Audit timezone changes — these affect punch dates, OT, and payroll grouping
-      if (data.timezone) {
-        const existing = await storage.getCompany(req.params.id as string);
-        if (existing && existing.timezone !== data.timezone) {
-          await writeAuditLog({
-            actorUserId: req.session.userId!,
-            targetResource: `company:${req.params.id}`,
-            changeType: "timezone_change",
-            beforeValue: existing.timezone || null,
-            afterValue: data.timezone,
-            note: `Timezone changed on company "${existing.name}". Affects: punch date assignment, overtime calculation, schedule comparisons, payroll period grouping.`,
-            companyId: req.params.id as string,
-          });
-        }
+      if (data.timezone && existing.timezone !== data.timezone) {
+        await writeAuditLog({
+          actorUserId: req.session.userId!,
+          targetResource: `company:${req.params.id}`,
+          changeType: "timezone_change",
+          beforeValue: existing.timezone || null,
+          afterValue: data.timezone,
+          note: `Timezone changed on company "${existing.name}". Affects: punch date assignment, overtime calculation, schedule comparisons, payroll period grouping.`,
+          companyId: req.params.id as string,
+        });
       }
       const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
@@ -2179,6 +2523,29 @@ function hashSigningToken(token: string): string {
     } catch (error) {
       console.error("Failed to fetch workers:", error);
       res.status(500).json({ message: "Failed to fetch workers" });
+    }
+  });
+
+  // Batch account/access status for a company's workers (one query), so the
+  // Employee list can show a status chip per row without an N+1 fetch.
+  // Registered before "/api/workers/:id" so "accounts" is not captured as an id.
+  app.get("/api/workers/accounts", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const qCompany = queryStr(req.query.companyId);
+      const companyId = isPlatformUser(actingUser?.role)
+        ? (qCompany && qCompany !== "all" ? qCompany : null)
+        : (actingUser?.companyId || null);
+      if (!companyId) return res.json({});
+      const map = await loadWorkerAccountStates(companyId);
+      const out: Record<string, { status: string; username: string | null; inviteId: string | null; inviteEmail: string | null }> = {};
+      for (const [workerId, s] of map) {
+        out[workerId] = { status: s.status, username: s.username, inviteId: s.inviteId, inviteEmail: s.inviteEmail };
+      }
+      res.json(out);
+    } catch (e) {
+      console.error("GET /api/workers/accounts failed:", e);
+      res.status(500).json({ message: "Failed to load account statuses" });
     }
   });
 
@@ -2246,23 +2613,36 @@ function hashSigningToken(token: string): string {
       if (isTenant && req.body.companyId !== actingUser!.companyId) {
         return res.status(403).json({ message: "Forbidden: cannot create a worker in a different company" });
       }
-      if (req.body.contractorType && !["hourly", "invoice"].includes(req.body.contractorType)) {
+      if (req.body.workerType && !isValidWorkerType(req.body.workerType)) {
+        return res.status(400).json({ message: "Worker type must be 'employee' or 'contractor'" });
+      }
+      if (req.body.contractorType && !isValidContractorType(req.body.contractorType)) {
         return res.status(400).json({ message: "Contractor type must be 'hourly' or 'invoice'" });
       }
       if (req.body.workerType === "employee") {
         req.body.contractorType = null;
       }
-      // Auto-generate employee number if not provided
+      // SaaS identity/onboarding (PR 1): optional one-step account provisioning.
+      // `account` is not a workers column — pull it off the body before the insert.
+      const accountReq: { mode?: string; email?: string; role?: string } | undefined =
+        req.body.account && typeof req.body.account === "object" ? req.body.account : undefined;
+      delete req.body.account;
+      const payRateResult = normalizeWorkerPayRate(req.body);
+      if (!payRateResult.ok) {
+        return res.status(400).json({ message: payRateResult.message });
+      }
+      req.body.payRate = payRateResult.payRate;
+      // Auto-generate employee number if not provided. Scoped to the target
+      // company (companyId is required above) — never load every tenant's
+      // workers; reduce (not a Math.max variadic spread) avoids a RangeError.
       if (!req.body.employeeNumber) {
-        const allWorkers = await storage.getWorkers();
-        const companyWorkers = req.body.companyId
-          ? allWorkers.filter((w: any) => w.companyId === req.body.companyId)
-          : allWorkers;
-        const existing = companyWorkers
-          .map((w: any) => parseInt(w.employeeNumber || "0", 10))
-          .filter((n: number) => !isNaN(n) && n > 0);
-        const next = existing.length > 0 ? Math.max(...existing) + 1 : 1001;
-        req.body.employeeNumber = String(next);
+        const companyWorkers = await storage.getWorkers(req.body.companyId);
+        const highest = companyWorkers.reduce((max: number, w: any) => {
+          const n = parseInt(w.employeeNumber || "0", 10);
+          return !isNaN(n) && n > max ? n : max;
+        }, 0);
+        const nextNum = highest > 0 ? highest + 1 : 1001;
+        req.body.employeeNumber = String(nextNum);
       }
       const worker = await storage.createWorker(req.body);
       await writeAuditLog({
@@ -2270,26 +2650,590 @@ function hashSigningToken(token: string): string {
         afterValue: `${worker.firstName} ${worker.lastName} (${worker.employeeNumber})`,
         note: `Worker created`, companyId: worker.companyId, targetUserId: worker.id,
       });
-      res.status(201).json(worker);
-    } catch (error) {
+
+      // ── One-step account provisioning (PR 1) ─────────────────────────────
+      // Never fails the worker creation — an employee without a login is valid.
+      // The response carries an `account` block describing what happened so the
+      // UI can toast it. No raw password is ever accepted here; 'invite' sends a
+      // sign-up link, 'link' binds an existing verified account.
+      let account: any = { mode: accountReq?.mode || "none", status: "no_login" };
+      try {
+        const relKind = worker.workerType === "contractor" ? "contractor" : "employee";
+        const grantRole = accountReq?.role === "manager" ? "manager" : (relKind === "contractor" ? "contractor" : "employee");
+        const targetEmail = normalizeEmail(accountReq?.email || worker.email || worker.workEmail);
+
+        if (accountReq?.mode === "invite") {
+          if (!targetEmail) {
+            account = { mode: "invite", status: "skipped", reason: "No email address — add one to send an invite." };
+          } else {
+            const inv = await createOrRefreshInvite({
+              companyId: worker.companyId, email: targetEmail, relationshipKind: relKind,
+              relationshipId: worker.id, role: grantRole, invitedByUserId: req.session.userId!,
+            });
+            await sendAccountInviteEmail(req, targetEmail, `${worker.firstName} ${worker.lastName}`.trim(), inv.rawToken).catch(() => {});
+            await writeAuditLog({
+              actorUserId: req.session.userId!, targetResource: "account_invites", changeType: "account_invite_sent",
+              afterValue: targetEmail, note: `Invite for ${relKind} ${worker.id}`, companyId: worker.companyId, targetUserId: worker.id,
+            });
+            account = { mode: "invite", status: "invited", email: targetEmail, expiresAt: inv.expiresAt };
+          }
+        } else if (accountReq?.mode === "link") {
+          const lookup = await findLinkableUserByEmail(targetEmail, worker.companyId);
+          if (lookup.outcome === "none") {
+            account = { mode: "link", status: "skipped", reason: "No existing account in this company matches that email." };
+          } else if (lookup.outcome === "ambiguous") {
+            account = { mode: "link", status: "skipped", reason: `${lookup.count} accounts share that email — resolve manually.` };
+          } else {
+            const conflict = lookup.alreadyLinkedWorkerId && lookup.alreadyLinkedWorkerId !== worker.id;
+            await upsertIdentityLink({
+              userId: lookup.userId, subjectType: "worker", subjectId: worker.id, companyId: worker.companyId,
+              linkStatus: conflict ? "pending_review" : "active", verifiedEmail: targetEmail,
+              linkedByUserId: req.session.userId!,
+              reviewReason: conflict ? `Account already linked to worker ${lookup.alreadyLinkedWorkerId}` : null,
+            });
+            if (!conflict) {
+              await db.execute(sql`UPDATE users SET worker_id = ${worker.id} WHERE id = ${lookup.userId} AND worker_id IS NULL`);
+            }
+            account = conflict
+              ? { mode: "link", status: "review", reason: "That account is already linked to another employee — flagged for review." }
+              : { mode: "link", status: "linked", username: lookup.username };
+          }
+        }
+      } catch (acctErr) {
+        console.error("[worker account provisioning]", acctErr);
+        account = { mode: accountReq?.mode || "none", status: "error", reason: "Account step failed; the employee was still created." };
+      }
+
+      res.status(201).json({ ...worker, account });
+    } catch (error: any) {
       console.error("Failed to create worker:", error);
+      if (error?.code === "23502" && error?.column) {
+        // Postgres not-null violation — surface which field was missing
+        // instead of a generic failure, without leaking query/schema detail.
+        return res.status(400).json({ message: `Missing required field: ${error.column}` });
+      }
       res.status(500).json({ message: "Failed to create worker" });
     }
   });
 
+  // ── Worker account/access (PR 1 — SaaS identity/onboarding) ────────────────
+  // Shared company-scope guard for the worker-account routes: loads the worker
+  // and, for a tenant user, refuses any worker outside their own company.
+  async function loadWorkerForAccountRoute(req: Request, res: Response): Promise<{ worker: any; companyId: string } | null> {
+    const worker = await storage.getWorker(req.params.id as string);
+    if (!worker) { res.status(404).json({ message: "Worker not found" }); return null; }
+    const actingUser = await storage.getUser(req.session.userId!);
+    const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+    if (isTenant && worker.companyId !== actingUser!.companyId) {
+      res.status(403).json({ message: "Forbidden" }); return null;
+    }
+    return { worker, companyId: worker.companyId };
+  }
+
+  app.get("/api/workers/:id/account", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const ctx = await loadWorkerForAccountRoute(req, res);
+      if (!ctx) return;
+      const state = await loadWorkerAccountState(ctx.worker.id, ctx.companyId);
+      res.json({
+        status: state.status,
+        userId: state.userId,
+        username: state.username,
+        inviteId: state.inviteId,
+        inviteEmail: state.inviteEmail,
+        inviteExpiresAt: state.inviteExpiresAt,
+        canInviteEmail: normalizeEmail(ctx.worker.email || ctx.worker.workEmail) || null,
+      });
+    } catch (e) {
+      console.error("GET /api/workers/:id/account failed:", e);
+      res.status(500).json({ message: "Failed to load account status" });
+    }
+  });
+
+  app.post("/api/workers/:id/resend-invite", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const ctx = await loadWorkerForAccountRoute(req, res);
+      if (!ctx) return;
+      const state = await loadWorkerAccountState(ctx.worker.id, ctx.companyId);
+      if (state.status === "active" || state.status === "suspended") {
+        return res.status(409).json({ message: "This employee already has a login account." });
+      }
+      const email = normalizeEmail(req.body?.email || state.inviteEmail || ctx.worker.email || ctx.worker.workEmail);
+      if (!email) return res.status(400).json({ message: "Add an email address before sending an invite." });
+      const relKind = ctx.worker.workerType === "contractor" ? "contractor" : "employee";
+      const inv = await createOrRefreshInvite({
+        companyId: ctx.companyId, email, relationshipKind: relKind, relationshipId: ctx.worker.id,
+        role: relKind === "contractor" ? "contractor" : "employee", invitedByUserId: req.session.userId!,
+      });
+      await sendAccountInviteEmail(req, email, `${ctx.worker.firstName} ${ctx.worker.lastName}`.trim(), inv.rawToken).catch(() => {});
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "account_invites", changeType: "account_invite_resent",
+        afterValue: email, note: `Resent invite for ${relKind} ${ctx.worker.id}`, companyId: ctx.companyId, targetUserId: ctx.worker.id,
+      });
+      res.json({ status: "invited", email, expiresAt: inv.expiresAt });
+    } catch (e) {
+      console.error("POST /api/workers/:id/resend-invite failed:", e);
+      res.status(500).json({ message: "Failed to resend invite" });
+    }
+  });
+
+  app.post("/api/workers/:id/account/:action", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const action = req.params.action;
+      if (action !== "disable" && action !== "enable") return res.status(400).json({ message: "Unknown action" });
+      const ctx = await loadWorkerForAccountRoute(req, res);
+      if (!ctx) return;
+      const result = await setWorkerAccountEnabled(ctx.worker.id, ctx.companyId, action === "enable");
+      if (result === null) return res.status(409).json({ message: "This employee has no login account." });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "users", changeType: action === "enable" ? "account_access_enabled" : "account_access_disabled",
+        afterValue: result, note: `Worker ${ctx.worker.id}`, companyId: ctx.companyId, targetUserId: ctx.worker.id,
+      });
+      res.json({ status: result });
+    } catch (e) {
+      console.error("POST /api/workers/:id/account/:action failed:", e);
+      res.status(500).json({ message: "Failed to change account access" });
+    }
+  });
+
+  // ── Account invites — public accept flow (PR 1) ───────────────────────────
+  // No auth: the raw token IS the credential. Never reveals whether an email or
+  // company exists beyond what the token itself unlocks.
+  app.get("/api/account-invites/validate", async (req, res) => {
+    try {
+      const token = queryStr(req.query.token);
+      const invite = token ? await getLiveInviteByToken(token) : null;
+      if (!invite) return res.status(404).json({ valid: false, message: "This invite link is invalid or has expired." });
+      let companyName: string | null = null;
+      if (invite.companyId) {
+        const c = await storage.getCompany(invite.companyId).catch(() => undefined);
+        companyName = c?.name ?? null;
+      }
+      res.json({ valid: true, email: invite.email, relationshipKind: invite.relationshipKind, companyName });
+    } catch (e) {
+      console.error("GET /api/account-invites/validate failed:", e);
+      res.status(500).json({ valid: false, message: "Could not validate the invite." });
+    }
+  });
+
+  app.post("/api/account-invites/accept", async (req, res) => {
+    try {
+      const { token, username, password } = req.body || {};
+      if (!token || !username || !password) {
+        return res.status(400).json({ message: "Token, username, and password are required." });
+      }
+      if (String(password).length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters." });
+      }
+      if (!/^[a-zA-Z0-9._-]{3,40}$/.test(String(username))) {
+        return res.status(400).json({ message: "Username must be 3–40 characters (letters, numbers, . _ -)." });
+      }
+      const hashed = await bcrypt.hash(String(password), 10);
+      const result = await acceptInviteWithUser(String(token), String(username), hashed);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      // Establish the session immediately so the invitee lands signed in.
+      req.session.userId = result.userId;
+      (req.session as any).username = username;
+      req.session.save(() => {
+        res.status(201).json({ id: result.userId, username, companyId: result.companyId, redirect: "/app" });
+      });
+    } catch (e) {
+      console.error("POST /api/account-invites/accept failed:", e);
+      res.status(500).json({ message: "Could not complete sign-up." });
+    }
+  });
+
+  // ── Contractor access requests — PR 2 ─────────────────────────────────────
+  // PUBLIC contractor sign-up: create (or coalesce onto) a `pending` request.
+  // Never creates a login account. Allowlisted in the global /api auth-gate as
+  // the exact path "/contractor-signup". IP abuse-guarded + email-dedup'd.
+  // Returns only a generic acknowledgement — no ids, no "exists" signal.
+  app.post("/api/contractor-signup", async (req, res) => {
+    try {
+      const ip = ((req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "").split(",")[0].trim();
+      if (isRateLimited(ip)) {
+        return res.status(429).json({ message: "Too many requests. Please try again later." });
+      }
+      const parsed = normalizeAccessRequestInput(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      await submitAccessRequest(parsed.value, { sourceIp: ip || null, userAgent: (req.get("user-agent") || "").slice(0, 400) || null });
+      res.status(202).json({ status: "received", message: "Thanks — your request has been submitted. A company administrator will review it." });
+    } catch (e) {
+      console.error("POST /api/contractor-signup failed:", e);
+      res.status(500).json({ message: "Could not submit your request. Please try again." });
+    }
+  });
+
+  // ADMIN review queue (company/tenant-scoped).
+  app.get("/api/contractor-access-requests", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = actingUser?.companyId || null;
+      if (!companyId) return res.json([]); // platform users manage per-company elsewhere
+      const status = queryStr(req.query.status);
+      const rows = await listAccessRequestsForCompany(companyId, status);
+      // Strip nothing sensitive here — these are already tenant-scoped admin rows;
+      // but source_ip / user_agent are intentionally not projected by mapRow.
+      res.json(rows);
+    } catch (e) {
+      console.error("GET /api/contractor-access-requests failed:", e);
+      res.status(500).json({ message: "Failed to load access requests" });
+    }
+  });
+
+  app.post("/api/contractor-access-requests/:id/approve", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = actingUser?.companyId;
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to approve requests." });
+      const result = await approveAccessRequest(req.params.id as string, companyId, req.session.userId!);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      if (result.invite) {
+        const name = `${result.email}`;
+        await sendAccountInviteEmail(req, result.email, name, result.invite.rawToken).catch(() => {});
+      }
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "contractor_access_requests", changeType: "contractor_access_request_approved",
+        afterValue: `${result.outcome} · ${result.email}`, note: result.reviewNote || `worker ${result.workerId}`,
+        companyId, targetUserId: result.workerId,
+      });
+      // Never return the raw invite token.
+      res.json({ outcome: result.outcome, workerId: result.workerId, needsReview: result.outcome === "needs_review", reviewNote: result.reviewNote });
+    } catch (e) {
+      console.error("POST /api/contractor-access-requests/:id/approve failed:", e);
+      res.status(500).json({ message: "Failed to approve request" });
+    }
+  });
+
+  app.post("/api/contractor-access-requests/:id/reject", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = actingUser?.companyId;
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to reject requests." });
+      const reason = (typeof req.body?.reason === "string" ? req.body.reason : "").trim().slice(0, 500) || "Not approved";
+      const result = await rejectAccessRequest(req.params.id as string, companyId, req.session.userId!, reason);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "contractor_access_requests", changeType: "contractor_access_request_rejected",
+        afterValue: reason, companyId,
+      });
+      res.json({ status: "rejected" });
+    } catch (e) {
+      console.error("POST /api/contractor-access-requests/:id/reject failed:", e);
+      res.status(500).json({ message: "Failed to reject request" });
+    }
+  });
+
+  // ── Vendor portal — PR 3 ────────────────────────────────────────────────────
+  // Admin/manager vendor management + a logged-in vendor's own portal. Vendor
+  // login reuses the PR 1 account_invites + identity_links system
+  // (relationship_kind='vendor' / subject_type='vendor'); NO new public endpoint
+  // and NO auth-gate allowlist entry — vendors accept via the existing
+  // /api/account-invites/accept. A review (approve/reject/status) sets a status
+  // and nothing else: no expense, expense_payment, check, contractor_payment, or
+  // any ledger row is created in PR 3.
+
+  const VENDOR_DOC_MAX_BYTES = 10 * 1024 * 1024;
+
+  /** Resolve (and require) the single vendor the acting user is bound to. 403 otherwise. */
+  async function requireVendorContext(req: any, res: Response): Promise<VendorContext | null> {
+    const ctx = await resolveVendorForUser(req.session.userId as string);
+    if (!ctx) {
+      res.status(403).json({ message: "This area is for vendor portal accounts." });
+      return null;
+    }
+    return ctx;
+  }
+
+  async function actingCompanyId(req: any): Promise<string | null> {
+    const u = await storage.getUser(req.session.userId!);
+    return u?.companyId || null;
+  }
+
+  // -- Admin/manager: vendor management (tenant-scoped) --
+  app.get("/api/vendors", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.json([]);
+      res.json(await listVendorsForCompany(companyId));
+    } catch (e) {
+      console.error("GET /api/vendors failed:", e);
+      res.status(500).json({ message: "Failed to load vendors" });
+    }
+  });
+
+  app.get("/api/vendors/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const vendor = await getVendorForCompany(req.params.id as string, companyId);
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      const all = await listVendorsForCompany(companyId);
+      const withPortal = all.find(v => v.id === vendor.id);
+      res.json(withPortal || vendor);
+    } catch (e) {
+      console.error("GET /api/vendors/:id failed:", e);
+      res.status(500).json({ message: "Failed to load vendor" });
+    }
+  });
+
+  app.post("/api/vendors", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to create vendors." });
+      const parsed = normalizeVendorInput(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const vendor = await createVendor(companyId, parsed.value, req.session.userId!);
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors", changeType: "vendor_created",
+        afterValue: vendor.businessName, companyId,
+      });
+      res.status(201).json(vendor);
+    } catch (e) {
+      console.error("POST /api/vendors failed:", e);
+      res.status(500).json({ message: "Failed to create vendor" });
+    }
+  });
+
+  app.patch("/api/vendors/:id", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const parsed = normalizeVendorPatch(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const vendor = await updateVendorContact(req.params.id as string, companyId, parsed.value);
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors", changeType: "vendor_updated",
+        afterValue: Object.keys(parsed.value).join(","), companyId,
+      });
+      res.json(vendor);
+    } catch (e) {
+      console.error("PATCH /api/vendors/:id failed:", e);
+      res.status(500).json({ message: "Failed to update vendor" });
+    }
+  });
+
+  app.post("/api/vendors/:id/status", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const enabled = req.body?.enabled === true || req.body?.enabled === "true";
+      const vendor = await setVendorAccessEnabled(req.params.id as string, companyId, enabled);
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors",
+        changeType: enabled ? "vendor_access_enabled" : "vendor_access_disabled",
+        afterValue: vendor.businessName, companyId,
+      });
+      res.json(vendor);
+    } catch (e) {
+      console.error("POST /api/vendors/:id/status failed:", e);
+      res.status(500).json({ message: "Failed to update vendor access" });
+    }
+  });
+
+  app.post("/api/vendors/:id/invite", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required to invite vendors." });
+      const result = await inviteVendorUser(req.params.id as string, companyId, req.session.userId!);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      const vendor = await getVendorForCompany(req.params.id as string, companyId);
+      await sendAccountInviteEmail(req, result.email, vendor?.contactName || vendor?.businessName || "there", result.rawToken).catch(() => {});
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendors", changeType: "vendor_user_invited",
+        afterValue: result.email, companyId,
+      });
+      // Never return the raw invite token.
+      res.json({ status: "invited", email: result.email });
+    } catch (e) {
+      console.error("POST /api/vendors/:id/invite failed:", e);
+      res.status(500).json({ message: "Failed to invite vendor user" });
+    }
+  });
+
+  // -- Admin/manager: review vendor submissions (status only) --
+  app.get("/api/vendor-submissions", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.json({ invoices: [], documents: [] });
+      res.json(await listPendingVendorSubmissionsForCompany(companyId));
+    } catch (e) {
+      console.error("GET /api/vendor-submissions failed:", e);
+      res.status(500).json({ message: "Failed to load vendor submissions" });
+    }
+  });
+
+  app.post("/api/vendor-invoices/:id/review", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const action = String(req.body?.action || "");
+      const status = action === "approve" ? "approved" : action === "reject" ? "rejected"
+        : action === "status" ? String(req.body?.status || "") : "";
+      const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 1000) || null : null;
+      const result = await reviewVendorInvoice(req.params.id as string, companyId, req.session.userId!, status, note);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendor_invoices",
+        changeType: `vendor_invoice_${status}`, afterValue: result.row?.id || req.params.id, companyId,
+      });
+      res.json(result.row);
+    } catch (e) {
+      console.error("POST /api/vendor-invoices/:id/review failed:", e);
+      res.status(500).json({ message: "Failed to review invoice" });
+    }
+  });
+
+  app.post("/api/vendor-documents/:id/review", requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await actingCompanyId(req);
+      if (!companyId) return res.status(403).json({ message: "A company-scoped admin is required." });
+      const action = String(req.body?.action || "");
+      const status = action === "approve" ? "approved" : action === "reject" ? "rejected" : "received";
+      const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 1000) || null : null;
+      const result = await reviewVendorDocument(req.params.id as string, companyId, req.session.userId!, status, note);
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "vendor_documents",
+        changeType: `vendor_document_${status}`, afterValue: req.params.id, companyId,
+      });
+      res.json(result.row);
+    } catch (e) {
+      console.error("POST /api/vendor-documents/:id/review failed:", e);
+      res.status(500).json({ message: "Failed to review document" });
+    }
+  });
+
+  // -- Logged-in vendor: own portal (vendor-scoped, never cross-vendor) --
+  app.get("/api/vendor-portal/profile", requireAuth, async (req: any, res) => {
+    try {
+      const ctx = await requireVendorContext(req, res);
+      if (!ctx) return;
+      const vendor = await getVendorForCompany(ctx.vendorId, ctx.companyId);
+      if (!vendor) return res.status(404).json({ message: "Vendor profile not found" });
+      const company = await storage.getCompany(ctx.companyId);
+      res.json({ vendor, company: company ? { id: company.id, name: company.name } : null });
+    } catch (e) {
+      console.error("GET /api/vendor-portal/profile failed:", e);
+      res.status(500).json({ message: "Failed to load profile" });
+    }
+  });
+
+  app.patch("/api/vendor-portal/profile", requireAuth, blockDemoWrites, async (req: any, res) => {
+    try {
+      const ctx = await requireVendorContext(req, res);
+      if (!ctx) return;
+      const parsed = normalizeVendorPatch(req.body || {});
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      // A vendor can edit their own contact fields but not their business name.
+      delete parsed.value.businessName;
+      const vendor = await updateVendorContact(ctx.vendorId, ctx.companyId, parsed.value);
+      res.json(vendor);
+    } catch (e) {
+      console.error("PATCH /api/vendor-portal/profile failed:", e);
+      res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
+  app.get("/api/vendor-portal/submissions", requireAuth, async (req: any, res) => {
+    try {
+      const ctx = await requireVendorContext(req, res);
+      if (!ctx) return;
+      res.json(await listSubmissionsForVendor(ctx));
+    } catch (e) {
+      console.error("GET /api/vendor-portal/submissions failed:", e);
+      res.status(500).json({ message: "Failed to load submissions" });
+    }
+  });
+
+  app.post(
+    "/api/vendor-portal/invoices",
+    requireAuth,
+    blockDemoWrites,
+    singleFileUpload(documentUpload, "file", { maxBytes: VENDOR_DOC_MAX_BYTES }),
+    async (req: any, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      try {
+        const ctx = await requireVendorContext(req, res);
+        if (!ctx) { await discardUploadedFile(file); return; }
+        const parsed = normalizeVendorInvoiceInput(req.body || {});
+        if (!parsed.ok) { await discardUploadedFile(file); return res.status(400).json({ message: parsed.message }); }
+        const stored = file
+          ? { fileName: file.originalname, fileUrl: `/uploads/${file.filename}`, fileSize: file.size, mimeType: file.mimetype }
+          : null;
+        let row;
+        try {
+          row = await createVendorInvoiceSubmission(ctx, req.session.userId as string, parsed.value, stored);
+        } catch (dbErr) {
+          await discardUploadedFile(file);
+          throw dbErr;
+        }
+        res.status(201).json({ id: row.id, status: row.status });
+      } catch (e) {
+        console.error("POST /api/vendor-portal/invoices failed:", e);
+        res.status(500).json({ message: "Failed to submit invoice" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/vendor-portal/documents",
+    requireAuth,
+    blockDemoWrites,
+    singleFileUpload(documentUpload, "file", { maxBytes: VENDOR_DOC_MAX_BYTES }),
+    async (req: any, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      try {
+        const ctx = await requireVendorContext(req, res);
+        if (!ctx) { await discardUploadedFile(file); return; }
+        if (!file) return res.status(400).json({ error: "NO_FILE", message: "Attach a file to upload." });
+        const documentType = normalizeVendorDocumentType(req.body?.documentType);
+        const notes = typeof req.body?.notes === "string" ? req.body.notes.trim().slice(0, 2000) || null : null;
+        let row;
+        try {
+          row = await createVendorDocumentSubmission(ctx, req.session.userId as string, documentType, notes, {
+            fileName: file.originalname, fileUrl: `/uploads/${file.filename}`, fileSize: file.size, mimeType: file.mimetype,
+          });
+        } catch (dbErr) {
+          await discardUploadedFile(file);
+          throw dbErr;
+        }
+        res.status(201).json({ id: row.id, documentType: row.document_type });
+      } catch (e) {
+        console.error("POST /api/vendor-portal/documents failed:", e);
+        res.status(500).json({ message: "Failed to upload document" });
+      }
+    },
+  );
+
   app.patch("/api/workers/:id", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
+      // Load the authoritative worker first — every check below (company
+      // ownership, and the companyId-immutability guard) is against this
+      // row, never against anything the client submitted.
+      const existing = await storage.getWorker(req.params.id as string);
+      if (!existing) return res.status(404).json({ message: "Worker not found" });
+
       // Company ownership guard: tenant users may only update workers in their own company
       const actingUser = await storage.getUser(req.session.userId!);
       const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-      if (isTenant) {
-        const existing = await storage.getWorker(req.params.id as string);
-        if (!existing) return res.status(404).json({ message: "Worker not found" });
-        if (existing.companyId !== actingUser!.companyId) {
-          return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
-        }
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
       }
-      const worker = await storage.updateWorker(req.params.id as string, req.body);
+
+      // companyId is immutable through this general-purpose update endpoint, for every
+      // caller (no platform-owner or hardcoded-tenant exception) — reassigning a worker
+      // to a different tenant is a distinct, explicit, audited platform-console operation,
+      // never a side effect of an ordinary field edit. Reject before any mutation if the
+      // request tries to change it; an absent or matching companyId is a no-op.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a worker's company cannot be changed through this endpoint" });
+      }
+      const updateData = { ...req.body, companyId: existing.companyId };
+
+      const worker = await storage.updateWorker(req.params.id as string, updateData);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
@@ -5667,6 +6611,16 @@ function hashSigningToken(token: string): string {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      // Tenant authorization before any aggregation. A foreign-tenant run id returns the
+      // same 404 as a nonexistent one — matching the already-fixed
+      // GET /api/workers/:id/ytd-taxes pattern (no existence oracle).
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && run.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Payroll run not found" });
+      }
+
       const summary = await storage.getPayrollSummary(run.id);
       if (!summary) return res.status(404).json({ message: "Payroll summary not found" });
       res.json(summary);
@@ -7668,6 +8622,19 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/companies/:id/tax-liability", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Load the target company first and authorize against its persisted id
+      // before aggregating any tax data — never trust req.params.id as
+      // pre-authorized just because it's a route param. A genuinely
+      // nonexistent company id falls through unchanged (storage.getCompanyTaxLiability
+      // returns [], same as before); a company that exists but isn't the
+      // caller's own is rejected before any liability data is fetched.
+      const targetCompany = await storage.getCompany(req.params.id);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (targetCompany && isTenant && targetCompany.id !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: company belongs to a different tenant" });
+      }
+
       const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
       const year = new Date().getFullYear();
       const start = startDate || `${year}-01-01`;
@@ -7687,6 +8654,16 @@ function hashSigningToken(token: string): string {
    */
   app.get("/api/companies/:id/quarterly-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Same authoritative ownership guard as GET /api/companies/:id/tax-liability
+      // above — a nonexistent company id falls through unchanged, a real
+      // foreign-tenant one is rejected before any payroll run is fetched.
+      const targetCompany = await storage.getCompany(req.params.id);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (targetCompany && isTenant && targetCompany.id !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: company belongs to a different tenant" });
+      }
+
       const { year, quarter } = req.query as { year?: string; quarter?: string };
       const targetYear = parseInt(year || String(new Date().getFullYear()), 10);
       const quarterMonths: Record<string, number[]> = { Q1: [0,1,2], Q2: [3,4,5], Q3: [6,7,8], Q4: [9,10,11] };
@@ -7757,11 +8734,25 @@ function hashSigningToken(token: string): string {
    * Returns per-employee YTD tax totals from stored payroll_item_taxes.
    * Used by W-2 and Employee Earnings reports.
    */
-  app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
+  app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const year = parseInt(queryStr(req.query.year) || String(new Date().getFullYear()), 10);
       const worker = await storage.getWorker(req.params.id);
-      const ytd = await storage.getEmployeeYTD(req.params.id, year, worker?.companyId ?? undefined);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+
+      // Tenant authorization before any payroll aggregation. A foreign-tenant worker id
+      // returns the exact same 404 as a nonexistent one — this endpoint must not let a
+      // caller distinguish "no such worker" from "exists, but not yours."
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && worker.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Worker not found" });
+      }
+
+      // getEmployeeYTD scopes its aggregation by both workerId and this authoritative
+      // companyId — never a client-supplied value — so even a worker/payroll-run id
+      // collision across tenants can't pull another company's totals into the result.
+      const ytd = await storage.getEmployeeYTD(req.params.id, year, worker.companyId ?? undefined);
       res.json(ytd);
     } catch (error) {
       console.error(error);
@@ -7777,6 +8768,20 @@ function hashSigningToken(token: string): string {
   app.get("/api/companies/:id/ytd-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const year = parseInt(queryStr(req.query.year) || String(new Date().getFullYear()), 10);
+
+      // Load the target company first and authorize against its persisted id
+      // before aggregating any worker/payroll data — never trust req.params.id
+      // as pre-authorized just because it's a route param. A genuinely
+      // nonexistent company id falls through unchanged (storage.getWorkers
+      // returns an empty list, same as before); a company that exists but
+      // isn't the caller's own is rejected before any worker is fetched.
+      const targetCompany = await storage.getCompany(req.params.id);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (targetCompany && isTenant && targetCompany.id !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: company belongs to a different tenant" });
+      }
+
       const workers = await storage.getWorkers(req.params.id);
       const results = await Promise.all(
         workers.map(async (w) => {
@@ -8154,6 +9159,14 @@ function hashSigningToken(token: string): string {
       if (isTenant && existing.companyId !== actingUser!.companyId) {
         return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
       }
+      // companyId is immutable through this general-purpose update endpoint, for every
+      // caller (no platform-owner exception) — reassigning a payroll run to a different
+      // tenant is a distinct, explicit operation, never a side effect of an ordinary field
+      // edit. Reject before any mutation if the request tries to change it; an absent or
+      // matching companyId is a no-op.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a payroll run's company cannot be changed through this endpoint" });
+      }
       // ── Guard: locked runs + paid/submitted runs — only ACH metadata fields allowed ──
       // A run is immutable once locked OR once real money has moved (paid/submitted).
       // Platform super-admins bypass this check (they use the dedicated unlock endpoint).
@@ -8170,7 +9183,8 @@ function hashSigningToken(token: string): string {
           return res.status(409).json({ message: reason, blockedFields: attempted });
         }
       }
-      const run = await storage.updatePayrollRun(req.params.id as string, req.body);
+      const updateData = { ...req.body, companyId: existing.companyId };
+      const run = await storage.updatePayrollRun(req.params.id as string, updateData);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
       res.json(run);
     } catch (error) {
@@ -9636,7 +10650,14 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/worker-memberships", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = queryStr(req.query.companyId);
+      // All non-platform users are force-scoped to their own company — this
+      // prevents both a ?companyId=<other_company> bypass and the unfiltered
+      // every-company result of omitting companyId entirely.
+      if (!isPlatformUser(user?.role) && user?.companyId) {
+        companyId = user.companyId;
+      }
       const memberships = await storage.getWorkerMemberships(companyId);
       res.json(memberships);
     } catch (error) {
@@ -9645,8 +10666,12 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.post("/api/worker-memberships", requireAuth, async (req, res) => {
+  app.post("/api/worker-memberships", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && req.body.companyId !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: cannot create a membership for a different company" });
+      }
       const membership = await storage.createWorkerMembership(req.body);
       res.status(201).json(membership);
     } catch (error) {
@@ -9655,9 +10680,24 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.patch("/api/worker-memberships/:id", requireAuth, async (req, res) => {
+  app.patch("/api/worker-memberships/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const membership = await storage.updateWorkerMembership(req.params.id, req.body);
+      const existing = await storage.getWorkerMembership(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Membership not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Membership not found" });
+      }
+
+      // companyId is immutable through this endpoint, for every caller — same
+      // guard already applied to the payroll-payment-methods/records routes.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a worker membership's company cannot be changed through this endpoint" });
+      }
+
+      const membership = await storage.updateWorkerMembership(req.params.id, { ...req.body, companyId: existing.companyId });
       if (!membership) return res.status(404).json({ message: "Membership not found" });
       res.json(membership);
     } catch (error) {
@@ -9666,8 +10706,18 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.delete("/api/worker-memberships/:id", requireAuth, async (req, res) => {
+  app.delete("/api/worker-memberships/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const existing = await storage.getWorkerMembership(req.params.id);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: membership belongs to a different company" });
+        }
+      }
+      // A nonexistent id falls through to here unchanged — deleteWorkerMembership
+      // is a no-op and this still reports success, exactly as before.
       await storage.deleteWorkerMembership(req.params.id);
       res.json({ message: "Membership deleted" });
     } catch (error) {
@@ -10338,100 +11388,699 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/expenses/:id/print-check — generate vendor check PDF + mark expense as paid
-  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+  // ── Expense payment lifecycle helpers (Release B2) ───────────────────────
+  class ExpenseRuleError extends Error {
+    constructor(public httpStatus: number, public code: string, message: string) { super(message); }
+  }
+  const epRows = (r: unknown): any[] => (Array.isArray(r) ? r : (((r as any)?.rows ?? []) as any[]));
+  const epRow = (r: unknown): any => epRows(r)[0];
+  const notifyExpenseAfterCommit = (paymentId: string, input: Parameters<typeof createContractorNotification>[0]) => {
+    Promise.resolve().then(() => createContractorNotification(input))
+      .catch(() => console.warn(`[expense-payment] notification deferred for payment ${paymentId}`));
+  };
+
+  // Resolve an expense + its company scope + funding account for a check render.
+  // PURE READ — no financial writes. Throws ExpenseRuleError.
+  async function resolveExpenseCheckContext(expenseId: string, req: any, sessionCompanyIdArg?: string | null): Promise<{
+    expense: any; companyId: string; company: any; remittanceSource: any; layoutConfig: any; calibrationOffsets: any;
+  }> {
+    const expense = epRow(await db.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId}`));
+    if (!expense) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+    const sessionCompanyId = sessionCompanyIdArg !== undefined ? sessionCompanyIdArg : await getSessionCompanyId(req);
+    if (sessionCompanyId && expense.company_id && sessionCompanyId !== expense.company_id) {
+      throw new ExpenseRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const user = await storage.getUser(req.session.userId!);
+    if (expense.company_id && !(await canAccessCompany(user!, expense.company_id))) {
+      throw new ExpenseRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const companyId = expense.company_id || sessionCompanyId;
+    const company = epRow(companyId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${companyId}`) : { rows: [] });
+    const rs = epRow(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${companyId} AND status = 'enabled' ORDER BY created_at ASC LIMIT 1`));
+    if (!rs?.routing_number || !rs?.account_number) {
+      throw new ExpenseRuleError(400, "NO_FUNDING_ACCOUNT", "No enabled bank account found for this company. Configure a remittance source first.");
+    }
+    const tpl = epRow(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${companyId} AND is_default = true LIMIT 1`)) as CheckTplRow | undefined;
+    return {
+      expense, companyId: String(companyId), company, remittanceSource: rs,
+      layoutConfig: tpl ? parseLayoutConfig(tpl.layout_config) : undefined,
+      calibrationOffsets: rs.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined,
+    };
+  }
+
+  async function renderExpenseCheckPdf(ctx: {
+    expense: any; company: any; remittanceSource: any; layoutConfig: any; calibrationOffsets: any;
+  }, opts: { amount?: unknown; checkNumber?: string | number | null; memo?: string; payeeName?: string; payeeAddress?: string; payeeCityStateZip?: string }): Promise<Uint8Array> {
+    const e = ctx.expense;
+    const co = ctx.company;
+    return renderCheckPdf({
+      item: null, worker: null, run: null,
+      company: co ? { name: co.name || "", address: co.address || "", city: co.city || "", state: co.state || "", zip: co.zip || "", phone: co.phone || "", ein: co.ein || "", dba: co.dba || "", logoUrl: co.logo_url || "" } : null,
+      remittanceSource: { routingNumber: ctx.remittanceSource.routing_number, accountNumber: ctx.remittanceSource.account_number },
+      isCalibration: false, layoutConfig: ctx.layoutConfig, calibrationOffsets: ctx.calibrationOffsets,
+      vendorCheck: {
+        payeeName: String(opts.payeeName || e.payee_name || e.vendor || "Vendor"),
+        payeeAddress: String(opts.payeeAddress || e.payee_address || ""),
+        payeeCityStateZip: String(opts.payeeCityStateZip || e.payee_city_state_zip || ""),
+        amount: fromCents(toCents(opts.amount ?? e.amount)),
+        checkNumber: opts.checkNumber != null ? String(opts.checkNumber) : undefined,
+        memo: String(opts.memo || e.memo || e.description || ""),
+      },
+    });
+  }
+
+  // GET|POST /api/expenses/:id/print-check[?preview=1] — PREVIEW ONLY, zero
+  // financial writes, zero check-counter increments. Issuing is POST /cut-check.
+  const expenseCheckPreview = async (req: any, res: any, sessionCompanyId: string | null | undefined) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      const expRow = pgRow<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
-      if (!expRow) return res.status(404).json({ message: "Expense not found" });
-
-      const sessionCompanyId = await getSessionCompanyId(req);
-      if (sessionCompanyId && expRow.company_id && sessionCompanyId !== expRow.company_id) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      // Duplicate payment guard
-      if (expRow.payment_status === "paid") {
-        return res.status(409).json({
-          message: "This expense has already been paid.",
-          checkNumber: expRow.check_number,
-          paidAt: expRow.paid_at,
-          hint: "To reissue, void the original payment first.",
-        });
-      }
-
-      const compId = expRow.company_id || sessionCompanyId;
-      const coRow = pgRow<any>(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
-
-      // Find the enabled remittance source for this company
-      const rsRow = pgRow<CheckRsRow>(await db.execute(sql`
-        SELECT * FROM remittance_sources
-        WHERE company_id = ${compId} AND status = 'enabled'
-        LIMIT 1
-      `));
-
-      const {
-        payeeName = expRow.payee_name || expRow.vendor || "Unknown Payee",
-        payeeAddress = expRow.payee_address || "",
-        payeeCityStateZip = expRow.payee_city_state_zip || "",
-        amount = expRow.amount,
-        checkNumber,
-        memo = expRow.memo || expRow.description || "",
-      } = req.body || {};
-
-      if (!rsRow?.routing_number || !rsRow?.account_number) {
-        return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
-      }
-
-      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
-      const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
-      const calibrationOffsets = rsRow.calibration_config ? parseCalibrationOffsets(rsRow.calibration_config) : undefined;
-
-      const coNorm = coRow ? {
-        name: coRow.name || "", address: coRow.address || "", city: coRow.city || "",
-        state: coRow.state || "", zip: coRow.zip || "", phone: coRow.phone || "",
-        ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || ""
-      } : null;
-
-      const pdfBytes = await renderCheckPdf({
-        item: null, worker: null, run: null,
-        company: coNorm,
-        remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
-        isCalibration: false,
-        layoutConfig,
-        calibrationOffsets,
-        vendorCheck: {
-          payeeName: String(payeeName),
-          payeeAddress: String(payeeAddress),
-          payeeCityStateZip: String(payeeCityStateZip),
-          amount: parseFloat(String(amount || 0)),
-          checkNumber: checkNumber ? String(checkNumber) : undefined,
-          memo: String(memo),
-        },
+      const body = (req.method === "POST" ? req.body : req.query) || {};
+      const ctx = await resolveExpenseCheckContext(String(req.params.id), req, sessionCompanyId);
+      const pdfBytes = await renderExpenseCheckPdf(ctx, {
+        amount: body.amount, checkNumber: body.checkNumber, memo: body.memo,
+        payeeName: body.payeeName, payeeAddress: body.payeeAddress, payeeCityStateZip: body.payeeCityStateZip,
       });
-
-      // Mark expense as paid
-      const resolvedCheckNum = checkNumber ? String(checkNumber) : null;
-      await db.execute(sql`
-        UPDATE expenses
-        SET payment_status  = 'paid',
-            check_number    = ${resolvedCheckNum},
-            memo            = ${memo || null},
-            payee_name      = ${payeeName || null},
-            payee_address   = ${payeeAddress || null},
-            payee_city_state_zip = ${payeeCityStateZip || null},
-            paid_by_user_id = ${user?.id || null},
-            paid_at         = NOW(),
-            updated_at      = NOW()
-        WHERE id = ${req.params.id}
-      `);
-
       res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `attachment; filename="expense-check-${req.params.id}.pdf"`);
+      res.set("X-Preview", "1");
+      res.set("Content-Disposition", `inline; filename="expense-check-preview-${req.params.id}.pdf"`);
       res.set("Content-Length", String(pdfBytes.length));
       return res.send(Buffer.from(pdfBytes));
     } catch (e: any) {
-      console.error("expense-print-check error:", e?.message || e, e?.stack);
-      res.status(500).json({ message: e?.message || "Failed to generate check PDF" });
+      if (e instanceof ExpenseRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[expense] check preview failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to generate check preview" });
+    }
+  };
+  // GET + POST share one preview implementation; each carries the server-side
+  // company-scope guard inline (session-derived company id, canAccessCompany
+  // membership check — never a body-supplied company id).
+  app.get("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+    const sessionCompanyId = await getSessionCompanyId(req);
+    const scopeUser = await storage.getUser(req.session.userId!);
+    const scopeRow = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${String(req.params.id)}`));
+    if (scopeRow?.company_id && !(await canAccessCompany(scopeUser!, scopeRow.company_id))) return res.status(403).json({ error: "ACCESS_DENIED", message: "Access denied" });
+    return expenseCheckPreview(req, res, sessionCompanyId);
+  });
+  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+    const sessionCompanyId = await getSessionCompanyId(req);
+    const scopeUser = await storage.getUser(req.session.userId!);
+    const scopeRow = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${String(req.params.id)}`));
+    if (scopeRow?.company_id && !(await canAccessCompany(scopeUser!, scopeRow.company_id))) return res.status(403).json({ error: "ACCESS_DENIED", message: "Access denied" });
+    return expenseCheckPreview(req, res, sessionCompanyId);
+  });
+
+  // POST /api/expenses/:id/cut-check — ISSUE a vendor/expense check. Idempotency-Key
+  // required. Atomic: lock the expense + funding account, recompute the unpaid
+  // balance from the expense_payments ledger, validate approval/vendor/funding,
+  // allocate one check number, write exactly one expense_payments row, update the
+  // expense payment status, commit together; then return the rendered PDF.
+  app.post("/api/expenses/:id/cut-check", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    const expenseId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      // Company scope is resolved and enforced server-side — never from the request body.
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const scopeUser = await storage.getUser(req.session.userId!);
+      const scopeRow = epRow(await db.execute(sql`SELECT company_id FROM expenses WHERE id = ${expenseId}`));
+      if (scopeRow?.company_id && !(await canAccessCompany(scopeUser!, scopeRow.company_id))) {
+        return res.status(403).json({ error: "ACCESS_DENIED", message: "Access denied" });
+      }
+      const ctx = await resolveExpenseCheckContext(expenseId, req, sessionCompanyId);
+      const bodyPayeeName = String((req.body as any)?.payeeName ?? "").trim() || null;
+      const bodyPayeeAddress = String((req.body as any)?.payeeAddress ?? "").trim() || null;
+      const bodyPayeeCsz = String((req.body as any)?.payeeCityStateZip ?? "").trim() || null;
+      const bodyMemo = String((req.body as any)?.memo ?? "").trim() || null;
+      const requestedCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : null;
+      const FULL_BALANCE_SENTINEL = -1;
+      const payeeName = String(ctx.expense.payee_name || bodyPayeeName || ctx.expense.vendor || "").trim();
+      const fingerprint = expensePaymentFingerprint({
+        companyId: ctx.companyId, expenseId, amountCents: requestedCents ?? FULL_BALANCE_SENTINEL,
+        method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName,
+      });
+
+      // Idempotency replay is checked BEFORE eligibility: a retried Cut Check
+      // whose first attempt already fully paid the expense must re-return that
+      // same check, not be rejected as "already paid".
+      // A stored key is a valid REPLAY only when it names the same operation —
+      // same company + expense + funding account + payee, and a compatible
+      // amount. Reusing the key for anything else (a different expense, even at
+      // the same dollar amount) is a client error: 409, never another check.
+      const isKeyReplay = (prior: any): boolean => {
+        if (String(prior.expense_id) !== expenseId) return false;
+        if (prior.idempotency_fingerprint === fingerprint) return true;
+        // #111 tolerance: original issued for the full balance (sentinel
+        // fingerprint), retried with an explicit amount equal to what was paid.
+        return requestedCents !== null && toCents(prior.amount) === requestedCents;
+      };
+      const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        if (!isKeyReplay(priorByKey)) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+        const pdf = await renderExpenseCheckPdf(ctx, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, payeeName: payeeName || undefined, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+        res.set("Content-Type", "application/pdf");
+        res.set("X-Payment-Id", String(priorByKey.id));
+        res.set("Content-Disposition", `attachment; filename="expense-check-${priorByKey.reference_number || expenseId}.pdf"`);
+        return res.send(Buffer.from(pdf));
+      }
+
+      // Not a replay — enforce eligibility for a fresh issuance.
+      const elig = checkExpenseEligibility(
+        { companyId: ctx.expense.company_id, status: ctx.expense.status, paymentStatus: ctx.expense.payment_status, vendor: ctx.expense.vendor, payeeName: ctx.expense.payee_name || bodyPayeeName, isArchived: ctx.expense.is_archived, archivedAt: ctx.expense.archived_at, amount: ctx.expense.amount },
+        { companyId: ctx.companyId },
+      );
+      if (!elig.ok) return res.status(elig.code === "EXPENSE_CROSS_COMPANY" ? 403 : 422).json({ error: elig.code, message: elig.message });
+
+      let issued: { payment: any; checkNumber: string; replay?: boolean };
+      try {
+        issued = await db.transaction(async (tx) => {
+          const e = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId} FOR UPDATE`));
+          if (!e) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+          // A concurrent request with the same key may have committed while we
+          // waited for the row lock — re-return its check rather than re-issuing
+          // or failing eligibility.
+          const raced = epRow(await tx.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (raced) {
+            if (!isKeyReplay(raced)) throw new ExpenseRuleError(409, "IDEMPOTENCY_KEY_REUSED", "This Idempotency-Key was already used for a different expense check.");
+            return { payment: raced, checkNumber: String(raced.reference_number ?? ""), replay: true };
+          }
+          const eg = checkExpenseEligibility(
+            { companyId: e.company_id, status: e.status, paymentStatus: e.payment_status, vendor: e.vendor, payeeName: e.payee_name, isArchived: e.is_archived, archivedAt: e.archived_at, amount: e.amount },
+            { companyId: ctx.companyId },
+          );
+          if (!eg.ok) throw new ExpenseRuleError(eg.code === "EXPENSE_CROSS_COMPANY" ? 403 : 422, eg.code, eg.message);
+
+          const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${expenseId} AND status <> 'void'`));
+          const totalCents = toCents(e.amount);
+          const balanceDueCents = totalCents - toCents(paidRow?.paid);
+          const amtInput = requestedCents !== null ? (req.body as any).amount : fromCents(balanceDueCents);
+          const amt = checkPaymentAmount(amtInput, balanceDueCents);
+          if (!amt.ok) throw new ExpenseRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          const rs = epRow(await tx.execute(sql`SELECT id, last_check_number FROM remittance_sources WHERE id = ${ctx.remittanceSource.id} FOR UPDATE`));
+          const nextCheckNum = Number(rs?.last_check_number || 0) + 1;
+          await tx.execute(sql`UPDATE remittance_sources SET last_check_number = ${nextCheckNum} WHERE id = ${ctx.remittanceSource.id}`);
+          const checkNumberStr = formatCheckNumber(nextCheckNum);
+
+          const payment = epRow(await tx.execute(sql`
+            INSERT INTO expense_payments
+              (company_id, expense_id, remittance_source_id, amount, payment_method, status, reference_number, idempotency_key, idempotency_fingerprint, created_by_user_id, issued_at)
+            VALUES (${ctx.companyId}, ${expenseId}, ${ctx.remittanceSource.id}, ${fromCents(amt.cents)}, 'check', 'completed', ${checkNumberStr}, ${idem.key}, ${fingerprint}, ${req.session.userId}, NOW())
+            RETURNING *`));
+
+          const newPaidCents = toCents(paidRow?.paid) + amt.cents;
+          const newStatus = recomputeExpensePaymentStatus(totalCents, newPaidCents);
+          await tx.execute(sql`
+            UPDATE expenses
+            SET payment_status = ${newStatus},
+                check_number = ${checkNumberStr},
+                payee_name = ${bodyPayeeName ?? eg.payeeName},
+                payee_address = ${bodyPayeeAddress ?? e.payee_address ?? null},
+                payee_city_state_zip = ${bodyPayeeCsz ?? e.payee_city_state_zip ?? null},
+                memo = ${bodyMemo ?? e.memo ?? null},
+                paid_by_user_id = ${req.session.userId},
+                paid_at = ${newStatus === "paid" ? sql`NOW()` : sql`paid_at`},
+                updated_at = NOW()
+            WHERE id = ${expenseId}`);
+
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, previous_status, new_status, metadata_json)
+            VALUES ('expense', ${expenseId}, 'check_issued', ${req.session.userId}, ${ctx.companyId}, ${e.payment_status ?? 'unpaid'}, ${newStatus}, ${JSON.stringify({ expensePaymentId: payment.id, checkNumber: checkNumberStr })})`);
+
+          return { payment, checkNumber: checkNumberStr };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${ctx.companyId} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            if (!isKeyReplay(committed)) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+            const pdf = await renderExpenseCheckPdf(ctx, { amount: committed.amount, checkNumber: committed.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+            res.set("Content-Type", "application/pdf");
+            res.set("X-Payment-Id", String(committed.id));
+            return res.send(Buffer.from(pdf));
+          }
+        }
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      const pdf = await renderExpenseCheckPdf(ctx, { amount: issued.payment.amount, checkNumber: issued.checkNumber || issued.payment.reference_number, payeeName: bodyPayeeName ?? elig.payeeName, payeeAddress: bodyPayeeAddress ?? undefined, payeeCityStateZip: bodyPayeeCsz ?? undefined, memo: bodyMemo ?? undefined });
+      if (issued.replay) {
+        res.set("Content-Type", "application/pdf");
+        res.set("X-Payment-Id", String(issued.payment.id));
+        res.set("Content-Disposition", `attachment; filename="expense-check-${issued.payment.reference_number || expenseId}.pdf"`);
+        return res.send(Buffer.from(pdf));
+      }
+      notifyExpenseAfterCommit(issued.payment.id, {
+        workerId: ctx.expense.submitter_id, companyId: ctx.companyId, notificationType: "expense_check_issued",
+        title: `Check ${issued.checkNumber} issued: $${fromCents(toCents(issued.payment.amount)).toFixed(2)}`,
+        body: "A check has been issued for an approved expense.",
+        entityType: "expense", entityId: expenseId, actionUrl: `/app/expenses?id=${expenseId}`,
+      });
+      res.set("Content-Type", "application/pdf");
+      res.set("X-Payment-Id", String(issued.payment.id));
+      res.set("Content-Disposition", `attachment; filename="expense-check-${issued.checkNumber}.pdf"`);
+      return res.send(Buffer.from(pdf));
+    } catch (e: any) {
+      console.error("[expense] cut-check failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to issue expense check" });
+    }
+  });
+
+  // GET /api/expense-payments/:paymentId/check — reprint an issued check. Zero financial writes.
+  app.get("/api/expense-payments/:paymentId/check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), requireActiveSubscription, async (req, res) => {
+    try {
+      const pay = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${String(req.params.paymentId)}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (pay.company_id && !(await canAccessCompany(user!, pay.company_id))) return res.status(403).json({ message: "Access denied" });
+      const ctx = await resolveExpenseCheckContext(String(pay.expense_id), req);
+      const pdf = await renderExpenseCheckPdf(ctx, { amount: pay.amount, checkNumber: pay.reference_number });
+      res.set("Content-Type", "application/pdf");
+      res.set("X-Reprint", "1");
+      res.set("Content-Disposition", `attachment; filename="expense-check-${pay.reference_number || pay.id}.pdf"`);
+      return res.send(Buffer.from(pdf));
+    } catch (e: any) {
+      if (e instanceof ExpenseRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[expense-payment] reprint failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to reprint check" });
+    }
+  });
+
+  // POST /api/expense-payments/:id/void — reverse MyPayLink's internal record.
+  app.post("/api/expense-payments/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const paymentId = String(req.params.id);
+    try {
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to void an expense check." });
+      const payPre = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${paymentId}`));
+      if (!payPre) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (payPre.company_id && !(await canAccessCompany(user!, payPre.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      let result: any;
+      try {
+        result = await db.transaction(async (tx) => {
+          const pay = epRow(await tx.execute(sql`SELECT * FROM expense_payments WHERE id = ${paymentId} FOR UPDATE`));
+          if (!pay) throw new ExpenseRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          const expense = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${pay.expense_id} FOR UPDATE`));
+          if (pay.status === "void") {
+            return { payment: pay, expense, alreadyVoid: true };
+          }
+          const voided = epRow(await tx.execute(sql`
+            UPDATE expense_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason}
+            WHERE id = ${paymentId} AND status <> 'void' RETURNING *`));
+          // Release any trade / barter valuation linked to this payment so its
+          // approved value is not lost or double-spent (migration 0018).
+          await tx.execute(sql`UPDATE contractor_trade_compensation SET expense_payment_id = NULL, updated_at = NOW() WHERE expense_payment_id = ${paymentId}`);
+          const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${pay.expense_id} AND status <> 'void'`));
+          const totalCents = toCents(expense?.amount);
+          const paidCents = toCents(paidRow?.paid);
+          const newStatus = recomputeExpensePaymentStatus(totalCents, paidCents);
+          const updatedExpense = epRow(await tx.execute(sql`
+            UPDATE expenses SET payment_status = ${newStatus},
+              paid_at = ${newStatus === "paid" ? sql`paid_at` : sql`NULL`},
+              check_number = ${newStatus === "unpaid" ? null : expense?.check_number ?? null},
+              updated_at = NOW()
+            WHERE id = ${pay.expense_id} RETURNING *`));
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, previous_status, new_status, notes, metadata_json)
+            VALUES ('expense', ${pay.expense_id}, 'check_voided', ${req.session.userId}, ${pay.company_id}, ${expense?.payment_status ?? null}, ${newStatus}, ${reason}, ${JSON.stringify({ expensePaymentId: paymentId, checkNumber: pay.reference_number })})`);
+          return { payment: voided, expense: updatedExpense, alreadyVoid: false };
+        });
+      } catch (txErr) {
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      if (!result.alreadyVoid) {
+        notifyExpenseAfterCommit(paymentId, {
+          workerId: payPre.expense_id ? undefined : undefined, companyId: payPre.company_id, notificationType: "expense_check_voided",
+          title: "An expense check was reversed",
+          body: `A previously issued expense check was reversed. ${EXPENSE_VOID_STOP_PAYMENT_NOTE}`,
+          entityType: "expense", entityId: String(payPre.expense_id), actionUrl: `/app/expenses?id=${payPre.expense_id}`,
+        });
+      }
+      return res.json({ payment: result.payment, expense: result.expense, alreadyVoid: result.alreadyVoid, stopPaymentNote: EXPENSE_VOID_STOP_PAYMENT_NOTE });
+    } catch (e: any) {
+      console.error("[expense-payment] void failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to void expense check" });
+    }
+  });
+
+  // POST /api/expense-payments/:id/reissue — void the original + one linked replacement, atomically, with a new check number.
+  app.post("/api/expense-payments/:id/reissue", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    const originalId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to reissue an expense check." });
+
+      const orig = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${originalId}`));
+      if (!orig) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (orig.company_id && !(await canAccessCompany(user!, orig.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      const ctx = await resolveExpenseCheckContext(String(orig.expense_id), req);
+      const newAmountCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : toCents(orig.amount);
+      if (!Number.isFinite(newAmountCents) || newAmountCents <= 0) return res.status(400).json({ error: "INVALID_AMOUNT", message: "Replacement amount must be a positive number." });
+      const fingerprint = expensePaymentFingerprint({
+        companyId: orig.company_id, expenseId: String(orig.expense_id), amountCents: newAmountCents,
+        method: EXPENSE_PAYMENT_METHOD, fundingAccountId: ctx.remittanceSource.id, payeeName: ctx.expense.payee_name || ctx.expense.vendor,
+      });
+
+      const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json({ replacement: priorByKey })
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+      }
+
+      let out: any;
+      try {
+        out = await db.transaction(async (tx) => {
+          const o = epRow(await tx.execute(sql`SELECT * FROM expense_payments WHERE id = ${originalId} FOR UPDATE`));
+          if (!o) throw new ExpenseRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          if (o.reissued_by_payment_id) throw new ExpenseRuleError(409, "ALREADY_REISSUED", "This expense check has already been reissued.");
+          const expense = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${o.expense_id} FOR UPDATE`));
+          if (!expense) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Linked expense not found");
+
+          if (o.status !== "void") {
+            await tx.execute(sql`UPDATE expense_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason} WHERE id = ${originalId}`);
+          }
+          const paidBeforeRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${o.expense_id} AND status <> 'void'`));
+          const totalCents = toCents(expense.amount);
+          if (toCents(paidBeforeRow?.paid) + newAmountCents > totalCents) {
+            throw new ExpenseRuleError(422, "AMOUNT_EXCEEDS_BALANCE", "Replacement amount exceeds the expense balance after reversing the original.");
+          }
+          const rs = epRow(await tx.execute(sql`SELECT id, last_check_number FROM remittance_sources WHERE id = ${ctx.remittanceSource.id} FOR UPDATE`));
+          const nextCheckNum = Number(rs?.last_check_number || 0) + 1;
+          await tx.execute(sql`UPDATE remittance_sources SET last_check_number = ${nextCheckNum} WHERE id = ${ctx.remittanceSource.id}`);
+          const checkNumberStr = formatCheckNumber(nextCheckNum);
+
+          const replacement = epRow(await tx.execute(sql`
+            INSERT INTO expense_payments
+              (company_id, expense_id, remittance_source_id, amount, payment_method, status, reference_number, idempotency_key, idempotency_fingerprint, created_by_user_id, issued_at, reverses_payment_id)
+            VALUES (${o.company_id}, ${o.expense_id}, ${ctx.remittanceSource.id}, ${fromCents(newAmountCents)}, 'check', 'completed', ${checkNumberStr}, ${idem.key}, ${fingerprint}, ${req.session.userId}, NOW(), ${originalId})
+            RETURNING *`));
+          await tx.execute(sql`UPDATE expense_payments SET reissued_by_payment_id = ${replacement.id} WHERE id = ${originalId}`);
+
+          const newPaidCents = toCents(paidBeforeRow?.paid) + newAmountCents;
+          const newStatus = recomputeExpensePaymentStatus(totalCents, newPaidCents);
+          const updatedExpense = epRow(await tx.execute(sql`
+            UPDATE expenses SET payment_status = ${newStatus}, check_number = ${checkNumberStr},
+              paid_at = ${newStatus === "paid" ? sql`NOW()` : sql`NULL`}, updated_at = NOW()
+            WHERE id = ${o.expense_id} RETURNING *`));
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, notes, metadata_json)
+            VALUES ('expense', ${o.expense_id}, 'check_reissued', ${req.session.userId}, ${o.company_id}, ${reason}, ${JSON.stringify({ originalPaymentId: originalId, replacementPaymentId: replacement.id, checkNumber: checkNumberStr })})`);
+          return { original: originalId, replacement, expense: updatedExpense };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) return res.status(committed.idempotency_fingerprint === fingerprint ? 200 : 409).json(committed.idempotency_fingerprint === fingerprint ? { replacement: committed } : { error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different expense check." });
+        }
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      notifyExpenseAfterCommit(out.replacement.id, {
+        workerId: ctx.expense.submitter_id, companyId: orig.company_id, notificationType: "expense_check_reissued",
+        title: "An expense check was reissued",
+        body: `An expense check was reversed and reissued. ${EXPENSE_VOID_STOP_PAYMENT_NOTE}`,
+        entityType: "expense", entityId: String(orig.expense_id), actionUrl: `/app/expenses?id=${orig.expense_id}`,
+      });
+      return res.status(201).json({ ...out, stopPaymentNote: EXPENSE_VOID_STOP_PAYMENT_NOTE });
+    } catch (e: any) {
+      console.error("[expense-payment] reissue failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to reissue expense check" });
+    }
+  });
+
+  // ══ End of Release B2 (vendor/expense Cut Check) issuance / void / reissue block ══
+  //
+  // Everything below (payment-document helpers, non-check record-payment,
+  // proof-of-payment document routes) is the combined MyPayLink contractor/vendor
+  // payment usability release — it extends the SAME expense_payments ledger
+  // additively (migration 0018); it does not modify the B2 issuance core above.
+
+  // ── Payment-document helpers (proof of payment for every method) ────────────
+  const paymentDocDate = (d: unknown): string => {
+    const dt = d ? new Date(d as string) : new Date();
+    return Number.isNaN(dt.getTime())
+      ? new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      : dt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  };
+  const PAYMENT_METHOD_LABELS: Record<string, string> = {
+    check: "Check", cash: "Cash", ach: "ACH / Bank Transfer",
+    trade_credit: "Trade / Barter", rent_credit: "Rent Credit", other: "Other / Manual",
+  };
+  const paymentMethodLabel = (m: unknown): string => {
+    const key = String(m ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    return PAYMENT_METHOD_LABELS[key] || String(m ?? "Payment").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+  async function companyAddressLines(companyId: string | null | undefined): Promise<{ name: string; lines: string[] }> {
+    if (!companyId) return { name: "", lines: [] };
+    const co = epRow(await db.execute(sql`SELECT name, address, city, state, zip FROM companies WHERE id = ${companyId} LIMIT 1`));
+    if (!co) return { name: "", lines: [] };
+    const cityStateZip = [[co.city, co.state].filter(Boolean).join(", "), co.zip].filter(Boolean).join(" ");
+    return { name: String(co.name ?? ""), lines: [co.address, cityStateZip].filter(Boolean).map(String) };
+  }
+  function parsePaymentDocLineItems(raw: unknown): PaymentDocInput["reference"]["lineItems"] {
+    let arr: any[] = [];
+    try { arr = typeof raw === "string" ? JSON.parse(raw) : Array.isArray(raw) ? raw : []; } catch { arr = []; }
+    return (Array.isArray(arr) ? arr : []).map((li: any) => ({
+      name: String(li?.name || li?.description || ""),
+      quantity: li?.quantity ?? li?.qty ?? 1,
+      unitPrice: li?.unit_price ?? li?.unitPrice ?? 0,
+      lineTotal: li?.line_total ?? li?.lineTotal ?? li?.amount ?? 0,
+    }));
+  }
+  const sendPaymentDocPdf = async (res: any, input: PaymentDocInput, filename: string) => {
+    const bytes = await renderPaymentDocumentPdf(input);
+    res.set("Content-Type", "application/pdf");
+    res.set("Content-Disposition", `inline; filename="${filename}"`);
+    res.set("Content-Length", String(bytes.length));
+    return res.send(Buffer.from(bytes));
+  };
+
+  // GET /api/expenses/:id/payments — the expense's payment ledger (non-void first).
+  app.get("/api/expenses/:id/payments", requireAuth, async (req, res) => {
+    try {
+      const scope = epRow(await db.execute(sql`SELECT company_id, submitter_id FROM expenses WHERE id = ${req.params.id}`));
+      if (!scope) return res.status(404).json({ message: "Expense not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (scope.company_id && !(await canAccessCompany(user!, scope.company_id))) return res.status(403).json({ message: "Access denied" });
+      // Same object-level gate every sibling expense sub-resource route enforces
+      // (GET /api/expenses/:id, /attachments, …): managers see any expense in the
+      // company; everyone else only the expense they submitted.
+      const isManager = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || user?.role === "supervisor";
+      if (!isManager && user?.workerId !== scope.submitter_id) return res.status(403).json({ message: "Not authorized" });
+      // Explicit projection — the internal replay-guard columns are never sent to a client.
+      const rows = epRows(await db.execute(sql`
+        SELECT id, expense_id, company_id, amount, payment_method, status, reference_number,
+               notes, payment_date, issued_at, trade_compensation_id, payee_user_id,
+               voided_at, void_reason, created_by_user_id
+        FROM expense_payments WHERE expense_id = ${req.params.id}
+        ORDER BY status = 'void', COALESCE(payment_date, issued_at) DESC`));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch expense payments" }); }
+  });
+
+  // POST /api/expenses/:id/record-payment — record a NON-CHECK vendor/expense
+  // payment (cash | ACH | trade_credit | rent_credit | other) against the same
+  // expense_payments ledger the Cut Check path uses. Check issuance stays on
+  // POST /api/expenses/:id/cut-check. Atomic (SELECT ... FOR UPDATE on the
+  // expense), Idempotency-Key required, trade/barter links one approved
+  // fair-market-value valuation exactly once.
+  app.post("/api/expenses/:id/record-payment", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    const expenseId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      const expPre = epRow(await db.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId}`));
+      if (!expPre) return res.status(404).json({ message: "Expense not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && expPre.company_id && sessionCompanyId !== expPre.company_id) return res.status(403).json({ message: "Access denied" });
+      if (expPre.company_id && !(await canAccessCompany(user!, expPre.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      const method = normalizeExpensePaymentMethod((req.body as any)?.paymentMethod);
+      if (!method || !(EXPENSE_RECORD_PAYMENT_METHODS as readonly string[]).includes(method)) {
+        return res.status(400).json({ error: "INVALID_PAYMENT_METHOD", message: `payment method must be one of: ${EXPENSE_RECORD_PAYMENT_METHODS.join(", ")} (issue a check with /cut-check)` });
+      }
+      const description = String((req.body as any)?.description ?? (req.body as any)?.notes ?? "").trim();
+      if (EXPENSE_DESCRIPTION_REQUIRED_METHODS.has(method) && !description) {
+        return res.status(400).json({ error: "DESCRIPTION_REQUIRED", message: `A description is required for "${method}" payments.` });
+      }
+      const tradeCompensationId = method === "trade_credit"
+        ? (String((req.body as any)?.tradeCompensationId ?? "").trim() || null)
+        : null;
+      if (method === "trade_credit" && !tradeCompensationId) {
+        return res.status(400).json({ error: "TRADE_COMPENSATION_REQUIRED", message: "trade / barter payments require an approved fair-market-value valuation (tradeCompensationId)." });
+      }
+
+      const requestedCents = toCents((req.body as any)?.amount);
+      if (!Number.isFinite(requestedCents) || requestedCents <= 0) {
+        return res.status(400).json({ error: "INVALID_AMOUNT", message: "Payment amount must be a positive number." });
+      }
+      const payeeName = String(expPre.payee_name || expPre.vendor || "").trim();
+      const fingerprint = expensePaymentFingerprint({ companyId: expPre.company_id, expenseId, amountCents: requestedCents, method, fundingAccountId: null, payeeName, tradeCompensationId });
+
+      const priorByKey = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${expPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json(priorByKey)
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+      }
+
+      const referenceNumber = String((req.body as any)?.referenceNumber ?? "").trim() || null;
+      const paymentDate = (req.body as any)?.paymentDate ? new Date(String((req.body as any).paymentDate)) : new Date();
+
+      let created: any;
+      try {
+        created = await db.transaction(async (tx) => {
+          const e = epRow(await tx.execute(sql`SELECT * FROM expenses WHERE id = ${expenseId} FOR UPDATE`));
+          if (!e) throw new ExpenseRuleError(404, "EXPENSE_NOT_FOUND", "Expense not found");
+
+          const elig = checkExpenseEligibility(
+            { companyId: e.company_id, status: e.status, paymentStatus: e.payment_status, vendor: e.vendor, payeeName: e.payee_name, isArchived: e.is_archived, archivedAt: e.archived_at, amount: e.amount, contractorInvoiceId: e.contractor_invoice_id },
+            { companyId: expPre.company_id },
+          );
+          if (!elig.ok) {
+            const status = elig.code === "EXPENSE_CROSS_COMPANY" ? 403 : elig.code === "EXPENSE_NOT_FOUND" ? 404 : 422;
+            throw new ExpenseRuleError(status, elig.code, elig.message);
+          }
+
+          const paidRow = epRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${expenseId} AND status <> 'void'`));
+          const totalCents = toCents(e.amount);
+          const balanceDueCents = totalCents - toCents(paidRow?.paid);
+          if (balanceDueCents <= 0) throw new ExpenseRuleError(422, "NO_UNPAID_BALANCE", "This expense has no unpaid balance.");
+
+          const amt = checkPaymentAmount((req.body as any)?.amount, balanceDueCents);
+          if (!amt.ok) throw new ExpenseRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          let payeeUserId: string | null = null;
+          if (method === "trade_credit" && tradeCompensationId) {
+            const tc = epRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
+            // The valuation must be auditable-linked to this expense: its contractor
+            // must be the worker who submitted the expense. A free-text payee / vendor
+            // name is not a provable link and is never accepted.
+            const chk = checkExpenseTradeCreditApplicable(
+              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id } : null,
+              {
+                companyId: e.company_id,
+                paymentCents: amt.cents,
+                expensePayeeWorkerId: e.submitter_id ?? null,
+              },
+            );
+            if (!chk.ok) throw new ExpenseRuleError(422, chk.code, chk.message);
+            payeeUserId = tc?.contractor_user_id ?? null;
+          }
+
+          const payment = epRow(await tx.execute(sql`
+            INSERT INTO expense_payments
+              (company_id, expense_id, amount, payment_method, status, reference_number, notes, payment_date, trade_compensation_id, payee_user_id, idempotency_key, idempotency_fingerprint, created_by_user_id, issued_at)
+            VALUES (${e.company_id}, ${expenseId}, ${fromCents(amt.cents)}, ${method}, 'completed', ${referenceNumber}, ${description || String((req.body as any)?.notes ?? "").trim() || null}, ${paymentDate.toISOString()}, ${tradeCompensationId}, ${payeeUserId}, ${idem.key}, ${fingerprint}, ${req.session.userId}, NOW())
+            RETURNING *`));
+
+          if (method === "trade_credit" && tradeCompensationId) {
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET expense_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND expense_payment_id IS NULL AND contractor_payment_id IS NULL`);
+          }
+
+          const newPaidCents = toCents(paidRow?.paid) + amt.cents;
+          const newStatus = recomputeExpensePaymentStatus(totalCents, newPaidCents);
+          await tx.execute(sql`
+            UPDATE expenses
+            SET payment_status = ${newStatus}, payee_name = ${e.payee_name ?? elig.payeeName},
+                paid_by_user_id = ${req.session.userId},
+                paid_at = ${newStatus === "paid" ? sql`NOW()` : sql`paid_at`},
+                payment_method_used = ${method}, updated_at = NOW()
+            WHERE id = ${expenseId}`);
+
+          await tx.execute(sql`
+            INSERT INTO expense_approval_actions (object_type, object_id, action_type, actor_user_id, company_id, previous_status, new_status, metadata_json)
+            VALUES ('expense', ${expenseId}, 'payment_recorded', ${req.session.userId}, ${e.company_id}, ${e.payment_status ?? 'unpaid'}, ${newStatus}, ${JSON.stringify({ expensePaymentId: payment.id, method, amount: fromCents(amt.cents), tradeCompensationId })})`);
+
+          return payment;
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE company_id = ${expPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            return committed.idempotency_fingerprint === fingerprint
+              ? res.status(200).json(committed)
+              : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+          }
+        }
+        if (txErr instanceof ExpenseRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      notifyExpenseAfterCommit(created.id, {
+        workerId: expPre.submitter_id, companyId: expPre.company_id, notificationType: "expense_payment_recorded",
+        title: `Payment recorded: $${fromCents(toCents(created.amount)).toFixed(2)}`,
+        body: "A payment has been recorded for an approved expense.",
+        entityType: "expense", entityId: expenseId, actionUrl: `/app/expenses?id=${expenseId}`,
+      });
+      return res.status(201).json(created);
+    } catch (e: any) {
+      console.error("[expense-payment] record failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to record expense payment" });
+    }
+  });
+
+  // GET /api/expense-payments/:id/document?copy=payee|company — proof of payment.
+  // Zero financial writes.
+  app.get("/api/expense-payments/:id/document", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
+    try {
+      const pay = epRow(await db.execute(sql`SELECT * FROM expense_payments WHERE id = ${req.params.id}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (pay.company_id && !(await canAccessCompany(user!, pay.company_id))) return res.status(403).json({ message: "Access denied" });
+      const exp = epRow(await db.execute(sql`SELECT * FROM expenses WHERE id = ${pay.expense_id}`));
+      const copy = String(req.query.copy ?? "payee") === "company" ? "company" : "payee";
+      const co = await companyAddressLines(pay.company_id);
+      const paidRow = epRow(await db.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${pay.expense_id} AND status <> 'void'`));
+      const totalCents = toCents(exp?.amount);
+      const paidToDate = toCents(paidRow?.paid);
+      let tradeValuation: number | null = null;
+      if (pay.trade_compensation_id) {
+        const tc = epRow(await db.execute(sql`SELECT total_value FROM contractor_trade_compensation WHERE id = ${pay.trade_compensation_id}`));
+        tradeValuation = tc ? Number(tc.total_value) : null;
+      }
+      const style = await resolveDocStyle(null, null, pay.company_id);
+      const payeeName = String(exp?.payee_name || exp?.vendor || "Vendor").trim();
+      const input: PaymentDocInput = {
+        copy, payeeKind: "vendor", style,
+        company: { name: co.name || "Company", addressLines: co.lines },
+        payee: { name: payeeName, addressLines: [exp?.payee_address, exp?.payee_city_state_zip].filter(Boolean).map(String) },
+        reference: {
+          documentNumberLabel: `Payment on Expense ${String(exp?.check_number || pay.expense_id).slice(0, 12)}`,
+          title: exp?.description || exp?.category_name || null,
+          contractReference: exp?.contractor_invoice_id ? `Contractor invoice ${String(exp.contractor_invoice_id).slice(0, 8)}` : null,
+          invoiceNumber: exp?.check_number || null,
+          lineItems: parsePaymentDocLineItems(exp?.line_items),
+        },
+        payment: {
+          paymentId: String(pay.id), method: String(pay.payment_method), methodLabel: paymentMethodLabel(pay.payment_method),
+          amountPaid: Number(pay.amount), paymentDate: paymentDocDate(pay.payment_date || pay.issued_at),
+          checkNumber: pay.reference_number && pay.payment_method === "check" ? String(pay.reference_number) : null,
+          referenceNumber: pay.reference_number && pay.payment_method !== "check" ? String(pay.reference_number) : null,
+          description: pay.notes || null, tradeValuation,
+        },
+        balances: {
+          approvedAmount: fromCents(totalCents),
+          amountPaidToDate: fromCents(paidToDate),
+          remainingBalance: fromCents(Math.max(0, totalCents - paidToDate)),
+        },
+      };
+      return sendPaymentDocPdf(res, input, `expense-payment-${copy}-${String(pay.id).slice(0, 8)}.pdf`);
+    } catch (e: any) {
+      console.error("[expense-payment] document failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to render payment document" });
     }
   });
 
@@ -10515,12 +12164,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!existing) return res.status(404).json({ message: "Not found" });
 
       const user = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+      if (isTenant && existing.companyId !== user!.companyId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
       const isOwner = user?.workerId === existing.contractorId;
       const isManager = user?.role === "admin" || user?.role === "manager";
       if (!isOwner && !isManager) return res.status(403).json({ message: "Not authorized" });
 
+      // companyId is immutable through this endpoint, for every caller (no
+      // platform-owner exception) — reassigning an invoice to a different
+      // tenant is a distinct, explicit operation, never a side effect of an
+      // ordinary field edit.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a contractor invoice's company cannot be changed through this endpoint" });
+      }
+
       const allowedFields = ["invoiceNumber", "invoiceDate", "dueDate", "amount", "description",
-        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes", "companyId",
+        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes",
         "templateId", "brandingId",
         "paymentMethodType", "nonCashPaymentDescription", "agreedTradeValue", "rentCreditAmount",
         "writtenApprovalAttached", "disputedAmount", "approvedAmount", "withheldAmount",
@@ -10805,6 +12467,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
+
+      // Tenant authorization before any payment-state change.
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && inv.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: contractor invoice belongs to a different company" });
+      }
+
       if (inv.status !== "approved") return res.status(400).json({ message: "Only approved invoices can be marked paid" });
 
       const updated = await storage.updateContractorInvoice(req.params.id, {
@@ -10855,95 +12525,231 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
   });
 
-  // POST /api/contractor-invoices/:id/print-check — generate vendor check PDF
-  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
+  // ── Contractor-payment lifecycle helpers (Release B) ─────────────────────
+  class PaymentRuleError extends Error {
+    constructor(public httpStatus: number, public code: string, message: string) { super(message); }
+  }
+  const cpRows = (r: unknown): any[] => (Array.isArray(r) ? r : (((r as any)?.rows ?? []) as any[]));
+  const cpRow = (r: unknown): any => cpRows(r)[0];
+  // Fire-and-forget contractor notification, sent only AFTER the financial
+  // transaction commits. Failure never affects the payment; the
+  // contractor_notifications insert is itself the durable queue. Logs only the
+  // payment id (never amounts, names, methods, or bank details).
+  const notifyAfterCommit = (paymentId: string, input: Parameters<typeof createContractorNotification>[0]) => {
+    Promise.resolve()
+      .then(() => createContractorNotification(input))
+      .catch(() => console.warn(`[contractor-payment] notification deferred for payment ${paymentId}`));
+  };
+
+  // Render a contractor-invoice check PDF. PURE RENDER — no financial writes.
+  // Throws PaymentRuleError for missing invoice / cross-company / no bank account.
+  async function buildContractorInvoiceCheckPdf(
+    invoiceId: string,
+    req: any,
+    opts: { amount?: unknown; checkNumber?: string | number | null; memo?: string; payeeName?: string; payeeAddress?: string; payeeCityStateZip?: string },
+  ): Promise<{ pdfBytes: Uint8Array; invoice: any; companyId: string }> {
+    const inv = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`));
+    if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+    const sessionCompanyId = await getSessionCompanyId(req);
+    if (sessionCompanyId && inv.company_id && sessionCompanyId !== inv.company_id) {
+      throw new PaymentRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const user = await storage.getUser(req.session.userId!);
+    if (inv.company_id && !(await canAccessCompany(user!, inv.company_id))) {
+      throw new PaymentRuleError(403, "ACCESS_DENIED", "Access denied");
+    }
+    const compId = inv.company_id || sessionCompanyId;
+    const coRow = cpRow(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
+    const rsRow = cpRow(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`)) as CheckRsRow | undefined;
+    if (!rsRow?.routing_number || !rsRow?.account_number) {
+      throw new PaymentRuleError(400, "NO_FUNDING_ACCOUNT", "No enabled bank account found for this company. Configure a remittance source first.");
+    }
+    const workerRow = cpRow(await db.execute(sql`SELECT w.first_name, w.last_name FROM workers w WHERE w.id = ${inv.contractor_id} LIMIT 1`));
+    const defaultPayeeName = workerRow ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || "Contractor" : "Contractor";
+    const calTplRow = cpRow(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`)) as CheckTplRow | undefined;
+    const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
+    const calibrationOffsets = (rsRow as any).calibration_config ? parseCalibrationOffsets((rsRow as any).calibration_config) : undefined;
+    const coNorm = coRow ? {
+      name: coRow.name || "", address: coRow.address || "", city: coRow.city || "", state: coRow.state || "",
+      zip: coRow.zip || "", phone: coRow.phone || "", ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || "",
+    } : null;
+    const pdfBytes = await renderCheckPdf({
+      item: null, worker: null, run: null, company: coNorm,
+      remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
+      isCalibration: false, layoutConfig, calibrationOffsets,
+      vendorCheck: {
+        payeeName: String(opts.payeeName || defaultPayeeName),
+        payeeAddress: String(opts.payeeAddress || ""),
+        payeeCityStateZip: String(opts.payeeCityStateZip || ""),
+        amount: fromCents(toCents(opts.amount ?? inv.amount)),
+        checkNumber: opts.checkNumber != null ? String(opts.checkNumber) : undefined,
+        memo: String(opts.memo || inv.description || inv.invoice_number || ""),
+      },
+    });
+    return { pdfBytes, invoice: inv, companyId: String(compId) };
+  }
+
+  // GET|POST /api/contractor-invoices/:id/print-check — PREVIEW ONLY. Renders the
+  // check PDF and performs ZERO financial writes. Issuing a check is POST /cut-check.
+  const contractorInvoiceCheckPreview = async (req: any, res: any) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      const inv = pgRow<any>(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`));
-      if (!inv) return res.status(404).json({ message: "Invoice not found" });
-
-      const sessionCompanyId = await getSessionCompanyId(req);
-      if (sessionCompanyId && inv.company_id && sessionCompanyId !== inv.company_id) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const compId = inv.company_id || sessionCompanyId;
-      const coRow = pgRow<any>(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
-
-      const rsRow = pgRow<CheckRsRow>(await db.execute(sql`
-        SELECT * FROM remittance_sources
-        WHERE company_id = ${compId} AND status = 'enabled'
-        LIMIT 1
-      `));
-
-      if (!rsRow?.routing_number || !rsRow?.account_number) {
-        return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
-      }
-
-      // Resolve payee name from the worker record only. The users table does
-      // not carry first_name/last_name in production, so keep this path away
-      // from users aliases entirely.
-      const workerRow = pgRow<any>(await db.execute(sql`
-        SELECT w.first_name, w.last_name, w.email, w.work_email, w.home_email
-        FROM workers w
-        WHERE w.id = ${inv.contractor_id} LIMIT 1
-      `));
-      const defaultPayeeName = workerRow
-        ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || "Contractor"
-        : "Contractor";
-
-      const {
-        payeeName = defaultPayeeName,
-        payeeAddress = "",
-        payeeCityStateZip = "",
-        amount = inv.amount,
-        checkNumber,
-        memo = inv.description || inv.invoice_number || "",
-      } = req.body || {};
-
-      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
-      const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
-      const calibrationOffsets = rsRow.calibration_config ? parseCalibrationOffsets(rsRow.calibration_config) : undefined;
-
-      const coNorm = coRow ? {
-        name: coRow.name || "", address: coRow.address || "", city: coRow.city || "",
-        state: coRow.state || "", zip: coRow.zip || "", phone: coRow.phone || "",
-        ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || "",
-      } : null;
-
-      const pdfBytes = await renderCheckPdf({
-        item: null, worker: null, run: null,
-        company: coNorm,
-        remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
-        isCalibration: false,
-        layoutConfig,
-        calibrationOffsets,
-        vendorCheck: {
-          payeeName: String(payeeName),
-          payeeAddress: String(payeeAddress),
-          payeeCityStateZip: String(payeeCityStateZip),
-          amount: parseFloat(String(amount || 0)),
-          checkNumber: checkNumber ? String(checkNumber) : undefined,
-          memo: String(memo),
-        },
+      const body = (req.method === "POST" ? req.body : req.query) || {};
+      const { pdfBytes } = await buildContractorInvoiceCheckPdf(String(req.params.id), req, {
+        amount: body.amount, checkNumber: body.checkNumber, memo: body.memo,
+        payeeName: body.payeeName, payeeAddress: body.payeeAddress, payeeCityStateZip: body.payeeCityStateZip,
       });
-
-      // Record payment reference on invoice (allow reprinting — no paid guard)
-      await db.execute(sql`
-        UPDATE contractor_invoices
-        SET payment_method    = 'check',
-            payment_reference = ${checkNumber ? String(checkNumber) : null},
-            updated_at        = NOW()
-        WHERE id = ${req.params.id}
-      `);
-
       res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `attachment; filename="invoice-check-${req.params.id}.pdf"`);
+      res.set("Content-Disposition", `inline; filename="invoice-check-preview-${req.params.id}.pdf"`);
       res.set("Content-Length", String(pdfBytes.length));
       return res.send(Buffer.from(pdfBytes));
     } catch (e: any) {
-      console.error("invoice-print-check error:", e?.message || e, e?.stack);
-      res.status(500).json({ message: e?.message || "Failed to generate check PDF" });
+      if (e instanceof PaymentRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[contractor-invoice] check preview failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to generate check preview" });
+    }
+  };
+  app.get("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), contractorInvoiceCheckPreview);
+  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), contractorInvoiceCheckPreview);
+
+  // POST /api/contractor-invoices/:id/cut-check — ISSUE a check: authorize, allocate
+  // a company+funding-account-scoped check number, create exactly one 'check'
+  // payment, reduce the invoice balance atomically, then return the rendered PDF.
+  // Idempotency-Key required; a replay re-renders the already-issued check with no write.
+  app.post("/api/contractor-invoices/:id/cut-check", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const invoiceId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      const invPre = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`));
+      if (!invPre) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && invPre.company_id && sessionCompanyId !== invPre.company_id) return res.status(403).json({ message: "Access denied" });
+      if (invPre.company_id && !(await canAccessCompany(user!, invPre.company_id))) return res.status(403).json({ message: "Access denied" });
+
+      if (invPre.proposal_id) {
+        const proposalStatus = (cpRow(await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invPre.proposal_id}`)) as any)?.status;
+        if (proposalStatus && proposalStatus !== "approved") {
+          return res.status(403).json({ message: `Check blocked. The linked proposal is "${proposalStatus}" — it must be approved first.`, blocked: true });
+        }
+      }
+
+      const rsPre = cpRow(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${invPre.company_id} AND status = 'enabled' LIMIT 1`));
+      if (!rsPre?.routing_number || !rsPre?.account_number) {
+        return res.status(400).json({ error: "NO_FUNDING_ACCOUNT", message: "No enabled bank account found for this company. Configure a remittance source first." });
+      }
+
+      // Cut-check fingerprint: an explicit requested amount, else a sentinel meaning
+      // "the invoice's remaining balance at issue time" — so a replay after the
+      // balance has gone to zero still matches the same key.
+      const requestedCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : null;
+      const FULL_BALANCE_SENTINEL = -1;
+      const fingerprint = paymentFingerprint({ companyId: invPre.company_id, invoiceId, method: "check", amountCents: requestedCents ?? FULL_BALANCE_SENTINEL, tradeCompensationId: null });
+
+      const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        // A replay is: no explicit amount, or an explicit amount equal to the issued check.
+        const explicitMismatch = requestedCents !== null && toCents(priorByKey.amount) !== requestedCents;
+        if (explicitMismatch && priorByKey.idempotency_fingerprint !== fingerprint) {
+          return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
+        }
+        // Replay: re-render the already-issued check, no write.
+        const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: priorByKey.amount, checkNumber: priorByKey.reference_number, memo: invPre.description || invPre.invoice_number || "" });
+        res.set("Content-Type", "application/pdf");
+        res.set("X-Payment-Id", String(priorByKey.id));
+        res.set("Content-Disposition", `attachment; filename="invoice-check-${invoiceId}.pdf"`);
+        return res.send(Buffer.from(pdfBytes));
+      }
+
+      let issued: { payment: any; checkNumber: string };
+      try {
+        issued = await db.transaction(async (tx) => {
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+          if (["draft", "voided", "voided_duplicate", "rejected", "rejected_duplicate"].includes(inv.status ?? "")) {
+            throw new PaymentRuleError(409, "INVOICE_NOT_PAYABLE", `Invoice status "${inv.status}" cannot take a check.`);
+          }
+          const paidRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${invoiceId} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const balanceDueCents = totalCents - toCents(paidRow?.paid);
+          const amtInput = (req.body as any)?.amount !== undefined ? (req.body as any).amount : fromCents(balanceDueCents);
+          const amt = checkPaymentAmount(amtInput, balanceDueCents);
+          if (!amt.ok) throw new PaymentRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          // Company + funding-account scoped check number (advisory lock avoids cross-txn skew).
+          const rs = cpRow(await tx.execute(sql`SELECT id, last_check_number FROM remittance_sources WHERE id = ${rsPre.id} FOR UPDATE`));
+          const nextCheckNum = Number(rs?.last_check_number || 0) + 1;
+          await tx.execute(sql`UPDATE remittance_sources SET last_check_number = ${nextCheckNum} WHERE id = ${rsPre.id}`);
+          const checkNumberStr = formatCheckNumber(nextCheckNum);
+
+          const payment = cpRow(await tx.execute(sql`
+            INSERT INTO contractor_payments
+              (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id, idempotency_key, idempotency_fingerprint, status)
+            VALUES (${invoiceId}, ${inv.company_id}, ${inv.contractor_id}, ${fromCents(amt.cents)}, 'check', ${checkNumberStr},
+                    ${`Check ${checkNumberStr} issued`}, ${req.session.userId}, ${idem.key}, ${fingerprint}, 'completed')
+            RETURNING *`));
+
+          const newPaidCents = toCents(paidRow?.paid) + amt.cents;
+          const newBalanceCents = Math.max(0, totalCents - newPaidCents);
+          await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(newPaidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${recomputeInvoiceStatus(totalCents, newPaidCents)},
+                paid_at = ${newBalanceCents <= 0 ? sql`NOW()` : sql`paid_at`}, payment_method = 'check', payment_reference = ${checkNumberStr}, updated_at = NOW()
+            WHERE id = ${invoiceId}`);
+
+          return { payment, checkNumber: checkNumberStr };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            const explicitMismatch = requestedCents !== null && toCents(committed.amount) !== requestedCents;
+            if (explicitMismatch) return res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different check." });
+            const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: committed.amount, checkNumber: committed.reference_number });
+            res.set("Content-Type", "application/pdf");
+            res.set("X-Payment-Id", String(committed.id));
+            return res.send(Buffer.from(pdfBytes));
+          }
+        }
+        if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      const { pdfBytes } = await buildContractorInvoiceCheckPdf(invoiceId, req, { amount: issued.payment.amount, checkNumber: issued.checkNumber, memo: invPre.description || invPre.invoice_number || "" });
+      notifyAfterCommit(issued.payment.id, {
+        workerId: invPre.contractor_id, companyId: invPre.company_id, notificationType: "check_issued",
+        title: `Check ${issued.checkNumber} issued: $${fromCents(toCents(issued.payment.amount)).toFixed(2)}`,
+        body: "A check has been issued against your invoice.",
+        entityType: "invoice", entityId: invoiceId, actionUrl: `/app/contractor-hub?section=payments&id=${invoiceId}`,
+      });
+      res.set("Content-Type", "application/pdf");
+      res.set("X-Payment-Id", String(issued.payment.id));
+      res.set("Content-Disposition", `attachment; filename="invoice-check-${issued.checkNumber}.pdf"`);
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e: any) {
+      console.error("[contractor-invoice] cut-check failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to issue check" });
+    }
+  });
+
+  // GET /api/contractor-payments/:paymentId/check — reprint an already-issued check. Zero financial writes.
+  app.get("/api/contractor-payments/:paymentId/check", requireAuth, requireRole("admin", "manager", "owner", "supervisor"), async (req, res) => {
+    try {
+      const pay = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${String(req.params.paymentId)}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      if (pay.payment_method !== "check") return res.status(400).json({ error: "NOT_A_CHECK_PAYMENT", message: "This payment was not issued as a check." });
+      const user = await storage.getUser(req.session.userId!);
+      if (pay.company_id && !(await canAccessCompany(user!, pay.company_id))) return res.status(403).json({ message: "Access denied" });
+      const { pdfBytes } = await buildContractorInvoiceCheckPdf(String(pay.invoice_id), req, { amount: pay.amount, checkNumber: pay.reference_number });
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `attachment; filename="invoice-check-${pay.reference_number || pay.id}.pdf"`);
+      res.set("X-Reprint", "1");
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e: any) {
+      if (e instanceof PaymentRuleError) return res.status(e.httpStatus).json({ error: e.code, message: e.message });
+      console.error("[contractor-payment] reprint failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to reprint check" });
     }
   });
 
@@ -11532,23 +13338,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       for (const c of orphanContracts.rows as any[]) {
         try {
-          const countRes = await db.execute(sql`SELECT COUNT(*) FROM contractor_invoices WHERE contractor_id = ${c.contractor_id} AND company_id = ${c.company_id}`);
-          const count = parseInt((countRes.rows[0] as any).count || "0");
-          const suffix = String(count + 1).padStart(4, "0");
-          const contractorSuffix = (c.contractor_id || "").slice(-4).toUpperCase();
-          const invNumber = `INV-${contractorSuffix}-${suffix}`;
-          const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
-          const invRes = await db.execute(sql`
-            INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_type, invoice_date, due_date, amount, status, proposal_id, contract_id)
-            VALUES (${c.company_id}, ${c.contractor_id}, ${invNumber}, 'standard', NOW(), ${dueDate.toISOString().slice(0, 10)},
-              ${c.total_value || c.proposal_amount || 0}, 'submitted', ${c.proposal_id}, ${c.id})
-            RETURNING id
-          `);
-          const invId = (invRes.rows[0] as any)?.id;
-          if (invId) {
-            await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invId} WHERE id = ${c.proposal_id} AND converted_to_invoice_id IS NULL`);
-            const invRow = (await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invId}`)).rows[0] as any;
-            if (invRow) await generateInvoicePdf(invId, invRow, req.session.userId!).catch(() => {});
+          const invoice = await autoCreateContractInvoiceExactlyOnce(c.id);
+          if (invoice?.id) {
+            await generateInvoicePdf(invoice.id, invoice, req.session.userId!).catch(() => {});
             results.orphanInvoices++;
           }
         } catch { results.errors++; }
@@ -11689,14 +13481,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let workerId: string;
       let effectiveCompanyId: string | null = null;
       if (isAdminUser && req.body.contractorId) {
-        // Admin path: create a proposal on behalf of a contractor
-        const targetWorker = await storage.getWorker(req.body.contractorId);
-        if (!targetWorker) return res.status(404).json({ message: "Contractor not found" });
-        if (targetWorker.workerType !== "contractor") return res.status(400).json({ message: "Target worker is not a contractor" });
-        if (!user || !(await canAccessCompany(user, targetWorker.companyId))) return res.status(403).json({ message: "Access denied" });
-        workerId = targetWorker.id;
-        // Derive company from validated context — do not trust client-supplied companyId
-        effectiveCompanyId = targetWorker.companyId ?? null;
+        // Admin path: create a proposal on behalf of a contractor.
+        // Only look the worker up once we know the id is a well-formed UUID.
+        const targetWorker = isValidUuid(req.body.contractorId)
+          ? await storage.getWorker(req.body.contractorId)
+          : undefined;
+        // Derive company from the validated contractor record — never trust a
+        // client-supplied companyId. But if the client DID send one (e.g. the
+        // "Client / Company" selector in the proposal builder), it must agree
+        // with the contractor's real company, or reject outright — silently
+        // overriding a mismatched selection is what let a proposal resolve to
+        // an unrelated contractor in a different company than the UI showed.
+        const reconciled = reconcileProposalContractor(req.body.contractorId, req.body.companyId, targetWorker);
+        if (!reconciled.ok) return res.status(reconciled.status).json({ message: reconciled.message });
+        if (!user || !(await canAccessCompany(user, reconciled.companyId))) return res.status(403).json({ message: "Access denied" });
+        workerId = reconciled.workerId;
+        effectiveCompanyId = reconciled.companyId;
       } else {
         const selfWorkerId = user?.workerId;
         if (!selfWorkerId) return res.status(403).json({ message: "Must be linked to a worker account" });
@@ -11977,7 +13777,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           await fs.promises.unlink(abs).catch((e: NodeJS.ErrnoException) => {
             if (e.code !== "ENOENT") {
               unlinkFailures.push(filePath);
-              console.error("[PURGE] file_unlink_failed:", filePath, e.message);
+              // Sanitized: log the error code only, not the document path.
+              console.error(`[PURGE] file_unlink_failed (${e.code || "EUNKNOWN"})`);
             }
           });
         }
@@ -12819,9 +14620,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
       const proposal = auth.proposal;
       const oldStatus = proposal.status;
+      // Idempotency guard: /send performs the pre-send -> sent transition
+      // exactly once. A second call (double-click, retried request, a second
+      // browser tab) must not re-email the client or write a duplicate audit
+      // event — /resend-email is the explicit, deliberate way to resend.
+      const PRE_SEND_STATUSES = ["draft", "internal_review", "submitted"];
+      if (!PRE_SEND_STATUSES.includes(oldStatus)) {
+        return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
+      }
       // Generate a share token if one doesn't exist yet
       const shareToken = proposal.share_token || crypto.randomBytes(32).toString("hex");
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken} WHERE id = ${req.params.id}`);
+      // The WHERE clause repeats the pre-send-status check so the transition
+      // is atomic: if two requests race past the read-time guard above, only
+      // one UPDATE can actually match and flip the status.
+      const transitionResult = await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken}
+        WHERE id = ${req.params.id} AND status = ANY(${PRE_SEND_STATUSES})
+      `);
+      if (!transitionResult.rowCount) {
+        return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
+      }
 
       // Send email to client if a client email is stored on the proposal
       let emailStatus: "sent" | "failed" | "skipped_no_client_email" = "skipped_no_client_email";
@@ -12855,23 +14673,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (emailResult.sent) {
             console.log(`[Proposals] Client notification email sent to ${proposal.client_email} for proposal ${req.params.id}`);
             emailStatus = "sent";
-            sentEventNotes = `Email sent to ${proposal.client_email} | Portal: ${portalUrl}`;
+            sentEventNotes = `Email sent to ${proposal.client_email} | Portal: ${redactDiagnosticText(portalUrl)}`;
           } else {
             console.error(`[Proposals] Email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
             emailStatus = "failed";
-            sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+            sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${redactDiagnosticText(portalUrl)}`;
           }
         } catch (emailErr: any) {
           console.error(`[Proposals] Failed to send client email for proposal ${req.params.id}:`, emailErr.message);
           emailStatus = "failed";
-          sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+          sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${redactDiagnosticText(portalUrl)}`;
         }
       } else {
-        sentEventNotes = `No client email on file | Portal: ${portalUrl}`;
+        sentEventNotes = `No client email on file | Portal: ${redactDiagnosticText(portalUrl)}`;
       }
       await logProposalEvent(req.params.id, "sent", oldStatus, "sent", req, undefined, undefined, sentEventNotes);
 
-      res.json({ message: "Proposal marked as sent", shareToken, emailStatus });
+      // Note: the raw share token is intentionally not included in this response.
+      // Nothing on the client consumes it from here — the dedicated
+      // /share-token endpoint is the only supported way to retrieve it.
+      res.json({ message: "Proposal marked as sent", emailStatus });
     } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }
   });
 
@@ -12923,19 +14744,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (emailResult.sent) {
             console.log(`[Proposals] Resent client notification email to ${proposal.client_email} for proposal ${req.params.id}`);
             emailStatus = "sent";
-            eventNotes = `Email sent to ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
+            eventNotes = `Email sent to ${proposal.client_email} (retry) | Portal: ${redactDiagnosticText(portalUrl)}`;
           } else {
             console.error(`[Proposals] Resend email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
             emailStatus = "failed";
-            eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
+            eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${redactDiagnosticText(portalUrl)}`;
           }
         } catch (emailErr: any) {
           console.error(`[Proposals] Failed to resend client email for proposal ${req.params.id}:`, emailErr.message);
           emailStatus = "failed";
-          eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${portalUrl}`;
+          eventNotes = `Email delivery failed for ${proposal.client_email} (retry) | Portal: ${redactDiagnosticText(portalUrl)}`;
         }
       } else {
-        eventNotes = `No client email on file | Portal: ${portalUrl}`;
+        eventNotes = `No client email on file | Portal: ${redactDiagnosticText(portalUrl)}`;
       }
 
       // Log as 'sent' so last_sent_event_notes (queried by event_type='sent') stays current and the badge reflects the latest outcome
@@ -13277,53 +15098,392 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to fetch payments" }); }
   });
 
-  // POST /api/contractor-invoices/:id/payments — record a payment (enforces proposal approval)
-  app.post("/api/contractor-invoices/:id/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  // GET /api/contractor-payments/:id/document?copy=payee|company — proof of
+  // payment for ANY method (check, cash, ACH, trade/barter, rent credit, other).
+  // Zero financial writes. The payee copy is the "Contractor Payment Statement —
+  // Nonemployee Compensation"; the company copy is the "Company Payment Receipt".
+  app.get("/api/contractor-payments/:id/document", requireAuth, async (req, res) => {
     try {
-      const invoiceRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`);
-      if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
-      const invoice = invoiceRes.rows[0] as any;
+      const pay = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${req.params.id}`));
+      if (!pay) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isManager = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
+      const wRes = cpRow(await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`));
+      // A non-manager may only fetch their OWN payment doc — and only when both
+      // sides of the identity are present (never let null === null through).
+      if (!isManager && (!wRes?.worker_id || !pay.contractor_id || pay.contractor_id !== wRes.worker_id)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (isManager && !isPlatform && pay.company_id && !(await canAccessCompany(user!, pay.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      // The company copy is a manager-only accounting artifact.
+      const copy = String(req.query.copy ?? "payee") === "company" ? "company" : "payee";
+      if (copy === "company" && !isManager) return res.status(403).json({ message: "Access denied" });
+
+      const inv = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${pay.invoice_id}`));
+      const proposal = inv?.proposal_id ? cpRow(await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${inv.proposal_id}`)) : null;
+      const worker = pay.contractor_id ? cpRow(await db.execute(sql`SELECT first_name, last_name, address, city, state, zip FROM workers WHERE id = ${pay.contractor_id}`)) : null;
+      const co = await companyAddressLines(pay.company_id);
+      const style = await resolveDocStyle(inv?.template_id, pay.contractor_id, pay.company_id);
+
+      const totalCents = toCents(inv?.amount);
+      const approvedCents = inv?.approved_amount != null ? toCents(inv.approved_amount) : totalCents;
+      const paidRow = cpRow(await db.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${pay.invoice_id} AND status <> 'void'`));
+      const paidToDate = toCents(paidRow?.paid);
+      let tradeValuation: number | null = null;
+      const tc = cpRow(await db.execute(sql`SELECT total_value FROM contractor_trade_compensation WHERE contractor_payment_id = ${pay.id} LIMIT 1`));
+      if (tc) tradeValuation = Number(tc.total_value);
+
+      const workerName = worker ? `${worker.first_name || ""} ${worker.last_name || ""}`.trim() : "";
+      const workerCsz = worker ? [[worker.city, worker.state].filter(Boolean).join(", "), worker.zip].filter(Boolean).join(" ") : "";
+      const input: PaymentDocInput = {
+        copy, payeeKind: "contractor", style,
+        company: { name: co.name || "Company", addressLines: co.lines },
+        payee: { name: workerName || "Contractor", addressLines: [worker?.address, workerCsz].filter(Boolean).map(String) },
+        reference: {
+          documentNumberLabel: `Payment on Invoice #${inv?.invoice_number || String(pay.invoice_id).slice(0, 8)}`,
+          title: proposal?.title || inv?.title || inv?.description || null,
+          contractReference: proposal ? `Proposal ${proposal.proposal_number || String(proposal.id).slice(0, 8)}` : (inv?.proposal_id ? `Proposal ${String(inv.proposal_id).slice(0, 8)}` : null),
+          invoiceNumber: inv?.invoice_number || null,
+          lineItems: parsePaymentDocLineItems(inv?.line_items),
+        },
+        payment: {
+          paymentId: String(pay.id), method: String(pay.payment_method || "other"), methodLabel: paymentMethodLabel(pay.payment_method),
+          amountPaid: Number(pay.amount), paymentDate: paymentDocDate(pay.paid_at),
+          checkNumber: pay.reference_number && pay.payment_method === "check" ? String(pay.reference_number) : null,
+          referenceNumber: pay.reference_number && pay.payment_method !== "check" ? String(pay.reference_number) : null,
+          description: pay.notes || null, tradeValuation,
+        },
+        balances: {
+          approvedAmount: fromCents(approvedCents),
+          amountPaidToDate: fromCents(paidToDate),
+          remainingBalance: fromCents(Math.max(0, totalCents - paidToDate)),
+        },
+      };
+      return sendPaymentDocPdf(res, input, `contractor-payment-${copy}-${String(pay.id).slice(0, 8)}.pdf`);
+    } catch (e: any) {
+      console.error("[contractor-payment] document failed:", e?.message || e);
+      return res.status(500).json({ message: "Failed to render payment document" });
+    }
+  });
+
+  // POST /api/contractor-invoices/:id/payments — record a payment.
+  // Atomic (SELECT ... FOR UPDATE on the invoice), idempotent (Idempotency-Key
+  // required), normalized payment method, and links approved fair-market-value
+  // trade compensation exactly once.
+  app.post("/api/contractor-invoices/:id/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const invoiceId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+
+      const invPre = cpRow(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId}`));
+      if (!invPre) return res.status(404).json({ message: "Invoice not found" });
+
+      const user = await storage.getUser(req.session.userId!);
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && invPre.company_id && sessionCompanyId !== invPre.company_id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (invPre.company_id && !(await canAccessCompany(user!, invPre.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
 
       // ── HARD RULE: proposal must be approved before any payment ──
-      if (invoice.proposal_id) {
-        const proposalRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invoice.proposal_id}`);
-        if (proposalRes.rows.length) {
-          const proposalStatus = (proposalRes.rows[0] as any).status;
-          if (proposalStatus !== "approved") {
-            return res.status(403).json({
-              message: `Payment blocked. The linked proposal is "${proposalStatus}" — it must be approved before any payment can be collected.`,
-              proposalStatus,
-              blocked: true,
-            });
-          }
+      if (invPre.proposal_id) {
+        const proposalStatus = (cpRow(await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invPre.proposal_id}`)) as any)?.status;
+        if (proposalStatus && proposalStatus !== "approved") {
+          return res.status(403).json({ message: `Payment blocked. The linked proposal is "${proposalStatus}" — it must be approved before any payment can be collected.`, proposalStatus, blocked: true });
         }
       }
 
-      const { amount, paymentMethod, referenceNumber, notes } = req.body;
-      if (!amount || parseFloat(amount) <= 0) return res.status(400).json({ message: "Valid amount is required" });
-
-      const balanceDue = parseFloat(invoice.balance_due ?? invoice.amount ?? "0");
-      if (parseFloat(amount) > balanceDue + 0.01) {
-        return res.status(400).json({ message: `Payment amount ($${amount}) exceeds balance due ($${balanceDue.toFixed(2)})` });
+      const method = normalizeContractorPaymentMethod((req.body as any)?.paymentMethod);
+      if (!method) {
+        return res.status(400).json({ error: "INVALID_PAYMENT_METHOD", message: `payment method must be one of: ${CONTRACTOR_PAYMENT_METHODS.join(", ")}` });
+      }
+      const description = String((req.body as any)?.description ?? (req.body as any)?.nonCashPaymentDescription ?? "").trim();
+      if (DESCRIPTION_REQUIRED_METHODS.has(method) && !description) {
+        return res.status(400).json({ error: "DESCRIPTION_REQUIRED", message: `A description is required for "${method}" payments.` });
+      }
+      const tradeCompensationId = method === "trade_credit"
+        ? (String((req.body as any)?.tradeCompensationId ?? "").trim() || null)
+        : null;
+      if (method === "trade_credit" && !tradeCompensationId) {
+        return res.status(400).json({ error: "TRADE_COMPENSATION_REQUIRED", message: "trade_credit payments require an approved trade-compensation record (tradeCompensationId)." });
       }
 
-      const userId = (req.session as any).userId;
-      const result = await db.execute(sql`
-        INSERT INTO contractor_payments (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id)
-        VALUES (${req.params.id}, ${invoice.company_id}, ${invoice.contractor_id}, ${parseFloat(amount)}, ${paymentMethod ?? null}, ${referenceNumber ?? null}, ${notes ?? null}, ${userId})
-        RETURNING *`);
+      const requestedCents = toCents((req.body as any)?.amount);
+      if (!Number.isFinite(requestedCents) || requestedCents <= 0) {
+        return res.status(400).json({ error: "INVALID_AMOUNT", message: "Payment amount must be a positive number." });
+      }
+      const fingerprint = paymentFingerprint({ companyId: invPre.company_id, invoiceId, method, amountCents: requestedCents, tradeCompensationId });
 
-      // Update invoice paid amount and balance
-      const newAmountPaid = parseFloat(invoice.amount_paid ?? "0") + parseFloat(amount);
-      const total = parseFloat(invoice.amount ?? "0");
-      const newBalance = Math.max(0, total - newAmountPaid);
-      const newStatus = newBalance <= 0.01 ? "paid" : "partially_paid";
-      const paidAt = newBalance <= 0.01 ? sql`NOW()` : sql`${invoice.paid_at ?? null}`;
-      await db.execute(sql`UPDATE contractor_invoices SET amount_paid = ${newAmountPaid}, balance_due = ${newBalance}, status = ${newStatus}, paid_at = ${paidAt}, updated_at = NOW() WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: invoice.contractor_id, notificationType: "payment_received", title: `Payment Recorded: $${parseFloat(amount).toFixed(2)}`, body: `A payment of $${parseFloat(amount).toFixed(2)} has been recorded for your invoice.`, entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=payments&id=${req.params.id}` }).catch(() => {});
+      // Idempotency pre-check (company-scoped). Same key + same fingerprint ->
+      // return the original; same key + different fingerprint -> 409.
+      const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json(priorByKey)
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+      }
 
-      res.status(201).json(result.rows[0]);
-    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to record payment" }); }
+      const referenceNumber = String((req.body as any)?.referenceNumber ?? "").trim() || null;
+      const noteText = description || String((req.body as any)?.notes ?? "").trim() || null;
+
+      let created: any;
+      try {
+        created = await db.transaction(async (tx) => {
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${invoiceId} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Invoice not found");
+          if (["draft", "voided", "voided_duplicate", "rejected", "rejected_duplicate"].includes(inv.status ?? "")) {
+            throw new PaymentRuleError(409, "INVOICE_NOT_PAYABLE", `Invoice status "${inv.status}" cannot take a payment.`);
+          }
+
+          // Authoritative remaining balance: amount - SUM(non-void payments), computed in the DB.
+          const paidRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${invoiceId} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const paidCents = toCents(paidRow?.paid);
+          const balanceDueCents = totalCents - paidCents;
+
+          const amt = checkPaymentAmount((req.body as any)?.amount, balanceDueCents);
+          if (!amt.ok) throw new PaymentRuleError(amt.code === "INVALID_AMOUNT" ? 400 : 422, amt.code, amt.message);
+
+          if (method === "trade_credit" && tradeCompensationId) {
+            const tc = cpRow(await tx.execute(sql`SELECT * FROM contractor_trade_compensation WHERE id = ${tradeCompensationId} FOR UPDATE`));
+            const chk = checkTradeCreditApplicable(
+              tc ? { id: tc.id, companyId: tc.company_id, contractorUserId: tc.contractor_user_id, approvedAt: tc.approved_at, valuationMethod: tc.valuation_method, totalValue: tc.total_value, contractorPaymentId: tc.contractor_payment_id, expensePaymentId: tc.expense_payment_id } : null,
+              { companyId: inv.company_id, contractorId: inv.contractor_id, paymentCents: amt.cents },
+            );
+            if (!chk.ok) throw new PaymentRuleError(422, chk.code, chk.message);
+          }
+
+          const payment = cpRow(await tx.execute(sql`
+            INSERT INTO contractor_payments
+              (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id, idempotency_key, idempotency_fingerprint, status)
+            VALUES (${invoiceId}, ${inv.company_id}, ${inv.contractor_id}, ${fromCents(amt.cents)}, ${method}, ${referenceNumber}, ${noteText}, ${req.session.userId}, ${idem.key}, ${fingerprint}, 'completed')
+            RETURNING *`));
+
+          if (method === "trade_credit" && tradeCompensationId) {
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = ${payment.id}, updated_at = NOW() WHERE id = ${tradeCompensationId} AND contractor_payment_id IS NULL AND expense_payment_id IS NULL`);
+          }
+
+          const newPaidCents = paidCents + amt.cents;
+          const newBalanceCents = Math.max(0, totalCents - newPaidCents);
+          const newStatus = recomputeInvoiceStatus(totalCents, newPaidCents);
+          await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(newPaidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${newStatus},
+                paid_at = ${newBalanceCents <= 0 ? sql`NOW()` : sql`paid_at`},
+                payment_method = ${method}, updated_at = NOW()
+            WHERE id = ${invoiceId}`);
+
+          return payment;
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          // Concurrent insert with the same key committed first — return the committed original.
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${invPre.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) {
+            return committed.idempotency_fingerprint === fingerprint
+              ? res.status(200).json(committed)
+              : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+          }
+        }
+        if (txErr instanceof PaymentRuleError) {
+          return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        }
+        throw txErr;
+      }
+
+      notifyAfterCommit(created.id, {
+        workerId: invPre.contractor_id, companyId: invPre.company_id, notificationType: "payment_received",
+        title: `Payment recorded: $${fromCents(toCents(created.amount)).toFixed(2)}`,
+        body: "A payment has been recorded against your invoice.",
+        entityType: "invoice", entityId: invoiceId, actionUrl: `/app/contractor-hub?section=payments&id=${invoiceId}`,
+      });
+      return res.status(201).json(created);
+    } catch (e) {
+      console.error("[contractor-payment] record failed:", e instanceof Error ? e.message : e);
+      return res.status(500).json({ message: "Failed to record payment" });
+    }
+  });
+
+  // POST /api/contractor-payments/:id/void — reverse MyPayLink's internal record
+  // of a payment. The original row is preserved (status='void' + audit fields);
+  // the invoice balance is restored and its status recomputed, atomically.
+  app.post("/api/contractor-payments/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const paymentId = String(req.params.id);
+    try {
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to void a payment." });
+
+      const payPre = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${paymentId}`));
+      if (!payPre) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (payPre.company_id && !(await canAccessCompany(user!, payPre.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      let result: any;
+      try {
+        result = await db.transaction(async (tx) => {
+          const pay = cpRow(await tx.execute(sql`SELECT * FROM contractor_payments WHERE id = ${paymentId} FOR UPDATE`));
+          if (!pay) throw new PaymentRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          if (pay.status === "void") {
+            // Repeated void is idempotent — no financial change.
+            return { payment: pay, invoice: cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${pay.invoice_id}`)), alreadyVoid: true };
+          }
+
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${pay.invoice_id} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Linked invoice not found");
+
+          const voided = cpRow(await tx.execute(sql`
+            UPDATE contractor_payments
+            SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason}
+            WHERE id = ${paymentId} AND status <> 'void'
+            RETURNING *`));
+
+          // Release any trade-compensation linkage so the value cannot be lost or double-spent.
+          await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = NULL, updated_at = NOW() WHERE contractor_payment_id = ${paymentId}`);
+
+          const paidRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${pay.invoice_id} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const paidCents = toCents(paidRow?.paid);
+          const newBalanceCents = Math.max(0, totalCents - paidCents);
+          const newStatus = recomputeInvoiceStatus(totalCents, paidCents);
+          const updatedInvoice = cpRow(await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(paidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${newStatus},
+                paid_at = ${newBalanceCents <= 0 && paidCents > 0 ? sql`paid_at` : sql`NULL`}, updated_at = NOW()
+            WHERE id = ${pay.invoice_id}
+            RETURNING *`));
+
+          return { payment: voided, invoice: updatedInvoice, alreadyVoid: false };
+        });
+      } catch (txErr) {
+        if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      if (!result.alreadyVoid) {
+        notifyAfterCommit(paymentId, {
+          workerId: payPre.contractor_id, companyId: payPre.company_id, notificationType: "payment_voided",
+          title: "A payment was reversed",
+          body: `A previously recorded payment on your invoice was reversed. ${externalSettlementDisclaimer(String(payPre.payment_method ?? "")) ?? ""}`.trim(),
+          entityType: "invoice", entityId: String(payPre.invoice_id), actionUrl: `/app/contractor-hub?section=payments&id=${payPre.invoice_id}`,
+        });
+      }
+      return res.json({
+        payment: result.payment, invoice: result.invoice, alreadyVoid: result.alreadyVoid,
+        externalSettlementNote: externalSettlementDisclaimer(String(payPre.payment_method ?? "")),
+      });
+    } catch (e) {
+      console.error("[contractor-payment] void failed:", e instanceof Error ? e.message : e);
+      return res.status(500).json({ message: "Failed to void payment" });
+    }
+  });
+
+  // POST /api/contractor-payments/:id/reissue — void the original and create one
+  // linked replacement payment, atomically. Body: { reason, amount?, paymentMethod?,
+  // referenceNumber?, description? } and an Idempotency-Key for the replacement.
+  app.post("/api/contractor-payments/:id/reissue", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    const originalId = String(req.params.id);
+    try {
+      const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      if (!idem.ok) return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: idem.message });
+      const reason = String((req.body as any)?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "REASON_REQUIRED", message: "A reason is required to reissue a payment." });
+
+      const orig = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${originalId}`));
+      if (!orig) return res.status(404).json({ message: "Payment not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (orig.company_id && !(await canAccessCompany(user!, orig.company_id))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const newMethod = normalizeContractorPaymentMethod((req.body as any)?.paymentMethod ?? orig.payment_method) ?? "check";
+      const newAmountCents = (req.body as any)?.amount !== undefined ? toCents((req.body as any).amount) : toCents(orig.amount);
+      if (!Number.isFinite(newAmountCents) || newAmountCents <= 0) {
+        return res.status(400).json({ error: "INVALID_AMOUNT", message: "Replacement amount must be a positive number." });
+      }
+      const description = String((req.body as any)?.description ?? "").trim();
+      if (DESCRIPTION_REQUIRED_METHODS.has(newMethod) && !description) {
+        return res.status(400).json({ error: "DESCRIPTION_REQUIRED", message: `A description is required for "${newMethod}" payments.` });
+      }
+      const fingerprint = paymentFingerprint({ companyId: orig.company_id, invoiceId: String(orig.invoice_id), method: newMethod, amountCents: newAmountCents, tradeCompensationId: null });
+
+      const priorByKey = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+      if (priorByKey) {
+        return priorByKey.idempotency_fingerprint === fingerprint
+          ? res.status(200).json({ replacement: priorByKey })
+          : res.status(409).json({ error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+      }
+
+      let out: any;
+      try {
+        out = await db.transaction(async (tx) => {
+          const o = cpRow(await tx.execute(sql`SELECT * FROM contractor_payments WHERE id = ${originalId} FOR UPDATE`));
+          if (!o) throw new PaymentRuleError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+          if (o.reissued_by_payment_id) throw new PaymentRuleError(409, "ALREADY_REISSUED", "This payment has already been reissued.");
+          const inv = cpRow(await tx.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${o.invoice_id} FOR UPDATE`));
+          if (!inv) throw new PaymentRuleError(404, "INVOICE_NOT_FOUND", "Linked invoice not found");
+
+          if (o.status !== "void") {
+            await tx.execute(sql`UPDATE contractor_payments SET status = 'void', voided_at = NOW(), voided_by_user_id = ${req.session.userId}, void_reason = ${reason} WHERE id = ${originalId}`);
+            await tx.execute(sql`UPDATE contractor_trade_compensation SET contractor_payment_id = NULL, updated_at = NOW() WHERE contractor_payment_id = ${originalId}`);
+          }
+
+          const paidBeforeRow = cpRow(await tx.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${o.invoice_id} AND status <> 'void'`));
+          const totalCents = toCents(inv.amount);
+          const paidBeforeCents = toCents(paidBeforeRow?.paid);
+          if (paidBeforeCents + newAmountCents > totalCents) {
+            throw new PaymentRuleError(422, "AMOUNT_EXCEEDS_BALANCE", "Replacement amount exceeds the invoice balance after reversing the original.");
+          }
+
+          const replacement = cpRow(await tx.execute(sql`
+            INSERT INTO contractor_payments
+              (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id, idempotency_key, idempotency_fingerprint, status, reverses_payment_id)
+            VALUES (${o.invoice_id}, ${o.company_id}, ${o.contractor_id}, ${fromCents(newAmountCents)}, ${newMethod},
+                    ${String((req.body as any)?.referenceNumber ?? "").trim() || null},
+                    ${description || `Reissue of payment ${originalId}: ${reason}`},
+                    ${req.session.userId}, ${idem.key}, ${fingerprint}, 'completed', ${originalId})
+            RETURNING *`));
+          await tx.execute(sql`UPDATE contractor_payments SET reissued_by_payment_id = ${replacement.id} WHERE id = ${originalId}`);
+
+          const newPaidCents = paidBeforeCents + newAmountCents;
+          const newBalanceCents = Math.max(0, totalCents - newPaidCents);
+          const newStatus = recomputeInvoiceStatus(totalCents, newPaidCents);
+          const updatedInvoice = cpRow(await tx.execute(sql`
+            UPDATE contractor_invoices
+            SET amount_paid = ${fromCents(newPaidCents)}, balance_due = ${fromCents(newBalanceCents)}, status = ${newStatus},
+                paid_at = ${newBalanceCents <= 0 ? sql`NOW()` : sql`NULL`}, payment_method = ${newMethod}, updated_at = NOW()
+            WHERE id = ${o.invoice_id}
+            RETURNING *`));
+
+          return { original: originalId, replacement, invoice: updatedInvoice };
+        });
+      } catch (txErr) {
+        if (isUniqueConstraintViolation(txErr)) {
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${orig.company_id} AND idempotency_key = ${idem.key} LIMIT 1`));
+          if (committed) return res.status(committed.idempotency_fingerprint === fingerprint ? 200 : 409).json(committed.idempotency_fingerprint === fingerprint ? { replacement: committed } : { error: "IDEMPOTENCY_KEY_REUSED", message: "This Idempotency-Key was already used for a different payment." });
+        }
+        if (txErr instanceof PaymentRuleError) return res.status(txErr.httpStatus).json({ error: txErr.code, message: txErr.message });
+        throw txErr;
+      }
+
+      notifyAfterCommit(out.replacement.id, {
+        workerId: orig.contractor_id, companyId: orig.company_id, notificationType: "payment_reissued",
+        title: "A payment was reissued",
+        body: "A payment on your invoice was reversed and reissued.",
+        entityType: "invoice", entityId: String(orig.invoice_id), actionUrl: `/app/contractor-hub?section=payments&id=${orig.invoice_id}`,
+      });
+      return res.status(201).json({ ...out, externalSettlementNote: externalSettlementDisclaimer(String(orig.payment_method ?? "")) });
+    } catch (e) {
+      console.error("[contractor-payment] reissue failed:", e instanceof Error ? e.message : e);
+      return res.status(500).json({ message: "Failed to reissue payment" });
+    }
   });
 
   // POST /api/contractor-invoices/:id/stripe-checkout-session — create Stripe Checkout session for online payment
@@ -13794,7 +15954,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
-      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
+      // contractor_email is resolved across every identity source in the same
+      // precedence the shared resolver uses (server/identity/identity-resolver.ts):
+      // worker email → work email → home email → linked login account → linked
+      // global person. Keeps the Add Signer dialog from showing "No email on
+      // file" when the address is on the linked user/person record.
+      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, COALESCE(w.email, w.work_email, w.home_email, u.email, p.email) AS contractor_email FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN users u ON u.worker_id = w.id LEFT JOIN persons p ON p.id = w.person_id WHERE cc.id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
       const contract = result.rows[0] as any;
       // Ownership check: admin sees company contracts; contractor sees own
@@ -13855,8 +16020,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   const CONTRACT_ACTIVE_SIGNER_STATUSES = ["pending", "sent", "viewed", "unsent", "draft"];
   const CONTRACT_UNSIGNED_SIGNER_STATUSES = [...CONTRACT_ACTIVE_SIGNER_STATUSES, "failed"];
 
+  function normalizeRecipientEmail(value: string | null | undefined): string {
+    return (value ?? "").trim().toLowerCase();
+  }
+
   function normalizeSignerEmail(email: unknown): string | null {
-    const normalized = String(email || "").trim().toLowerCase();
+    const normalized = normalizeRecipientEmail(typeof email === "string" ? email : email == null ? null : String(email));
     return normalized || null;
   }
 
@@ -13923,6 +16092,47 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       ).catch(() => {});
     }
     return pendingCount === 0 && signedCount > 0 ? "fully_signed" : pendingCount > 0 && signedCount > 0 ? "partially_signed" : null;
+  }
+
+  async function autoCreateContractInvoiceExactlyOnce(contractId: string) {
+    return db.transaction(async (tx) => {
+      const contract = firstRow<any>(await tx.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`));
+      if (!contract?.proposal_id) return null;
+      const proposal = firstRow<any>(await tx.execute(sql`
+        SELECT * FROM contractor_proposals
+        WHERE id = ${contract.proposal_id} AND company_id = ${contract.company_id}
+        FOR UPDATE
+      `));
+      if (!proposal) return null;
+      const standardInvoiceTemplate = firstRow<any>(await tx.execute(sql`
+        SELECT id FROM contractor_templates
+        WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice'
+        LIMIT 1
+      `));
+      return autoCreateProposalBackedInvoice(contract, proposal, {
+        countInvoicesForContractor: async (contractorId: string) => Number((firstRow<any>(await tx.execute(sql`
+          SELECT COUNT(*) AS c FROM contractor_invoices
+          WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}
+        `))?.c) || 0),
+        findExistingInvoice: async (contractForInvoice, proposalForInvoice) => firstRow<any>(await tx.execute(sql`
+          SELECT * FROM contractor_invoices
+          WHERE company_id = ${contract.company_id}
+            AND (contract_id = ${contractForInvoice.id} OR proposal_id = ${proposalForInvoice.id})
+          ORDER BY created_at ASC LIMIT 1
+        `)),
+        createInvoice: async (values: Record<string, unknown>) => firstRow<any>(await tx.execute(sql`
+          INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id, template_id, documenso_completion_idempotency_key)
+          VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id}, ${standardInvoiceTemplate?.id || null}, ${values.documenso_completion_idempotency_key})
+          RETURNING *
+        `)),
+        markProposalConverted: async (proposalId: string, invoiceId: string) => {
+          await tx.execute(sql`
+            UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW()
+            WHERE id = ${proposalId} AND company_id = ${contract.company_id} AND converted_to_invoice_id IS NULL
+          `);
+        },
+      });
+    });
   }
 
   // Auto-snapshot the current contract state into contract_versions before a mutation.
@@ -14040,7 +16250,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return res.status(202).json({ message: "Documenso is configured. Use POST /api/contractor-contracts/:id/send-for-signature to create and send the signing envelope.", contractId: req.params.id, baseUrl: config.baseUrl });
   });
 
-  app.get("/api/signing/contracts/:token", async (req, res) => {
+  const getPublicContractSigningStatus = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`
@@ -14049,10 +16259,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                cc.id AS contract_id, cc.title, cc.company_id, cc.contractor_id, cc.status AS contract_status,
                dsr.id AS signature_request_id, dsr.documenso_document_id, dsr.status AS signature_request_status
         FROM contract_signers cs
-        JOIN contractor_contracts cc ON cc.id = cs.contract_id
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
         LEFT JOIN LATERAL (
           SELECT * FROM documenso_signature_requests dsr
-          WHERE dsr.document_type = 'contract'
+          WHERE dsr.document_type IN ('contract', 'contractor_hub_contract')
             AND dsr.related_record_id = cc.id
             AND dsr.company_id = cc.company_id
           ORDER BY dsr.created_at DESC LIMIT 1
@@ -14061,33 +16271,40 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         LIMIT 1
       `);
       const row = result.rows[0] as any;
-      if (!row) return res.status(404).json({ state: "missing_contract", message: "We could not find this contract." });
-      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_or_canceled", message: "This signing link is expired or no longer active." });
-      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id}`).catch(() => {});
+      if (!row) return res.status(404).json({ state: "invalid_link", reason: "invalid_link", safeErrorReason: "invalid_link", message: "This signing link is invalid. Please contact the sender for a new link." });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_link", reason: "expired_link", safeErrorReason: "expired_link", message: "This signing link has expired. Please contact the sender for a new link." });
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id} AND company_id = ${row.company_id}`).catch(() => {});
       if ((req.path || "").includes("/status") || row.documenso_document_id) {
         await syncDocumensoContractStatus(row.contract_id).catch((err) => console.warn("[Documenso] contract status sync failed", err?.message || err));
       }
       const refreshed = firstRow<any>(await db.execute(sql`
         SELECT cs.status AS signer_status, cc.status AS contract_status
-        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id
-        WHERE cs.id = ${row.signer_id}
+        FROM contract_signers cs JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
+        WHERE cs.id = ${row.signer_id} AND cs.company_id = ${row.company_id}
       `).catch(() => ({ rows: [] } as any)));
       if (refreshed) { row.signer_status = refreshed.signer_status; row.contract_status = refreshed.contract_status; }
       const inactiveSignerStatuses = ["canceled", "cancelled", "expired", "void", "replaced", "voided", "declined"];
+      const documensoMissingSigningUrl = !!row.documenso_document_id && !row.documenso_signing_url && !["signed", "fully_signed", "completed", "active"].includes(String(row.signer_status || row.contract_status));
       const state = ["fully_signed", "completed", "active"].includes(String(row.contract_status))
         ? "fully_signed"
         : inactiveSignerStatuses.includes(String(row.signer_status || row.signature_request_status || row.contract_status))
           ? "expired_or_canceled"
           : row.signer_status === "signed"
             ? "already_signed"
-            : "pending_signature";
+            : documensoMissingSigningUrl
+              ? "documenso_unavailable"
+              : "pending_signature";
       res.json({
         state,
+        reason: state,
+        safeErrorReason: state === "pending_signature" ? null : state,
         message: state === "fully_signed" ? "Contract fully signed."
           : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
           : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
+          : state === "documenso_unavailable" ? "The signing provider is temporarily unavailable for this link. Please contact the sender or try again later."
           : "This contract is ready for your signature.",
         contractId: row.contract_id,
+        publicContractId: row.contract_id,
         title: row.title,
         signerName: row.signer_name,
         signerEmail: row.email,
@@ -14096,13 +16313,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         signatureRequestId: row.signature_request_id,
         documensoDocumentId: row.documenso_document_id,
         documensoRecipientId: row.documenso_recipient_id,
+        signingProviderUrl: row.documenso_signing_url,
         documensoSigningUrl: row.documenso_signing_url,
+        embeddedSigningData: null,
         canSign: state === "pending_signature",
+        isDocumensoUnavailable: state === "documenso_unavailable",
       });
-    } catch (e: any) { res.status(500).json({ message: "Failed to load signing link" }); }
-  });
+    } catch (e: any) {
+      console.error("[PublicContractSigning] status lookup failed", e?.message || e);
+      res.status(500).json({ state: "server_error", reason: "server_error", safeErrorReason: "server_error", message: "We could not load this signing link right now. Please try again or contact the sender." });
+    }
+  };
 
-  app.post("/api/signing/contracts/:token/complete", async (req, res) => {
+  app.get("/api/public/sign/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/public/sign/contracts/:token/status", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token", getPublicContractSigningStatus);
+  app.get("/api/signing/contracts/:token/status", getPublicContractSigningStatus);
+
+  const completePublicContractSignature = async (req: any, res: any) => {
     try {
       const tokenHash = hashSigningToken(req.params.token);
       const result = await db.execute(sql`SELECT * FROM contract_signers WHERE signing_token_hash = ${tokenHash} LIMIT 1`);
@@ -14125,9 +16353,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${signer.contract_id}`
         : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${signer.contract_id}`
       );
+      if (pendingCount === 0 && signer.contract_id) {
+        try {
+          await autoCreateContractInvoiceExactlyOnce(signer.contract_id);
+        } catch (invoiceErr) { console.warn("[PublicContractSigning] auto-invoice creation failed", invoiceErr); }
+      }
       res.json({ success: true, contractStatus: pendingCount === 0 ? "fully_signed" : "partially_signed" });
-    } catch (e: any) { res.status(500).json({ message: "Failed to complete signature" }); }
-  });
+    } catch (e: any) { res.status(500).json({ state: "server_error", message: "Failed to complete signature" }); }
+  };
+
+  app.post("/api/public/sign/contracts/:token/complete", completePublicContractSignature);
+  app.post("/api/signing/contracts/:token/complete", completePublicContractSignature);
 
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -14182,9 +16418,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (contract.status !== "draft") return res.status(400).json({ message: "Only draft contracts can be sent" });
-      await autoSnapshotContract(req.params.id, req.session.userId!, "pre-send snapshot");
+      // Legacy/manual send is only for contracts never connected to Documenso — never a bypass path
+      // once a Documenso envelope exists for this contract.
+      const documensoBacked = firstRow<any>(await db.execute(sql`SELECT id FROM documenso_signature_requests WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id} AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL LIMIT 1`).catch(() => ({ rows: [] } as any)));
+      if (documensoBacked?.id) return res.status(400).json({ message: "This contract is connected to Documenso. Use Send via Documenso instead of the legacy send path." });
+      const { reason } = req.body;
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required to use the legacy/manual send path." });
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-send snapshot: ${reason}`);
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "contract_legacy_send", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ reason }) }).catch(() => {});
       createContractorNotification({ workerId: contract.contractor_id, notificationType: "contract_sent", title: `Contract Ready for Signature: ${contract.title || req.params.id}`, body: "A contract has been sent to you for review and signature.", entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
       // Notify contractor
       try {
@@ -14463,46 +16706,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // ── Auto-create invoice after all required parties have signed ────────────
       if (newStatus === "fully_signed" && contractData?.proposal_id) {
         try {
-          const propCheck = await db.execute(sql`
-            SELECT id, converted_to_invoice_id, company_id, contractor_id, amount,
-                   description, title, proposal_number, expiration_date, line_items,
-                   notes, job_id, cost_center_id, branding_id, currency,
-                   archived_document_id AS prop_dam_id
-            FROM contractor_proposals WHERE id = ${contractData.proposal_id}
-          `);
-          const prop = propCheck.rows[0] as any;
-          if (prop && !prop.converted_to_invoice_id) {
-            const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${prop.contractor_id}`);
-            const invCount = Number((cntRes.rows[0] as any)?.c ?? 0);
-            const autoInvoiceNumber = `INV-${String(prop.contractor_id ?? "").slice(-4).toUpperCase()}-${String(invCount + 1).padStart(4, "0")}`;
-            const today = new Date().toISOString().split("T")[0];
-            let invTemplateId: string | null = null;
-            try {
-              const stdRes = await db.execute(sql`SELECT id FROM contractor_templates WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice' LIMIT 1`);
-              invTemplateId = (stdRes.rows[0] as any)?.id || null;
-            } catch { /* ok */ }
-
-            const autoInvRes = await db.execute(sql`
-              INSERT INTO contractor_invoices (
-                company_id, contractor_id, invoice_number, invoice_date, due_date,
-                amount, description, proposal_id, contract_id, proposal_reference,
-                line_items, notes, status, is_1099_reportable,
-                job_id, cost_center_id, branding_id, template_id
-              ) VALUES (
-                ${contractData.company_id}, ${prop.contractor_id}, ${autoInvoiceNumber},
-                ${today}, ${prop.expiration_date || null},
-                ${prop.amount || 0}, ${prop.description || prop.title || null},
-                ${prop.id}, ${req.params.id}, ${prop.proposal_number || null},
-                ${prop.line_items || null}, ${prop.notes || null},
-                'submitted', TRUE,
-                ${prop.job_id || null}, ${prop.cost_center_id || null},
-                ${prop.branding_id || null}, ${invTemplateId || null}
-              ) RETURNING *
+          const autoInvoice = await autoCreateContractInvoiceExactlyOnce(req.params.id);
+          if (autoInvoice?.id) {
+            const propCheck = await db.execute(sql`
+              SELECT *, archived_document_id AS prop_dam_id
+              FROM contractor_proposals
+              WHERE id = ${contractData.proposal_id} AND company_id = ${contractData.company_id}
             `);
-            const autoInvoice = autoInvRes.rows[0] as any;
-
-            if (autoInvoice?.id) {
-              await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${autoInvoice.id}, updated_at = NOW() WHERE id = ${prop.id}`).catch(() => {});
+            const prop = propCheck.rows[0] as any;
+            if (prop) {
+              const autoInvoiceNumber = autoInvoice.invoice_number;
 
               // Archive invoice PDF to DAM
               try {
@@ -14566,9 +16779,52 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (["void", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: `Contract is already ${contract.status}` });
       const { reason } = req.body;
-      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot${reason ? ": " + reason : ""}`);
-      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required to void a contract." });
+
+      // Block once irreversible downstream financial activity exists — route those cases to an
+      // explicit reversal/cancellation workflow instead of allowing Void to paper over them.
+      const downstreamInvoice = firstRow<any>(await db.execute(sql`
+        SELECT id, status FROM contractor_invoices
+        WHERE contract_id = ${req.params.id} AND company_id = ${contract.company_id}
+          AND (paid_at IS NOT NULL OR COALESCE(amount_paid, 0)::numeric > 0 OR export_status IN ('exported', 'posted'))
+        LIMIT 1
+      `).catch(() => ({ rows: [] } as any)));
+      if (downstreamInvoice?.id) {
+        return res.status(400).json({ message: "This contract cannot be voided: a related invoice has already been paid, has a recorded payment, or has been posted to accounting. Use the invoice reversal/cancellation workflow instead.", downstreamInvoiceId: downstreamInvoice.id });
+      }
+
+      // Best-effort remote cancellation — only attempted while the envelope is still in a
+      // cancellable state, and never allowed to block the local void either way.
+      const sigReq = firstRow<any>(await db.execute(sql`
+        SELECT documenso_document_id, status FROM documenso_signature_requests
+        WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id}
+          AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1
+      `).catch(() => ({ rows: [] } as any)));
+      const cancellableRemoteStatuses = ["draft", "pending", "sent", "partially_signed"];
+      let remoteVoidResult: { attempted: boolean; success: boolean; error?: string } = { attempted: false, success: false };
+      if (sigReq?.documenso_document_id && cancellableRemoteStatuses.includes(String(sigReq.status || "").toLowerCase())) {
+        remoteVoidResult.attempted = true;
+        try {
+          const { voidDocumensoDocument } = await import("./services/documenso.js");
+          await voidDocumensoDocument(sigReq.documenso_document_id);
+          remoteVoidResult.success = true;
+        } catch (remoteErr: any) {
+          remoteVoidResult.error = remoteErr?.message || String(remoteErr);
+        }
+      }
+
+      const priorStatus = contract.status;
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot: ${reason}`);
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason}, updated_at = NOW() WHERE id = ${req.params.id} AND company_id = ${contract.company_id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_contract", objectId: req.params.id, actionType: "contract_voided",
+        actorUserId: req.session.userId, companyId: contract.company_id,
+        metadataJson: JSON.stringify({ reason, priorStatus, documensoDocumentId: sigReq?.documenso_document_id || null, remoteVoidResult }),
+      }).catch(() => {});
+
       // Notify contractor of void
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
@@ -14576,11 +16832,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const wRes = await db.execute(sql`SELECT u.email, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
         const recipient = wRes.rows[0] as any;
         if (recipient?.email) {
-          sendContractEventEmail({ event: "contract_voided" as any, recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: reason || "Contract has been voided.", actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+          sendContractEventEmail({ event: "contract_voided" as any, recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: reason, actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
         }
-        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_voided', ${"Contract Voided: " + contract.title}, ${reason || "This contract has been voided."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_voided', ${"Contract Voided: " + contract.title}, ${reason}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
       } catch (notifErr) { console.error("[Contract] Notify void failed:", notifErr); }
-      res.json(result.rows[0]);
+      res.json({ ...result.rows[0], remoteVoidResult });
     } catch (e: any) { res.status(500).json({ message: "Failed to void contract: " + e.message }); }
   });
 
@@ -14621,12 +16877,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      // Documenso-backed contracts activate automatically once signing is verified (webhook or
+      // reconciliation) via activateContractAfterVerifiedCompletion. Manual Activate is reserved for
+      // imported/manual contracts whose required evidence is recorded outside Documenso — offering it
+      // as a workaround for a Documenso contract that looks "stuck" would bypass verification instead
+      // of fixing the underlying sync gap.
+      const documensoBacked = firstRow<any>(await db.execute(sql`
+        SELECT id FROM documenso_signature_requests
+        WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${req.params.id}
+          AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL
+        LIMIT 1
+      `).catch(() => ({ rows: [] } as any)));
+      if (documensoBacked?.id) {
+        return res.status(400).json({ message: "This contract is managed by Documenso and activates automatically once signing is verified. If it looks stuck, reconcile status instead of activating manually." });
+      }
       if (!["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status)) {
         return res.status(400).json({ message: "Contract cannot be activated from current status" });
       }
-      await autoSnapshotContract(req.params.id, req.session.userId!, "pre-activate snapshot");
-      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'active', updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      const { reason } = req.body;
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required to manually activate a contract." });
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-activate snapshot: ${reason}`);
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'active', updated_at = NOW() WHERE id = ${req.params.id} AND company_id = ${contract.company_id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "contract_manually_activated", actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ reason, priorStatus: contract.status }) }).catch(() => {});
       // Create DAM document record for the activated contract
       try {
         const baseUrl = process.env.APP_BASE_URL || "";
@@ -14658,16 +16931,51 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contract = await assertContractSignerManageAccess(contractId, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (["void", "fully_signed", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to a contract in " + contract.status + " status" });
-      const { name, email, role, workerId, userId, isRequired = true } = req.body;
+      let { name, email, workerId } = req.body;
+      const { role, userId, isRequired = true } = req.body;
+      // Validate role: must be one of the accepted signer roles
+      const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
+      const signerRole = validRoles.includes(role) ? role : "contractor";
+      // A "contractor" role signer must always be the contract's own contractor —
+      // name/email are derived from that worker's profile, never taken from free
+      // client input, and there is no authorized-override workflow for this yet,
+      // so any mismatch is blocked outright (see contractor-proposal-identity.ts).
+      if (signerRole === "contractor") {
+        const contractorProfile = contract.contractor_id ? await storage.getWorker(contract.contractor_id) : undefined;
+        // Shared identity resolver (PR 1): also consider the worker's home email,
+        // the linked login account's email, and the linked global person's
+        // email — all loaded scoped to this contract's company. Fixes the
+        // "No email on file" false negative when the address lives on the
+        // linked user/person record rather than workers.email/work_email.
+        const signerIdentity = await loadWorkerSignerIdentity(contract.contractor_id, contract.company_id);
+        const resolved = resolveContractorSignerIdentity(
+          contract.contractor_id,
+          workerId || null,
+          email || null,
+          contractorProfile
+            ? {
+                id: contractorProfile.id,
+                firstName: contractorProfile.firstName,
+                lastName: contractorProfile.lastName,
+                email: contractorProfile.email,
+                workEmail: contractorProfile.workEmail,
+                homeEmail: signerIdentity.sources.workerHomeEmail ?? (contractorProfile as any).homeEmail ?? null,
+                linkedUserEmail: signerIdentity.sources.linkedUserEmail ?? null,
+                linkedPersonEmail: signerIdentity.sources.linkedPersonEmail ?? null,
+              }
+            : undefined,
+        );
+        if (!resolved.ok) return res.status(resolved.status).json({ message: resolved.message });
+        name = resolved.name;
+        email = resolved.email;
+        workerId = resolved.workerId;
+      }
       if (!name) return res.status(400).json({ message: "Signer name is required" });
       const normalizedEmail = normalizeSignerEmail(email);
       if (normalizedEmail && await hasDuplicateActiveContractSigner(contractId, normalizedEmail)) return res.status(409).json({ message: "This signer is already assigned to this contract." });
       // Validate that userId/workerId belongs to the same company as the contract (prevent cross-company notification leak)
       const scopeError = await validateContractSignerCompanyScope(contract, workerId, userId);
       if (scopeError) return res.status(403).json({ message: scopeError });
-      // Validate role: must be one of the accepted signer roles
-      const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
-      const signerRole = validRoles.includes(role) ? role : "contractor";
       const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${contractId}`);
       const order = parseInt((count.rows[0] as any).count) + 1;
       const token = crypto.randomBytes(32).toString("base64url");
@@ -14711,10 +17019,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contractRes = await db.execute(sql`
         SELECT cc.*,
           w.first_name || ' ' || w.last_name AS contractor_name,
-          COALESCE(w.email, w.work_email) AS contractor_email,
+          COALESCE(w.email, w.work_email, w.home_email, u.email, p.email) AS contractor_email,
           co.name AS company_name
         FROM contractor_contracts cc
         LEFT JOIN workers w ON w.id = cc.contractor_id
+        LEFT JOIN users u ON u.worker_id = w.id
+        LEFT JOIN persons p ON p.id = w.person_id
         LEFT JOIN companies co ON co.id = cc.company_id
         WHERE cc.id = ${contractId}
       `);
@@ -14903,10 +17213,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   function getDocumensoResendBlockReason(documentStatus: unknown, recipientStatus?: unknown, recipientFound = true): string | null {
     const docStatus = normalizeDocumensoRecipientStatus(documentStatus);
     const recStatus = normalizeDocumensoRecipientStatus(recipientStatus);
-    if (["completed", "signed"].includes(docStatus)) return "This contract has already been completed.";
+    if (["completed", "signed"].includes(docStatus)) return "Completed document";
     if (["voided", "canceled", "cancelled"].includes(docStatus)) return "Document voided";
-    if (["archived", "deleted"].includes(docStatus)) return docStatus === "archived" ? "Document archived" : "Document not found";
-    if (!recipientFound) return "Recipient not found";
+    if (docStatus === "archived") return "Document archived";
+    if (docStatus === "deleted") return "Document not found";
+    if (!recipientFound) return "Recipient missing remotely";
     if (recStatus === "signed") return "Already signed";
     if (recStatus === "declined") return "Recipient declined";
     if (["canceled", "cancelled", "voided"].includes(recStatus)) return "Recipient cancelled";
@@ -14919,18 +17230,80 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : Array.isArray(remote?.rawResponse?.recipients) ? remote.rawResponse.recipients
       : Array.isArray(remote?.rawResponse?.data?.recipients) ? remote.rawResponse.data.recipients
       : fallback;
-    return raw.map((r: any) => ({
-      id: String(r?.id || r?.token || r?.recipientId || r?.recipient_id || "") || null,
-      name: r?.name || null,
-      email: normalizeSignerEmail(r?.email || r?.recipientEmail || r?.recipient_email),
-      role: r?.role || r?.type || null,
-      status: normalizeDocumensoRecipientStatus(r?.status || r?.signingStatus || r?.readStatus),
-      signingUrl: r?.signingUrl || r?.signing_url || null,
-    }));
+    return raw.map((r: any) => {
+      const signingToken = r?.token ?? null;
+
+      return {
+        id:
+          r?.id != null
+            ? String(r.id)
+            : r?.recipientId != null
+              ? String(r.recipientId)
+              : null,
+        signingToken,
+        name: r?.name || null,
+        email: normalizeSignerEmail(
+          r?.email || r?.recipientEmail || r?.recipient_email,
+        ),
+        role: r?.role || r?.type || null,
+        status: normalizeDocumensoRecipientStatus(
+          r?.status || r?.signingStatus || r?.readStatus,
+        ),
+        signingUrl:
+          r?.signingUrl ??
+          r?.signing_url ??
+          (signingToken
+            ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${signingToken}`
+            : null),
+      };
+    });
   }
 
-  async function refreshDocumensoContractRecipientMetadata(contractId: string, contract: any, sigReq: any, remote: any, actorUserId?: string | null) {
+  function maskAuditEmail(email: string | null | undefined): string | null {
+    const normalized = normalizeRecipientEmail(email);
+    if (!normalized) return null;
+    const [local, domain] = normalized.split("@");
+    if (!domain) return "***";
+    return `${local.slice(0, 2)}***@${domain}`;
+  }
+
+  async function refreshDocumensoRecipientMappings({ contractId, companyId, documensoDocumentId, actorUserId, remote: providedRemote, reason = "resend_recipient_not_found" }: { contractId: string; companyId: string; documensoDocumentId: string; actorUserId?: string | null; remote?: any; reason?: string }) {
+    const sigReq = firstRow<any>(await db.execute(sql`
+      SELECT * FROM documenso_signature_requests
+      WHERE document_type IN ('contract','contractor_hub_contract')
+        AND related_record_id = ${contractId}
+        AND company_id = ${companyId}
+        AND documenso_document_id = ${documensoDocumentId}
+      ORDER BY created_at DESC LIMIT 1
+    `));
+    if (!sigReq) throw new Error("Documenso signature request not found for this contract.");
+    const remote = providedRemote || await getDocumensoDocument(documensoDocumentId);
+    const liveDocumentId = String(remote?.documentId || remote?.id || remote?.envelopeId || remote?.rawResponse?.id || remote?.rawResponse?.envelopeId || documensoDocumentId);
+    if (liveDocumentId && liveDocumentId !== String(documensoDocumentId)) throw new Error("Documenso document mismatch for this contract.");
     const recipients = extractDocumensoRecipients(remote);
+    const byEmail = new Map<string, any[]>();
+    for (const recipient of recipients) {
+      if (!recipient.email) continue;
+      const list = byEmail.get(recipient.email) || [];
+      list.push(recipient);
+      byEmail.set(recipient.email, list);
+    }
+    const signers = (await db.execute(sql`
+      SELECT * FROM contract_signers
+      WHERE contract_id = ${contractId}
+        AND company_id = ${companyId}
+        AND status IN ('pending','sent','viewed','unsent','draft','failed')
+        AND email IS NOT NULL
+      ORDER BY COALESCE(signing_order, "order", 1) ASC
+    `)).rows as any[];
+    const results = signers.map((signer) => {
+      const email = normalizeSignerEmail(signer.email);
+      const matches = email ? (byEmail.get(email) || []) : [];
+      const live = matches.length === 1 ? matches[0] : null;
+      const blockReason = matches.length > 1 ? "Multiple live Documenso recipients match this email; manual review required." : getDocumensoResendBlockReason(remote?.status, live?.status, !!live);
+      return { signer, email, live, oldRecipientId: signer.documenso_recipient_id || null, newRecipientId: live?.id || null, signingUrl: live?.signingUrl || null, refreshed: !!(live?.id && live.id !== signer.documenso_recipient_id), reason: blockReason };
+    });
+    const changed = results.filter((r) => r.refreshed);
     const metadata = recipients.map((r: any) => ({ email: r.email, recipientId: r.id, signingUrl: r.signingUrl, status: r.status, role: r.role }));
     await db.transaction(async (tx) => {
       await tx.execute(sql`
@@ -14939,23 +17312,34 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             status = ${normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(remote?.status || remote?.rawResponse?.status || sigReq.status))},
             raw_response = COALESCE(${remote ? JSON.stringify(remote.rawResponse || remote) : null}, raw_response),
             updated_at = NOW()
-        WHERE id = ${sigReq.id}
+        WHERE id = ${sigReq.id} AND company_id = ${companyId}
       `);
-      for (const r of recipients) {
+      for (const r of results) {
+        if (!r.live) continue;
         await tx.execute(sql`
           UPDATE contract_signers
-          SET documenso_recipient_id = COALESCE(${r.id}, documenso_recipient_id),
+          SET documenso_recipient_id = CASE WHEN ${r.newRecipientId} IS NOT NULL AND documenso_recipient_id IS DISTINCT FROM ${r.newRecipientId} THEN ${r.newRecipientId} ELSE documenso_recipient_id END,
               documenso_signing_url = COALESCE(${r.signingUrl}, documenso_signing_url),
-              status = CASE WHEN ${r.status} IN ('signed','declined','canceled','cancelled') THEN ${r.status} ELSE status END,
-              updated_at = NOW()
-          WHERE contract_id = ${contractId}
+              status = CASE WHEN ${r.live.status} IN ('signed','declined','canceled','cancelled') THEN ${r.live.status} ELSE status END,
+              updated_at = CASE WHEN documenso_recipient_id IS DISTINCT FROM ${r.newRecipientId} OR ${r.signingUrl} IS NOT NULL THEN NOW() ELSE updated_at END
+          WHERE id = ${r.signer.id}
+            AND contract_id = ${contractId}
+            AND company_id = ${companyId}
             AND lower(trim(email)) = ${r.email}
         `);
       }
     });
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_recipient_refresh", actorUserId: actorUserId || undefined, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, recipientCount: recipients.length }) }).catch(() => {});
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_metadata_updated", actorUserId: actorUserId || undefined, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, recipients: metadata }) }).catch(() => {});
-    return recipients;
+    for (const r of changed) {
+      const metadataJson = JSON.stringify({ contract_id: contractId, document_id: documensoDocumentId, recipient_email: maskAuditEmail(r.email), old_recipient_id: r.oldRecipientId, new_recipient_id: r.newRecipientId, reason });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_recipient_refresh", actorUserId: actorUserId || undefined, companyId, metadataJson }).catch(() => {});
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_metadata_updated", actorUserId: actorUserId || undefined, companyId, metadataJson }).catch(() => {});
+    }
+    return { remote, recipients, results, refreshedCount: changed.length };
+  }
+
+  async function refreshDocumensoContractRecipientMetadata(contractId: string, contract: any, sigReq: any, remote: any, actorUserId?: string | null) {
+    const refreshed = await refreshDocumensoRecipientMappings({ contractId, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId, remote, reason: "resend_recipient_not_found" });
+    return refreshed.recipients;
   }
 
   async function syncDocumensoContractStatus(contractId: string) {
@@ -14978,6 +17362,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : Array.isArray((remote as any)?.rawResponse?.recipients) ? (remote as any).rawResponse.recipients
       : Array.isArray((remote as any)?.rawResponse?.data?.recipients) ? (remote as any).rawResponse.data.recipients
       : [];
+    const canonicalRecipients = extractDocumensoRecipients(remote);
     const normalizeRecipientStatus = (value: any) => {
       const v = String(value || "").toLowerCase();
       if (["completed", "complete", "signed", "document.signed", "recipient.signed"].includes(v)) return "signed";
@@ -14989,8 +17374,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       return null;
     };
     let signersUpdated = 0;
-    for (const recipient of rawRecipients) {
-      const recipientId = String(recipient?.id || recipient?.token || recipient?.recipientId || recipient?.recipient_id || "") || null;
+    for (const [recipientIdx, recipient] of rawRecipients.entries()) {
+      const recipientId = canonicalRecipients[recipientIdx]?.id ?? null;
       const email = normalizeSignerEmail(recipient?.email || recipient?.recipientEmail || recipient?.recipient_email);
       const status = normalizeRecipientStatus(recipient?.status || recipient?.signingStatus || recipient?.readStatus);
       if (!status || (!recipientId && !email)) continue;
@@ -15021,14 +17406,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const remoteStatus = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus((remote as any)?.status || (remote as any)?.rawResponse?.status || sigReq.status));
     const allSigned = activeRequired > 0 && signedRequired >= activeRequired;
     const nextStatus = allSigned || remoteStatus === "completed" ? "fully_signed" : signedRequired > 0 ? "partially_signed" : contract.status;
-    if (["partially_signed", "fully_signed"].includes(nextStatus) && contract.status !== nextStatus && contract.status !== "completed") {
+    // Never move a contract backward: only advance from a non-terminal, non-active status. This
+    // makes reconciliation safe to call repeatedly (including racing a webhook) without regressing
+    // an already-active/void/terminated contract back toward pending/partially_signed.
+    const lockedStatuses = ["active", "completed", "void", "terminated"];
+    let effectiveStatus = contract.status;
+    if (["partially_signed", "fully_signed"].includes(nextStatus) && contract.status !== nextStatus && !lockedStatuses.includes(contract.status)) {
       await db.execute(nextStatus === "fully_signed"
-        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`
-        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${contractId}`);
+        ? sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contractId} AND status NOT IN ('active','completed','void','terminated')`
+        : sql`UPDATE contractor_contracts SET status = 'partially_signed', updated_at = NOW() WHERE id = ${contractId} AND status NOT IN ('active','completed','void','terminated')`);
+      effectiveStatus = nextStatus;
     }
     await db.execute(sql`UPDATE documenso_signature_requests SET status = ${remoteStatus}, raw_response = COALESCE(${remote ? JSON.stringify((remote as any).rawResponse || remote) : null}, raw_response), updated_at = NOW() WHERE id = ${sigReq.id}`).catch(() => {});
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_status_synced", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, status: nextStatus, signersUpdated }) }).catch(() => {});
-    return { contractId, status: nextStatus, documensoDocumentId: sigReq.documenso_document_id, signersUpdated, remoteStatus };
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_status_synced", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, status: effectiveStatus, signersUpdated }) }).catch(() => {});
+
+    // Authoritative remote reconciliation reaching "fully signed" must converge on the same
+    // verified-completion transition the webhook uses — this is what previously left contracts
+    // stuck at fully_signed (needing a manual Activate click) whenever the webhook never fired.
+    if (effectiveStatus === "fully_signed") {
+      const activated = await activateContractAfterVerifiedCompletion(contractId, "reconciliation");
+      if (activated) effectiveStatus = "active";
+    }
+    return { contractId, status: effectiveStatus, documensoDocumentId: sigReq.documenso_document_id, signersUpdated, remoteStatus };
   }
 
   async function fileDocumensoFinalAgreementPacket(contract: any, documensoDocumentId: string, completionEventId?: string | null) {
@@ -15061,8 +17460,45 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       RETURNING id
     `);
     const documentId = firstRow<any>(inserted)?.id || null;
-    await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = COALESCE(${documentId}, archived_document_id), status = CASE WHEN status = 'fully_signed' THEN 'completed' ELSE status END, updated_at = NOW() WHERE id = ${contract.id}`).catch(() => {});
+    // Archival only — status transitions (fully_signed -> active) are owned exclusively by
+    // activateContractAfterVerifiedCompletion, so this function never regresses/skips lifecycle state.
+    await db.execute(sql`UPDATE contractor_contracts SET archived_to_documents_at = NOW(), archived_document_id = COALESCE(${documentId}, archived_document_id), updated_at = NOW() WHERE id = ${contract.id}`).catch(() => {});
     return { documentId, created: true };
+  }
+
+  // Single authoritative transition for "signing is verified complete" — called from both the
+  // Documenso webhook and syncDocumensoContractStatus (authoritative remote reconciliation), so a
+  // replayed/out-of-order webhook and a manual "reconcile status" action behave identically and
+  // neither can regress an already-active/completed/void contract. Exactly-once by construction:
+  // the UPDATE only matches a row still in 'fully_signed', so a second call (replay, or reconciliation
+  // racing the webhook) is a no-op that neither re-creates the invoice nor re-touches status.
+  async function activateContractAfterVerifiedCompletion(contractId: string, source: string) {
+    const activated = firstRow<any>(await db.execute(sql`
+      UPDATE contractor_contracts
+      SET status = 'active', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW()
+      WHERE id = ${contractId} AND status = 'fully_signed'
+      RETURNING *
+    `));
+    if (!activated) return null;
+
+    if (activated.proposal_id) {
+      await autoCreateContractInvoiceExactlyOnce(activated.id).catch((err) => console.error("[Contract] exactly-once invoice creation failed:", err?.message || err));
+    }
+
+    // Best-effort archival — must never block or unwind the activation above.
+    const sigReq = firstRow<any>(await db.execute(sql`
+      SELECT documenso_document_id FROM documenso_signature_requests
+      WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${contractId}
+        AND company_id = ${activated.company_id} AND documenso_document_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `).catch(() => ({ rows: [] } as any)));
+    if (sigReq?.documenso_document_id) {
+      const packetResult = await fileDocumensoFinalAgreementPacket(activated, sigReq.documenso_document_id, null).catch((err) => ({ error: err?.message || String(err) }));
+      await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_completion_packet_filed", companyId: activated.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, source, packetResult }) }).catch(() => {});
+    }
+
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "contract_activated_verified_completion", companyId: activated.company_id, metadataJson: JSON.stringify({ source }) }).catch(() => {});
+    return activated;
   }
 
   async function sendContractSigningReminderNow(contract: any, contractId: string, actorUserId: string | undefined, message: string, selectedSignerId?: string | null) {
@@ -15076,13 +17512,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent') AND email IS NOT NULL`);
     const signers = pending.rows as any[];
     const { sendGenericNotificationEmail } = await import("./notifications.js");
-    const baseUrl = process.env.APP_BASE_URL || "";
+    const senderUser = actorUserId ? await storage.getUser(actorUserId) : null;
+    const senderWorker = senderUser?.workerId ? await storage.getWorker(senderUser.workerId) : null;
+    const senderCompany = await storage.getCompany(contract.company_id);
+    const senderIdentity = resolveDocumensoSenderIdentity({ user: senderUser, worker: senderWorker, company: senderCompany });
     let sentCount = 0;
     const failures: Array<{ signerId: string; email: string; error: string }> = [];
     for (const signer of signers) {
-      const signingUrl = `${baseUrl}/app/contractor-hub?section=contracts&id=${contractId}`;
+      const signingUrl = signer.documenso_signing_url || null;
+      if (!signingUrl) {
+        failures.push({ signerId: signer.id, email: signer.email, error: "missing_signer_specific_documenso_url" });
+        await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status, error_message) VALUES ('contract', ${contractId}, 'email', ${signer.email}, 'contract_signing_reminder', ${"Reminder skipped"}, ${""}, 'failed', ${"missing_signer_specific_documenso_url"})`).catch(() => {});
+        continue;
+      }
       const subject = `Reminder: please sign ${contract.title || contract.contract_number || "contract"}`;
-      const body = `${message}\n\nContract: ${contract.title || contract.contract_number || contractId}\nOpen signing: ${signingUrl}`;
+      const body = `${senderIdentity.name} has requested that you review and sign this contract.\n\n${message}\n\nContract: ${contract.title || contract.contract_number || contractId}\nOpen signing: ${signingUrl}`;
       try {
         const result = await sendGenericNotificationEmail({ recipientName: signer.name || "Signer", email: signer.email, title: subject, body, actionUrl: signingUrl });
         const ok = (result as any)?.sent !== false;
@@ -15149,16 +17593,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/contractor-contracts/:id/resend-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    let contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-    if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
+    const blockedResendStatuses = ["fully_signed", "active", "completed", "void", "terminated"];
+    if (blockedResendStatuses.includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
+
+    // Reconcile authoritative remote status BEFORE deciding who is actually pending. Without this,
+    // a signer who already completed remotely but whose local row was still 'sent'/'viewed' would be
+    // incorrectly targeted for resend and reported as "missing remotely" by Documenso.
+    await syncDocumensoContractStatus(req.params.id).catch(() => null);
+    const reconciled = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+    if (reconciled) contract = reconciled;
+    if (blockedResendStatuses.includes(contract.status)) return res.status(400).json({ message: "This contract has already been completed." });
 
     await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType: "documenso_resend_requested", actorUserId: req.session.userId, companyId: contract.company_id }).catch(() => {});
 
     const pending = (await db.execute(sql`
       SELECT * FROM contract_signers
       WHERE contract_id = ${req.params.id}
-        AND status IN ('pending','sent','viewed','unsent')
+        AND status IN ('pending','sent','viewed','unsent','signed','declined','canceled','cancelled','failed','draft')
         AND email IS NOT NULL
       ORDER BY COALESCE(signing_order, "order", 1) ASC
     `)).rows as any[];
@@ -15189,40 +17642,58 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       ORDER BY created_at DESC LIMIT 1
     `)).rows[0] as any;
 
-    const appBaseUrl = getAppBaseUrl(req);
     const tokenByEmail = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
-    for (const signer of pending) {
-      const email = normalizeSignerEmail(signer.email);
-      if (!email || tokenByEmail.has(email)) continue;
-      const token = crypto.randomBytes(32).toString("base64url");
-      tokenByEmail.set(email, { token, expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14), myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token) });
-    }
+
 
     let remote: any = null;
     let remoteRecipients: any[] = [];
     let documensoResult: Awaited<ReturnType<typeof resendDocumensoDocument>> | null = null;
     let documensoError: any = null;
     let retriedAfterRefresh = false;
+    let refreshInfo: Awaited<ReturnType<typeof refreshDocumensoRecipientMappings>> | null = null;
     if (!sigReq?.documenso_document_id) {
       documensoError = { errorMessage: "No Documenso signature request/document id exists for this contract.", timestamp: new Date().toISOString() };
     } else {
       try {
         remote = await getDocumensoDocument(sigReq.documenso_document_id);
-        remoteRecipients = await refreshDocumensoContractRecipientMetadata(req.params.id, contract, sigReq, remote, req.session.userId);
+        refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
+        remoteRecipients = refreshInfo.recipients;
         const docBlock = getDocumensoResendBlockReason(remote.status, undefined, true);
         if (docBlock) {
           documensoError = { errorMessage: docBlock, responseBody: remote.rawResponse || remote, timestamp: new Date().toISOString() };
         } else {
-          documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+          try {
+            documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+          } catch (firstResendError: any) {
+            documensoError = serializeDocumensoError(firstResendError);
+            refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_provider_rejected_after_metadata_check" });
+            remoteRecipients = refreshInfo.recipients;
+            if ((refreshInfo.refreshedCount || 0) > 0) {
+              retriedAfterRefresh = true;
+              try {
+                documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+                documensoError = null;
+              } catch (retryProviderErr: any) {
+                documensoError = serializeDocumensoError(retryProviderErr);
+              }
+            }
+          }
         }
       } catch (e: any) {
         documensoError = serializeDocumensoError(e);
         if (remote) {
           try {
-            remoteRecipients = await refreshDocumensoContractRecipientMetadata(req.params.id, contract, sigReq, remote, req.session.userId);
-            retriedAfterRefresh = true;
-            documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
-            documensoError = null;
+            refreshInfo = await refreshDocumensoRecipientMappings({ contractId: req.params.id, companyId: contract.company_id, documensoDocumentId: sigReq.documenso_document_id, actorUserId: req.session.userId, remote, reason: "resend_recipient_not_found" });
+            remoteRecipients = refreshInfo.recipients;
+            if ((refreshInfo.refreshedCount || 0) > 0) {
+              retriedAfterRefresh = true;
+              try {
+                documensoResult = await resendDocumensoDocument(sigReq.documenso_document_id);
+                documensoError = null;
+              } catch (retryProviderErr: any) {
+                documensoError = serializeDocumensoError(retryProviderErr);
+              }
+            }
           } catch (retryErr: any) {
             documensoError = serializeDocumensoError(retryErr);
           }
@@ -15230,22 +17701,40 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
     }
 
-    const linksByEmail = new Map(extractDocumensoRecipients(documensoResult, remoteRecipients).map((link: any) => [normalizeSignerEmail(link.email), link]));
+    const extractedLinks = extractDocumensoRecipients(documensoResult, remoteRecipients);
+    const linkGroupsByEmail = new Map<string, any[]>();
+    for (const link of extractedLinks) {
+      const email = normalizeSignerEmail(link.email);
+      if (!email) continue;
+      const list = linkGroupsByEmail.get(email) || [];
+      list.push(link);
+      linkGroupsByEmail.set(email, list);
+    }
+    const refreshBySignerId = new Map((refreshInfo?.results || []).map((r: any) => [r.signer.id, r]));
     const recipients = pending.map((signer) => {
       const email = normalizeSignerEmail(signer.email);
-      const remoteRecipient: any = email ? linksByEmail.get(email) : undefined;
+      const matches = email ? (linkGroupsByEmail.get(email) || []) : [];
+      const remoteRecipient: any = matches.length === 1 ? matches[0] : undefined;
       const localToken = email ? tokenByEmail.get(email) : undefined;
-      const reason = getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
+      const refreshRow: any = refreshBySignerId.get(signer.id);
+      const duplicateReason = matches.length > 1 ? "Duplicate recipient email in Documenso; manual review required" : null;
+      const localSignerStatus = String(signer.status || "").toLowerCase();
+      const localBlockReason = localSignerStatus === "signed" ? "Already signed"
+        : localSignerStatus === "declined" ? "Recipient declined"
+          : ["canceled", "cancelled"].includes(localSignerStatus) ? "Recipient cancelled"
+            : null;
+      const reason = duplicateReason || localBlockReason || refreshRow?.reason || getDocumensoResendBlockReason(remote?.status, remoteRecipient?.status, !!remoteRecipient) || documensoError?.errorMessage || null;
+      const resultStatus = duplicateReason ? "manual_review" : reason === "Recipient missing remotely" ? "missing" : reason === "Already signed" ? "signed" : reason ? "skipped" : "resent";
       const accepted = !!documensoResult && !!remoteRecipient && !reason;
       return {
         signerId: signer.id, name: signer.name || null, email, role: signer.role || signer.signer_role || remoteRecipient?.role || null,
         signerRowExists: true, documensoDocumentId: sigReq?.documenso_document_id || null,
         localSignerStatus: signer.status || null, documensoStatus: remoteRecipient?.status || null,
-        documensoRecipientId: remoteRecipient?.id || signer.documenso_recipient_id || null,
+        documensoRecipientId: remoteRecipient?.id || refreshRow?.newRecipientId || signer.documenso_recipient_id || null,
         documensoSigningUrl: remoteRecipient?.signingUrl || signer.documenso_signing_url || null,
         myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null, sentAt: signer.sent_at || null,
         resentAt: accepted ? new Date().toISOString() : null,
-        resendResult: accepted ? "accepted" : "skipped", reason: accepted ? null : reason,
+        resendResult: accepted ? "accepted" : "skipped", status: accepted ? "resent" : resultStatus, refreshed: !!refreshRow?.refreshed, retried: false, reason: accepted && refreshRow?.refreshed ? "Recipient mapping refreshed and reminder resent." : (accepted ? null : reason),
         error: accepted ? null : reason,
       };
     });
@@ -15268,18 +17757,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       UPDATE documenso_signature_requests SET documenso_signing_url = COALESCE(${acceptedRecipients.find((r) => r.documensoSigningUrl)?.documensoSigningUrl || null}, documenso_signing_url),
         documenso_recipient_ids = ${JSON.stringify(recipientMetadata)}::jsonb,
         status = ${acceptedRecipients.length ? "sent_for_signature" : "resend_failed"}, sent_at = COALESCE(sent_at, NOW()),
-        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, retriedAfterRefresh, duplicateEmails, possibleIdentityMismatches })}::jsonb,
+        raw_response = ${JSON.stringify({ resend: documensoResult?.rawResponse || null, remote: remote?.rawResponse || null, error: documensoError, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, duplicateEmails, possibleIdentityMismatches })}::jsonb,
         updated_at = NOW() WHERE id = ${sigReq.id}
     `).catch(() => {});
 
     const actionType = acceptedRecipients.length === recipients.length && recipients.length ? "documenso_resend_requested" : (acceptedRecipients.length ? "documenso_resend_skipped" : "documenso_resend_failed");
-    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, retriedAfterRefresh, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: req.params.id, actionType, actorUserId: req.session.userId, companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null, recipients, documensoError, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, duplicateEmails, possibleIdentityMismatches }) }).catch(() => {});
 
     res.status(200).json({
       success: recipients.length > 0 && acceptedRecipients.length === recipients.length,
       documensoResult: documensoError ? "errored" : (acceptedRecipients.length ? "accepted" : "skipped"),
+      requested: recipients.length, accepted: acceptedRecipients.length, partial: acceptedRecipients.length > 0 && acceptedRecipients.length < recipients.length, refreshed: recipients.filter((r: any) => r.refreshed).length, refreshAttempted: !!refreshInfo, retryAttempted: retriedAfterRefresh, retryCount: retriedAfterRefresh ? 1 : 0, retried: retriedAfterRefresh ? 1 : 0,
       targetedCount: recipients.length, sentCount: acceptedRecipients.length, failedCount: recipients.length - acceptedRecipients.length,
-      recipients, documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null,
+      results: recipients.map((r: any) => ({ email: r.email, status: r.status, refreshed: r.refreshed, retried: r.retried, reason: r.reason })), recipients, documensoDocumentId: sigReq?.documenso_document_id || null, documentStatus: remote?.status || null,
       duplicateEmails, possibleIdentityMismatches, documensoError, retriedAfterRefresh,
       message: documensoError?.errorMessage || `${acceptedRecipients.length} of ${recipients.length} pending signer(s) accepted by Documenso for resend.`,
     });
@@ -15359,12 +17849,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     `)).rows[0] as any;
     if (sigReq?.documenso_document_id) {
       const resendResult = await resendDocumensoDocument(sigReq.documenso_document_id).catch(() => null);
-      const matchingLink = resendResult?.signingLinks?.find((link: any) => normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email));
-      latestDocumensoSigningUrl = matchingLink?.signingUrl || resendResult?.signingLinks?.find((link: any) => link.signingUrl)?.signingUrl || latestDocumensoSigningUrl;
-      latestRecipientId = matchingLink?.token || latestRecipientId;
+      const matchingLink = findSignerSpecificDocumensoLink(resendResult?.signingLinks || [], { email: signer.email, recipientId: signer.documenso_recipient_id });
+      latestDocumensoSigningUrl = matchingLink?.signingUrl || latestDocumensoSigningUrl;
+      latestRecipientId = matchingLink?.id || latestRecipientId;
       const updatedRecipientMetadata = resendResult?.signingLinks?.map((link: any) => ({
         email: normalizeSignerEmail(link.email),
-        recipientId: link.token || null,
+        recipientId: link.id || null,
         signingUrl: link.signingUrl || null,
         myPayLinkSigningUrl: normalizeSignerEmail(link.email) === normalizeSignerEmail(signer.email) ? buildContractSigningUrl(getAppBaseUrl(req), token) : null,
         status: link.status || null,
@@ -15431,6 +17921,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const signersRes = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${contractId} AND status IN ('pending','sent','viewed','unsent','draft','failed') ORDER BY "order" ASC`);
       const signers = signersRes.rows as any[];
       const seenEmails = new Set<string>();
+      const senderUser = await storage.getUser(req.session.userId!);
+      const senderWorker = senderUser?.workerId ? await storage.getWorker(senderUser.workerId) : null;
+      const senderCompany = await storage.getCompany(contract.company_id);
+      const senderIdentity = resolveDocumensoSenderIdentity({ user: senderUser, worker: senderWorker, company: senderCompany });
+      if (senderIdentity.source === "fallback") {
+        return res.status(400).json({ message: "Cannot send for signature: no valid sender identity (worker, user, or company) is configured for this company. Configure a sender before sending." });
+      }
       const recipients = signers.filter(s => {
         const email = normalizeSignerEmail(s.email);
         if (!email || seenEmails.has(email)) return false;
@@ -15447,7 +17944,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND related_record_id = ${contractId}
           AND company_id = ${contract.company_id}
           AND documenso_document_id IS NOT NULL
-          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error')
+          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error','superseded')
         ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
         LIMIT 1
       `);
@@ -15455,10 +17952,71 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const { sendDocumentForSignature, getDocumensoDocument } = await import("./services/documenso.js");
       const appBaseUrl = getAppBaseUrl(req);
+      const isReusingExistingEnvelope = !!existingReq?.documenso_document_id;
+
+      // Fix A: before reusing an existing envelope, confirm its live recipient set still matches
+      // the contract's current signer set. Fails CLOSED: if the live GET throws, or succeeds but
+      // returns no usable recipient list, we return immediately — no send, resend, token rotation,
+      // mapping update, or email may proceed on unverified data. Compared against ALL non-removed
+      // local signers (not just the currently-pending ones) so a signer who already completed
+      // signing — expected to remain on the envelope — is never mistaken for an "unexpected"
+      // remote recipient.
+      let existingEnvelopeRemote: any = null;
+      if (isReusingExistingEnvelope) {
+        try {
+          existingEnvelopeRemote = await getDocumensoDocument(existingReq.documenso_document_id);
+        } catch (err: any) {
+          return res.status(502).json({
+            code: "documenso_envelope_verification_failed",
+            message: "Could not verify the existing Documenso envelope before reuse. No signing request was sent, resent, or modified.",
+          });
+        }
+        const remoteRecipientsList = Array.isArray(existingEnvelopeRemote?.recipients) ? existingEnvelopeRemote.recipients : null;
+        if (!remoteRecipientsList || remoteRecipientsList.length === 0) {
+          return res.status(503).json({
+            code: "documenso_envelope_verification_unavailable",
+            message: "The existing Documenso envelope's recipient list could not be verified. No signing request was sent, resent, or modified.",
+          });
+        }
+        const allLocalSignersRes = await db.execute(sql`
+          SELECT DISTINCT lower(trim(email)) AS email
+          FROM contract_signers
+          WHERE contract_id = ${contractId}
+            AND email IS NOT NULL
+            AND status NOT IN ('replaced', 'canceled', 'cancelled', 'voided', 'void', 'declined')
+        `);
+        const localEmailSet = new Set(allLocalSignersRes.rows.map((r: any) => r.email).filter(Boolean));
+        const remoteEmailSet = new Set(
+          remoteRecipientsList.map((r: any) => normalizeSignerEmail(r.email)).filter(Boolean),
+        );
+        const missingRemotely = [...localEmailSet].filter((e) => !remoteEmailSet.has(e)).sort();
+        const unexpectedRemotely = [...remoteEmailSet].filter((e) => !localEmailSet.has(e)).sort();
+        if (missingRemotely.length > 0 || unexpectedRemotely.length > 0) {
+          return res.status(409).json({
+            code: "documenso_signer_set_mismatch",
+            message: "The contract signer list has changed since this Documenso envelope was created. A replacement signing request is required.",
+            missingRemotely,
+            unexpectedRemotely,
+            replacementRequired: true,
+          });
+        }
+      }
+
       const signerTokens = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
       for (const signer of signers) {
         const email = normalizeSignerEmail(signer.email);
         if (!email || signerTokens.has(email)) continue;
+        // Reusing an existing, still-live envelope: don't mint a new MyPayLink token (and don't
+        // touch signing_token_hash/signing_token_expires_at) for a signer whose current token is
+        // valid and unexpired — that preserves their already-delivered signing link instead of
+        // silently invalidating it. Expired, null/revoked (cancel/replace nulls the hash), or
+        // missing tokens still mint fresh, as does every signer on a fresh envelope send.
+        if (isReusingExistingEnvelope) {
+          const hasValidExistingToken = !!signer.signing_token_hash
+            && !!signer.signing_token_expires_at
+            && new Date(signer.signing_token_expires_at).getTime() > Date.now();
+          if (hasValidExistingToken) continue;
+        }
         const token = crypto.randomBytes(32).toString("base64url");
         signerTokens.set(email, {
           token,
@@ -15475,18 +18033,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       let externalSendSucceeded = false;
       if (existingReq?.documenso_document_id) {
         reusedExistingDocumensoRequest = true;
-        const remote = await getDocumensoDocument(existingReq.documenso_document_id).catch(() => null);
+        const remote = existingEnvelopeRemote; // already fetched and verified above; avoid a second GET
         const storedRecipients = Array.isArray(existingReq.documenso_recipient_ids) ? existingReq.documenso_recipient_ids : [];
         docResult = {
           documentId: existingReq.documenso_document_id,
           status: remote?.status || existingReq.status || "sent",
-          signingLinks: (remote?.recipients?.length ? remote.recipients : storedRecipients).map((r: any) => ({
-            name: r.name || "",
-            email: r.email || "",
-            signingUrl: r.signingUrl || r.signing_url || null,
-            token: r.id || r.token || r.recipientId || null,
-            status: r.status || r.documensoStatus || null,
-          })),
+          signingLinks: (remote?.recipients?.length ? remote.recipients : storedRecipients).map((r: any) => {
+            const signingToken = r.token ?? null;
+            return {
+              id:
+                r.id != null
+                  ? String(r.id)
+                  : r.recipientId != null
+                    ? String(r.recipientId)
+                    : null,
+              name: r.name || "",
+              email: r.email || "",
+              signingUrl:
+                r.signingUrl ??
+                r.signing_url ??
+                (signingToken
+                  ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${signingToken}`
+                  : null),
+              token: signingToken,
+              status: r.status || r.documensoStatus || null,
+            };
+          }),
           rawResponse: { reusedExistingDocumensoRequest: true, existingRequestId: existingReq.id, remote: remote?.rawResponse || null },
         };
       } else {
@@ -15496,9 +18068,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
           pdfBuffer,
           recipients,
-          metadata: { externalId: contractId, contractId, companyId: contract.company_id },
+          metadata: { externalId: contractId, contractId, companyId: contract.company_id, senderName: senderIdentity.name, ...(senderIdentity.email ? { senderEmail: senderIdentity.email } : {}) },
           subject: `Please sign: ${contract.title}`,
-          message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+          message: `${senderIdentity.name} has requested that you review and sign contract "${contract.title}". Please open the link below to sign.`,
           returnUrl: primaryReturnUrl,
         });
         externalSendSucceeded = true;
@@ -15506,14 +18078,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Persist the Documenso request and signer metadata.
       const primarySigner = recipients[0];
-      const signingLinks = (docResult.signingLinks || []) as Array<{ email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
+      const signingLinks = (docResult.signingLinks || []) as Array<{ id?: string | null; email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
       const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
       const recipientMetadata = signingLinks.map((link) => {
         const email = normalizeSignerEmail(link.email);
         const localToken = email ? signerTokens.get(email) : undefined;
         return {
           email,
-          recipientId: link.token || null,
+          recipientId: link.id || null,
           signingUrl: link.signingUrl || null,
           myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null,
           status: link.status || null,
@@ -15524,7 +18096,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           INSERT INTO documenso_signature_requests
             (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
           VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
-                  ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
+                  ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify({ provider: docResult.rawResponse, sender: senderIdentity })}, ${req.session.userId})
           ON CONFLICT DO NOTHING
         `);
       } catch (persistError: any) {
@@ -15546,7 +18118,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         await db.execute(sql`
           UPDATE contract_signers
           SET status = CASE WHEN status IN ('pending','unsent','draft','failed') THEN 'sent' ELSE status END,
-              documenso_recipient_id = COALESCE(${link.token || null}, documenso_recipient_id),
+              documenso_recipient_id = COALESCE(${link.id || null}, documenso_recipient_id),
               documenso_signing_url = COALESCE(${link.signingUrl || null}, documenso_signing_url),
               signing_token_hash = COALESCE(${signerTokens.get(email)?.token ? hashSigningToken(signerTokens.get(email)!.token) : null}, signing_token_hash),
               signing_token_expires_at = COALESCE(${signerTokens.get(email)?.expires || null}, signing_token_expires_at),
@@ -15559,6 +18131,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Update contract status
       await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = COALESCE(sent_at, NOW()), updated_at = NOW() WHERE id = ${contractId}`);
+
+      // Documenso's own /envelope/distribute call (inside sendDocumentForSignature above) already
+      // emailed each recipient a native "Please sign" message with a working signing link. Do NOT
+      // also send a second MyPayLink-branded "Please sign" email here — Documenso's public API does
+      // not document a way to reliably suppress its native send, and per policy a second email is
+      // only sent when suppression is verified. Sending both was the source of the duplicate-email
+      // defect (one from Documenso, one from MyPayLink, same subject, to the same recipient).
+      // See ONE_SIGNING_EMAIL_PER_RECIPIENT in tests/documenso-single-notification-static.test.ts.
 
       // Notify signers in-app
       createContractorNotification({
@@ -15582,6 +18162,185 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(503).json({ message: "Documenso rejected the configured API token. Please verify DOCUMENSO_API_KEY in Replit Secrets and try again." });
       }
       res.status(500).json({ message: "Failed to send for signature: " + msg });
+    }
+  });
+
+  // ── Fix B: explicit, authorized replacement of a mismatched Documenso envelope ──
+  // Creates a brand-new envelope for the contract's current signer set. Never voids or otherwise
+  // mutates the old Documenso envelope (no safe void operation exists in this integration); the
+  // old local documenso_signature_requests row is preserved and marked 'superseded' for audit
+  // history, never deleted.
+  app.post("/api/contractor-contracts/:id/replace-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contractId = req.params.id;
+      const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (!req.body?.confirm) {
+        return res.status(400).json({
+          code: "confirmation_required",
+          message: "Explicit confirmation is required to create a replacement signing request.",
+        });
+      }
+      if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) {
+        return res.status(400).json({ message: `Cannot replace the signing request for a contract in '${contract.status}' status` });
+      }
+
+      const signersRes = await db.execute(sql`
+        SELECT * FROM contract_signers
+        WHERE contract_id = ${contractId}
+          AND status NOT IN ('replaced','canceled','cancelled','voided','void','declined')
+          AND email IS NOT NULL
+        ORDER BY "order" ASC
+      `);
+      const signers = signersRes.rows as any[];
+      const seenEmails = new Set<string>();
+      const recipients = signers.filter(s => {
+        const email = normalizeSignerEmail(s.email);
+        if (!email || seenEmails.has(email)) return false;
+        seenEmails.add(email);
+        return true;
+      }).map((s, i) => ({ name: s.name as string, email: normalizeSignerEmail(s.email) || s.email as string, role: "SIGNER" as const, routingOrder: i + 1 }));
+      if (recipients.length === 0) {
+        return res.status(400).json({ message: "Add at least one signer with an email address before creating a replacement signing request." });
+      }
+
+      const { sendDocumentForSignature, getDocumensoDocument } = await import("./services/documenso.js");
+
+      const existingReqRes = await db.execute(sql`
+        SELECT * FROM documenso_signature_requests
+        WHERE document_type IN ('contract', 'contractor_hub_contract')
+          AND related_record_id = ${contractId}
+          AND company_id = ${contract.company_id}
+          AND documenso_document_id IS NOT NULL
+          AND COALESCE(status, '') NOT IN ('voided','canceled','cancelled','deleted','error','superseded')
+        ORDER BY COALESCE(sent_at, created_at) DESC, created_at DESC
+        LIMIT 1
+      `);
+      const existingReq = existingReqRes.rows[0] as any;
+
+      // Idempotency: if the current active envelope already matches the current signer set, a
+      // prior replacement call already fixed this — don't mint a second new envelope, don't send
+      // duplicate emails, don't rotate tokens again.
+      if (existingReq?.documenso_document_id) {
+        const remote = await getDocumensoDocument(existingReq.documenso_document_id).catch(() => null);
+        if (remote && Array.isArray(remote.recipients) && remote.recipients.length > 0) {
+          const localEmailSet = new Set(recipients.map(r => r.email));
+          const remoteEmailSet = new Set(
+            remote.recipients.map((r: any) => normalizeSignerEmail(r.email)).filter((e: string | null): e is string => !!e),
+          );
+          const missingRemotely = [...localEmailSet].filter(e => !remoteEmailSet.has(e));
+          const unexpectedRemotely = [...remoteEmailSet].filter(e => !localEmailSet.has(e));
+          if (missingRemotely.length === 0 && unexpectedRemotely.length === 0) {
+            return res.json({
+              success: true,
+              alreadyReplaced: true,
+              documensoDocumentId: existingReq.documenso_document_id,
+              message: "The current signing request already matches the active signer set; no replacement was necessary.",
+            });
+          }
+        }
+      }
+
+      const appBaseUrl = getAppBaseUrl(req);
+      const signerTokens = new Map<string, { token: string; expires: Date; myPayLinkSigningUrl: string }>();
+      for (const signer of signers) {
+        const email = normalizeSignerEmail(signer.email);
+        if (!email || signerTokens.has(email)) continue;
+        const token = crypto.randomBytes(32).toString("base64url");
+        signerTokens.set(email, {
+          token,
+          expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14),
+          myPayLinkSigningUrl: buildContractSigningUrl(appBaseUrl, token),
+        });
+      }
+      const primarySignerToken = signerTokens.get(normalizeSignerEmail(recipients[0]?.email) || "")?.token;
+      const primaryReturnUrl = primarySignerToken
+        ? buildContractDocumensoReturnUrl(appBaseUrl, primarySignerToken)
+        : buildContractDocumensoReturnUrl(appBaseUrl, contractId);
+
+      const pdfBuffer = await generateContractPdf(contractId);
+      if (!pdfBuffer) return res.status(500).json({ message: "Failed to generate contract PDF for the replacement signing request" });
+
+      const docResult = await sendDocumentForSignature({
+        title: contract.title || `Contract #${contract.contract_number || contractId.slice(0, 8)}`,
+        pdfBuffer,
+        recipients,
+        metadata: { externalId: contractId, contractId, companyId: contract.company_id },
+        subject: `Please sign: ${contract.title}`,
+        message: `You have been requested to review and sign contract "${contract.title}". Please open the link below to sign.`,
+        returnUrl: primaryReturnUrl,
+      });
+
+      // Preserve the old request row for audit history — never delete it, only mark superseded.
+      if (existingReq?.id) {
+        await db.execute(sql`UPDATE documenso_signature_requests SET status = 'superseded', updated_at = NOW() WHERE id = ${existingReq.id}`);
+      }
+
+      const primarySigner = recipients[0];
+      const signingLinks = (docResult.signingLinks || []) as Array<{ id?: string | null; email?: string; token?: string | null; signingUrl?: string | null; status?: string | null }>;
+      const primarySigningUrl = signingLinks.find(l => l.signingUrl)?.signingUrl || null;
+      const recipientMetadata = signingLinks.map((link) => {
+        const email = normalizeSignerEmail(link.email);
+        const localToken = email ? signerTokens.get(email) : undefined;
+        return {
+          email,
+          recipientId: link.id || null,
+          signingUrl: link.signingUrl || null,
+          myPayLinkSigningUrl: localToken?.myPayLinkSigningUrl || null,
+          status: link.status || null,
+        };
+      });
+
+      await db.execute(sql`
+        INSERT INTO documenso_signature_requests
+          (document_type, related_record_id, company_id, documenso_document_id, documenso_signing_url, documenso_recipient_ids, status, signer_name, signer_email, sent_at, raw_response, created_by_user_id)
+        VALUES ('contract', ${contractId}, ${contract.company_id}, ${docResult.documentId}, ${primarySigningUrl}, ${JSON.stringify(recipientMetadata)}::jsonb, 'sent_for_signature',
+                ${primarySigner.name}, ${primarySigner.email}, NOW(), ${JSON.stringify(docResult.rawResponse)}, ${req.session.userId})
+        ON CONFLICT DO NOTHING
+      `);
+
+      for (const link of signingLinks) {
+        const email = normalizeSignerEmail(link.email);
+        if (!email) continue;
+        await db.execute(sql`
+          UPDATE contract_signers
+          SET status = CASE WHEN status IN ('pending','unsent','draft','failed') THEN 'sent' ELSE status END,
+              documenso_recipient_id = ${link.id || null},
+              documenso_signing_url = ${link.signingUrl || null},
+              signing_token_hash = ${signerTokens.get(email)?.token ? hashSigningToken(signerTokens.get(email)!.token) : null},
+              signing_token_expires_at = ${signerTokens.get(email)?.expires || null},
+              last_sent_at = NOW(),
+              sent_at = COALESCE(sent_at, NOW()),
+              updated_at = NOW()
+          WHERE contract_id = ${contractId} AND lower(trim(email)) = ${email}
+        `);
+      }
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_contract",
+        objectId: contractId,
+        actionType: "documenso_envelope_replaced",
+        actorUserId: req.session.userId,
+        companyId: contract.company_id,
+        metadataJson: JSON.stringify({
+          oldDocumentId: existingReq?.documenso_document_id || null,
+          newDocumentId: docResult.documentId,
+          reason: "signer_set_mismatch",
+        }),
+      }).catch(() => {});
+
+      // See the identical note in /send-for-signature: Documenso's own distribute call already
+      // emailed each recipient. Do not also send a second MyPayLink "Please sign" email here.
+
+      res.json({
+        success: true,
+        alreadyReplaced: false,
+        documensoDocumentId: docResult.documentId,
+        oldDocumentId: existingReq?.documenso_document_id || null,
+        signingLinks: recipientMetadata,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: "Failed to create replacement signing request: " + (e?.message || "unknown error") });
     }
   });
 
@@ -15768,6 +18527,125 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return res.status(307).setHeader("Location", "/api/dam-documents").json({ message: "Use /api/dam-documents for upload-compatible Document Hub assets." });
   });
 
+
+  app.get("/api/contractor-documents/:entityType/:id/archived-versions", requireAuth, async (req, res) => {
+    try {
+      const entityType = String(req.params.entityType || "").toLowerCase();
+      const entityId = req.params.id;
+      if (!["proposal", "contract", "invoice", "dam", "file"].includes(entityType)) return res.status(400).json({ message: "Unsupported document type" });
+      const user = await storage.getUser(req.session.userId!);
+      const workerRes = await db.execute(sql`SELECT worker_id, company_id FROM users WHERE id = ${req.session.userId} LIMIT 1`);
+      const workerId = (workerRes.rows[0] as any)?.worker_id || null;
+      const sessionCompanyId = (workerRes.rows[0] as any)?.company_id || user?.companyId || null;
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isCompanyRep = user?.role === "admin" || user?.role === "manager" || user?.role === "owner" || (user?.role || "").startsWith("tenant_") || isPlatform;
+
+      const assertEntityAccess = async () => {
+        if (entityType === "proposal") {
+          const row = firstRow<any>(await db.execute(sql`SELECT id, company_id, contractor_id, title, proposal_number, status, created_at, updated_at, archived_at, archive_reason, archived_document_id, converted_to_contract_id, converted_to_invoice_id FROM contractor_proposals WHERE id = ${entityId} AND deleted_at IS NULL`));
+          if (!row) return null;
+          if (!isCompanyRep && row.contractor_id !== workerId) return null;
+          if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, row.company_id))) return null;
+          return row;
+        }
+        if (entityType === "contract") {
+          const row = firstRow<any>(await db.execute(sql`SELECT id, company_id, contractor_id, proposal_id, title, contract_number, status, created_at, updated_at, fully_signed_at, archived_to_documents_at, archived_document_id FROM contractor_contracts WHERE id = ${entityId}`));
+          if (!row) return null;
+          if (!isCompanyRep && row.contractor_id !== workerId) return null;
+          if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, row.company_id))) return null;
+          return row;
+        }
+        if (entityType === "invoice") {
+          const row = firstRow<any>(await db.execute(sql`SELECT id, company_id, contractor_id, proposal_id, contract_id, title, invoice_number, status, created_at, updated_at, paid_at, archived_at, archived_document_id, duplicate_of_invoice_id FROM contractor_invoices WHERE id = ${entityId}`));
+          if (!row) return null;
+          if (!isCompanyRep && row.contractor_id !== workerId) return null;
+          if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, row.company_id))) return null;
+          return row;
+        }
+        const doc = firstRow<any>(await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${entityId} AND deleted_at IS NULL`));
+        if (!doc) return null;
+        if (!isCompanyRep && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return null;
+        if (isCompanyRep && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return null;
+        return doc;
+      };
+
+      const entity = await assertEntityAccess();
+      if (!entity) return res.status(404).json({ message: "Document not found or access denied" });
+      const companyId = entity.company_id || null;
+      const contractorId = entity.contractor_id || entity.worker_id || entity.related_contractor_id || null;
+      const rows: any[] = [];
+      const title = entity.title || entity.proposal_number || entity.contract_number || entity.invoice_number || entity.file_name || "Document";
+      rows.push({
+        id: entity.id,
+        source: entityType === "file" ? "dam" : entityType,
+        title,
+        versionNumber: entity.version_number || 1,
+        status: entity.status || "current",
+        createdAt: entity.created_at,
+        signedAt: entity.fully_signed_at || entity.signed_at || null,
+        completedAt: entity.fully_signed_at || entity.paid_at || null,
+        archivedAt: entity.archived_at || entity.archived_to_documents_at || null,
+        archiveReason: entity.archive_reason || null,
+        proposalId: entity.proposal_id || (entityType === "proposal" ? entity.id : null),
+        contractId: entity.contract_id || (entityType === "contract" ? entity.id : null),
+        invoiceId: entity.invoice_id || (entityType === "invoice" ? entity.id : null),
+        current: true,
+        readOnly: ["approved", "converted_to_contract", "fully_signed", "completed", "active", "paid", "closed", "archived"].includes(String(entity.status || "")) || !!entity.archived_at,
+        viewUrl: entityType === "proposal" ? `/api/contractor-proposals/${entity.id}/pdf` : entityType === "contract" ? `/api/contractor-contracts/${entity.id}/download` : entityType === "invoice" ? `/api/contractor-invoices/${entity.id}/download` : `/api/dam-documents/${entity.id}/download`,
+        downloadUrl: entityType === "proposal" ? `/api/contractor-proposals/${entity.id}/pdf` : entityType === "contract" ? `/api/contractor-contracts/${entity.id}/download` : entityType === "invoice" ? `/api/contractor-invoices/${entity.id}/download` : `/api/dam-documents/${entity.id}/download`,
+      });
+
+      if (entityType === "proposal") {
+        const versions = (await db.execute(sql`SELECT id, version, snapshot_json, change_notes, created_at FROM proposal_versions WHERE proposal_id = ${entityId} ORDER BY version DESC`).catch(() => ({ rows: [] } as any))).rows as any[];
+        rows.push(...versions.map(v => ({ id: v.id, source: "proposal_version", title, versionNumber: v.version, status: "version_snapshot", createdAt: v.created_at, archivedAt: v.created_at, archiveReason: v.change_notes, proposalId: entityId, contractId: entity.converted_to_contract_id || null, invoiceId: entity.converted_to_invoice_id || null, current: false, readOnly: true, viewUrl: null, downloadUrl: null })));
+      }
+      if (entityType === "contract") {
+        const versions = (await db.execute(sql`SELECT id, version, reason, created_at FROM contract_versions WHERE contract_id = ${entityId} ORDER BY version DESC`).catch(() => ({ rows: [] } as any))).rows as any[];
+        rows.push(...versions.map(v => ({ id: v.id, source: "contract_version", title, versionNumber: v.version, status: "version_snapshot", createdAt: v.created_at, archivedAt: v.created_at, archiveReason: v.reason, proposalId: entity.proposal_id || null, contractId: entityId, invoiceId: null, current: false, readOnly: true, viewUrl: null, downloadUrl: null })));
+      }
+
+      const damRows = (await db.execute(sql`
+        SELECT * FROM dam_documents
+        WHERE deleted_at IS NULL
+          AND (${companyId}::text IS NULL OR company_id = ${companyId})
+          AND (${contractorId}::text IS NULL OR worker_id = ${contractorId} OR related_contractor_id = ${contractorId})
+          AND (
+            ${entityType === "proposal" ? sql`proposal_id = ${entityId} OR (linked_entity_type = 'proposal' AND linked_entity_id = ${entityId})` : sql`FALSE`}
+            OR ${entityType === "contract" ? sql`contract_id = ${entityId} OR (linked_entity_type = 'contract' AND linked_entity_id = ${entityId})` : sql`FALSE`}
+            OR ${entityType === "invoice" ? sql`invoice_id = ${entityId} OR (linked_entity_type = 'invoice' AND linked_entity_id = ${entityId})` : sql`FALSE`}
+            OR ${(entityType === "dam" || entityType === "file") ? sql`id = ${entityId} OR superseded_by_document_id = ${entityId}` : sql`FALSE`}
+          )
+        ORDER BY COALESCE(is_archived, FALSE) ASC, created_at DESC
+      `).catch(() => ({ rows: [] } as any))).rows as any[];
+      for (const d of damRows) {
+        if (rows.some(r => r.source === "dam" && r.id === d.id)) continue;
+        rows.push({
+          id: d.id,
+          source: "dam",
+          title: d.title || d.file_name || title,
+          versionNumber: d.version_number || null,
+          status: d.status || d.lifecycle_status || (d.is_archived ? "archived" : "active"),
+          createdAt: d.created_at,
+          signedAt: d.signed_at || null,
+          completedAt: d.finalized_at || d.paid_at || d.signed_at || null,
+          archivedAt: d.archived_at || null,
+          archiveReason: d.deleted_reason || d.lifecycle_status || null,
+          proposalId: d.proposal_id || entity.proposal_id || (entityType === "proposal" ? entityId : null),
+          contractId: d.contract_id || entity.contract_id || (entityType === "contract" ? entityId : null),
+          invoiceId: d.invoice_id || entity.invoice_id || (entityType === "invoice" ? entityId : null),
+          current: !d.is_archived && d.id === entity.archived_document_id,
+          readOnly: true,
+          viewUrl: `/api/dam-documents/${d.id}/download`,
+          downloadUrl: `/api/dam-documents/${d.id}/download`,
+        });
+      }
+      rows.sort((a, b) => Number(b.current) - Number(a.current) || new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ message: "Failed to fetch archived versions" });
+    }
+  });
+
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -15838,8 +18716,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = result.rows[0] as any;
       // Ownership: admin sees company docs; contractor sees own
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'view')`).catch(() => {});
       res.json(doc);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch document" }); }
@@ -15885,8 +18763,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = result.rows[0] as any;
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'download')`).catch(() => {});
 
       // Stream the file directly so the browser receives the PDF/binary
@@ -15916,9 +18794,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = existing.rows[0] as any;
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      // Cross-tenant guard: admin must belong to same company (unless platform)
-      if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Cross-tenant guard: admins use the shared canAccessCompany helper rather than raw company equality.
+      if (isAdmin && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
+      if (doc.is_archived) return res.status(409).json({ message: "Archived document versions are read-only" });
       const { title, description, tags, isArchived, isPublic, linkedEntityType, linkedEntityId } = req.body;
       const result = await db.execute(sql`
         UPDATE dam_documents SET
@@ -15947,9 +18826,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = existing.rows[0] as any;
-      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-      // Cross-tenant guard: admin must belong to same company (unless platform)
-      if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+      if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Cross-tenant guard: admins use the shared canAccessCompany helper rather than raw company equality.
+      if (isAdmin && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
@@ -15964,46 +18843,48 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
     if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
     const doc = result.rows[0] as any;
-    if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
-    if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!isAdmin && doc.worker_id !== workerId && doc.related_contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+    if (isAdmin && !isPlatform && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
     res.json(doc);
   });
   app.get("/api/document-hub/assets/:id/download", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download" }));
   app.get("/api/document-hub/assets/:id/print", requireAuth, async (_req, res) => res.status(307).json({ message: "Use /api/dam-documents/:id/download for inline print rendering" }));
   app.patch("/api/document-hub/assets/:id/metadata", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
+    if (doc.is_archived) return res.status(409).json({ message: "Archived document versions are read-only" });
     await db.execute(sql`INSERT INTO document_asset_metadata (document_asset_id, metadata_key, metadata_value, metadata_type, is_editable_by_user) VALUES (${req.params.id}, ${req.body?.metadataKey || "metadata"}, ${req.body?.metadataValue || null}, ${req.body?.metadataType || "text"}, TRUE)`);
     await db.execute(sql`INSERT INTO document_asset_audit_logs (document_asset_id, actor_user_id, action, after_json, ip_address, user_agent) VALUES (${req.params.id}, ${req.session.userId || null}, 'metadata.updated', ${JSON.stringify(req.body || {})}, ${req.ip || null}, ${req.headers["user-agent"] || null})`).catch(() => {});
     res.json({ success: true });
   });
   app.post("/api/document-hub/assets/:id/versions", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
+    if (doc.is_archived) return res.status(409).json({ message: "Archived document versions are read-only" });
     await db.execute(sql`INSERT INTO document_asset_versions (document_asset_id, version_number, storage_key, file_name, file_mime_type, file_size, created_by_user_id, change_summary) VALUES (${req.params.id}, ${req.body?.versionNumber || 1}, ${req.body?.storageKey || null}, ${req.body?.fileName || null}, ${req.body?.fileMimeType || null}, ${req.body?.fileSize || null}, ${req.session.userId || null}, ${req.body?.changeSummary || null})`);
     res.status(201).json({ success: true });
   });
   app.post("/api/document-hub/assets/:id/archive", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
     await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, archived_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
     res.json({ success: true });
   });
   app.get("/api/document-hub/assets/:id/audit", requireAuth, async (req, res) => {
     const user = await storage.getUser(req.session.userId!);
-    const docRes = await db.execute(sql`SELECT company_id FROM dam_documents WHERE id = ${req.params.id}`);
+    const docRes = await db.execute(sql`SELECT company_id, is_archived FROM dam_documents WHERE id = ${req.params.id}`);
     const doc = docRes.rows[0] as any;
     if (!doc) return res.status(404).json({ message: "Document not found" });
-    if (!(user?.role || "").startsWith("platform_") && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+    if (!(user?.role || "").startsWith("platform_") && user && !(await canAccessCompany(user, doc.company_id))) return res.status(403).json({ message: "Access denied" });
     const logs = await db.execute(sql`SELECT * FROM dam_document_access_logs WHERE document_id = ${req.params.id} ORDER BY created_at DESC`);
     res.json(logs.rows);
   });
@@ -18143,6 +21024,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Non-manager tenant users can only see their own wage history
       if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
+      } else if (workerId) {
+        // A manager/admin supplied an explicit workerId — authorize against
+        // that worker's persisted companyId before ever calling
+        // getWageHistory. A foreign-tenant worker id and a nonexistent one
+        // are indistinguishable: both yield an empty list, never a 403/404
+        // that could be used as a cross-tenant existence oracle.
+        const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+        if (isTenant) {
+          const targetWorker = await storage.getWorker(workerId);
+          if (!targetWorker || targetWorker.companyId !== user!.companyId) {
+            return res.json([]);
+          }
+        }
       }
       const entries = await storage.getWageHistory(workerId);
       res.json(entries);
@@ -19874,7 +22768,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/check-templates", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = queryStr(req.query.companyId);
+      // All non-platform users are force-scoped to their own company — this
+      // prevents both a ?companyId=<other_company> bypass and the unfiltered
+      // every-company result of omitting companyId entirely.
+      if (!isPlatformUser(user?.role) && user?.companyId) {
+        companyId = user.companyId;
+      }
       const templates = await storage.getCheckTemplates(companyId);
       res.json(templates);
     } catch (error) {
@@ -19886,6 +22787,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const template = await storage.getCheckTemplate(req.params.id as string);
       if (!template) return res.status(404).json({ message: "Template not found" });
+
+      // A foreign-tenant template gets the exact same 404 as a nonexistent
+      // one — this route has no company-existence oracle to begin with.
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && template.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Template not found" });
+      }
+
       res.json(template);
     } catch (error) {
       console.error(error);
@@ -19897,6 +22807,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const data = { ...req.body };
       if (!data.companyId || data.companyId === "") {
         return res.status(400).json({ message: "Company is required" });
+      }
+      // Non-platform callers may only create a template owned by their own
+      // company — a client-supplied companyId is never proof of access.
+      const actingUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && data.companyId !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: cannot create a check template for a different company" });
       }
       if (!data.name || data.name.trim() === "") {
         return res.status(400).json({ message: "Template name is required" });
@@ -19914,8 +22830,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.patch("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const data = { ...req.body };
-      if (data.companyId === "") data.companyId = null;
+      const existing = await storage.getCheckTemplate(req.params.id as string);
+      if (!existing) return res.status(404).json({ message: "Template not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Template not found" });
+      }
+
+      // companyId is immutable through this general-purpose update endpoint,
+      // for every caller (no platform-owner exception) — reassigning a check
+      // template to a different tenant is a distinct, explicit operation,
+      // never a side effect of an ordinary field edit. Reject before any
+      // mutation if the request tries to change it.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a check template's company cannot be changed through this endpoint" });
+      }
+
+      const data = { ...req.body, companyId: existing.companyId };
       const template = await storage.updateCheckTemplate(req.params.id as string, data);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
@@ -19926,6 +22859,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.delete("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
+      const existing = await storage.getCheckTemplate(req.params.id as string);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: check template belongs to a different company" });
+        }
+      }
+      // A nonexistent id falls through to here unchanged — deleteCheckTemplate
+      // is a no-op and this still reports success, exactly as before.
       await storage.deleteCheckTemplate(req.params.id as string);
       res.json({ success: true });
     } catch (error) {
@@ -20031,49 +22974,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return (dollars === 0 ? "Zero" : conv(dollars)) + " Dollars and " + String(cents).padStart(2, "0") + "/100";
   }
 
-  // Zero-pad check number to `length` digits (default 4).
-  // If the number already exceeds `length` digits it is kept as-is.
-  function formatCheckNumber(n: string | number, length = 4): string {
-    return String(n).replace(/\D/g, "").padStart(length, "0");
-  }
-
-  function buildMicrStr(routing: string, account: string, checkNum: string): string {
-    // ConnectCodeMICRT_X9.ttf (ANSI X9.7 compliant E-13B):
-    //   'a' = ⑆ transit routing delimiter
-    //   'b' = ⑇ amount symbol (not used in basic check layout)
-    //   'c' = ⑈ on-us symbol
-    //   'd' = ⑉ dash symbol
-    //
-    // ANSI X9.7 BUSINESS CHECK field order (checks > 6 inches):
-    //   Auxiliary On-Us  |  Transit Field    |  On-Us Field
-    //   ⑈ checknum ⑈       ⑆ routing ⑆         account ⑈
-    //
-    // This differs from personal-check order (⑆ routing ⑆ account ⑈ check ⑈).
-    const T      = "a"; // ⑆ transit
-    const O      = "c"; // ⑈ on-us
-    const r      = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
-    const a      = account.replace(/\D/g, "").slice(0, 17);
-    const fmtChk = formatCheckNumber(checkNum);
-    // Auxiliary On-Us field: ⑈ checknum ⑈ (check number only, no padding spaces)
-    const auxOnUs = `${O}${fmtChk}${O}`;
-    return `${auxOnUs}  ${T}${r}${T}  ${a}${O}`;
-  }
-
-  // Build fractional ABA routing number for human-readable backup on check face.
-  // Correct ABA fractional formula per ABA standard:
-  //   Numerator   = prefix-institution  (e.g. "11-35")
-  //     prefix    = ABA geographic city/state code (configured per remittance source)
-  //     institution = digits 5–8 of routing, leading zeros dropped (e.g. "0035" → "35")
-  //   Denominator = first 4 digits of routing, leading zeros kept  (e.g. "1210")
-  // Example: routing 121000358, prefix "11" → "11-35\n1210" → rendered as 11-35/1210
-  function buildFractionalRouting(routing: string, abaPrefix?: string): string {
-    const r = routing.replace(/\D/g, "").padStart(9, "0");
-    if (r.length < 9 || r === "000000000") return "";
-    const denom  = r.slice(0, 4);                         // "1210" — keep leading zeros
-    const instit = String(parseInt(r.slice(4, 8), 10));   // "0035" → "35"
-    const num    = abaPrefix ? `${abaPrefix}-${instit}` : instit;
-    return `${num}\n${denom}`;
-  }
+  // formatCheckNumber, buildMicrString (E-13B) and buildFractionalRouting are
+  // imported from ./check-micr so the exact strings the renderer draws can be
+  // covered by rendered-artifact regression tests without exposing bank data.
+  const buildMicrStr = buildMicrString;
 
   async function renderCheckPdf(params: {
     item: any; worker: any; run: any; company: any; remittanceSource: any;
@@ -20101,21 +23005,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // MICR font — hard failure for production checks; calibration falls back to Courier
     let micrFont: any = null;
     let micrFontLoaded = false;
-    const MICR_FONT_FILE = "ConnectCodeMICRT_X9.ttf"; // ANSI X9.7 compliant E-13B
+    const MICR_FONT_FILE = "micrenc.ttf";             // E-13B mapping used by buildMicrStr/client preview
     const MICR_FONT_SIZE = 12;                         // 12pt — reduced to match standard payroll check MICR sizing
     let micrFontName = "(none)";
     try {
       // Try __dirname-relative first (reliable in both dev and production PM2 regardless of cwd)
       // then fall back to process.cwd() for local dev
       const micrPathAlt1 = path.join(__dirname, "public", "fonts", MICR_FONT_FILE);
+      const micrPathAlt0 = path.join(process.cwd(), "public", "fonts", MICR_FONT_FILE);
       const micrPathAlt2 = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
-      const micrPath = fs.existsSync(micrPathAlt1) ? micrPathAlt1 : micrPathAlt2;
+      const micrPath = fs.existsSync(micrPathAlt1) ? micrPathAlt1 : fs.existsSync(micrPathAlt0) ? micrPathAlt0 : micrPathAlt2;
       const micrBytes = fs.readFileSync(micrPath);
       micrFont = await doc.embedFont(micrBytes);
       micrFontLoaded = true;
       micrFontName = MICR_FONT_FILE;
     } catch (micrErr) {
-      console.error("[CHECK_PDF] MICR font load error:", micrErr);
+      // Log the error class only — the message embeds the font filesystem path.
+      const micrErrCls = micrErr instanceof Error ? `${micrErr.name}` : typeof micrErr;
+      console.error(`[CHECK_PDF] MICR font (${MICR_FONT_FILE}) load failed: ${micrErrCls}`);
       if (!isCalibration) {
         throw new Error(
           `MICR font (${MICR_FONT_FILE}) failed to load. Printing requires the MICR E-13B font ` +
@@ -20143,6 +23050,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // ABA fractional prefix — ABA city/state geographic code (e.g. "11" for San Francisco area).
     // Configured per check template (cfg.abaPrefix). Not derivable from routing alone.
     const cfgAbaPrefix: string | undefined = cfg.abaPrefix ? String(cfg.abaPrefix) : undefined;
+    type CheckStockMode = "preprinted" | "blank_security";
+    const checkStockMode: CheckStockMode = cfg.checkStockMode === "blank_security" ? "blank_security" : "preprinted";
+    const bankBrandingEnabled = cfg.bankBrandingEnabled !== false;
+    const normalizeBrandName = (value: unknown): string => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const isAdikenTenant = normalizeBrandName((company as any)?.name || cfg.tenantSlug || cfg.companySlug) === "adiken" || String(cfg.tenantSlug || cfg.companySlug || "").toLowerCase() === "adiken";
+    const allowBuiltInAdikenLogo = isAdikenTenant && cfg.allowBuiltInAdikenLogo === true;
 
     // Per-field position overrides from check_templates.layoutConfig.positions
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
@@ -20163,6 +23076,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const companyLogoOffset = nestedCalibration.companyLogo || {};
     const bankLogoOffset = nestedCalibration.bankLogo || {};
     const fractionalRoutingOffset = nestedCalibration.fractionalRouting || {};
+    // Additional per-element check-face position offsets (points, clamped ±36, default 0
+    // so today's rendering is unchanged). Every company/bank account can adjust each of
+    // these independently via check_templates.layout_config.checkLayoutCalibration.
+    const elOffXY = (key: string): { x: number; y: number } => {
+      const o = (nestedCalibration as Record<string, any>)[key] || {};
+      return { x: clampCheckFaceOffsetPt(o.x), y: clampCheckFaceOffsetPt(o.y) };
+    };
+    const printableAreaOffset  = elOffXY("printableArea");   // whole check face (global)
+    const dateOffset           = elOffXY("date");
+    const amountInWordsOffset   = elOffXY("amountInWords");
+    const numericAmountOffset   = elOffXY("numericAmount");
+    const memoOffset            = elOffXY("memo");
+    const signatureOffset       = elOffXY("signature");
+    const payeeOffset           = elOffXY("payee");
+    const recipientAddressOffset = elOffXY("recipientAddress");
+    const micrOffset            = elOffXY("micr");
 
     // Existing Zone 2 envelope-window offsets are intentionally left as-is for backwards compatibility.
     // The nested *checkLayoutCalibration* offsets below are point-based and clamped to ±36pt; they apply
@@ -20180,13 +23109,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const bankLogoOffX = clampCheckFaceOffsetPt(bankLogoOffset.x);
     const bankLogoOffY = clampCheckFaceOffsetPt(bankLogoOffset.y);
     const fractionalRoutingOffX = clampCheckFaceOffsetPt(fractionalRoutingOffset.x);
-    const fractionalRoutingOffY = clampCheckFaceOffsetPt(fractionalRoutingOffset.y ?? cfg.fractionalRoutingOffsetY);
+    // fractionalRoutingOffsetY is a per-company downward inch offset for the grouped
+    // fractional ABA element. Safe default is +0.125in downward so the fraction clears
+    // the top check border; nested point calibration can still override for legacy templates.
+    const fractionalRoutingDefaultDownIn = 0.125;
+    const fractionalRoutingConfigDownIn = Number(cfg.fractionalRoutingOffsetY ?? fractionalRoutingDefaultDownIn);
+    const fractionalRoutingDefaultDownPt = -72 * Math.max(0, Math.min(0.30, Number.isFinite(fractionalRoutingConfigDownIn) ? fractionalRoutingConfigDownIn : fractionalRoutingDefaultDownIn));
+    const fractionalRoutingOffY = fractionalRoutingOffset.y !== undefined
+      ? clampCheckFaceOffsetPt(fractionalRoutingOffset.y)
+      : clampCheckFaceOffsetPt(fractionalRoutingDefaultDownPt);
     const paystubOffX      = Number(cfg.paystubOffsetX      ?? 72);  // default +1in right (envelope window safety)
     const paystubOffY      = Number(cfg.paystubOffsetY      ?? -18); // default -0.25in (down, envelope window safety)
 
-    // Global calibration offsets (globalTop > 0 = shift down in CSS; = subtract in PDF Y-up)
-    const gOT = -(params.calibrationOffsets?.globalTop  || 0);
-    const gOL =   params.calibrationOffsets?.globalLeft || 0;
+    // Global calibration offsets (globalTop > 0 = shift down in CSS; = subtract in PDF Y-up).
+    // printableArea{x,y} from layout_config applies the same global shift per company/bank account.
+    const gOT = -(params.calibrationOffsets?.globalTop  || 0) + printableAreaOffset.y;
+    const gOL =   (params.calibrationOffsets?.globalLeft || 0) + printableAreaOffset.x;
 
     const px = (def: number, key: string): number =>
       positions[key]?.x !== undefined ? Math.round(positions[key].x! + gOL) : def;
@@ -20212,10 +23150,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
 
     // ── Data values ─────────────────────────────────────────────────────────
+    const tradeCredits = Array.isArray(item?.tradeCredits) ? item.tradeCredits : [];
+    const totalTradeCredit = tradeCredits.reduce((sum: number, credit: any) => sum + Number(credit.totalValue || credit.total_value || 0), 0);
     const netPayRaw = isCalibration ? 1234.56 : params.vendorCheck ? params.vendorCheck.amount : Number(item?.netPay || 0);
     const netPay   = isNaN(netPayRaw) ? 0 : netPayRaw;
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
+    const totalCompensation = grossPay;
     const checkNum    = isCalibration ? "0001"  : params.vendorCheck?.checkNumber ? params.vendorCheck.checkNumber : String(item?.checkNumber || "0000");
     const fmtCheckNum = formatCheckNumber(checkNum); // zero-padded to 4 digits, e.g. "0011"
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
@@ -20241,9 +23182,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" "));
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
-    const isContractor  = isCalibration
-      ? true
-      : (worker?.compensationType === "contractor" || worker?.compensationType === "1099");
+    const isContractor  = isCalibration ? true : isIndependentContractorWorker(worker);
+    // Exact contractor-statement heading + disclaimer — used on every contractor
+    // statement panel and detachable contractor copy. Nonemployee compensation:
+    // no payroll taxes are withheld and no self-employment-tax estimate is shown.
+    const CONTRACTOR_STATEMENT_HEADING = "CONTRACTOR PAYMENT STATEMENT — NONEMPLOYEE COMPENSATION";
+    const CONTRACTOR_STATEMENT_DISCLAIMER = "Not an employee wage statement. No payroll taxes were withheld.";
+    const statementLabel = isContractor ? CONTRACTOR_STATEMENT_HEADING : "EMPLOYEE EARNINGS STATEMENT";
+    const statementTitle = isContractor ? "Contractor Payment Statement — Nonemployee Compensation" : "Employee Earnings Statement";
+    const companyCopyHeading = isContractor ? CONTRACTOR_STATEMENT_HEADING : "Company Copy - Employee Paystub";
+    // Contractor payment context — used in place of hard-coded "Paid" / "$0.00".
+    const contractorPaymentMethod = isCalibration
+      ? "Check"
+      : sanitizeForPdf(String(params.vendorCheck ? "Check" : (item?.paymentMethod || "Check")))
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (m) => m.toUpperCase());
 
     // Company fields
     const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
@@ -20301,7 +23254,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const isPng = imageUrl.toLowerCase().endsWith(".png") || imageBytes[0] === 0x89;
         return isPng ? await doc.embedPng(imageBytes) : await doc.embedJpg(imageBytes);
       } catch (imageErr) {
-        console.warn("[CHECK_PDF] Logo image embed failed (using text fallback):", imageErr);
+        // Sanitized: never log the image URL / stored-file path — only the error class.
+        const cls = imageErr instanceof Error ? imageErr.name : typeof imageErr;
+        console.warn(`[CHECK_PDF] Logo image embed failed (${cls}) — using text fallback`);
         return null;
       }
     };
@@ -20318,6 +23273,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // z1y: vertical (PDF Y-from-bottom), with global-top calibration offset
     const z1x = (inches: number) => Math.round(inches * 72 + gOL);
     const z1y = (inches: number) => Math.round(H + gOT - inches * 72);
+
+    // Check stock background: existing tenants default to preprinted stock to avoid double-printing
+    // a security pattern over physical check stock. Blank-security mode draws a vector-only
+    // non-scanned background layer and preserves the 612 x 792 point page size.
+    if (checkStockMode === "blank_security") {
+      page.drawRectangle({ x: 0, y: checkBot, width: W, height: checkH, color: rgb(0.90, 0.96, 1.0), opacity: 0.55 });
+      for (let sx = -W; sx < W * 2; sx += 24) {
+        page.drawLine({ start: { x: sx, y: checkBot }, end: { x: sx + checkH, y: H }, color: rgb(0.66, 0.84, 0.96), thickness: 0.25, opacity: 0.30 });
+      }
+      for (let sx = 0; sx < W; sx += 54) {
+        page.drawText("PAYLINK SECURITY", { x: sx, y: checkBot + 96, size: 5.5, font: hvB, color: rgb(0.72, 0.86, 0.96), opacity: 0.42, rotate: degrees(25) });
+        page.drawText("VOID", { x: sx + 12, y: checkBot + 156, size: 5, font: hvB, color: rgb(0.72, 0.86, 0.96), opacity: 0.35, rotate: degrees(25) });
+      }
+    }
 
     // VOID watermark only — REPRINT is a UI label only, never printed on PDF
     if (isVoid)
@@ -20344,8 +23313,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
 
     if (!logoEmbedded) {
-      // Calibration: draw a labeled placeholder box; production: reserved space only
-      if (isCalibration) {
+      // Company branding hierarchy: tenant-uploaded logo, then explicitly enabled Adiken-only
+      // vector fallback, then text company name. Never print Adiken branding globally.
+      if (!isCalibration && allowBuiltInAdikenLogo) {
+        page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH, color: rgb(0.05, 0.24, 0.50), opacity: 0.95 });
+        page.drawText("A", { x: logoX + 7, y: logoBot + 5, size: 18, font: hvB, color: rgb(1, 1, 1) });
+        logoEmbedded = true;
+      } else if (isCalibration) {
         page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH,
           borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
         page.drawText("LOGO", { x: logoX + 4, y: logoBot + 4, size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
@@ -20366,20 +23340,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // ── Bank block — top-center (center x 4.25in) ────────────────────────
     // Bank name: template config takes priority; fall back to remittance source institution field.
-    const bankName    = isCalibration ? "Bank of America"                           : sanitizeForPdf(cfg.bankName || (remittanceSource as any)?.bankName || (remittanceSource as any)?.institution || "");
-    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || "");
+    const bankName    = isCalibration ? "Bank of America" : sanitizeForPdf(cfg.bankName || (remittanceSource as any)?.bankName || (remittanceSource as any)?.institution || "");
+    // Bank address is configuration-only. Do not hardcode production addresses.
+    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || (remittanceSource as any)?.bankAddress || "");
     const bankLogoUrl: string | undefined = cfg.bankLogoUrl || cfg.bankLogo?.url;
+    const normalizedBankName = normalizeBrandName(bankName);
     const bankLogoImg = !isCalibration ? await embedUploadOrRemoteImage(bankLogoUrl) : null;
     if (bankLogoImg) {
-      page.drawImage(bankLogoImg, { x: z1x(3.98) + bankLogoOffX, y: z1y(0.25 + 0.28) + bankLogoOffY, width: 40, height: 20 });
+      page.drawImage(bankLogoImg, { x: z1x(3.45) + bankLogoOffX, y: z1y(0.46) + bankLogoOffY, width: 86, height: 20 });
+    } else if (bankBrandingEnabled && normalizedBankName === "bank of america") {
+      const bx = z1x(3.45) + bankLogoOffX, by = z1y(0.46) + bankLogoOffY;
+      page.drawRectangle({ x: bx, y: by, width: 86, height: 20, color: rgb(0.0, 0.12, 0.40), opacity: 0.95 });
+      page.drawRectangle({ x: bx + 43, y: by, width: 43, height: 20, color: rgb(0.76, 0.02, 0.08), opacity: 0.95 });
+      page.drawText("Bank of America", { x: bx + 5, y: by + 6, size: 6.5, font: hvB, color: rgb(1, 1, 1) });
     }
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
       const bnaW = bankAddress.length * 3.7;
-      const bankCenterX = z1x(4.25);
-      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2) + bankLogoOffX, y: z1y(0.42) + bankLogoOffY, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
+      const bankCenterX = z1x(4.18);
+      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2) + bankLogoOffX, y: z1y(0.52) + bankLogoOffY, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
       if (bankAddress)
-        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(0.59) + bankLogoOffY, size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
+        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(0.66) + bankLogoOffY, size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
     }
 
     // ── Fractional ABA routing — upper-right corner (x ~5.25in), ANSI X9 requirement ─
@@ -20390,9 +23371,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (fracStr) {
         const [fracNum, fracDen] = fracStr.split("\n");
         const fracX = z1x(5.25) + fractionalRoutingOffX;
-        const fracNumY  = z1y(0.30) + fractionalRoutingOffY;   // numerator baseline, lowered from 0.17in to clear top border
-        const fracLineY = z1y(0.35) + fractionalRoutingOffY;   // fraction rule
-        const fracDenY  = z1y(0.45) + fractionalRoutingOffY;   // denominator baseline
+        const fracNumY  = z1y(0.42) + fractionalRoutingOffY;   // numerator baseline, lowered from 0.17in to clear top border; lowered again from 0.30in after reopen
+        const fracLineY = z1y(0.47) + fractionalRoutingOffY;   // fraction rule
+        const fracDenY  = z1y(0.57) + fractionalRoutingOffY;   // denominator baseline
         drawGuide(fracX, fracDenY - 2, 70, 26, "FRACTIONAL RTG");
         page.drawText(fracNum, { x: fracX, y: fracNumY, size: 7.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
         page.drawLine({ start: { x: fracX, y: fracLineY }, end: { x: fracX + 55, y: fracLineY }, color: rgb(0.35, 0.35, 0.35), thickness: 0.6 });
@@ -20410,12 +23391,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
 
     // ── Date — label above, value above its underline (x 6.75in–8.00in) ──
-    const dtX1 = z1x(6.75), dtX2 = z1x(8.00);
-    drawGuide(dtX1, z1y(0.95), dtX2 - dtX1, Math.round(0.51*72), "DATE BLOCK");
-    page.drawText("DATE",   { x: dtX1, y: z1y(0.52), size: 7.5,  font: hvB, color: rgb(0.35, 0.35, 0.35) });
-    page.drawText(payDate,  { x: dtX1 + 2, y: z1y(0.70), size: 10.5, font: hv,  color: rgb(0,   0,   0  ) });
-    page.drawLine({ start: { x: dtX1, y: z1y(0.76) }, end: { x: dtX2, y: z1y(0.76) }, color: rgb(0, 0, 0), thickness: 0.9 });
-    page.drawText("VOID AFTER 90 DAYS", { x: z1x(6.75), y: z1y(0.95), size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    const dtX1 = z1x(6.75) + dateOffset.x, dtX2 = z1x(8.00) + dateOffset.x;
+    const dtY = (inches: number) => z1y(inches) + dateOffset.y;
+    drawGuide(dtX1, dtY(0.95), dtX2 - dtX1, Math.round(0.51*72), "DATE BLOCK");
+    page.drawText("DATE",   { x: dtX1, y: dtY(0.52), size: 7.5,  font: hvB, color: rgb(0.35, 0.35, 0.35) });
+    page.drawText(payDate,  { x: dtX1 + 2, y: dtY(0.70), size: 10.5, font: hv,  color: rgb(0,   0,   0  ) });
+    page.drawLine({ start: { x: dtX1, y: dtY(0.76) }, end: { x: dtX2, y: dtY(0.76) }, color: rgb(0, 0, 0), thickness: 0.9 });
+    page.drawText("VOID AFTER 90 DAYS", { x: dtX1, y: dtY(0.95), size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
     // ── PAY TO THE ORDER OF — stacked two-line label matching sample layout ──
     //    "PAY TO THE" on line 1 (y 1.18in), "ORDER OF" on line 2 (y 1.30in)
@@ -20432,25 +23414,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     drawGuide(payLabelX, z1y(1.39 + 0.02), payLineX2 - payLabelX, Math.round(0.30*72), "PAYEE ROW");
     page.drawText("PAY TO THE",   { x: payLabelX, y: payLine1Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("ORDER OF",     { x: payLabelX, y: payRowY,   size: 9, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(wName, { x: payeeNameX + checkFaceReceiverOffX, y: payRowY + checkFaceReceiverOffY, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(wName, { x: payeeNameX + checkFaceReceiverOffX + payeeOffset.x, y: payRowY + checkFaceReceiverOffY + payeeOffset.y, size: 11, font: hvB, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: payLineX1, y: payeeLineY }, end: { x: payLineX2, y: payeeLineY }, color: rgb(0, 0, 0), thickness: 0.9 });
 
     // Numeric amount — no box, right-aligned bold 12pt on same baseline as payee name row
     // Right edge at x 7.82in, baseline at y 1.30in (same as ORDER OF / payee baseline)
     const amtStr   = `$${fmtMoney(netPay)}`;
     const amtStrW  = Math.round(amtStr.length * 7.0); // approx char width at 12pt bold
-    const amtTextX = Math.round(z1x(7.20) - amtStrW); // was 7.82 — moved left toward date/check# area
+    const amtTextX = Math.round(z1x(7.20) - amtStrW) + numericAmountOffset.x; // was 7.82 — moved left toward date/check# area
     drawGuide(amtTextX, z1y(1.38), amtStrW + 4, 14, "AMOUNT TEXT");
-    page.drawText(amtStr, { x: amtTextX, y: payRowY, size: 12, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(amtStr, { x: amtTextX, y: payRowY + numericAmountOffset.y, size: 12, font: hvB, color: rgb(0, 0, 0) });
 
     // ── Legal amount row: "The Sum of" (bold) + written amount + underline ─
     //    "The Sum of" same size/weight as "PAY TO THE ORDER OF" (9pt bold)
     //    Written amount includes Dollars: "Forty Dollars and 00/100"
     //    Underline from x 1.30in to x 7.20in at y 1.84in; no underline under label
-    const legalY      = z1y(1.75);
-    const legalLineY  = z1y(1.84);
-    const writtenX    = z1x(1.30);
-    const writtenEndX = z1x(7.20);
+    const legalY      = z1y(1.75) + amountInWordsOffset.y;
+    const legalLineY  = z1y(1.84) + amountInWordsOffset.y;
+    const writtenX    = z1x(1.30) + amountInWordsOffset.x;
+    const writtenEndX = z1x(7.20) + amountInWordsOffset.x;
     const writtenStr  = amtWords.length > 58 ? amtWords.slice(0, 55) + "..." : amtWords;
     drawGuide(z1x(0.30), legalLineY - 2, writtenEndX - z1x(0.30), Math.round(0.15*72), "LEGAL AMT");
     page.drawText("The Sum of", { x: z1x(0.30), y: legalY, size: 9,   font: hvB, color: rgb(0, 0, 0) });
@@ -20459,37 +23441,42 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       color: rgb(0, 0, 0), thickness: 0.6 });
 
     // ── Payee mailing address — moved lower (x 1.90in) ───────────────────
-    drawGuide(z1x(1.90), z1y(2.40 + 0.12), Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
-    if (wStreet)       page.drawText(wStreet,       { x: z1x(1.90), y: z1y(2.23), size: 9, font: hv, color: rgb(0, 0, 0) });
-    if (wCityStateZip) page.drawText(wCityStateZip, { x: z1x(1.90), y: z1y(2.40), size: 9, font: hv, color: rgb(0, 0, 0) });
+    const recipX = z1x(1.90) + recipientAddressOffset.x;
+    drawGuide(recipX, z1y(2.40 + 0.12) + recipientAddressOffset.y, Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
+    if (wStreet)       page.drawText(wStreet,       { x: recipX, y: z1y(2.23) + recipientAddressOffset.y, size: 9, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: recipX, y: z1y(2.40) + recipientAddressOffset.y, size: 9, font: hv, color: rgb(0, 0, 0) });
 
     // ── Memo (left) + Signature (right) — both at y 2.65in/2.72in ────────
     //    Must not enter MICR clear band (starts y 2.875in from check top)
-    const memoLabelY = z1y(2.65);
-    const memoLineY  = z1y(2.72);
+    const memoLabelY = z1y(2.65) + memoOffset.y;
+    const memoLineY  = z1y(2.72) + memoOffset.y;
+    const memoX      = memoOffset.x;
     const memoText   = sanitizeForPdf(params.vendorCheck?.memo ? params.vendorCheck.memo : (pStart && pEnd && pStart !== "N/A" && pEnd !== "N/A" ? `Pay period ${pStart} - ${pEnd}` : ""));
-    drawGuide(z1x(0.30), memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
-    page.drawText("MEMO:",   { x: z1x(0.30), y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
-    page.drawText(memoText,  { x: z1x(0.80), y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
-    page.drawLine({ start: { x: z1x(0.75), y: memoLineY }, end: { x: z1x(3.95), y: memoLineY },
+    drawGuide(z1x(0.30) + memoX, memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
+    page.drawText("MEMO:",   { x: z1x(0.30) + memoX, y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
+    page.drawText(memoText,  { x: z1x(0.80) + memoX, y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
+    page.drawLine({ start: { x: z1x(0.75) + memoX, y: memoLineY }, end: { x: z1x(3.95) + memoX, y: memoLineY },
       color: rgb(0, 0, 0), thickness: 0.6 });
 
-    const sigLineY = memoLineY; // same Y as memo underline per spec
-    const sigX1    = z1x(5.35), sigX2 = z1x(7.95);
+    const sigLineY = memoLineY + signatureOffset.y - memoOffset.y; // signature Y independently adjustable
+    const sigX1    = z1x(5.35) + signatureOffset.x, sigX2 = z1x(7.95) + signatureOffset.x;
     const sigLabel  = "AUTHORIZED SIGNATURE";
     const sigLabelW = Math.round(sigLabel.length * 3.5);
-    const sigCenterX = z1x(6.65);
+    const sigCenterX = z1x(6.65) + signatureOffset.x;
     page.drawLine({ start: { x: sigX1, y: sigLineY }, end: { x: sigX2, y: sigLineY },
       color: rgb(0, 0, 0), thickness: 0.6 });
-    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.90),
+    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.90) + signatureOffset.y,
       size: 7, font: hv, color: rgb(0.4, 0.4, 0.4) }); // was z1y(2.78) — moved below line so it doesn't get cut
 
     // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.38in ──
     //    No other drawing inside this band.
     drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
-    if (showMicrLine)
-      page.drawText(buildMicrStr(routing, account, checkNum),
-        { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
+    if (showMicrLine) {
+      const micrString = buildMicrStr(routing, account, checkNum);
+      // Do not log the MICR string (even redacted) — it encodes routing/account digits.
+      console.log(`[CHECK_PDF] MICR line rendered (E-13B, length ${micrString.length})`);
+      page.drawText(micrString, { x: z1x(0.50) + micrOffset.x, y: z1y(3.38) + micrOffset.y, size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
+    }
 
     // Zone 1 / Zone 2 separator — REMOVED: check stock has physical perforations; software lines are redundant.
 
@@ -20529,15 +23516,106 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // ── Paystub / vendor-check info (right column of Zone 2) ────────────────
     // vcMemo declared here so it is accessible in both Zone 2 and Zone 3 sections
     const vcMemo = params.vendorCheck?.memo || "";
+    const truncatePdfText = (text: string, maxChars: number): string =>
+      text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
+    const tradeCreditValue = (credit: any): number => Number(credit.totalValue || credit.total_value || 0);
+    const tradeCreditLabel = (credit: any): string => {
+      const itemName = sanitizeForPdf(String(credit.itemName || credit.item_name || credit.productName || credit.product_name || "Goods"));
+      const sku = sanitizeForPdf(String(credit.itemSku || credit.item_sku || credit.sku || credit.reference || credit.referenceNumber || credit.reference_number || ""));
+      const qty = sanitizeForPdf(String(credit.quantity || credit.qty || "1"));
+      const unitValue = Number(credit.unitValue || credit.unit_value || 0);
+      const approval = credit.approvalStatus || credit.approval_status || credit.approvedAt || credit.approved_at ? "approved" : "pending";
+      const delivery = sanitizeForPdf(String(credit.deliveryStatus || credit.delivery_status || ""));
+      const agreement = sanitizeForPdf(String(credit.tradeAgreementNumber || credit.trade_agreement_number || credit.agreementNumber || credit.agreement_number || ""));
+      return [
+        `${itemName}${sku ? ` (${sku})` : ""}`,
+        `qty ${qty}`,
+        unitValue > 0 ? `unit $${fmtMoney(unitValue)}` : "",
+        approval,
+        delivery ? `delivery ${delivery}` : "",
+        agreement ? `ref ${agreement}` : "",
+      ].filter(Boolean).join(" • ");
+    };
+    const renderContractorStatementStub = () => {
+      // Zone 2 right column — contractor payment statement. Nonemployee
+      // compensation: no wage terminology, no deductions/withholding/FICA,
+      // no YTD, no self-employment-tax estimate. No overlay is drawn because
+      // the employee paystub content is never rendered for a contractor.
+      const psC1 = psX, psC3 = rm - 108;
+      const minY = mailBot + 8;
+      let psY = checkBot - 40 + paystubOffY;
+      const row = (label: string, value: string, bold = false, color = rgb(0, 0, 0), size = 6.7) => {
+        if (psY < minY) return;
+        page.drawText(label, { x: psC1, y: psY, size, font: bold ? hvB : hv, color });
+        if (value) page.drawText(value, { x: psC3, y: psY, size, font: bold ? hvB : cour, color });
+        psY -= 10;
+      };
+
+      page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
+      page.drawText(CONTRACTOR_STATEMENT_HEADING, { x: psX, y: checkBot - 13 + paystubOffY, size: 5.6, font: hvB, color: rgb(1, 1, 1) });
+      page.drawText(CONTRACTOR_STATEMENT_DISCLAIMER, { x: psX, y: checkBot - 27 + paystubOffY, size: 5.4, font: hv, color: rgb(0.3, 0.3, 0.3) });
+
+      // Payer / contractor / reference block
+      page.drawText(`Payer: ${truncatePdfText(coName, 40)}`, { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) }); psY -= 10;
+      page.drawText(`Contractor: ${truncatePdfText(wName, 38)}`, { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0.2, 0.2, 0.2) }); psY -= 10;
+      page.drawText(`Check / Ref No.: ${fmtCheckNum}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9;
+      page.drawText(`Payment Date: ${payDate}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9;
+      page.drawText(`Payment Method: ${contractorPaymentMethod}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9;
+      const invRef = sanitizeForPdf(String(item?.invoiceNumber || item?.invoice_number || item?.reference || ""));
+      const conRef = sanitizeForPdf(String(item?.contractReference || item?.contract_reference || item?.contractId || ""));
+      if (invRef) { page.drawText(`Invoice: ${truncatePdfText(invRef, 40)}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9; }
+      if (conRef) { page.drawText(`Contract: ${truncatePdfText(conRef, 40)}`, { x: psC1, y: psY, size: 6.3, font: hv, color: rgb(0.25, 0.25, 0.25) }); psY -= 9; }
+      psY -= 3;
+
+      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 12, color: rgb(0.88, 0.88, 0.88) });
+      page.drawText("PAYMENT", { x: psC1, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText("AMOUNT", { x: psC3, y: psY, size: 6.3, font: hvB, color: rgb(0, 0, 0) });
+      psY -= 12;
+      row("Current payment amount", `$${fmtMoney(netPay)}`, true, rgb(0, 0, 0.55), 6.8);
+      if (totalTradeCredit > 0) row("Documented trade / noncash amount", `$${fmtMoney(totalTradeCredit)}`, true, rgb(0.05, 0.35, 0.12));
+      const invBalanceRaw = item?.balanceDue ?? item?.balance_due;
+      if (invBalanceRaw !== undefined && invBalanceRaw !== null && String(invBalanceRaw) !== "") {
+        row("Remaining invoice balance", `$${fmtMoney(Number(invBalanceRaw) || 0)}`);
+      }
+
+      if (totalTradeCredit > 0 && psY >= minY + 20) {
+        page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 12, color: rgb(0.90, 0.96, 0.92), opacity: 0.9 });
+        page.drawText("TRADE / NONCASH DETAIL", { x: psC1, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+        page.drawText("VALUE", { x: rm - 52, y: psY, size: 6.2, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+        psY -= 11;
+        for (const credit of tradeCredits.slice(0, 3)) {
+          if (psY < minY + 8) break;
+          page.drawText(truncatePdfText(tradeCreditLabel(credit), 56), { x: psC1, y: psY, size: 5.7, font: hv, color: rgb(0, 0, 0) });
+          page.drawText(`$${fmtMoney(tradeCreditValue(credit))}`, { x: psC3, y: psY, size: 5.7, font: cour, color: rgb(0, 0, 0) });
+          psY -= 8;
+        }
+      }
+      if (psY >= minY + 12) {
+        page.drawText(
+          `Ref ${fmtCheckNum} • ${payDate} • ${contractorPaymentMethod} $${fmtMoney(netPay)}` +
+            (totalTradeCredit > 0 ? ` • Trade $${fmtMoney(totalTradeCredit)}` : ""),
+          { x: psC1, y: psY, size: 5.6, font: hv, color: rgb(0.1, 0.1, 0.1) },
+        );
+      }
+    };
+    const renderEmployeePaystub = () => {
+      // Existing employee paystub renderer intentionally remains inline below.
+      // Employee output is unchanged; contractor output is overlaid by renderContractorStatementStub().
+    };
     // earnRows/totalHrs hoisted here so Zone 3 can reference them regardless of branch taken in Zone 2
     type ERow = [string, string, string, string, string];
     const earnRows: ERow[] = [];
     let totalHrs = 0;
-    if (!params.vendorCheck) {
+    if (!params.vendorCheck && isContractor) {
+      // Contractor payment statement — the sole Zone 2 renderer for contractors.
+      // Employee wage-statement content below is never drawn for contractors, so
+      // no employee terminology, deductions, withholding, FICA or YTD can leak.
+      renderContractorStatementStub();
+    } else if (!params.vendorCheck) {
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
     page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText(statementLabel, { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
     const psChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
@@ -20548,17 +23626,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(`Pay Period Start: ${pStart}`, { x: psX, y: checkBot - 42 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
     page.drawText(`Pay Period End: ${pEnd}`,     { x: psX, y: checkBot - 52 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
     page.drawText(`Pay Date: ${payDate}`,        { x: psX, y: checkBot - 62 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
-    // Contractor note
-    if (isContractor)
-      page.drawText("Independent contractor — responsible for self-employment tax (15.3%: SS 12.4% + Medicare 2.9%)",
-        { x: psX, y: checkBot - 74 + paystubOffY, size: 5.5, font: hv, color: rgb(0.45, 0.32, 0.05) });
 
     // Compact earnings table
     const psC1 = psX, psC2 = psX + 115, psC3 = psX + 160, psC4 = psX + 210;
     const psC5 = Math.min(psX + 262, rm - 5); // capped so YTD column never overflows right margin
     let psY = checkBot - 88 + paystubOffY;
     page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
-    page.drawText("EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(isContractor ? "SERVICES / COMPENSATION" : "EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("HOURS",     { x: psC2, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("RATE",      { x: psC3, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("CURRENT",   { x: psC4, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
@@ -20626,31 +23700,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     psY -= 4;
     if (psY >= mailBot + 34) {
       page.drawLine({ start: { x: psC1 - 2, y: psY + 8 }, end: { x: rm + 2, y: psY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
-      page.drawText("GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(isContractor ? "TOTAL COMPENSATION" : "GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       page.drawText(`$${fmtMoney(grossPay)}`, { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       if (showYtdTotals) page.drawText(`$${fmtMoney(ytdGross)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
       psY -= 11;
-      page.drawText("TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`-$${fmtMoney(totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
-      if (showYtdTotals) page.drawText(`-$${fmtMoney(ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      page.drawText(isContractor ? "TRADE COMPENSATION - GOODS" : "TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      if (showYtdTotals) page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
       psY -= 11;
       page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
-      page.drawText("NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      page.drawText(isContractor ? "CASH PAYMENT / CHECK AMOUNT" : "NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       page.drawText(`$${fmtMoney(netPay)}`, { x: psC4, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       if (showYtdTotals) page.drawText(`$${fmtMoney(ytdNet)}`, { x: psC5, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
       psY -= 14;
     }
 
-    // SE tax reference (Zone 2 right col, contractor only)
-    if (isContractor && psY >= mailBot + 50) {
-      const ssSEcur = grossPay * 0.124, medSEcur = grossPay * 0.029, totSEcur = grossPay * 0.153;
-      const ssSEytd = ytdGross  * 0.124, medSEytd = ytdGross  * 0.029, totSEytd = ytdGross  * 0.153;
-      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.95, 0.92, 0.82), opacity: 0.85 });
-      page.drawText("SELF-EMPLOYMENT TAX REFERENCE", { x: psC1, y: psY, size: 6, font: hvB, color: rgb(0.5, 0.35, 0) }); psY -= 12;
-      if (psY >= mailBot + 8) { page.drawText("Social Security (SS) 12.4%", { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(ssSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
-      if (psY >= mailBot + 8) { page.drawText("Medicare 2.9%",              { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(medSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
-      if (psY >= mailBot + 8) { page.drawText("Total SE Tax 15.3%",         { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: psC4, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(totSEytd)}`, { x: psC5, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); }
-    }
+    renderEmployeePaystub();
     } else {
       // Vendor check info panel — right column of Zone 2
       page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.08, 0.38, 0.14), opacity: 0.9 });
@@ -20688,6 +23753,57 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(`Amount:  $${fmtMoney(netPay)}`, { x: lm, y: vcZ3Y, size: 9, font: hvB, color: rgb(0, 0, 0.5) }); vcZ3Y -= 12;
       page.drawText(`Date:    ${payDate}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); vcZ3Y -= 12;
       if (vcMemo) { page.drawText(`Memo:    ${vcMemo.length > 60 ? vcMemo.slice(0, 57) + "…" : vcMemo}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); }
+    } else if (isContractor) {
+    // ═══════════════════════════════════════════════════════════════════════
+    // ZONE 3 — CONTRACTOR PAYMENT STATEMENT (detachable contractor copy)
+    // Nonemployee compensation: no earnings/deductions table, no withholding,
+    // no self-employment-tax estimate, no YTD, no hard-coded "Paid".
+    // ═══════════════════════════════════════════════════════════════════════
+    const cz3Banner = mailBot - 14;
+    page.drawRectangle({ x: lm - 4, y: cz3Banner - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
+    page.drawText(`${CONTRACTOR_STATEMENT_HEADING} — DETACH AND RETAIN`, { x: lm, y: cz3Banner, size: 6.6, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    const cz3Chk = `Check / Ref No. ${fmtCheckNum}`;
+    page.drawText(cz3Chk, { x: rm - Math.round(cz3Chk.length * 4.2), y: cz3Banner, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    let cy = cz3Banner - 14;
+    page.drawText(CONTRACTOR_STATEMENT_DISCLAIMER, { x: lm, y: cy, size: 6.4, font: hv, color: rgb(0.35, 0.35, 0.35) }); cy -= 14;
+    page.drawText(`Payer: ${coName}`, { x: lm, y: cy, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`Payment Date: ${payDate}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
+    page.drawText(`Contractor: ${wName}`, { x: lm, y: cy, size: 8, font: hv, color: rgb(0.15, 0.15, 0.15) });
+    page.drawText(`Payment Method: ${contractorPaymentMethod}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); cy -= 12;
+    if (wStreet) { page.drawText(wStreet, { x: lm, y: cy, size: 8, font: hv, color: rgb(0.15, 0.15, 0.15) }); }
+    if (coEin) { page.drawText(`Payer EIN: ${coEin}`, { x: rm - 180, y: cy, size: 8, font: hv, color: rgb(0.25, 0.25, 0.25) }); }
+    cy -= 12;
+    if (wCityStateZip) { page.drawText(wCityStateZip, { x: lm, y: cy, size: 8, font: hv, color: rgb(0.15, 0.15, 0.15) }); cy -= 14; } else { cy -= 2; }
+
+    const czAmt = rm - 95;
+    page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
+    page.drawText("PAYMENT", { x: lm, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("AMOUNT", { x: czAmt, y: cy, size: 7, font: hvB, color: rgb(0, 0, 0) }); cy -= 14;
+    page.drawRectangle({ x: lm - 2, y: cy - 4, width: rm - lm + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+    page.drawText("Current payment amount", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+    page.drawText(`$${fmtMoney(netPay)}`, { x: czAmt, y: cy, size: 8, font: hvB, color: rgb(0, 0, 0.55) }); cy -= 14;
+    if (totalTradeCredit > 0) {
+      page.drawText("Documented trade / noncash amount", { x: lm, y: cy, size: 8, font: hvB, color: rgb(0.05, 0.35, 0.12) });
+      page.drawText(`$${fmtMoney(totalTradeCredit)}`, { x: czAmt, y: cy, size: 8, font: hvB, color: rgb(0.05, 0.35, 0.12) }); cy -= 12;
+      for (const credit of tradeCredits.slice(0, 4)) {
+        if (cy < 40) break;
+        page.drawText(truncatePdfText(tradeCreditLabel(credit), 74), { x: lm + 6, y: cy, size: 6, font: hv, color: rgb(0.25, 0.25, 0.25) });
+        page.drawText(`$${fmtMoney(tradeCreditValue(credit))}`, { x: czAmt, y: cy, size: 6, font: cour, color: rgb(0.25, 0.25, 0.25) }); cy -= 9;
+      }
+    }
+    {
+      const czBal = item?.balanceDue ?? item?.balance_due;
+      if (czBal !== undefined && czBal !== null && String(czBal) !== "") {
+        page.drawText("Remaining invoice balance", { x: lm, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) });
+        page.drawText(`$${fmtMoney(Number(czBal) || 0)}`, { x: czAmt, y: cy, size: 8, font: hv, color: rgb(0, 0, 0) }); cy -= 14;
+      }
+    }
+    cy -= 2;
+    page.drawText(
+      `Ref ${fmtCheckNum} • ${payDate} • ${contractorPaymentMethod} $${fmtMoney(netPay)}` +
+        (totalTradeCredit > 0 ? ` • Trade $${fmtMoney(totalTradeCredit)}` : ""),
+      { x: lm, y: cy, size: 6.5, font: hv, color: rgb(0.15, 0.15, 0.15) },
+    );
     } else {
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 3 — DETAILED EARNINGS STATEMENT  (Y: 0..mailBot = 0..288)
@@ -20697,6 +23813,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const z3BannerY = mailBot - 14;
     page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
     page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(companyCopyHeading, { x: lm, y: z3BannerY - 13, size: 6.5, font: hvB, color: rgb(0.25, 0.25, 0.25) });
     const z3ChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
 
@@ -20790,28 +23907,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(`$${fmtMoney(netPay)}`,    { x: d4, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
     page.drawText(`$${fmtMoney(ytdNet)}`,    { x: d5, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
     z3Y -= 18;
-
-    // SE tax reference detail (contractor only, Zone 3)
-    if (isContractor && z3Y > 55) {
-      const ssSEcur = grossPay * 0.124, medSEcur = grossPay * 0.029, totSEcur = grossPay * 0.153;
-      const ssSEytd = ytdGross  * 0.124, medSEytd = ytdGross  * 0.029, totSEytd = ytdGross  * 0.153;
-      page.drawRectangle({ x: lm - 2, y: z3Y - 4, width: rm - lm + 2, height: 13, color: rgb(0.95, 0.92, 0.82), opacity: 0.85 });
-      page.drawText("SELF-EMPLOYMENT TAX REFERENCE — NOT DEDUCTED FROM PAY", { x: lm, y: z3Y, size: 6.5, font: hvB, color: rgb(0.5, 0.35, 0) }); z3Y -= 13;
-      // SE table header
-      const se4 = rm - 200, se5 = rm - 128, se6 = rm - 55;
-      page.drawRectangle({ x: lm - 2, y: z3Y - 3, width: rm - lm + 2, height: 12, color: rgb(0.92, 0.89, 0.78) });
-      page.drawText("DESCRIPTION", { x: lm,  y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
-      page.drawText("RATE",        { x: se4, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
-      page.drawText("CURRENT",     { x: se5, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
-      page.drawText("YTD",         { x: se6, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) }); z3Y -= 12;
-      if (z3Y > 30) { page.drawText("Social Security (SSI)", { x: lm, y: z3Y, size: 7.5, font: hv, color: rgb(0,0,0) }); page.drawText("12.4%", { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); z3Y -= 11; }
-      if (z3Y > 30) { page.drawText("Medicare",              { x: lm, y: z3Y, size: 7.5, font: hv, color: rgb(0,0,0) }); page.drawText("2.9%",  { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); z3Y -= 11; }
-      if (z3Y > 30) { page.drawText("Total SE Tax",          { x: lm, y: z3Y, size: 7.5, font: hvB, color: rgb(0,0,0) }); page.drawText("15.3%", { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: hvB,  color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: hvB,  color: rgb(0,0,0) }); z3Y -= 11; }
-      if (z3Y > 18)
-        page.drawText("As an independent contractor, you are responsible for self-employment tax (SSI 12.4% + Medicare 2.9% = 15.3%) directly to the IRS. SS applies to first $168,600 of earnings.",
-          { x: lm, y: z3Y, size: 5.5, font: hv, color: rgb(0.4, 0.4, 0.4) });
-    }
-    } // end Zone 3 else block (regular payroll earnings statement)
+    } // end Zone 3 employee earnings statement
 
     // Footer
     const footerText = coEin ? `This is a computer-generated document. ${coName} - EIN: ${coEin}` : "This is a computer-generated document.";
@@ -20836,7 +23932,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Typed interfaces for raw SQL rows returned by check PDF endpoints.
   interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; status: string | null; }
   interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; phone: string; ein: string; }
-  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; }
+  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; worker_type?: string; worker_group?: string; }
   interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; institution: string | null; }
   interface CheckTplRow { layout_config: unknown; }
   // Normalize pg / drizzle raw execute result to a typed array.
@@ -20945,6 +24041,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
       ]);
 
+      let tradeCreditsForItem: any[] = [];
+      let printableItemRow: any = itemRow;
+      if (isIndependentContractorWorker(worker)) {
+        tradeCreditsForItem = await db.select().from(contractorTradeCompensation).where(and(eq(contractorTradeCompensation.payrollItemId, payrollItemId), eq(contractorTradeCompensation.companyId, compId)));
+        if (tradeCreditsForItem.length > 0) {
+          try {
+            const settlement = assertContractorTradeCreditsPrintable({ grossCompensation: Number(itemRow.grossPay || 0), tradeCredits: tradeCreditsForItem });
+            printableItemRow = { ...itemRow, netPay: settlement.paidByCheck.toFixed(2), tradeCredits: tradeCreditsForItem };
+          } catch (tradeErr: any) {
+            await db.execute(sql`
+              INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
+              VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${req.session.userId || null}, 1, ${itemRow.netPay || 0}, 'failed', ${JSON.stringify([tradeErr?.message || "Contractor trade credit validation failed"])}, true, 'server-pdf', 'trade_credit_print_blocked', ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
+            `).catch(() => {});
+            return res.status(422).json({ message: tradeErr?.message || "Contractor trade credit validation failed" });
+          }
+        }
+      }
+
       let rs: CheckRsRow | null = null;
       if (runRow?.funding_account_id) {
         rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
@@ -20968,8 +24082,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const calibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
       const pdfBytes = await renderCheckPdf({
-        item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
+        item: printableItemRow,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
@@ -20986,7 +24100,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const printUserId = req.session.userId;
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
-          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${itemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
+          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${printableItemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
         `);
       }
 
@@ -21280,7 +24394,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           };
           const bytes = await renderCheckPdf({
             item: normalizedItem,
-            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type } : null,
+            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type, workerType: w.worker_type, workerGroup: w.worker_group } : null,
             run: runNorm, company: coNorm, remittanceSource: remSrc,
             layoutConfig: batchLayoutConfig,
             calibrationOffsets: batchCalibrationOffsets,
@@ -21468,7 +24582,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" },
@@ -21503,6 +24617,74 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+
+  // ── Contractor trade compensation credits ───────────────────────────────
+  app.get("/api/contractor-trade-compensation", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const payrollItemId = queryStr(req.query.payrollItemId);
+      const companyId = queryStr(req.query.companyId) || user?.companyId || null;
+      if (!companyId || !(await canAccessCompany(user!, companyId))) return res.status(403).json({ message: "Access denied" });
+      const conditions = [eq(contractorTradeCompensation.companyId, companyId)];
+      if (payrollItemId) conditions.push(eq(contractorTradeCompensation.payrollItemId, payrollItemId));
+      if (user?.role === "contractor" && user.workerId) conditions.push(eq(contractorTradeCompensation.contractorUserId, user.workerId));
+      res.json(await db.select().from(contractorTradeCompensation).where(and(...conditions)));
+    } catch (e: any) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch trade credits") }); }
+  });
+
+  app.post("/api/contractor-trade-compensation", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = String(req.body.companyId || user?.companyId || "");
+      if (!companyId || !(await canAccessCompany(user!, companyId))) return res.status(403).json({ message: "Access denied" });
+      const totalValue = (Number(req.body.quantity || 0) * Number(req.body.unitValue || 0)).toFixed(2);
+      const payload = insertContractorTradeCompensationSchema.parse({ ...req.body, companyId, totalValue });
+      if (payload.payrollItemId) {
+        const [item] = await db.select().from(payrollItems).where(eq(payrollItems.id, payload.payrollItemId));
+        if (item) calculateContractorTradeSettlement({ grossCompensation: Number(item.grossPay || 0), tradeCredits: [{ totalValue }] });
+      }
+      // Exactly-once: an explicit Idempotency-Key, else a fingerprint anchored to
+      // the payroll item / SKU (two legitimately-distinct credits never collapse;
+      // when there is no such anchor an explicit key is required).
+      const tcHeaderKey = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
+      const idempotencyKey = tcHeaderKey.ok
+        ? tcHeaderKey.key
+        : (payload.payrollItemId || payload.itemSku)
+          ? tradeCompFingerprint({ companyId, contractorUserId: String(payload.contractorUserId || ""), payrollItemId: payload.payrollItemId ?? null, itemSku: payload.itemSku ?? null, itemName: payload.itemName ?? null, totalValueCents: Math.round(Number(totalValue) * 100) })
+          : null;
+      if (!idempotencyKey) {
+        return res.status(400).json({ error: "IDEMPOTENCY_KEY_REQUIRED", message: "An Idempotency-Key is required for a trade-compensation record with no payroll item or SKU anchor." });
+      }
+      const priorTc = cpRow(await db.execute(sql`SELECT * FROM contractor_trade_compensation WHERE company_id = ${companyId} AND idempotency_key = ${idempotencyKey} LIMIT 1`));
+      if (priorTc) return res.status(200).json(priorTc);
+
+      let created: any;
+      try {
+        [created] = await db.insert(contractorTradeCompensation).values({ ...payload, idempotencyKey }).returning();
+      } catch (tcErr) {
+        if (isUniqueConstraintViolation(tcErr)) {
+          const committed = cpRow(await db.execute(sql`SELECT * FROM contractor_trade_compensation WHERE company_id = ${companyId} AND idempotency_key = ${idempotencyKey} LIMIT 1`));
+          if (committed) return res.status(200).json(committed);
+        }
+        throw tcErr;
+      }
+      await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: created.id, actionType: "trade_credit_created", companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ contractorStatementId: created.contractorStatementId, settlementId: created.settlementId, payrollItemId: created.payrollItemId, totalValue: created.totalValue }) }).catch(() => {});
+      res.status(201).json(created);
+    } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to create trade credit") }); }
+  });
+
+  app.post("/api/contractor-trade-compensation/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const [credit] = await db.select().from(contractorTradeCompensation).where(eq(contractorTradeCompensation.id, req.params.id));
+      if (!credit) return res.status(404).json({ message: "Trade credit not found" });
+      if (!(await canAccessCompany(user!, credit.companyId))) return res.status(403).json({ message: "Access denied" });
+      const [updated] = await db.update(contractorTradeCompensation).set({ approvedByUserId: user?.id || null, approvedAt: new Date(), updatedAt: new Date() }).where(eq(contractorTradeCompensation.id, req.params.id)).returning();
+      await storage.createExpenseApprovalAction({ objectType: "contractor_trade_compensation", objectId: updated.id, actionType: "trade_credit_approved", companyId: updated.companyId, actorUserId: user?.id, metadataJson: JSON.stringify({ totalValue: updated.totalValue }) }).catch(() => {});
+      res.json(updated);
+    } catch (e: any) { res.status(400).json({ message: safeErrorMessage(e, "Failed to approve trade credit") }); }
+  });
+
   // ── Payroll Payment Methods ───────────────────────────────────────────────
   app.get("/api/payroll-payment-methods", requireAuth, async (req, res) => {
     try {
@@ -21524,7 +24706,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-payment-methods/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const r = await storage.updatePayrollPaymentMethod(req.params.id, req.body);
+      const existing = await storage.getPayrollPaymentMethod(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
+      // companyId is immutable through this endpoint, for every caller (no
+      // platform-owner exception) — the same guard already applied to
+      // PATCH /api/check-templates/:id.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a payroll payment method's company cannot be changed through this endpoint" });
+      }
+
+      const r = await storage.updatePayrollPaymentMethod(req.params.id, { ...req.body, companyId: existing.companyId });
       if (!r) return res.status(404).json({ message: "Not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: "Failed to update payment method" }); }
@@ -21532,6 +24730,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/payroll-payment-methods/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const existing = await storage.getPayrollPaymentMethod(req.params.id);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: payroll payment method belongs to a different company" });
+        }
+      }
       await storage.deletePayrollPaymentMethod(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete payment method" }); }
@@ -21671,7 +24877,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-payment-records/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const r = await storage.updatePayrollPaymentRecord(req.params.id, req.body);
+      const existing = await storage.getPayrollPaymentRecord(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
+      // companyId is immutable through this endpoint, for every caller — same
+      // guard already applied to PATCH /api/payroll-payment-methods/:id.
+      if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
+        return res.status(403).json({ message: "Forbidden: a payroll payment record's company cannot be changed through this endpoint" });
+      }
+
+      const r = await storage.updatePayrollPaymentRecord(req.params.id, { ...req.body, companyId: existing.companyId });
       if (!r) return res.status(404).json({ message: "Not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: "Failed to update payment record" }); }
@@ -21679,6 +24900,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/payroll-payment-records/:id", requireRole("admin"), async (req, res) => {
     try {
+      const existing = await storage.getPayrollPaymentRecord(req.params.id);
+      if (existing) {
+        const actingUser = await storage.getUser(req.session.userId!);
+        const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+        if (isTenant && existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: payroll payment record belongs to a different company" });
+        }
+      }
+      // A nonexistent id falls through to here unchanged — deletePayrollPaymentRecord
+      // is a no-op and this still reports success, exactly as before.
       await storage.deletePayrollPaymentRecord(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete payment record" }); }
@@ -21780,15 +25011,63 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       }
 
+      const tradeTotalsByItem: Record<string, number> = {};
+      if (itemIds.length > 0) {
+        const credits = await db.select().from(contractorTradeCompensation).where(inArray(contractorTradeCompensation.payrollItemId, itemIds));
+        for (const credit of credits) {
+          tradeTotalsByItem[credit.payrollItemId || ""] = (tradeTotalsByItem[credit.payrollItemId || ""] || 0) + Number(credit.totalValue || 0);
+        }
+      }
+
       res.json(rows.map(r => ({
         ...r.item,
         run: r.run,
+        documentLabel: tradeTotalsByItem[r.item.id] > 0 ? "Contractor Statement" : undefined,
+        tradeCreditTotal: tradeTotalsByItem[r.item.id] || 0,
         paymentStatus: recordsByItem[r.item.id]?.status || null,
         paidAt: recordsByItem[r.item.id]?.paidAt || null,
         failureReason: recordsByItem[r.item.id]?.failureReason || null,
         reconciledAt: recordsByItem[r.item.id]?.reconciledAt || null,
       })));
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch paystubs" }); }
+  });
+
+
+  app.get("/api/my/paystubs/:id/pdf", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker profile" });
+      const payrollItemId = String(req.params.id);
+      const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
+      if (!itemRow || itemRow.workerId !== user.workerId) return res.status(404).json({ message: "Statement not found" });
+      const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
+      if (!runRow) return res.status(404).json({ message: "Payroll run not found" });
+      if (user.companyId && runRow.company_id && user.companyId !== runRow.company_id) return res.status(403).json({ message: "Access denied" });
+      const [company, worker] = await Promise.all([
+        db.execute(sql`SELECT * FROM companies WHERE id = ${runRow.company_id}`).then(r => pgRow<CheckCompanyRow>(r)),
+        db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
+      ]);
+      let printableItemRow: any = itemRow;
+      if (isIndependentContractorWorker(worker)) {
+        const tradeCredits = await db.select().from(contractorTradeCompensation).where(and(eq(contractorTradeCompensation.payrollItemId, payrollItemId), eq(contractorTradeCompensation.companyId, runRow.company_id)));
+        if (tradeCredits.length > 0) {
+          const settlement = assertContractorTradeCreditsPrintable({ grossCompensation: Number(itemRow.grossPay || 0), tradeCredits });
+          printableItemRow = { ...itemRow, netPay: settlement.paidByCheck.toFixed(2), tradeCredits };
+        }
+      }
+      let rs: CheckRsRow | null = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${runRow.company_id} ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      const pdfBytes = await renderCheckPdf({
+        item: printableItemRow,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type, workerType: worker.worker_type, workerGroup: worker.worker_group } : null,
+        run: { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end },
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
+        remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
+      });
+      await storage.createExpenseApprovalAction({ objectType: "contractor_statement", objectId: payrollItemId, actionType: "statement_downloaded", companyId: runRow.company_id, actorUserId: user.id, actorWorkerId: user.workerId, metadataJson: JSON.stringify({ checkNumber: itemRow.checkNumber }) }).catch(() => {});
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${isIndependentContractorWorker(worker) ? "contractor-statement" : "paystub"}-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
+    } catch (e: any) { res.status(500).json({ message: safeErrorMessage(e, "Failed to download statement PDF") }); }
   });
 
   app.get("/api/my/documents", requireAuth, async (req, res) => {
@@ -22736,6 +26015,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           VALUES (${companyId}, ${userId})
         `);
 
+        // PR 4 — give the new trial company a structured tenant_licenses record
+        // (status 'trialing'). Additive: it mirrors the trial window we just
+        // wrote to `companies`; it does not change access. ON CONFLICT DO
+        // NOTHING keeps this idempotent if the row somehow already exists.
+        await ensureTrialLicense(
+          companyId,
+          {
+            tenantId,
+            planType: "starter",
+            trialStart: now,
+            trialEnd,
+            source: "trial_signup",
+            actor: { userId, role: "admin" },
+          },
+          db,
+        );
+
         await db.execute(sql`
           INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
           VALUES ('signup_completed', ${userId}, ${companyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
@@ -23660,11 +26956,88 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch customer") }); }
   });
 
-  app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+  app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, requireLicenseNotBlocked, async (req, res) => {
+    // Company scope is resolved server-side, never trusted from an arbitrary
+    // body companyId:
+    //  - a tenant user's company comes exclusively from the session;
+    //  - a platform admin (super-admin / admin / owner — the only platform
+    //    roles requireRole("admin","manager") admits) must explicitly select
+    //    an acting company, which the server then validates (exists + the
+    //    platform role may act for it) and audits;
+    //  - anything else → a sanitized 400 INVALID_COMPANY_CONTEXT, nothing created.
     try {
-      const r = await storage.createCustomer(req.body);
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const bodyCompanyId =
+        typeof req.body?.companyId === "string" && req.body.companyId ? req.body.companyId : null;
+
+      let companyId: string;
+      if (isGlobalDiagnosticsRole(user.role)) {
+        // Platform admin: acting company is explicit, validated, and audited.
+        if (!bodyCompanyId) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Select a company before adding a customer.",
+          });
+        }
+        const company = await storage.getCompany(bodyCompanyId);
+        if (!company) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "The selected company was not found.",
+          });
+        }
+        if (!(await canAccessCompany({ id: user.id, companyId: user.companyId, role: user.role }, bodyCompanyId))) {
+          return res.status(403).json({
+            error: "COMPANY_ACCESS_DENIED",
+            message: "You are not permitted to act for the selected company.",
+          });
+        }
+        companyId = bodyCompanyId;
+        await writeAuditLog({
+          actorUserId: user.id,
+          targetResource: `company:${companyId}`,
+          changeType: "platform_acting_company",
+          note: "customer.create",
+          companyId,
+        }).catch(() => {});
+      } else {
+        // Tenant user: company is the session's; the body cannot override it.
+        const sessionCompanyId = user.companyId || null;
+        if (!sessionCompanyId) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Your account is not associated with a company. Contact an administrator.",
+          });
+        }
+        if (bodyCompanyId && bodyCompanyId !== sessionCompanyId) {
+          return res.status(403).json({ error: "COMPANY_MISMATCH", message: "You cannot create a customer for another company." });
+        }
+        const company = await storage.getCompany(sessionCompanyId);
+        if (!company) {
+          return res.status(400).json({
+            error: "INVALID_COMPANY_CONTEXT",
+            message: "Your account is linked to a company that no longer exists. Contact an administrator.",
+          });
+        }
+        companyId = sessionCompanyId;
+      }
+
+      const { id: _id, companyId: _bodyCompanyId, createdAt: _createdAt, updatedAt: _updatedAt, ...rest } =
+        (req.body ?? {}) as Record<string, unknown>;
+      const r = await storage.createCustomer({ ...(rest as any), companyId });
       res.status(201).json(r);
-    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") }); }
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      if (code === "23502" || code === "23503") {
+        return res.status(400).json({ error: "CUSTOMER_INVALID", message: "A required field or the company reference was invalid." });
+      }
+      if (code === "23505") {
+        return res.status(409).json({ error: "CUSTOMER_DUPLICATE", message: "A customer with these details already exists." });
+      }
+      console.error("[Customers] create failed:", (e as Error).message);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") });
+    }
   });
 
   app.patch("/api/customers/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
@@ -23738,7 +27111,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice") }); }
   });
 
-  app.post("/api/invoices", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+  app.post("/api/invoices", requireAuth, requireRole("admin", "manager"), blockDemoWrites, requireLicenseNotBlocked, async (req, res) => {
     try {
       const { lineItems, ...invoiceData } = req.body;
       const invoice = await storage.createInvoice(invoiceData);
@@ -23754,6 +27127,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      // Load the authoritative invoice first — authorization is against this row,
+      // never against anything the client submitted.
+      const existing = await storage.getInvoice(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Invoice not found" });
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: invoice belongs to a different company" });
+      }
+
       const { lineItems, ...invoiceData } = req.body;
       const r = await storage.updateInvoice(req.params.id, invoiceData);
       if (!r) return res.status(404).json({ message: "Invoice not found" });
@@ -23770,6 +27153,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      // Load the authoritative invoice first — authorization is against this row,
+      // never against anything the client submitted.
+      const existing = await storage.getInvoice(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Invoice not found" });
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: invoice belongs to a different company" });
+      }
       await storage.deleteInvoice(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete invoice") }); }
@@ -24820,36 +28212,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractSig.related_record_id}`);
             const contract = firstRow<any>(contractRes);
             if (contract) {
-              const wasAlreadyFullySigned = contract.status === "fully_signed";
-              if (!wasAlreadyFullySigned) {
-                await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id}`);
-                await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status IN ('pending','sent','viewed')`).catch(() => {});
-              }
-              const packetResult = await fileDocumensoFinalAgreementPacket({ ...contract, status: 'fully_signed', fully_signed_at: contract.fully_signed_at || new Date().toISOString() }, documensoDocumentId, webhookEventId).catch((err) => ({ error: err?.message || String(err) }));
-              await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contract.id, actionType: "documenso_completion_packet_filed", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId, webhookEventId, packetResult }) }).catch(() => {});
-              if (!wasAlreadyFullySigned && contract.proposal_id) {
-                const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${contract.proposal_id}`);
-                const prop = firstRow<any>(propRes);
-                if (prop && !prop.converted_to_invoice_id) {
-                  await autoCreateProposalBackedInvoice(contract, prop, {
-                    countInvoicesForContractor: async (contractorId: string) => {
-                      const cntRes = await db.execute(sql`SELECT COUNT(*) AS c FROM contractor_invoices WHERE contractor_id = ${contractorId} AND company_id = ${contract.company_id}`);
-                      return Number((cntRes.rows[0] as any)?.c ?? 0);
-                    },
-                    createInvoice: async (values: Record<string, unknown>) => {
-                      const invRes = await db.execute(sql`
-                        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, contract_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, branding_id)
-                        VALUES (${values.company_id}, ${values.contractor_id}, ${values.invoice_number}, ${values.invoice_date}, ${values.due_date}, ${values.amount}, ${values.description}, ${values.proposal_id}, ${values.contract_id}, ${values.proposal_reference}, ${values.line_items}, ${values.notes}, ${values.status}, TRUE, ${values.job_id}, ${values.cost_center_id}, ${values.branding_id})
-                        RETURNING id
-                      `);
-                      return firstRow<any>(invRes);
-                    },
-                    markProposalConverted: async (proposalId: string, invoiceId: string) => {
-                      await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${invoiceId}, updated_at = NOW() WHERE id = ${proposalId} AND company_id = ${contract.company_id}`);
-                    },
-                  });
-                }
-              }
+              // Guard against backward transitions from a replayed/out-of-order webhook: only ever
+              // move a contract INTO fully_signed from a non-terminal, non-active status.
+              await db.execute(sql`UPDATE contractor_contracts SET status = 'fully_signed', fully_signed_at = COALESCE(fully_signed_at, NOW()), updated_at = NOW() WHERE id = ${contract.id} AND status NOT IN ('active','completed','void','terminated')`);
+              // Reconcile stale per-signer state even on replay — this is what previously left
+              // signers stuck at 'viewed'/'sent' after the remote side actually completed.
+              await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = COALESCE(signed_at, NOW()) WHERE contract_id = ${contract.id} AND status IN ('pending','sent','viewed')`).catch(() => {});
+              // Single authoritative verified-completion transition (fully_signed -> active),
+              // exactly-once invoice creation, and archival — shared with reconciliation below.
+              await activateContractAfterVerifiedCompletion(contract.id, `webhook:${webhookEventId || "unknown"}`);
             }
           }
           if (webhookEventId) await db.execute(sql`UPDATE webhook_events SET status = 'processed', processed_at = NOW() WHERE id = ${webhookEventId}`);
@@ -24928,7 +28299,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch document") }); }
   });
 
-  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
+  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, requireLicenseNotBlocked, enforceCompanyScope("body"), async (req, res) => {
     try {
       const companyId = (req as any)._companyId;
       const r = await storage.createDocument({ ...req.body, companyId });
@@ -26137,8 +29508,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.post("/api/app-doctor/reports", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const requestedCompanyId = req.body?.companyId || user?.companyId || null;
+      if (requestedCompanyId && !isPlatformUser(user?.role) && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       const report = await recordAppDoctorReport(req, {
-        companyId: req.body?.companyId || null,
+        companyId: requestedCompanyId,
         source: req.body?.source,
         severity: req.body?.severity,
         title: req.body?.title,
@@ -26187,9 +29563,211 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  function appDoctorMasked(value: string | undefined | null) {
+    if (!value) return "missing";
+    return "configured";
+  }
+
+  async function collectAppDoctorOperationsSnapshot(companyId?: string | null) {
+    const deploymentHistoryPath = "/home/paylinkssh/deployment-history.log";
+    const prodEnv = process.env.APP_ENV || getAppEnvironment();
+    const port = process.env.PORT || (prodEnv === "staging" ? "8010" : "8000");
+    const companyCount = pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM companies`));
+    const scopedOpenReports = companyId
+      ? pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_reports WHERE company_id = ${companyId} AND status IN ('open','reopened','ai_review_ready')`))
+      : pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_reports WHERE status IN ('open','reopened','ai_review_ready')`));
+    const pendingTickets = companyId
+      ? pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE company_id = ${companyId} AND status IN ('pending_approval','approved','pr_requested')`))
+      : pgRow<any>(await db.execute(sql`SELECT COUNT(*) as cnt FROM app_doctor_repair_tickets WHERE status IN ('pending_approval','approved','pr_requested')`));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      deploymentManagement: {
+        environment: prodEnv,
+        port,
+        commit: getCommitHash(),
+        historyLog: deploymentHistoryPath,
+        productionManualOnly: true,
+        stagingDefaultOnPush: true,
+      },
+      stagingVerification: {
+        requiredProcess: "paylink-staging",
+        requiredPort: "8010",
+        requiredHost: "staging.mypaylink.app",
+        requiresSeparateDatabaseUrl: true,
+        requiresSeparateUploads: true,
+        status: prodEnv === "staging" && port === "8010" ? "current-process-staging" : "verify-on-vps",
+      },
+      databaseIntegrityScans: {
+        databaseUrl: appDoctorMasked(process.env.DATABASE_URL),
+        lastCheck: "SELECT 1 performed by diagnostics endpoint",
+        destructiveChecks: false,
+      },
+      tenantHealthScans: {
+        companyCount: Number(companyCount?.cnt || 0),
+        scopedCompanyId: companyId || null,
+        openReports: Number(scopedOpenReports?.cnt || 0),
+        pendingRepairTickets: Number(pendingTickets?.cnt || 0),
+      },
+      pushNotificationDiagnostics: {
+        vapidPublicKey: appDoctorMasked(process.env.VAPID_PUBLIC_KEY),
+        vapidPrivateKey: appDoctorMasked(process.env.VAPID_PRIVATE_KEY),
+        twilioConfigured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+      },
+      releaseManagement: {
+        version: getAppVersion(),
+        releaseTagRequiredForProduction: true,
+        productionPushDeploysBlocked: true,
+      },
+      rollbackManagement: {
+        rollbackRequiresHumanApproval: true,
+        deploymentHistoryLog: deploymentHistoryPath,
+        stagingRollbackCommand: "pm2 restart paylink-staging --update-env",
+        productionRollbackCommand: "Use manual production workflow with approved release tag or documented rollback procedure.",
+      },
+    };
+  }
+
+
+
+  async function collectContractorLifecycleAudit(companyId?: string | null) {
+    const scoped = (column = "company_id") => companyId ? sql`AND ${sql.raw(column)} = ${companyId}` : sql``;
+    const limited = 50;
+    const queries = {
+      approvedProposalsWithNoContract: sql`
+        SELECT p.id AS proposal_id, p.company_id, p.contractor_id, p.status, p.updated_at
+        FROM contractor_proposals p
+        WHERE p.status = 'approved'
+          ${scoped("p.company_id")}
+          AND NOT EXISTS (
+            SELECT 1 FROM contractor_contracts c
+            WHERE c.proposal_id = p.id AND c.company_id = p.company_id
+              AND COALESCE(c.is_archived, FALSE) = FALSE
+              AND COALESCE(c.status, '') NOT IN ('void','voided','terminated','replaced')
+          )
+        ORDER BY p.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      contractsAwaitingSignatures: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status, dsr.documenso_document_id, dsr.status AS documenso_status,
+               jsonb_agg(jsonb_build_object('email', cs.email, 'status', cs.status, 'recipientId', cs.documenso_recipient_id, 'signingUrlPresent', cs.documenso_signing_url IS NOT NULL) ORDER BY COALESCE(cs.signing_order, cs."order", 1)) FILTER (WHERE cs.id IS NOT NULL) AS signers
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        LEFT JOIN contract_signers cs ON cs.contract_id = c.id AND cs.company_id = c.company_id AND cs.status NOT IN ('replaced')
+        WHERE c.status IN ('awaiting_signatures','sent','partially_signed') ${scoped("c.company_id")}
+        GROUP BY c.id, c.proposal_id, c.company_id, c.status, dsr.documenso_document_id, dsr.status, c.updated_at
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      duplicateSignerMappings: sql`
+        SELECT contract_id, company_id, lower(trim(email)) AS signer_email, COUNT(*)::int AS count, array_agg(id) AS signer_ids, array_agg(status) AS statuses
+        FROM contract_signers
+        WHERE email IS NOT NULL AND status NOT IN ('canceled','cancelled','replaced') ${scoped("company_id")}
+        GROUP BY contract_id, company_id, lower(trim(email)) HAVING COUNT(*) > 1
+        ORDER BY count DESC
+        LIMIT ${limited}
+      `,
+      brokenPublicSigningLinks: sql`
+        SELECT cs.contract_id, cs.company_id, cs.email AS signer_email, cs.status AS signer_status, cs.documenso_recipient_id, cs.documenso_signing_url, dsr.documenso_document_id
+        FROM contract_signers cs
+        JOIN contractor_contracts c ON c.id = cs.contract_id AND c.company_id = cs.company_id
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        WHERE cs.status IN ('pending','sent','viewed','unsent') ${scoped("cs.company_id")}
+          AND (cs.signing_token_hash IS NULL OR (dsr.documenso_document_id IS NOT NULL AND cs.documenso_signing_url IS NULL))
+        ORDER BY cs.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      completedDocumensoEnvelopesNotCompleteLocally: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status AS local_contract_status, dsr.documenso_document_id, dsr.status AS documenso_status
+        FROM documenso_signature_requests dsr
+        JOIN contractor_contracts c ON c.id = dsr.related_record_id AND c.company_id = dsr.company_id
+        WHERE dsr.document_type IN ('contract','contractor_hub_contract') ${scoped("dsr.company_id")}
+          AND dsr.status IN ('completed','signed','fully_signed')
+          AND c.status NOT IN ('fully_signed','completed')
+        ORDER BY dsr.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      completedContractsWithNoInvoice: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status, dsr.documenso_document_id
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        WHERE c.status IN ('fully_signed','completed') ${scoped("c.company_id")}
+          AND c.proposal_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM contractor_invoices i WHERE i.company_id = c.company_id AND (i.contract_id = c.id OR i.proposal_id = c.proposal_id))
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      duplicateInvoices: sql`
+        SELECT company_id, proposal_id, contract_id, COUNT(*)::int AS count, array_agg(id ORDER BY created_at) AS invoice_ids
+        FROM contractor_invoices
+        WHERE (proposal_id IS NOT NULL OR contract_id IS NOT NULL) ${scoped("company_id")}
+        GROUP BY company_id, proposal_id, contract_id HAVING COUNT(*) > 1
+        ORDER BY count DESC
+        LIMIT ${limited}
+      `,
+      outdatedVisibleVersions: sql`
+        SELECT proposal_id, company_id, COUNT(*)::int AS visible_contract_count, array_agg(id ORDER BY created_at DESC) AS visible_contract_ids
+        FROM contractor_contracts
+        WHERE proposal_id IS NOT NULL ${scoped("company_id")}
+          AND COALESCE(is_archived, FALSE) = FALSE
+          AND COALESCE(status, '') NOT IN ('void','voided','terminated','replaced')
+        GROUP BY proposal_id, company_id HAVING COUNT(*) > 1
+        ORDER BY visible_contract_count DESC
+        LIMIT ${limited}
+      `,
+      missingFinalSignedPdfs: sql`
+        SELECT c.id AS contract_id, c.proposal_id, c.company_id, c.status, c.archived_document_id, dsr.documenso_document_id
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        WHERE c.status IN ('fully_signed','completed') ${scoped("c.company_id")}
+          AND c.archived_document_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM dam_documents d
+            WHERE d.company_id = c.company_id AND d.contract_id = c.id
+              AND d.document_type = 'contractor_signed_agreement_packet'
+          )
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+      missingProposalToContractReferences: sql`
+        SELECT c.id AS contract_id, c.company_id, c.proposal_id, c.status
+        FROM contractor_contracts c
+        LEFT JOIN contractor_proposals p ON p.id = c.proposal_id AND p.company_id = c.company_id
+        WHERE (${companyId}::text IS NULL OR c.company_id = ${companyId})
+          AND (c.proposal_id IS NULL OR p.id IS NULL)
+        ORDER BY c.updated_at DESC NULLS LAST
+        LIMIT ${limited}
+      `,
+    };
+    const entries = await Promise.all(Object.entries(queries).map(async ([key, query]) => [key, pgRows<any>(await db.execute(query).catch(() => ({ rows: [] } as any)))]));
+    const categories = Object.fromEntries(entries);
+    return {
+      generatedAt: new Date().toISOString(),
+      scopedCompanyId: companyId || null,
+      mode: "report_only_no_production_mutation",
+      categories,
+      summary: Object.fromEntries(Object.entries(categories).map(([key, rows]) => [key, Array.isArray(rows) ? rows.length : 0])),
+      requiredLiveValidation: [
+        "real_documenso_send", "actual_email_receipt", "signing_page_render", "all_required_signers_complete", "webhook_validated", "invoice_generation", "webhook_replay_idempotency", "paid_document_visibility",
+      ],
+    };
+  }
+
+
   // ── App Doctor: Diagnostics snapshot ────────────────────────────────────────
   app.get("/api/app-doctor/diagnostics", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = (req.user as any) || await storage.getUser(req.session.userId!);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const isGlobalDiagnostics = isGlobalDiagnosticsRole(user?.role);
+      if (!isGlobalDiagnostics && !user?.companyId) {
+        return res.status(403).json({ message: "Global diagnostics require a platform admin role" });
+      }
+      if (requestedCompanyId && !isGlobalDiagnostics && requestedCompanyId !== user?.companyId && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const diagnosticsCompanyId = isGlobalDiagnostics ? requestedCompanyId : (requestedCompanyId === user?.companyId ? requestedCompanyId : user?.companyId);
+      const companyId = diagnosticsCompanyId;
       let dbHealth = "ok";
       try { await db.execute(sql`SELECT 1`); } catch { dbHealth = "error"; }
 
@@ -26214,6 +29792,48 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       `));
 
       const toMap = (rows: any[]) => Object.fromEntries(rows.map(r => [r.severity || r.status || r.issue_category, parseInt(r.cnt)]));
+      const documensoBase = getDocumensoBaseUrlInfo();
+      const documensoConfig = validateDocumensoConfig();
+      const webhookUrl = process.env.DOCUMENSO_WEBHOOK_URL || process.env.MYPAYLINK_DOCUMENSO_WEBHOOK_URL || `${process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || ""}/api/webhooks/documenso`;
+      const requestedContractId = typeof req.query.contractId === "string" ? req.query.contractId : null;
+      const contractRows = pgRows<any>(await db.execute(sql`
+        SELECT c.id AS contract_id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url,
+               dsr.documenso_recipient_ids, dsr.status AS request_status,
+               COUNT(cs.id)::int AS local_recipient_count,
+               COUNT(cs.id) FILTER (WHERE cs.documenso_recipient_id IS NOT NULL)::int AS local_recipient_id_count,
+               COUNT(cs.id) FILTER (WHERE cs.documenso_signing_url IS NOT NULL)::int AS local_signing_url_count
+        FROM contractor_contracts c
+        LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
+        LEFT JOIN contract_signers cs ON cs.contract_id = c.id AND cs.status NOT IN ('canceled','cancelled','replaced')
+        WHERE (${requestedContractId}::text IS NULL OR c.id = ${requestedContractId})
+          AND (${companyId}::text IS NULL OR c.company_id = ${companyId})
+        GROUP BY c.id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url, dsr.documenso_recipient_ids, dsr.status, dsr.created_at
+        ORDER BY dsr.created_at DESC NULLS LAST, c.updated_at DESC
+        LIMIT 10
+      `).catch(() => ({ rows: [] } as any)));
+      const contractDiagnostics = contractRows.map((row) => {
+        const remoteRecipients = Array.isArray(row.documenso_recipient_ids) ? row.documenso_recipient_ids : [];
+        const remoteRecipientCount = remoteRecipients.length;
+        const localRecipientCount = Number(row.local_recipient_count || 0);
+        const localRecipientIdCount = Number(row.local_recipient_id_count || 0);
+        const localSigningUrlCount = Number(row.local_signing_url_count || 0);
+        const documentExists = !!row.documenso_document_id;
+        const recipientIdsExist = localRecipientCount > 0 && localRecipientIdCount >= localRecipientCount;
+        const signingUrlPresent = !!row.documenso_signing_url || localSigningUrlCount > 0 || remoteRecipients.some((r: any) => !!(r.signingUrl || r.signing_url));
+        return {
+          localContractId: row.contract_id,
+          documensoDocumentId: row.documenso_document_id,
+          documentIdExists: documentExists,
+          localRecipientCount,
+          remoteRecipientCount,
+          recipientIdsExist,
+          recipientIdMatch: remoteRecipientCount === 0 ? "unknown" : (remoteRecipientCount === localRecipientCount && recipientIdsExist ? "match" : "mismatch"),
+          signingUrlPresent,
+          webhookStatus: webhookUrl ? "configured" : "missing",
+          resendEligibility: documentExists && recipientIdsExist && signingUrlPresent ? "eligible" : "needs_repair",
+          repairActions: [!documentExists ? "recreate_document" : null, !recipientIdsExist ? "sync_recipients" : null, !signingUrlPresent ? "regenerate_signing_link" : null].filter(Boolean),
+        };
+      });
 
       res.json({
         timestamp: new Date().toISOString(),
@@ -26232,6 +29852,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           maxRiskAutoDraft: process.env.APP_DOCTOR_MAX_RISK_AUTO_DRAFT || "minor",
           requireApproval: process.env.APP_DOCTOR_REQUIRE_APPROVAL !== "false",
         },
+        documenso: {
+          configuredBaseUrl: documensoBase.publicBaseUrl,
+          apiBaseUrl: documensoBase.apiBaseUrl,
+          baseUrlEnv: documensoBase.source,
+          apiKeyPresent: !!documensoConfig.apiKeyConfigured,
+          webhookUrl,
+          webhookSecretPresent: !!documensoConfig.webhookSecretConfigured,
+          contracts: contractDiagnostics,
+        },
         reports: {
           last24hBySeverity: toMap(errorCounts),
           last7dByStatus: toMap(statusCounts),
@@ -26241,17 +29870,34 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           open: parseInt(openTicketRow?.cnt || "0"),
           pendingApproval: parseInt(pendingApprovalRow?.cnt || "0"),
         },
+        operations: await collectAppDoctorOperationsSnapshot(diagnosticsCompanyId || null),
+        contractorLifecycleAudit: await collectContractorLifecycleAudit(diagnosticsCompanyId || null),
       });
     } catch (e: any) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to collect diagnostics") });
     }
   });
 
-  // ── App Doctor: Repair Tickets ───────────────────────────────────────────────
-  app.get("/api/app-doctor/repair-tickets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.get("/api/app-doctor/operations", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const isPlatform = isPlatformUser(user?.role);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      const companyId = isPlatform ? requestedCompanyId : user?.companyId;
+      if (requestedCompanyId && !isPlatform && !(await canAccessCompany(user!, requestedCompanyId))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.json(await collectAppDoctorOperationsSnapshot(companyId));
+    } catch (e: any) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to collect App Doctor operations") });
+    }
+  });
+
+  // ── App Doctor: Repair Tickets ───────────────────────────────────────────────
+  app.get("/api/app-doctor/repair-tickets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = (req.user as any) || await storage.getUser(req.session.userId!);
+      const isPlatform = isGlobalDiagnosticsRole(user?.role);
       const companyId = isPlatform
         ? (typeof req.query.companyId === "string" ? req.query.companyId : undefined)
         : user?.companyId;
@@ -26279,6 +29925,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!reportId) return res.status(400).json({ message: "reportId required" });
       const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
       if (!report) return res.status(404).json({ message: "Report not found" });
+
+      const existingTicket = pgRow<any>(await db.execute(sql`
+        SELECT * FROM app_doctor_repair_tickets
+        WHERE report_id = ${reportId}
+          AND status NOT IN ('rejected','merged')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `));
+      if (existingTicket) return res.status(200).json({ ...existingTicket, duplicate: true });
 
       const severityClass = report.severity_class || "medium";
       const requiredApproverRole = severityClass === "major" ? "global_admin" : "admin";
@@ -26368,6 +30023,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         WHERE t.id = ${req.params.id}
       `));
       if (!ticket) return res.status(404).json({ message: "Repair ticket not found" });
+      if (ticket.status === "pr_created" && ticket.pr_url) return res.json({ ...ticket, prUrl: ticket.pr_url, duplicate: true });
+      if (ticket.status === "pr_requested") return res.json({ ...ticket, note: "Manual PR already requested for this ticket.", duplicate: true });
       if (ticket.status !== "approved") return res.status(400).json({ message: "Ticket must be approved before creating a PR" });
 
       const githubToken = process.env.GITHUB_TOKEN;
@@ -26376,12 +30033,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!githubToken || !githubRepo) {
         // Degrade gracefully — mark as pr_requested without actual GitHub PR
         const updated = pgRow<any>(await db.execute(sql`
-          UPDATE app_doctor_repair_tickets SET status = 'pr_requested', updated_at = NOW()
+          UPDATE app_doctor_repair_tickets SET status = 'pr_creation_failed', updated_at = NOW()
           WHERE id = ${req.params.id} RETURNING *
         `));
-        return res.json({
+        return res.status(503).json({
           ...updated,
-          note: "GITHUB_TOKEN and GITHUB_REPO are not configured. Set these environment variables to enable automatic PR creation. The ticket has been marked as pr_requested for manual processing.",
+          success: false,
+          status: "pr_creation_failed",
+          note: "GITHUB_TOKEN and GITHUB_REPO are not configured. Retry PR creation after configuring GitHub credentials.",
           manualBranch: `app-doctor/fix-${req.params.id.slice(0, 8)}-${(ticket.report_title || "repair").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
         });
       }
@@ -26403,11 +30062,45 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const refData: any = await refRes.json();
       const baseSha = refData.object?.sha;
 
-      // Create branch
-      await fetch(`${ghBase}/git/refs`, {
+      // Create branch; tolerate retries when the App Doctor button is clicked twice.
+      const branchRes = await fetch(`${ghBase}/git/refs`, {
         method: "POST",
         headers: ghHeaders,
         body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: baseSha }),
+      });
+      if (!branchRes.ok && branchRes.status !== 422) {
+        const err: any = await branchRes.json().catch(() => ({}));
+        throw new Error(`GitHub branch creation failed: ${branchRes.status} — ${err.message || JSON.stringify(err)}`);
+      }
+
+      // Commit a review artifact so the branch has a diff and GitHub can open a PR.
+      const artifactPath = `.github/app-doctor-tickets/${ticket.id}.md`;
+      const artifactBody = [
+        `# App Doctor Repair Ticket`,
+        ``,
+        `- Ticket ID: ${ticket.id}`,
+        `- Report: ${ticket.report_title || "Unknown"}`,
+        `- Severity: ${ticket.severity_class}`,
+        `- Required approver: ${ticket.required_approver_role}`,
+        ``,
+        `## Proposed patch`,
+        "```diff",
+        ticket.proposed_patch || "# No generated patch; engineer must apply a manual fix.",
+        "```",
+      ].join("\n");
+      await fetch(`${ghBase}/contents/${artifactPath}`, {
+        method: "PUT",
+        headers: ghHeaders,
+        body: JSON.stringify({
+          message: `App Doctor repair ticket ${ticket.id}`,
+          content: Buffer.from(artifactBody).toString("base64"),
+          branch: branchName,
+        }),
+      }).then(async (artifactRes) => {
+        if (!artifactRes.ok && artifactRes.status !== 422) {
+          const err: any = await artifactRes.json().catch(() => ({}));
+          throw new Error(`GitHub repair artifact commit failed: ${artifactRes.status} — ${err.message || JSON.stringify(err)}`);
+        }
       });
 
       // Compose PR body
@@ -26449,11 +30142,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           base: "main",
         }),
       });
+      let pr: any;
       if (!prRes.ok) {
         const err: any = await prRes.json().catch(() => ({}));
-        throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+        if (prRes.status === 422) {
+          const existingPrRes = await fetch(`${ghBase}/pulls?head=${encodeURIComponent(`${owner}:${branchName}`)}&state=open`, { headers: ghHeaders });
+          const existingPrs: any[] = existingPrRes.ok ? (await existingPrRes.json() as any[]) : [];
+          pr = existingPrs[0];
+        }
+        if (!pr) throw new Error(`GitHub PR creation failed: ${prRes.status} — ${err.message || JSON.stringify(err)}`);
+      } else {
+        pr = await prRes.json();
       }
-      const pr: any = await prRes.json();
 
       // Add labels (best-effort)
       await fetch(`${ghBase}/issues/${pr.number}/labels`, {
@@ -29243,43 +32943,200 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
   });
 
-  // ── Phase 2: Contractor Documents (W-9 / W-8BEN) ─────────────────────────
+  // ── Contractor compliance documents (W-9, contractor agreement, …) ───────
+  //
+  // Canonical read is the unified contractor-compliance view: contractor_documents
+  // plus the contractor-compliance subset of worker_documents for the same
+  // worker (no binary duplication). Company scope is always derived from the
+  // target contractor record and checked against the caller — the client
+  // companyId is advisory and must agree with the contractor's real company.
   app.get("/api/contractor-documents", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {
-      const { companyId, workerId } = req.query;
-      if (!companyId) return res.status(400).json({ message: "companyId required" });
-      res.json(await storage.getContractorDocuments(companyId as string, workerId as string | undefined));
-    } catch (e) { res.status(500).json({ message: "Failed to fetch contractor documents" }); }
-  });
-
-  app.post("/api/contractor-documents/upload", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req: any, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const { companyId, workerId } = req.query as { companyId?: string; workerId?: string };
       const userId = req.session.userId as string;
-      const { companyId, workerId, documentType, notes } = req.body;
-      if (!companyId || !workerId) return res.status(400).json({ message: "companyId and workerId required" });
-      const doc = await storage.createContractorDocument({
-        companyId, workerId,
-        documentType: documentType || "w9",
-        fileName: req.file.originalname,
-        fileUrl: `/uploads/${req.file.filename}`,
-        fileSize: req.file.size,
-        mimeType: req.file.mimetype,
-        notes: notes || null,
-        uploadedBy: userId,
-      });
-      // Recalculate 1099 after W-9 upload
-      const year = new Date().getFullYear();
-      await storage.calculate1099Summary(companyId, workerId, year);
-      res.status(201).json(doc);
-    } catch (e) { res.status(500).json({ message: "Failed to upload contractor document" }); }
+
+      if (workerId) {
+        const access = await resolveContractorAccess(userId, workerId, companyId ?? null);
+        if (!access.ok) return res.status(access.status).json(access.body);
+        return res.json(await storage.getContractorComplianceDocuments(access.companyId, workerId));
+      }
+
+      if (!companyId) return res.status(400).json({ error: "COMPANY_ID_REQUIRED", message: "companyId or workerId is required." });
+      const user = await storage.getUser(userId);
+      if (!user || !(await canAccessCompany(user, companyId))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
+      res.json(await storage.getContractorComplianceDocuments(companyId));
+    } catch (e) {
+      console.error("[ContractorDocs] list failed:", (e as Error).message);
+      res.status(500).json({ error: "LIST_FAILED", message: "Failed to fetch contractor documents." });
+    }
   });
 
-  app.delete("/api/contractor-documents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post(
+    "/api/contractor-documents/upload",
+    requireAuth,
+    requireRole("admin", "manager"),
+    singleFileUpload(contractorComplianceUpload, "file", { maxBytes: CONTRACTOR_DOC_MAX_BYTES }),
+    async (req: any, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      try {
+        if (!file) return res.status(400).json({ error: "NO_FILE", message: "No file was uploaded." });
+        const userId = req.session.userId as string;
+        const { companyId, workerId, documentType, notes } = req.body as Record<string, string | undefined>;
+
+        const access = await resolveContractorAccess(userId, workerId, companyId ?? null);
+        if (!access.ok) {
+          await discardUploadedFile(file);
+          return res.status(access.status).json(access.body);
+        }
+
+        const canonicalType = normalizeContractorDocumentType(documentType || "w9");
+        const isW9 = canonicalType === "w9";
+        const hadW9Before = isW9
+          ? await storage.contractorHasCurrentW9(access.companyId, workerId!)
+          : false;
+
+        const insert = {
+          companyId: access.companyId,
+          workerId: workerId!,
+          documentType: canonicalType,
+          fileName: file.originalname,
+          fileUrl: `/uploads/${file.filename}`,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          notes: notes || null,
+          uploadedBy: userId,
+        };
+
+        let doc: Awaited<ReturnType<typeof storage.createContractorDocument>>;
+        let supersededFileUrls: string[] = [];
+        try {
+          if (isW9) {
+            // Atomic: insert the new W-9 and remove any prior native W-9 row(s)
+            // for this contractor so the profile shows exactly one current W-9.
+            ({ doc, supersededFileUrls } = await storage.replaceContractorW9(insert));
+          } else {
+            doc = await storage.createContractorDocument(insert);
+          }
+        } catch (dbErr) {
+          // The write (and, for a W-9, the atomic supersede) failed after the
+          // object landed on disk — nothing changed in the DB. Remove the
+          // just-uploaded orphan and surface a clean 500.
+          await discardUploadedFile(file);
+          throw dbErr;
+        }
+
+        // Prior W-9 rows were deleted inside the transaction above; drop their
+        // blobs too, but only those no longer referenced by any remaining
+        // contractor_documents or worker_documents row.
+        for (const url of supersededFileUrls) {
+          const outcome = await removeUnreferencedUploadFile(url, { excludeContractorDocumentId: doc.id });
+          if (outcome === "error") console.error("[ContractorDocs] superseded W-9 blob cleanup failed");
+        }
+
+        await recordContractorDocEvent(access.companyId, workerId!, {
+          event: hadW9Before ? "replaced" : "uploaded",
+          documentType: canonicalType,
+          source: "contractor_document",
+          docId: doc.id,
+          actorUserId: userId,
+          replaced: hadW9Before,
+        });
+
+        // Refresh the current year's 1099 W-9 status (best-effort).
+        try {
+          await storage.calculate1099Summary(access.companyId, workerId!, new Date().getFullYear());
+        } catch (calcErr) {
+          console.error("[ContractorDocs] 1099 recalc after upload failed:", (calcErr as Error).message);
+        }
+
+        res.status(201).json({ ...doc, source: "contractor_document" });
+      } catch (e) {
+        console.error("[ContractorDocs] upload failed:", (e as Error).message);
+        res.status(500).json({ error: "UPLOAD_FAILED", message: "The document could not be saved." });
+      }
+    },
+  );
+
+  // Authenticated, audited download. Serves both contractor_documents and
+  // worker_documents-sourced compliance records; every request is authorized
+  // afresh against the caller's company scope — there is no public URL.
+  app.get("/api/contractor-documents/:id/download", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {
-      await storage.deleteContractorDocument(req.params.id);
-      res.json({ ok: true });
-    } catch (e) { res.status(500).json({ message: "Failed to delete contractor document" }); }
+      const userId = req.session.userId as string;
+      const doc = await storage.getContractorComplianceDocumentById(req.params.id);
+      if (!doc) return res.status(404).json({ error: "NOT_FOUND", message: "Document not found." });
+
+      const access = await resolveContractorAccess(userId, doc.workerId, null);
+      if (!access.ok) return res.status(access.status).json(access.body);
+
+      const abs = resolveUploadPath(doc.fileUrl);
+      if (!abs || !fs.existsSync(abs)) {
+        return res.status(404).json({ error: "FILE_MISSING", message: "The stored file is unavailable." });
+      }
+
+      await recordContractorDocEvent(access.companyId, doc.workerId, {
+        event: "accessed",
+        documentType: doc.documentType,
+        source: doc.source,
+        docId: doc.id,
+        actorUserId: userId,
+      });
+
+      res.setHeader("Cache-Control", "no-store, private");
+      res.setHeader("Content-Disposition", `attachment; filename="${(doc.fileName || "document").replace(/[^a-z0-9.\-_]/gi, "_")}"`);
+      res.sendFile(abs);
+    } catch (e) {
+      console.error("[ContractorDocs] download failed:", (e as Error).message);
+      res.status(500).json({ error: "DOWNLOAD_FAILED", message: "The document could not be retrieved." });
+    }
+  });
+
+  app.delete("/api/contractor-documents/:id", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const doc = await storage.getContractorComplianceDocumentById(req.params.id);
+      if (!doc) return res.status(404).json({ error: "NOT_FOUND", message: "Document not found." });
+
+      const access = await resolveContractorAccess(userId, doc.workerId, null);
+      if (!access.ok) return res.status(access.status).json(access.body);
+
+      if (doc.source !== "contractor_document") {
+        return res.status(409).json({
+          error: "MANAGED_ELSEWHERE",
+          message: "This document is managed in the worker profile's Documents tab and must be removed there.",
+        });
+      }
+
+      await storage.deleteContractorDocument(doc.id);
+
+      // Remove the stored blob unless another contractor_documents or
+      // worker_documents row still points at the same canonical file.
+      const fileOutcome = await removeUnreferencedUploadFile(doc.fileUrl);
+      const fileCleanup =
+        fileOutcome === "removed" || fileOutcome === "missing" ? "removed"
+        : fileOutcome === "retained-shared" ? "retained"
+        : "deferred";
+      if (fileOutcome === "error") console.error("[ContractorDocs] stored-file cleanup failed after delete");
+
+      await recordContractorDocEvent(access.companyId, doc.workerId, {
+        event: "deleted",
+        documentType: doc.documentType,
+        source: doc.source,
+        docId: doc.id,
+        actorUserId: userId,
+        fileRemoved: fileCleanup === "removed",
+        fileRetained: fileCleanup === "retained",
+      });
+      try {
+        await storage.calculate1099Summary(access.companyId, doc.workerId, new Date().getFullYear());
+      } catch { /* best-effort */ }
+      res.json({ ok: true, fileCleanup });
+    } catch (e) {
+      console.error("[ContractorDocs] delete failed:", (e as Error).message);
+      res.status(500).json({ error: "DELETE_FAILED", message: "Failed to delete contractor document." });
+    }
   });
 
   // ── Phase 2: 1099 Summaries ───────────────────────────────────────────────
@@ -29323,6 +33180,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { companyId, year } = req.query;
       if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user || !(await canAccessCompany(user, companyId as string))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
       res.json(await storage.get1099Summaries(companyId as string, parseInt(year as string)));
     } catch (e) { res.status(500).json({ message: "Failed to fetch 1099 summaries" }); }
   });
@@ -29339,6 +33200,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { companyId, year } = req.body;
       if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user || !(await canAccessCompany(user, companyId as string))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
       const summaries = await storage.generateAll1099Summaries(companyId, parseInt(year));
       res.json({ generated: summaries.length, summaries });
     } catch (e) { res.status(500).json({ message: "Failed to generate 1099 summaries" }); }
@@ -29450,9 +33315,28 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
+      // requireRole("admin", "platform_super_admin") admits more than those
+      // two literal roles — expandRoleForGuard() still aliases platform_admin
+      // (and platform_owner) to also carry "admin" (intentional, centralized
+      // platform-admin authority — out of scope for the platform_support/
+      // platform_implementation boundary fix, see phase-0.5-platform-role-boundary
+      // report). platform_support and platform_implementation no longer carry
+      // "admin" here as of that fix, so they now 403 at requireRole() itself
+      // rather than reaching this handler. platform_admin is correctly NOT
+      // isSuperAdmin, but platform-scoped accounts are required to have
+      // companyId = NULL (enforced at login), so falling through to
+      // `currentUser.companyId` would resolve to undefined for it — and
+      // storage.getAuthorizationAuditLogsFiltered applies no company filter
+      // at all when companyId is falsy, handing it every tenant's audit log
+      // unfiltered (batch 5 audit, verified defect 10). Only a real
+      // tenant-scoped caller (has a companyId) or platform_super_admin may
+      // proceed past this point.
+      if (!isSuperAdmin && !currentUser?.companyId) {
+        return res.status(403).json({ message: "Forbidden: platform_super_admin access required to view cross-tenant audit logs" });
+      }
       const resolvedCompanyId = isSuperAdmin
         ? (companyId as string | undefined)
-        : (currentUser?.companyId ?? undefined);
+        : currentUser!.companyId!;
 
       const result = await storage.getAuthorizationAuditLogsFiltered({
         limit,
@@ -29474,9 +33358,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
+      // Same role-alias fix as GET /api/audit-log above — see the comment
+      // there for the full explanation (batch 5 audit, verified defect 10).
+      if (!isSuperAdmin && !currentUser?.companyId) {
+        return res.status(403).json({ message: "Forbidden: platform_super_admin access required to view cross-tenant audit logs" });
+      }
       const resolvedCompanyId = isSuperAdmin
         ? (companyId as string | undefined)
-        : (currentUser?.companyId ?? undefined);
+        : currentUser!.companyId!;
 
       const result = await storage.getAuthorizationAuditLogsFiltered({
         limit: 10000,
@@ -29545,6 +33434,111 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: "Failed to fetch lifecycle overview" }); }
   });
 
+  // ── Tenant licenses — PR 4 (migration 0022) ────────────────────────────────
+  // `tenant_licenses` is an ADDITIVE structured record. `companies` gate columns
+  // + checkTenantGate() remain authoritative for access and are unchanged here.
+  //
+  //   GET  /api/license/status                      any authenticated tenant user — advisory badge data
+  //   GET  /api/platform/licenses                   platform admin — every company's resolved license
+  //   GET  /api/platform/companies/:id/license      platform admin — one company (+ recent events)
+  //   PUT  /api/platform/companies/:id/license      platform admin — mutate (keeps companies + mirror consistent)
+
+  // Advisory: the caller's own workspace license. Never blocks; safe to poll.
+  app.get("/api/license/status", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (!user.companyId) {
+        return res.json({ scoped: false, license: null, gate: { allowed: true } });
+      }
+      const view = await resolveCompanyLicense(user.companyId);
+      res.json({
+        scoped: true,
+        companyId: view.companyId,
+        license: {
+          status: view.resolved.effectiveStatus,
+          label: view.resolved.label,
+          source: view.resolved.source,
+          isLegacy: view.resolved.isLegacy,
+          hasLicenseRecord: view.resolved.hasLicenseRecord,
+          planType: view.resolved.planType,
+          trial: view.resolved.trial,
+          gateBlocks: view.resolved.gateBlocks,
+        },
+        // Authoritative access decision (unchanged legacy gate), echoed for the UI.
+        gate: { allowed: view.gate.allowed, reason: view.gate.reason ?? null, code: view.gate.code ?? null },
+      });
+    } catch (e) {
+      console.error("[GET /api/license/status] failed:", e);
+      res.status(500).json({ message: "Failed to resolve license status" });
+    }
+  });
+
+  app.get("/api/platform/licenses", requireAuth, requirePlatformAdminRole(), async (_req, res) => {
+    try {
+      const rows = await listCompanyLicenses();
+      const summary = rows.reduce(
+        (acc, r) => {
+          acc.total++;
+          acc.byStatus[r.resolved.effectiveStatus] = (acc.byStatus[r.resolved.effectiveStatus] ?? 0) + 1;
+          if (r.resolved.hasLicenseRecord) acc.withRecord++;
+          else acc.legacy++;
+          return acc;
+        },
+        { total: 0, withRecord: 0, legacy: 0, byStatus: {} as Record<string, number> },
+      );
+      res.json({ licenses: rows, summary, generatedAt: new Date().toISOString() });
+    } catch (e) {
+      console.error("[GET /api/platform/licenses] failed:", e);
+      res.status(500).json({ message: "Failed to load licenses" });
+    }
+  });
+
+  app.get("/api/platform/companies/:companyId/license", requireAuth, requirePlatformAdminRole(), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const view = await resolveCompanyLicense(companyId);
+      const events = await getLicenseEvents(companyId, 50);
+      res.json({
+        companyId,
+        record: view.record,
+        resolved: view.resolved,
+        gate: { allowed: view.gate.allowed, reason: view.gate.reason ?? null, code: view.gate.code ?? null },
+        events,
+      });
+    } catch (e) {
+      console.error("[GET /api/platform/companies/:companyId/license] failed:", e);
+      res.status(500).json({ message: "Failed to load company license" });
+    }
+  });
+
+  app.put("/api/platform/companies/:companyId/license", requireAuth, requirePlatformAdminRole(), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const actorUser = await storage.getUser(req.session.userId!);
+      const { status, planType, trialEnd, notes, reason } = req.body ?? {};
+      const result = await adminUpsertLicense(
+        companyId,
+        { status, planType, trialEnd, notes, reason },
+        { userId: actorUser?.id ?? null, role: actorUser?.role ?? null },
+      );
+      const view = await resolveCompanyLicense(companyId);
+      res.json({
+        message: "License updated",
+        record: result.record,
+        companyStatusChanged: result.companyStatusChanged,
+        companyStatus: result.companyStatus,
+        resolved: view.resolved,
+        gate: { allowed: view.gate.allowed, reason: view.gate.reason ?? null, code: view.gate.code ?? null },
+      });
+    } catch (e: any) {
+      if (e instanceof LicenseValidationError) return res.status(400).json({ message: e.message });
+      if (e instanceof CompanyNotFoundError) return res.status(404).json({ message: e.message });
+      console.error("[PUT /api/platform/companies/:companyId/license] failed:", e);
+      res.status(500).json({ message: "Failed to update license" });
+    }
+  });
+
   app.get("/api/permissions/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
       const allRoles = await storage.getRoles();
@@ -29593,6 +33587,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { companyId } = req.query;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user || !(await canAccessCompany(user, companyId as string))) {
+        return res.status(403).json({ error: "CROSS_TENANT", message: "You do not have access to this company." });
+      }
       const allWorkers = await storage.getWorkers(companyId as string);
       const contractors = allWorkers.filter(w => w.workerType === "contractor");
       res.json(contractors);
@@ -29738,10 +33736,33 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // Assign a company to a tenant — super_admin only
+  //
+  // The URL's :id is the sole authoritative tenant id for this operation.
+  // Before this fix, it was passed straight into the INSERT with no
+  // existence check at all — companyId is (and always was) implicitly
+  // validated by its own FK to companies.id, but tenant_id carries no FK
+  // (docs/saas-readiness/phase-0.5-tenant-companies-fk-preflight.md), so a
+  // stale or mistyped tenant id in the URL silently created a dangling
+  // tenant_companies row and still returned 201. Both sides are now checked
+  // to exist before any write is attempted, so an invalid tenant or company
+  // 404s/400s with zero rows written, instead of writing an orphan.
   app.post("/api/tenants/:id/companies", requireAuth, requireSuperAdmin(), async (req, res) => {
     try {
-      const { companyId, isPrimary = false } = req.body;
+      const { companyId, isPrimary = false, tenantId: bodyTenantId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      // A body-supplied tenantId can never override the URL's :id — if the
+      // caller sends one, it must agree with the URL or the request is
+      // rejected outright, rather than silently ignoring a mismatched value.
+      if (bodyTenantId !== undefined && bodyTenantId !== req.params.id) {
+        return res.status(400).json({ message: "tenantId in the request body does not match the tenant in the URL" });
+      }
+
+      const { rows: tenantRows } = await db.$client.query(`SELECT id FROM tenants WHERE id = $1`, [req.params.id]);
+      if (!tenantRows.length) return res.status(404).json({ message: "Tenant not found" });
+
+      const { rows: companyRows } = await db.$client.query(`SELECT id FROM companies WHERE id = $1`, [companyId]);
+      if (!companyRows.length) return res.status(400).json({ message: "Company not found" });
+
       const { rows } = await db.$client.query(`
         INSERT INTO tenant_companies (tenant_id, company_id, is_primary)
         VALUES ($1, $2, $3)
@@ -29759,10 +33780,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Remove a company from a tenant — super_admin only
   app.delete("/api/tenants/:id/companies/:companyId", requireAuth, requireSuperAdmin(), async (req, res) => {
     try {
-      await db.$client.query(
+      const result = await db.$client.query(
         `DELETE FROM tenant_companies WHERE tenant_id = $1 AND company_id = $2`,
         [req.params.id, req.params.companyId]
       );
+      // A tenant/company pair that doesn't actually match any row (wrong
+      // tenant id, wrong company id, or a company that belongs to a
+      // different tenant) must not report the same { ok: true } as a real
+      // deletion, and must not fire the cache-invalidation side effect for
+      // a company whose tenant association never changed (batch 5 audit,
+      // verified defect 9).
+      if (!result.rowCount) {
+        return res.status(404).json({ message: "Tenant-company association not found" });
+      }
       invalidateTenantCache(req.params.companyId);
       res.json({ ok: true });
     } catch (e) {
@@ -29800,16 +33830,30 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
     });
 
-    app.post("/api/provisioning/event", requireAuth, requirePlatformRole(), async (req, res) => {
+    // Every event type this route can fire mutates tenant-owned commercial
+    // state (agreement/fee/subscription/payment-method status, or an
+    // outright suspend/activate) — requirePlatformAdminRole() (not the
+    // broader requirePlatformRole()) so platform_billing/platform_sales/
+    // platform_support/platform_implementation/platform_auditor can no
+    // longer suspend or activate any tenant's subscription through this
+    // endpoint (batch 5 audit, verified defects 4 and 5).
+    app.post("/api/provisioning/event", requireAuth, requirePlatformAdminRole(), async (req, res) => {
       try {
         const { companyId, event, payload } = req.body;
         if (!companyId || !event) return res.status(400).json({ message: "companyId and event are required" });
+        const targetCompany = await storage.getCompany(companyId);
+        if (!targetCompany) return res.status(404).json({ message: "Company not found" });
         const result = await handleProvisioningEvent(companyId, event, payload || {}, "admin");
         res.json(result);
       } catch (e) { res.status(500).json({ message: "Failed to handle provisioning event" }); }
     });
 
-    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requirePlatformRole(), async (req, res) => {
+    // requirePlatformAdminRole() (not requirePlatformRole()) — triggering
+    // provisioning activates billing, creates a tenant-owner user, and
+    // seeds departments/permissions; platform_auditor must remain
+    // read-only and must not be able to trigger this (batch 5 audit,
+    // verified defect 6).
+    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requirePlatformAdminRole(), async (req, res) => {
       try {
         const { companyId } = req.params;
         const gate = await storage.getTenantCommercialGate(companyId);
@@ -29819,9 +33863,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       } catch (e) { res.status(500).json({ message: "Failed to retry provisioning" }); }
     });
 
-    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requirePlatformRole(), async (req, res) => {
+    // requirePlatformAdminRole() (not requirePlatformRole()) — mutating a
+    // tenant's commercial gates (agreement/fee/subscription/payment-method
+    // status) is a billing-adjacent administrative action, not a general
+    // platform-console capability; platform_billing/platform_sales/
+    // platform_support/platform_implementation/platform_auditor must not be
+    // able to flip these fields for any tenant (batch 5 audit, verified
+    // defect 3).
+    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requirePlatformAdminRole(), async (req, res) => {
       try {
         const { companyId } = req.params;
+        const targetCompany = await storage.getCompany(companyId);
+        if (!targetCompany) return res.status(404).json({ message: "Company not found" });
         const gate = await storage.upsertTenantCommercialGate(companyId, req.body);
         res.json(gate);
       } catch (e) { res.status(500).json({ message: "Failed to update commercial gates" }); }
@@ -31646,12 +35699,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     const { companyId } = req.params;
     const userId = (req as any).user?.id;
     try {
-      await db.execute(sql`
+      const result = await db.execute(sql`
         UPDATE companies
         SET agreement_signed_at = NOW(),
             agreement_signed_by_user_id = ${userId}
         WHERE id = ${companyId}
       `);
+      // A nonexistent companyId matches zero rows — report that truthfully
+      // rather than a blanket { success: true } (batch 5 audit, verified
+      // defect 7: this audit surface's own record of what it did must not
+      // be misleading).
+      if (!(result as any).rowCount) {
+        return res.status(404).json({ message: "Company not found" });
+      }
       res.json({ success: true, signedAt: new Date().toISOString(), signedByUserId: userId });
     } catch (e: any) {
       res.status(500).json({ message: e?.message || "Failed to update agreement" });
@@ -31663,17 +35723,23 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     const { companyId } = req.params;
     const { reason, subscriptionStatus } = req.body;
     try {
+      let result;
       if (subscriptionStatus) {
-        await db.execute(sql`
+        result = await db.execute(sql`
           UPDATE companies
           SET subscription_status = ${subscriptionStatus},
               gate_override_reason = ${reason || null}
           WHERE id = ${companyId}
         `);
       } else {
-        await db.execute(sql`
+        result = await db.execute(sql`
           UPDATE companies SET gate_override_reason = ${reason || null} WHERE id = ${companyId}
         `);
+      }
+      // Same truthful-response fix as POST .../contracts/:companyId/sign
+      // above (batch 5 audit, verified defect 8).
+      if (!(result as any).rowCount) {
+        return res.status(404).json({ message: "Company not found" });
       }
       res.json({ success: true });
     } catch (e: any) {
@@ -34166,13 +38232,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // POST /api/feature-registry/activate — enable or disable a feature for a tenant
-  app.post("/api/feature-registry/activate", requireAuth, requirePlatformRole(), async (req, res) => {
+  // requirePlatformAdminRole() (not requirePlatformRole() with an inline
+  // isPlatformAdmin check) — centralizes the same platform_super_admin/
+  // platform_admin-only decision this route already made ad hoc.
+  app.post("/api/feature-registry/activate", requireAuth, requirePlatformAdminRole(), async (req, res) => {
     try {
       const user = await storage.getUser((req.session as any).userId!);
-      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
-      if (!isPlatformAdmin) {
-        return res.status(403).json({ message: "platform_super_admin or platform_admin role required to activate features" });
-      }
       const { companyId, featureKey, enabled, expiresAt, notes } = req.body as {
         companyId: string; featureKey: string; enabled: boolean; expiresAt?: string; notes?: string;
       };
@@ -34186,9 +38251,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.status(400).json({ message: `Unknown featureKey: ${featureKey}` });
       }
 
-      // Fetch company name for audit log
+      // Validate the target company actually exists before writing a
+      // feature_overrides row for it — feature_overrides.company_id has no
+      // foreign-key constraint, so this was previously a silent no-op write
+      // for a typo'd/nonexistent companyId (batch 5 audit, verified
+      // defect 1).
       const company = await storage.getCompany(companyId);
-      const companyName = company?.name ?? companyId;
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+      const companyName = company.name ?? companyId;
       const performerName = `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.username || "unknown";
 
       // Upsert the override
@@ -34217,13 +38289,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // POST /api/feature-registry/bulk-activate — enable/disable multiple features for a tenant at once
-  app.post("/api/feature-registry/bulk-activate", requireAuth, requirePlatformRole(), async (req, res) => {
+  // requirePlatformAdminRole() — same centralization as .../activate above.
+  app.post("/api/feature-registry/bulk-activate", requireAuth, requirePlatformAdminRole(), async (req, res) => {
     try {
       const user = await storage.getUser((req.session as any).userId!);
-      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
-      if (!isPlatformAdmin) {
-        return res.status(403).json({ message: "platform_super_admin or platform_admin role required" });
-      }
       const { companyId, features, notes } = req.body as {
         companyId: string;
         features: Array<{ featureKey: string; enabled: boolean; expiresAt?: string }>;
@@ -34233,8 +38302,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.status(400).json({ message: "companyId and features[] are required" });
       }
 
+      // Same existence check as POST /api/feature-registry/activate above.
       const company = await storage.getCompany(companyId);
-      const companyName = company?.name ?? companyId;
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+      const companyName = company.name ?? companyId;
       const performerName = `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.username || "unknown";
 
       for (const f of features) {
