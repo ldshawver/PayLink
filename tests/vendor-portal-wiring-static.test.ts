@@ -109,6 +109,10 @@ ok("portal routes require login and resolve the acting user's own vendor",
   && /app\.post\(\s*"\/api\/vendor-portal\/invoices",\s*\n\s*requireAuth/.test(routes)
   && /app\.post\(\s*"\/api\/vendor-portal\/documents",\s*\n\s*requireAuth/.test(routes));
 ok("requireVendorContext 403s a non-vendor account", /This area is for vendor portal accounts\./.test(routes));
+ok("a `vendor`-role session is confined to an /api allowlist (portal/auth/invites) — every other /api path is 403",
+  /if \(role !== "vendor"\) return next\(\);/.test(routes)
+  && /VENDOR_ALLOWED_API = \[\s*"\/vendor-portal\/", "\/auth\/", "\/account-invites\/"/.test(routes)
+  && /Vendor portal accounts can only access the vendor portal\./.test(routes));
 ok("resolveVendorForUser binds ONLY via an active identity_links row (subject_type='vendor')",
   /subject_type = 'vendor'\s*\n\s*AND il\.link_status = 'active' AND v\.status = 'active'/.test(mod));
 ok("portal submission queries are scoped to ctx.vendorId AND ctx.companyId",

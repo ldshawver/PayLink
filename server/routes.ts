@@ -2161,6 +2161,28 @@ function hashSigningToken(token: string): string {
     next();
   });
 
+  // ── Vendor portal session confinement (PR 3) ─────────────────────────────
+  // A `vendor`-role account is a portal-only persona: it exists solely to
+  // submit invoices/documents for one vendor and see that vendor's own status.
+  // It has a company_id (its payer) but MUST NOT reach any other tenant API —
+  // several company-scoped GET routes are only requireAuth-gated and would
+  // otherwise return the employee roster, schedules, messages, etc. to a vendor
+  // (a vendor user has no workers.worker_id, so the per-route "self only"
+  // narrowing does not apply). Confine vendors to an explicit allowlist; every
+  // other /api path is 403. Non-vendor roles are unaffected.
+  const VENDOR_ALLOWED_API = [
+    "/vendor-portal/", "/auth/", "/account-invites/", "/notifications", "/feedback",
+  ];
+  app.use("/api", (req, res, next) => {
+    const role = (req as any).user?.role;
+    if (role !== "vendor") return next();
+    const p = req.path.split("?")[0];
+    if (VENDOR_ALLOWED_API.some(a => a.endsWith("/") ? p.startsWith(a) : p === a || p.startsWith(a + "/"))) {
+      return next();
+    }
+    return res.status(403).json({ message: "Vendor portal accounts can only access the vendor portal." });
+  });
+
   app.get("/api/payroll-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { year, quarter, companyId } = req.query;
