@@ -95,7 +95,7 @@ const mig = fs.readFileSync("migrations/0023_app_doctor_revalidation.sql", "utf8
 const page = fs.readFileSync("client/src/pages/app-doctor.tsx", "utf8");
 const suites = fs.readFileSync("scripts/test-suites.json", "utf8");
 
-ok("0023 is the highest numbered migration", migrations[migrations.length - 1] === "0023_app_doctor_revalidation.sql");
+ok("0023_app_doctor_revalidation.sql is present and its migration number is unique", migrations.includes("0023_app_doctor_revalidation.sql") && migrations.filter(m => /^0023_/.test(m)).length === 1);
 {
   // strip `-- comment` lines and blank lines → just the executable SQL of the forward section
   const forward = mig.split("ROLLBACK")[0]

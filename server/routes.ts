@@ -1641,7 +1641,11 @@ export async function registerRoutes(
     console.error("[MIGRATION] Proposal soft-delete migration error:", migErr);
   }
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/api/webhooks/documenso", "/portal/", "/time-clock/"];
+  // NOTE: these are matched against `req.path` INSIDE `app.use("/api", ...)`, which is
+  // mount-relative — so entries must NOT carry the `/api` prefix (`/webhooks/documenso`,
+  // not `/api/webhooks/documenso`). The stray `/api/...` form here previously meant the
+  // Documenso webhook was silently rejected with 401 before its handler ran.
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/webhooks/documenso", "/portal/", "/time-clock/"];
   // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
   // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
   // auth, analytics, and webhook paths listed in publicWritePaths.
@@ -2171,7 +2175,7 @@ function hashSigningToken(token: string): string {
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
-      || req.path === "/webhooks/product-events" || req.path === "/api/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
+      || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
       || req.path === "/analytics/event"
@@ -2179,7 +2183,13 @@ function hashSigningToken(token: string): string {
       || req.path === "/license/request"
       || req.path === "/account-invites/validate" || req.path === "/account-invites/accept"
       || req.path === "/contractor-signup"
-      || req.path.startsWith("/portal/")) {
+      || req.path.startsWith("/portal/")
+      // Public, token-authenticated contract signing: the routes do their own signing-token
+      // hash lookup (an unmatched token is a handler-level 404, never a 401). Without these
+      // the global requireAuth gate 401s an external signer's return/status page before its
+      // handler runs — exact prefixes only, never the broader /public/ or /signing/ namespace.
+      || req.path.startsWith("/signing/contracts/")
+      || req.path.startsWith("/public/sign/contracts/")) {
       return next();
     }
     requireAuth(req, res, next);
@@ -15984,6 +15994,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Ownership check: admin sees company contracts; contractor sees own
       if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
       if (isAdmin && !(await canAccessCompany(user!, contract.company_id))) return res.status(403).json({ message: "Access denied" });
+      // Safe read-path reconcile: if this contract is Documenso-backed and still in a
+      // non-terminal signing state, pull the latest signer/contract status from Documenso
+      // before returning so the admin UI reflects reality (webhooks are best-effort). This
+      // only advances state forward and is idempotent; failures are swallowed.
+      if (["sent", "partially_signed", "fully_signed"].includes(String(contract.status))) {
+        const syncPromise = syncDocumensoContractStatus(req.params.id).catch((err) => console.warn("[Documenso] contract GET reconcile failed", err?.message || err));
+        // Time-box the read path — if Documenso is slow, return the current state and let the
+        // 15-minute reconcile loop / a later refetch catch up (syncPromise keeps running).
+        await Promise.race([syncPromise, new Promise((resolve) => setTimeout(resolve, 6000))]);
+        const reReadContract = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`).catch(() => ({ rows: [] } as any)));
+        if (reReadContract) Object.assign(contract, reReadContract);
+      }
       const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
       const proposalInfo = contract.proposal_id ? (await db.execute(sql`SELECT id, proposal_number, title FROM contractor_proposals WHERE id = ${contract.proposal_id} AND company_id = ${contract.company_id} LIMIT 1`)).rows[0] as any : null;
       const invoiceInfo = (await db.execute(sql`SELECT id, status FROM contractor_invoices WHERE contract_id = ${req.params.id} AND company_id = ${contract.company_id} ORDER BY created_at DESC LIMIT 1`)).rows[0] as any;
@@ -16313,15 +16335,53 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             : documensoMissingSigningUrl
               ? "documenso_unavailable"
               : "pending_signature";
+
+      // Real signer roster for the return page — "who has signed / who is still needed".
+      // Email-less placeholder rows and inactive (replaced/canceled/declined) rows are excluded.
+      const rosterRows = (await db.execute(sql`
+        SELECT name, email, status, signed_at
+        FROM contract_signers
+        WHERE contract_id = ${row.contract_id}
+          AND COALESCE(is_required, TRUE) = TRUE
+          AND (email IS NOT NULL OR documenso_recipient_id IS NOT NULL)
+          AND status NOT IN ('replaced','void')
+        ORDER BY COALESCE(signing_order, "order", 1) ASC
+      `).catch(() => ({ rows: [] } as any))).rows as any[];
+      const publicSignerLabel = (s: any) => {
+        const nm = String(s.name || "").trim();
+        if (nm) return nm;
+        return maskAuditEmail(s.email) || "A signer";
+      };
+      const roster = rosterRows.map((s) => ({
+        name: publicSignerLabel(s),
+        status: s.status === "signed" ? "signed" : inactiveSignerStatuses.includes(String(s.status)) ? String(s.status) : "pending",
+        signedAt: s.signed_at || null,
+      }));
+      const signedCount = roster.filter(s => s.status === "signed").length;
+      const remainingSigners = roster.filter(s => s.status === "pending").map(s => s.name);
+      const viewerSigned = row.signer_status === "signed" || state === "fully_signed";
+
+      // Fully-signed document, exposed only through this validated signing token.
+      const completedDocumentUrl = state === "fully_signed"
+        ? `/api/public/sign/contracts/${encodeURIComponent(req.params.token)}/document`
+        : null;
+      const completedDocumentReady = state === "fully_signed" && !!(row.documenso_document_id || row.signature_request_id);
+
+      const message = state === "fully_signed"
+        ? "This document is fully signed."
+        : state === "already_signed"
+          ? (remainingSigners.length > 0
+              ? `You have signed this document. Waiting on ${remainingSigners.length} other signer(s).`
+              : "You have signed this document. Finalizing…")
+          : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
+          : state === "documenso_unavailable" ? "The signing provider is temporarily unavailable for this link. Please contact the sender or try again later."
+          : "This contract is ready for your signature.";
+
       res.json({
         state,
         reason: state,
         safeErrorReason: state === "pending_signature" ? null : state,
-        message: state === "fully_signed" ? "Contract fully signed."
-          : state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)."
-          : state === "expired_or_canceled" ? "This signing link is expired or no longer active."
-          : state === "documenso_unavailable" ? "The signing provider is temporarily unavailable for this link. Please contact the sender or try again later."
-          : "This contract is ready for your signature.",
+        message,
         contractId: row.contract_id,
         publicContractId: row.contract_id,
         title: row.title,
@@ -16337,6 +16397,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         embeddedSigningData: null,
         canSign: state === "pending_signature",
         isDocumensoUnavailable: state === "documenso_unavailable",
+        // Post-signing lifecycle fields
+        viewerSigned,
+        signers: roster,
+        signedCount,
+        totalSignerCount: roster.length,
+        remainingSignerCount: remainingSigners.length,
+        remainingSigners,
+        completedDocumentUrl,
+        completedDocumentReady,
       });
     } catch (e: any) {
       console.error("[PublicContractSigning] status lookup failed", e?.message || e);
@@ -16348,6 +16417,51 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/public/sign/contracts/:token/status", getPublicContractSigningStatus);
   app.get("/api/signing/contracts/:token", getPublicContractSigningStatus);
   app.get("/api/signing/contracts/:token/status", getPublicContractSigningStatus);
+
+  // Fully-signed contract PDF, reachable only with a valid signing token whose contract has
+  // actually reached a completed state. Prefers the Documenso-completed PDF; falls back to the
+  // MyPayLink render. Never exposes anything for a contract that is not fully signed.
+  const getPublicSignedContractDocument = async (req: any, res: any) => {
+    try {
+      const tokenHash = hashSigningToken(req.params.token);
+      const row = firstRow<any>(await db.execute(sql`
+        SELECT cc.id AS contract_id, cc.title, cc.company_id, cc.status AS contract_status,
+               cs.signing_token_expires_at,
+               dsr.documenso_document_id
+        FROM contract_signers cs
+        JOIN contractor_contracts cc ON cc.id = cs.contract_id AND cc.company_id = cs.company_id
+        LEFT JOIN LATERAL (
+          SELECT documenso_document_id FROM documenso_signature_requests dsr
+          WHERE dsr.document_type IN ('contract', 'contractor_hub_contract')
+            AND dsr.related_record_id = cc.id AND dsr.company_id = cc.company_id
+          ORDER BY dsr.created_at DESC LIMIT 1
+        ) dsr ON TRUE
+        WHERE cs.signing_token_hash = ${tokenHash}
+        LIMIT 1
+      `));
+      if (!row) return res.status(404).json({ message: "This signing link is invalid." });
+      if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) {
+        return res.status(410).json({ message: "This signing link has expired." });
+      }
+      if (!["fully_signed", "completed", "active"].includes(String(row.contract_status))) {
+        return res.status(409).json({ message: "This contract is not fully signed yet.", state: "not_ready" });
+      }
+      let pdf: Buffer | null = null;
+      if (row.documenso_document_id) pdf = await downloadCompletedDocumensoPdf(row.documenso_document_id).catch(() => null);
+      if (!pdf) pdf = await generateContractPdf(row.contract_id).catch(() => null);
+      if (!pdf) return res.status(503).json({ message: "The signed document is still being finalized. Please check back shortly — a copy is also emailed to all signers.", state: "finalizing" });
+      const safeTitle = String(row.title || "contract").replace(/[^a-z0-9]+/gi, "-").toLowerCase().slice(0, 60) || "contract";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="signed-${safeTitle}.pdf"`);
+      res.setHeader("Content-Length", String(pdf.length));
+      res.send(pdf);
+    } catch (e: any) {
+      console.error("[PublicContractSigning] signed document fetch failed", e?.message || e);
+      res.status(500).json({ message: "We could not load the signed document right now. A copy is emailed to all signers." });
+    }
+  };
+  app.get("/api/public/sign/contracts/:token/document", getPublicSignedContractDocument);
+  app.get("/api/signing/contracts/:token/document", getPublicSignedContractDocument);
 
   const completePublicContractSignature = async (req: any, res: any) => {
     try {
@@ -16555,6 +16669,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         pendingSignerCount,
       });
     } catch (e: any) { res.status(500).json({ message: "Failed to load contract signing page" }); }
+  });
+
+  // Explicit "Refresh status" — admin-triggered pull-sync from Documenso. Company-scoped via
+  // assertContractCompanyAccess. Does not send envelopes / rotate tokens / create anything;
+  // it only reconciles signer + contract status (and converges completion the same way the
+  // webhook and the periodic loop do).
+  app.post("/api/contractor-contracts/:id/reconcile-signing", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      const syncResult = await syncDocumensoContractStatus(req.params.id).catch((err) => ({ error: err?.message || String(err) }));
+      const fresh = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`));
+      const signers = (await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`)).rows;
+      res.json({ ok: true, syncResult, contract: fresh, signers });
+    } catch (e: any) { res.status(500).json({ message: "Failed to reconcile signing status" }); }
   });
 
   app.post("/api/contractor-contracts/:id/sign", requireAuth, async (req, res) => {
@@ -17399,10 +17528,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const status = normalizeRecipientStatus(recipient?.status || recipient?.signingStatus || recipient?.readStatus);
       if (!status || (!recipientId && !email)) continue;
       const signedAt = status === "signed" ? (recipient?.signedAt || recipient?.signed_at || recipient?.completedAt || recipient?.completed_at || new Date()) : null;
+      // Forward-only per-signer transition. Documenso can deliver events out of order (a
+      // late "viewed" after "signed", a re-fetch that momentarily lacks a status) — never
+      // regress a signer that already reached a terminal state, and only advance along
+      // pending/sent -> viewed -> signed (declined/canceled are terminal-negative and may
+      // be applied from any non-signed state).
       const updateRes = await db.execute(sql`
         UPDATE contract_signers
         SET status = ${status},
             signed_at = CASE WHEN ${status} = 'signed' THEN COALESCE(signed_at, ${signedAt}) ELSE signed_at END,
+            viewed_at = CASE WHEN ${status} IN ('viewed','signed') THEN COALESCE(viewed_at, NOW()) ELSE viewed_at END,
+            declined_at = CASE WHEN ${status} = 'declined' THEN COALESCE(declined_at, NOW()) ELSE declined_at END,
             documenso_recipient_id = COALESCE(documenso_recipient_id, ${recipientId}),
             documenso_signing_url = COALESCE(documenso_signing_url, ${recipient?.signingUrl || recipient?.signing_url || null}),
             updated_at = NOW()
@@ -17410,14 +17546,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND (${recipientId} IS NOT NULL AND documenso_recipient_id = ${recipientId}
                OR ${email} IS NOT NULL AND lower(trim(email)) = ${email})
           AND status IS DISTINCT FROM ${status}
+          AND status NOT IN ('signed','declined','canceled','cancelled','voided','replaced','expired')
+          AND (
+            ${status} IN ('signed','declined','canceled')
+            OR (${status} = 'viewed' AND status IN ('pending','sent','unsent','draft'))
+            OR (${status} = 'sent' AND status IN ('pending','unsent','draft'))
+          )
         RETURNING id
       `).catch(() => ({ rows: [] } as any));
       signersUpdated += Number((updateRes as any).rows?.length || 0);
     }
+    // Only "real" signers count toward completion: a required signer that either has an
+    // email or is mapped to a Documenso recipient. Email-less placeholder rows (added as
+    // scaffolding, never sent) must never keep a contract from completing and are never
+    // emailed the signed copy.
     const counts = firstRow<any>(await db.execute(sql`
       SELECT
-        COUNT(*) FILTER (WHERE COALESCE(is_required, TRUE) = TRUE AND status = 'signed') AS signed_required,
-        COUNT(*) FILTER (WHERE COALESCE(is_required, TRUE) = TRUE AND status NOT IN ('canceled','cancelled','expired','declined','replaced','voided')) AS active_required
+        COUNT(*) FILTER (WHERE COALESCE(is_required, TRUE) = TRUE AND (email IS NOT NULL OR documenso_recipient_id IS NOT NULL) AND status = 'signed') AS signed_required,
+        COUNT(*) FILTER (WHERE COALESCE(is_required, TRUE) = TRUE AND (email IS NOT NULL OR documenso_recipient_id IS NOT NULL) AND status NOT IN ('canceled','cancelled','expired','declined','replaced','voided')) AS active_required
       FROM contract_signers WHERE contract_id = ${contractId}
     `));
     const signedRequired = Number(counts?.signed_required || 0);
@@ -17437,6 +17583,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       effectiveStatus = nextStatus;
     }
     await db.execute(sql`UPDATE documenso_signature_requests SET status = ${remoteStatus}, raw_response = COALESCE(${remote ? JSON.stringify((remote as any).rawResponse || remote) : null}, raw_response), updated_at = NOW() WHERE id = ${sigReq.id}`).catch(() => {});
+    await db.execute(sql`UPDATE contractor_contracts SET signing_last_synced_at = NOW() WHERE id = ${contractId}`).catch(() => {});
     await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "documenso_status_synced", companyId: contract.company_id, metadataJson: JSON.stringify({ documensoDocumentId: sigReq.documenso_document_id, status: effectiveStatus, signersUpdated }) }).catch(() => {});
 
     // Authoritative remote reconciliation reaching "fully signed" must converge on the same
@@ -17445,6 +17592,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (effectiveStatus === "fully_signed") {
       const activated = await activateContractAfterVerifiedCompletion(contractId, "reconciliation");
       if (activated) effectiveStatus = "active";
+    }
+    // Exactly-once "here is your fully signed contract" email to every real signer. Safe to
+    // call on every sync once complete — the claim on signed_contract_emailed_at inside makes
+    // it a no-op after the first successful send, and a NULL claim (PDF not ready yet) simply
+    // retries on the next reconcile.
+    if (["fully_signed", "active", "completed"].includes(effectiveStatus)) {
+      await emailSignedContractToAllSigners(contractId, "reconciliation").catch((err) => console.warn("[Documenso] signed-contract email failed", err?.message || err));
     }
     return { contractId, status: effectiveStatus, documensoDocumentId: sigReq.documenso_document_id, signersUpdated, remoteStatus };
   }
@@ -17485,6 +17639,72 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return { documentId, created: true };
   }
 
+  // Exactly-once "your fully signed contract" email to every real signer. The claim on
+  // contractor_contracts.signed_contract_emailed_at is what makes it exactly-once: only the
+  // caller whose UPDATE flips it from NULL proceeds to send. Safe to call repeatedly (webhook,
+  // reconcile loop, admin refresh) — every call after the first is a no-op. If the completed
+  // PDF isn't available yet, or every send fails (SMTP outage), the claim is left / released
+  // NULL so a later reconcile retries. Email-less placeholder signer rows are never included.
+  async function emailSignedContractToAllSigners(contractId: string, source: string) {
+    const contract = firstRow<any>(await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`));
+    if (!contract) return { sent: 0, skipped: "missing_contract" };
+    if (!["fully_signed", "active", "completed"].includes(String(contract.status))) return { sent: 0, skipped: "not_complete" };
+    if (contract.signed_contract_emailed_at) return { sent: 0, skipped: "already_emailed" };
+
+    const sigReq = firstRow<any>(await db.execute(sql`
+      SELECT documenso_document_id FROM documenso_signature_requests
+      WHERE document_type IN ('contract','contractor_hub_contract') AND related_record_id = ${contractId}
+        AND company_id = ${contract.company_id} AND documenso_document_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `).catch(() => ({ rows: [] } as any)));
+
+    let pdf: Buffer | null = null;
+    if (sigReq?.documenso_document_id) pdf = await downloadCompletedDocumensoPdf(sigReq.documenso_document_id).catch(() => null);
+    if (!pdf) pdf = await generateContractPdf(contractId).catch(() => null);
+    if (!pdf) return { sent: 0, skipped: "pdf_unavailable" };
+
+    const claimed = firstRow<any>(await db.execute(sql`
+      UPDATE contractor_contracts SET signed_contract_emailed_at = NOW(), updated_at = NOW()
+      WHERE id = ${contractId} AND signed_contract_emailed_at IS NULL
+      RETURNING id
+    `));
+    if (!claimed) return { sent: 0, skipped: "already_emailed" };
+
+    const signerRows = (await db.execute(sql`
+      SELECT DISTINCT ON (lower(trim(email))) name, email
+      FROM contract_signers
+      WHERE contract_id = ${contractId}
+        AND email IS NOT NULL
+        AND status = 'signed'
+        AND COALESCE(is_required, TRUE) = TRUE
+      ORDER BY lower(trim(email)), signed_at ASC NULLS LAST
+    `).catch(() => ({ rows: [] } as any))).rows as any[];
+
+    const { sendSignedContractEmail } = await import("./notifications.js");
+    const title = `Signed contract: ${contract.title || contract.contract_number || "Agreement"}`;
+    const attachmentFileName = `signed-${String(contract.title || "contract").replace(/[^a-z0-9]+/gi, "-").toLowerCase().slice(0, 60) || "contract"}.pdf`;
+    let sent = 0;
+    const failures: Array<{ email: string; error: string }> = [];
+    for (const s of signerRows) {
+      const r = await sendSignedContractEmail({
+        recipientName: s.name || "Signer",
+        email: s.email,
+        title,
+        body: `All parties have signed "${contract.title || "the agreement"}". A copy of the fully executed contract is attached for your records.`,
+        attachmentFileName,
+        attachmentBuffer: pdf,
+      }).catch((e: any) => ({ sent: false, error: e?.message || "send_failed" }));
+      if ((r as any).sent) sent++; else failures.push({ email: s.email, error: (r as any).error || "unknown" });
+    }
+    // Total failure (e.g. SMTP down) — release the claim so a later reconcile retries. A
+    // partial success keeps the claim (duplicates are worse than a logged single miss).
+    if (sent === 0 && signerRows.length > 0) {
+      await db.execute(sql`UPDATE contractor_contracts SET signed_contract_emailed_at = NULL WHERE id = ${contractId} AND signed_contract_emailed_at IS NOT NULL`).catch(() => {});
+    }
+    await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "signed_contract_emailed", companyId: contract.company_id, metadataJson: JSON.stringify({ source, sent, failureCount: failures.length, recipients: signerRows.map(s => maskAuditEmail(s.email)) }) }).catch(() => {});
+    return { sent, failures };
+  }
+
   // Single authoritative transition for "signing is verified complete" — called from both the
   // Documenso webhook and syncDocumensoContractStatus (authoritative remote reconciliation), so a
   // replayed/out-of-order webhook and a manual "reconcile status" action behave identically and
@@ -17517,6 +17737,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
 
     await storage.createExpenseApprovalAction({ objectType: "contractor_contract", objectId: contractId, actionType: "contract_activated_verified_completion", companyId: activated.company_id, metadataJson: JSON.stringify({ source }) }).catch(() => {});
+
+    // Exactly-once — emails the fully executed PDF to every real signer. No-op if already sent
+    // or if the completed PDF isn't retrievable yet (a later reconcile retries).
+    await emailSignedContractToAllSigners(contractId, `activate:${source}`).catch((err) => console.warn("[Documenso] signed-contract email failed", err?.message || err));
     return activated;
   }
 
@@ -28216,7 +28440,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         if (contractSig) {
           const remote = await getDocumensoDocument(documensoDocumentId).catch(() => null);
           const status = normalizeDocumensoDisplayStatus(toLocalDocumensoStatus(payload?.status || payload?.data?.status || remote?.status || contractSig.status));
-          const completed = status === "completed" || /recipient.*signed|document.*completed|document.*signed/i.test(eventType);
+          // A per-recipient `recipient.signed` event is NOT document completion — only the
+          // whole-document status/events are. Treating one signer's event as completion
+          // previously flipped the entire contract to fully_signed (and force-signed every
+          // other pending signer + created the invoice) on the FIRST signature. The
+          // authoritative per-signer + completion reconciliation is syncDocumensoContractStatus
+          // below, which only completes when every real signer is done.
+          const completed = status === "completed" || /document\.(completed|signed)/i.test(eventType);
           await syncDocumensoContractStatus(contractSig.related_record_id).catch((err) => console.warn("[Documenso] contract webhook sync failed", err?.message || err));
           await db.execute(sql`
             UPDATE documenso_signature_requests
@@ -40190,6 +40420,47 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     runDailyScheduler();
     setInterval(runDailyScheduler, 24 * 60 * 60 * 1000);
   }, 30_000);
+
+  // ── Documenso signing reconcile loop ───────────────────────────────────────
+  // Webhook delivery from Documenso is best-effort (and, historically, has not been
+  // arriving at all). This loop is the backstop that guarantees signer + contract
+  // status, exactly-once invoice conversion, and the exactly-once signed-contract
+  // email all still converge without any webhook. It scans contracts still in a
+  // non-terminal signing state that have an active Documenso envelope, oldest sync
+  // first, in small batches, and calls the same idempotent syncDocumensoContractStatus
+  // the webhook and the admin "Refresh status" button use.
+  const runDocumensoSigningReconcile = async () => {
+    try {
+      const due = await db.execute(sql`
+        SELECT cc.id
+        FROM contractor_contracts cc
+        WHERE cc.status IN ('sent', 'partially_signed', 'fully_signed')
+          AND EXISTS (
+            SELECT 1 FROM documenso_signature_requests dsr
+            WHERE dsr.document_type IN ('contract', 'contractor_hub_contract')
+              AND dsr.related_record_id = cc.id
+              AND dsr.company_id = cc.company_id
+              AND dsr.documenso_document_id IS NOT NULL
+              AND COALESCE(dsr.status, '') NOT IN ('voided','canceled','cancelled','deleted','error','superseded')
+          )
+        ORDER BY cc.signing_last_synced_at ASC NULLS FIRST
+        LIMIT 25
+      `);
+      const ids = (due.rows as Array<{ id: string }>).map(r => r.id);
+      let reconciled = 0;
+      for (const id of ids) {
+        await syncDocumensoContractStatus(id).then(() => { reconciled++; }).catch((e) => console.warn(`[DocumensoReconcile] ${id} failed:`, e instanceof Error ? e.message : String(e)));
+      }
+      if (reconciled > 0) console.log(`[DocumensoReconcile] reconciled ${reconciled}/${ids.length} contract(s)`);
+    } catch (e) {
+      console.warn("[DocumensoReconcile] loop failed:", e instanceof Error ? e.message : String(e));
+    }
+  };
+  // First pass 90s after boot, then every 15 minutes.
+  setTimeout(() => {
+    runDocumensoSigningReconcile();
+    setInterval(runDocumensoSigningReconcile, 15 * 60 * 1000);
+  }, 90_000);
 
   return httpServer;
 }

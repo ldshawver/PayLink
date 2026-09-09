@@ -68,7 +68,7 @@ ok("status page fetches the /status API variant on a /status URL",
 ok("status page appends `/status` to the fetch URL when isStatusReturn",
   /\/api\/public\/sign\/contracts\/\$\{encodeURIComponent\(token\)\}\$\{isStatusReturn \? "\/status" : ""\}/.test(page));
 ok("status page has a non-blank fallback for post-signing returns + unknown states",
-  /if \(isPostDocumensoReturn\)\s*\{[\s\S]{0,200}Signature received/.test(page)
+  /if \(isPostDocumensoReturn && state[\s\S]{0,300}Signature received/.test(page)
   && /if \(state !== "pending_signature"\)/.test(page));
 ok("documenso_unavailable / documenso_managed render an informational panel (not the sign form)",
   /state === "documenso_unavailable" \|\| state === "documenso_managed"/.test(page));

@@ -391,6 +391,13 @@ app.use((req, res, next) => {
     await run("contract_signers.documenso_signing_url", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS documenso_signing_url TEXT`);
     await run("contract_signers.last_sent_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS last_sent_at TIMESTAMPTZ`);
     await run("documenso_signature_requests contract index", sql`CREATE INDEX IF NOT EXISTS idx_documenso_signature_requests_contract_sent_at ON documenso_signature_requests(document_type, related_record_id, company_id, sent_at)`);
+    // Documenso post-signing lifecycle (migrations/0024_documenso_post_signing_lifecycle.sql) — additive, nullable.
+    await run("contract_signers.viewed_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMPTZ`);
+    await run("contract_signers.declined_at", sql`ALTER TABLE contract_signers ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ`);
+    await run("contractor_contracts.signed_contract_emailed_at", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS signed_contract_emailed_at TIMESTAMPTZ`);
+    await run("contractor_contracts.signing_last_synced_at", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS signing_last_synced_at TIMESTAMPTZ`);
+    await run("contractor_contracts signing-reconcile index", sql`CREATE INDEX IF NOT EXISTS idx_contractor_contracts_signing_reconcile ON contractor_contracts(status, signing_last_synced_at) WHERE status IN ('sent','partially_signed','fully_signed')`);
+    await run("contract_signers contract-recipient index", sql`CREATE INDEX IF NOT EXISTS idx_contract_signers_contract_recipient ON contract_signers(contract_id, documenso_recipient_id)`);
     // Exactly-once backstop for Documenso-completion auto-invoice creation (see migrations/0014_contractor_invoice_exactly_once.sql)
     await run("contractor_invoices.documenso_completion_idempotency_key", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS documenso_completion_idempotency_key TEXT`);
     await run("contractor_invoices auto-invoice unique index", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_contractor_invoices_auto_invoice_key ON contractor_invoices (company_id, documenso_completion_idempotency_key) WHERE documenso_completion_idempotency_key IS NOT NULL`);

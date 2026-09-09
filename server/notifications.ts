@@ -579,6 +579,42 @@ export async function sendGenericNotificationEmail({ recipientName, email, title
   }
 }
 
+/**
+ * Email the fully-executed contract PDF to a signer. Used only after every real signer
+ * has completed — exactly-once enforcement lives in the caller
+ * (emailSignedContractToAllSigners in routes.ts, gated on
+ * contractor_contracts.signed_contract_emailed_at).
+ */
+export async function sendSignedContractEmail({ recipientName, email, title, body, attachmentBuffer, attachmentFileName }: {
+  recipientName: string;
+  email: string;
+  title: string;
+  body: string;
+  attachmentBuffer: Buffer;
+  attachmentFileName: string;
+}): Promise<{ sent: boolean; error?: string }> {
+  if (!email) return { sent: false, error: "No recipient email" };
+  const smtp = await getTransporter();
+  if (!smtp) return { sent: false, error: "SMTP not configured" };
+  const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;"><div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;"><h1 style="color:white;margin:0;font-size:20px;">${title}</h1></div><div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;"><p style="font-size:15px;color:#111827;">Hi <strong>${recipientName}</strong>,</p><p style="color:#374151;">${body}</p><p style="color:#374151;">The signed PDF is attached.</p><p style="color:#9ca3af;font-size:12px;margin-top:24px;">This notification was sent via PayLink.</p></div></div>`;
+  const text = `Hi ${recipientName},\n\n${body}\n\nThe signed PDF is attached.\n\nPayLink`;
+  try {
+    await smtp.transporter.sendMail({
+      from: smtp.fromAddress,
+      to: email,
+      subject: title,
+      text,
+      html,
+      attachments: [{ filename: attachmentFileName, content: attachmentBuffer, contentType: "application/pdf" }],
+    });
+    console.log(`[Email] Signed contract sent to ${email}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[Email] Failed signed-contract email to ${email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
 export async function sendGenericNotificationSms({ phone, title, body }: { phone: string; title: string; body: string }): Promise<{ sent: boolean; error?: string }> {
   if (!phone) return { sent: false, error: "No phone number" };
   const message = `${title}: ${body}`;

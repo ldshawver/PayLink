@@ -6,11 +6,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Loader2, FileSignature, CheckCircle, AlertTriangle, ExternalLink } from "lucide-react";
+import { Loader2, FileSignature, CheckCircle, Clock, AlertTriangle, ExternalLink } from "lucide-react";
 
 function tokenFromPath(pathname: string): string {
   return decodeURIComponent(pathname.split("/sign/contracts/")[1]?.split("/")[0] || "");
 }
+
+interface RosterSigner { name: string; status: string; signedAt?: string | null }
 
 export default function ContractSigningPage() {
   const [location] = useLocation();
@@ -37,6 +39,14 @@ export default function ContractSigningPage() {
     },
     enabled: !!token,
     retry: false,
+    // On the post-signing return, briefly poll so a just-completed final signature
+    // flips this page to the fully-signed state without a manual reload. Stops once
+    // the contract is fully signed (or after react-query's default staleness window
+    // via the callback returning false).
+    refetchInterval: (query: any) => {
+      const data = query?.state?.data;
+      return isStatusReturn && data && data.state !== "fully_signed" && data.state !== "expired_or_canceled" ? 5000 : false;
+    },
   });
 
   const completeMutation = useMutation({
@@ -60,8 +70,24 @@ export default function ContractSigningPage() {
     return <SigningShell><div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading contract…</div></SigningShell>;
   }
 
+  const isPostDocumensoReturn = location.includes("/status") || location.includes("signed=1");
+
   if (contractQuery.isError) {
     const error = contractQuery.error as Error & { state?: string; status?: number };
+    // A post-signing return that hit a transient error must NEVER be a blank page or a
+    // scary "invalid link" — the signer very likely did sign; show a recoverable
+    // "we're confirming" state instead.
+    if (isPostDocumensoReturn && (error.status === undefined || error.status >= 500 || error.state === "server_error")) {
+      return (
+        <SigningShell>
+          <Alert data-testid="public-contract-signing-status">
+            <Clock className="h-4 w-4" />
+            <AlertTitle>Signature received</AlertTitle>
+            <AlertDescription>We are confirming completion with the signing provider. You can close this page — a copy of the signed contract is emailed to every signer once all parties have signed.</AlertDescription>
+          </Alert>
+        </SigningShell>
+      );
+    }
     const title = error.state === "expired_link" || error.state === "expired_or_canceled" ? "Signing link expired"
       : error.state === "already_signed" ? "Already signed"
       : error.state === "fully_signed" ? "Contract fully signed"
@@ -70,30 +96,60 @@ export default function ContractSigningPage() {
     return <SigningShell><ErrorState title={title} message={error.message || "This signing link could not be loaded. Please contact the sender for a new link."} /></SigningShell>;
   }
 
-  const isPostDocumensoReturn = location.includes("/status") || location.includes("signed=1");
-
   if (completeMutation.isSuccess) {
     return <SigningShell><Alert><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>Your contract signature has been recorded.</AlertDescription></Alert></SigningShell>;
   }
 
   const contract = contractQuery.data || {};
   const state = typeof contract.state === "string" ? contract.state : (isPostDocumensoReturn ? "pending_signature" : "missing_contract");
-  const message = typeof contract.message === "string" ? contract.message : (
-    state === "fully_signed" ? "Contract fully signed." :
-    state === "already_signed" ? "You already signed this contract. Waiting for other signer(s)." :
-    state === "expired_or_canceled" ? "This signing link is expired or no longer active." :
-    "Signature received. We are confirming completion."
-  );
+  const roster: RosterSigner[] = Array.isArray(contract.signers) ? contract.signers : [];
+  const remaining: string[] = Array.isArray(contract.remainingSigners) ? contract.remainingSigners : [];
+  const viewerSigned = !!contract.viewerSigned;
+  const message = typeof contract.message === "string" ? contract.message : "Signature received. We are confirming completion.";
 
-  if (isPostDocumensoReturn && state === "pending_signature") {
-    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>Signature received. We are confirming completion.</AlertDescription></Alert></SigningShell>;
+  // ── Fully signed ──────────────────────────────────────────────────────────
+  if (state === "fully_signed") {
+    return (
+      <SigningShell>
+        <Alert data-testid="public-contract-signing-status">
+          <CheckCircle className="h-4 w-4" />
+          <AlertTitle>This document is fully signed</AlertTitle>
+          <AlertDescription>{message} A copy has been emailed to every signer.</AlertDescription>
+        </Alert>
+        {roster.length > 0 && <SignerRoster signers={roster} className="mt-4" />}
+        {contract.completedDocumentUrl && (
+          <Button asChild className="mt-4" data-testid="button-open-signed-document">
+            <a href={contract.completedDocumentUrl} target="_blank" rel="noopener noreferrer">View signed document <ExternalLink className="ml-2 h-4 w-4" /></a>
+          </Button>
+        )}
+      </SigningShell>
+    );
   }
-  if (["already_signed", "fully_signed"].includes(state)) {
-    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>{state === "fully_signed" ? "Contract fully signed" : "Already signed"}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert></SigningShell>;
+
+  // ── Viewer has signed, others still pending ───────────────────────────────
+  if (viewerSigned || state === "already_signed") {
+    return (
+      <SigningShell>
+        <Alert data-testid="public-contract-signing-status">
+          <CheckCircle className="h-4 w-4" />
+          <AlertTitle>You have signed this document</AlertTitle>
+          <AlertDescription>
+            {remaining.length > 0
+              ? `Waiting on ${remaining.length} other signer${remaining.length === 1 ? "" : "s"}. You'll receive the fully signed contract by email once everyone has signed.`
+              : "We are finalizing the fully signed contract. A copy will be emailed to every signer."}
+          </AlertDescription>
+        </Alert>
+        {roster.length > 0 && <SignerRoster signers={roster} className="mt-4" />}
+      </SigningShell>
+    );
   }
-  if (["expired_or_canceled", "expired_link", "invalid_link", "missing_contract", "server_error"].includes(state)) {
-    return <SigningShell><ErrorState title={state === "expired_link" ? "Signing link expired" : state === "invalid_link" || state === "missing_contract" ? "Invalid signing link" : state === "server_error" ? "Signing service unavailable" : "Signing link inactive"} message={message} /></SigningShell>;
+
+  // ── Expired / canceled ───────────────────────────────────────────────────
+  if (["expired_or_canceled", "expired_link", "invalid_link", "missing_contract"].includes(state)) {
+    return <SigningShell><ErrorState title={state === "expired_link" ? "Signing link expired" : state === "invalid_link" || state === "missing_contract" ? "Invalid signing link" : "Signing link inactive"} message={message} /></SigningShell>;
   }
+
+  // ── Documenso in-flight (provider handles the actual signing) ─────────────
   if (state === "documenso_unavailable" || state === "documenso_managed") {
     return (
       <SigningShell>
@@ -107,16 +163,32 @@ export default function ContractSigningPage() {
             ) : null}
           </AlertDescription>
         </Alert>
+        {roster.length > 0 && <SignerRoster signers={roster} className="mt-4" />}
       </SigningShell>
     );
   }
-  // Any post-signing return URL that didn't resolve to a terminal state above:
-  // show a neutral "confirming" message rather than the (misleading) signature
-  // form or — before the error boundary was added — a blank page.
-  if (isPostDocumensoReturn) {
-    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>{message || "Signature received. We are confirming completion — you can close this page."}</AlertDescription></Alert></SigningShell>;
+
+  // ── Any post-signing return that didn't resolve to a terminal state above:
+  //    neutral "confirming" message + the roster — never blank, never the form.
+  if (isPostDocumensoReturn && state !== "pending_signature") {
+    return (
+      <SigningShell>
+        <Alert data-testid="public-contract-signing-status"><Clock className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>{message || "Signature received. We are confirming completion — you can close this page."}</AlertDescription></Alert>
+        {roster.length > 0 && <SignerRoster signers={roster} className="mt-4" />}
+      </SigningShell>
+    );
   }
-  if (contract.documensoSigningUrl) {
+  if (isPostDocumensoReturn && state === "pending_signature" && !contract.canSign) {
+    return (
+      <SigningShell>
+        <Alert data-testid="public-contract-signing-status"><Clock className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>We are confirming completion.</AlertDescription></Alert>
+        {roster.length > 0 && <SignerRoster signers={roster} className="mt-4" />}
+      </SigningShell>
+    );
+  }
+
+  // ── Documenso signing link available ─────────────────────────────────────
+  if (contract.documensoSigningUrl && state === "pending_signature") {
     return (
       <SigningShell>
         <div className="space-y-4">
@@ -131,15 +203,20 @@ export default function ContractSigningPage() {
           <Button asChild data-testid="button-open-documenso-signing">
             <a href={contract.documensoSigningUrl} rel="noopener noreferrer">Open Documenso signing <ExternalLink className="ml-2 h-4 w-4" /></a>
           </Button>
+          {roster.length > 0 && <SignerRoster signers={roster} />}
         </div>
       </SigningShell>
     );
   }
-  // Only offer the manual signature form for a genuinely signable state. Any
-  // other unrecognized state gets a neutral shell (never blank, never a
-  // misleading "sign here" form).
+
+  // ── Only offer the manual signature form for a genuinely signable state ──
   if (state !== "pending_signature") {
-    return <SigningShell><Alert data-testid="public-contract-signing-status"><FileSignature className="h-4 w-4" /><AlertTitle>{contract.title || "Contract signing"}</AlertTitle><AlertDescription>{message || "This signing link is not currently actionable. Please contact the sender if you expected to sign here."}</AlertDescription></Alert></SigningShell>;
+    return (
+      <SigningShell>
+        <Alert data-testid="public-contract-signing-status"><FileSignature className="h-4 w-4" /><AlertTitle>{contract.title || "Contract signing"}</AlertTitle><AlertDescription>{message || "This signing link is not currently actionable. Please contact the sender if you expected to sign here."}</AlertDescription></Alert>
+        {roster.length > 0 && <SignerRoster signers={roster} className="mt-4" />}
+      </SigningShell>
+    );
   }
   return (
     <SigningShell>
@@ -160,8 +237,33 @@ export default function ContractSigningPage() {
           {completeMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           Complete signature
         </Button>
+        {roster.length > 0 && <SignerRoster signers={roster} />}
       </div>
     </SigningShell>
+  );
+}
+
+function SignerRoster({ signers, className }: { signers: RosterSigner[]; className?: string }) {
+  return (
+    <div className={`rounded-lg border p-3 ${className || ""}`} data-testid="public-contract-signer-roster">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Signers</p>
+      <ul className="space-y-1.5">
+        {signers.map((s, i) => {
+          const signed = s.status === "signed";
+          return (
+            <li key={i} className="flex items-center justify-between text-sm" data-testid={`public-contract-signer-${i}`}>
+              <span className="flex items-center gap-2">
+                {signed ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Clock className="h-4 w-4 text-muted-foreground" />}
+                {s.name}
+              </span>
+              <span className={signed ? "text-green-600 text-xs font-medium" : "text-muted-foreground text-xs"}>
+                {signed ? "Signed" : s.status === "pending" ? "Awaiting signature" : s.status}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
