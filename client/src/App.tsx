@@ -682,10 +682,16 @@ function AppContent() {
   }
 
   if (location.startsWith("/sign/contracts/")) {
+    // Public signing route — no auth gate, so it also had no error boundary:
+    // any render error or post-deploy chunk-load failure showed a BLANK page
+    // (this is the Documenso "status route renders blank" report). Wrap it so a
+    // failure shows a message / auto-reloads on a stale chunk and is reported.
     return (
-      <Suspense fallback={<PageLoader />}>
-        <ContractSigningPage />
-      </Suspense>
+      <AppErrorBoundary area="public_contract_signing">
+        <Suspense fallback={<PageLoader />}>
+          <ContractSigningPage />
+        </Suspense>
+      </AppErrorBoundary>
     );
   }
 

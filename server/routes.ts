@@ -14640,9 +14640,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // The WHERE clause repeats the pre-send-status check so the transition
       // is atomic: if two requests race past the read-time guard above, only
       // one UPDATE can actually match and flip the status.
+      //
+      // NOTE: Drizzle binds a JS array as a single parameter, so
+      // "status = ANY(of PRE_SEND_STATUSES)" renders as a row constructor
+      // ANY(($2, $3, $4)), which Postgres rejects (op ANY/ALL requires an
+      // array). That threw on every /send call and was swallowed by the catch
+      // below as a generic 500 "Failed to send proposal". Use IN (...) via
+      // sql.join to expand the list into individual bound params (same pattern
+      // as the proposal lifecycle filter above).
+      const preSendList = sql.join(PRE_SEND_STATUSES.map((s) => sql`${s}`), sql`, `);
       const transitionResult = await db.execute(sql`
         UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken}
-        WHERE id = ${req.params.id} AND status = ANY(${PRE_SEND_STATUSES})
+        WHERE id = ${req.params.id} AND status IN (${preSendList})
       `);
       if (!transitionResult.rowCount) {
         return res.json({ message: "Proposal was already sent", alreadySent: true, emailStatus: "skipped_already_sent" });
@@ -14700,7 +14709,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Nothing on the client consumes it from here — the dedicated
       // /share-token endpoint is the only supported way to retrieve it.
       res.json({ message: "Proposal marked as sent", emailStatus });
-    } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }
+    } catch (e: any) {
+      console.error(`[Proposals] /send failed for ${req.params.id}:`, e?.message || e);
+      res.status(500).json({ message: "Failed to send proposal" });
+    }
   });
 
   // POST /api/contractor-proposals/:id/resend-email — resend client notification without changing proposal status
@@ -30047,7 +30059,15 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                COUNT(cs.id) FILTER (WHERE cs.documenso_signing_url IS NOT NULL)::int AS local_signing_url_count
         FROM contractor_contracts c
         LEFT JOIN documenso_signature_requests dsr ON dsr.related_record_id = c.id AND dsr.company_id = c.company_id AND dsr.document_type IN ('contract','contractor_hub_contract')
-        LEFT JOIN contract_signers cs ON cs.contract_id = c.id AND cs.status NOT IN ('canceled','cancelled','replaced')
+        -- Only signers that could actually BE a Documenso recipient: an active
+        -- signer with a real email. An email-less signer row (the legacy "No
+        -- email" placeholder) can never receive a documenso_recipient_id, so
+        -- counting it made recipientIdsExist=false and produced a false
+        -- "recipient IDs missing / sync_recipients" repair flag on contracts
+        -- whose real recipients were fine.
+        LEFT JOIN contract_signers cs ON cs.contract_id = c.id
+          AND cs.status NOT IN ('canceled','cancelled','replaced')
+          AND cs.email IS NOT NULL AND btrim(cs.email) <> ''
         WHERE (${requestedContractId}::text IS NULL OR c.id = ${requestedContractId})
           AND (${companyId}::text IS NULL OR c.company_id = ${companyId})
         GROUP BY c.id, c.company_id, dsr.documenso_document_id, dsr.documenso_signing_url, dsr.documenso_recipient_ids, dsr.status, dsr.created_at

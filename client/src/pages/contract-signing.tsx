@@ -16,11 +16,16 @@ export default function ContractSigningPage() {
   const [location] = useLocation();
   const token = tokenFromPath(location);
   const [signature, setSignature] = useState("");
+  // A `/sign/contracts/<token>/status` URL is the redirect target after signing
+  // in Documenso. Hit the matching `/status` API variant so the server runs its
+  // Documenso status sync before returning — otherwise the page can show a
+  // stale "ready to sign" state (or, previously, nothing) right after signing.
+  const isStatusReturn = /\/sign\/contracts\/[^/]+\/status/.test(location);
 
   const contractQuery = useQuery<any>({
-    queryKey: ["/api/signing/contracts", token],
+    queryKey: ["/api/signing/contracts", token, isStatusReturn ? "status" : "view"],
     queryFn: async () => {
-      const res = await fetch(`/api/public/sign/contracts/${encodeURIComponent(token)}`);
+      const res = await fetch(`/api/public/sign/contracts/${encodeURIComponent(token)}${isStatusReturn ? "/status" : ""}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         const error = new Error(body.message || body.safeErrorReason || "Unable to load signing link") as Error & { state?: string; status?: number };
@@ -89,6 +94,28 @@ export default function ContractSigningPage() {
   if (["expired_or_canceled", "expired_link", "invalid_link", "missing_contract", "server_error"].includes(state)) {
     return <SigningShell><ErrorState title={state === "expired_link" ? "Signing link expired" : state === "invalid_link" || state === "missing_contract" ? "Invalid signing link" : state === "server_error" ? "Signing service unavailable" : "Signing link inactive"} message={message} /></SigningShell>;
   }
+  if (state === "documenso_unavailable" || state === "documenso_managed") {
+    return (
+      <SigningShell>
+        <Alert data-testid="public-contract-signing-status">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Signing continues in Documenso</AlertTitle>
+          <AlertDescription>
+            {message || "Please complete signing in the Documenso email you received. This page will reflect the result once Documenso confirms."}
+            {contract.documensoSigningUrl ? (
+              <span className="mt-3 block"><a className="underline" href={contract.documensoSigningUrl} rel="noopener noreferrer">Open the Documenso signing page</a></span>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      </SigningShell>
+    );
+  }
+  // Any post-signing return URL that didn't resolve to a terminal state above:
+  // show a neutral "confirming" message rather than the (misleading) signature
+  // form or — before the error boundary was added — a blank page.
+  if (isPostDocumensoReturn) {
+    return <SigningShell><Alert data-testid="public-contract-signing-status"><CheckCircle className="h-4 w-4" /><AlertTitle>Signature received</AlertTitle><AlertDescription>{message || "Signature received. We are confirming completion — you can close this page."}</AlertDescription></Alert></SigningShell>;
+  }
   if (contract.documensoSigningUrl) {
     return (
       <SigningShell>
@@ -107,6 +134,12 @@ export default function ContractSigningPage() {
         </div>
       </SigningShell>
     );
+  }
+  // Only offer the manual signature form for a genuinely signable state. Any
+  // other unrecognized state gets a neutral shell (never blank, never a
+  // misleading "sign here" form).
+  if (state !== "pending_signature") {
+    return <SigningShell><Alert data-testid="public-contract-signing-status"><FileSignature className="h-4 w-4" /><AlertTitle>{contract.title || "Contract signing"}</AlertTitle><AlertDescription>{message || "This signing link is not currently actionable. Please contact the sender if you expected to sign here."}</AlertDescription></Alert></SigningShell>;
   }
   return (
     <SigningShell>

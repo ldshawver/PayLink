@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 86,
+      "fileCount": 88,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -92,7 +92,9 @@
         "tests/urgent-production-fixes-static.test.ts",
         "tests/worker-created-confirmation.test.ts",
         "tests/worker-pay-rate-rules-wiring-static.test.ts",
-        "tests/worker-pay-rate-validation.test.ts"
+        "tests/worker-pay-rate-validation.test.ts",
+        "tests/documenso-recipient-merge.test.ts",
+        "tests/documenso-proposal-signing-repair-static.test.ts"
       ]
     },
     "db": {
@@ -101,7 +103,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 24,
+      "fileCount": 25,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
@@ -126,7 +128,8 @@
         "tests/contractor-access-requests-db.test.ts",
         "tests/vendor-portal-db.test.ts",
         "tests/tenant-licenses-db.test.ts",
-        "tests/app-doctor-revalidation-db.test.ts"
+        "tests/app-doctor-revalidation-db.test.ts",
+        "tests/documenso-repair-diagnostic-db.test.ts"
       ]
     },
     "e2e": {

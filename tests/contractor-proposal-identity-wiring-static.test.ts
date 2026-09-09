@@ -68,7 +68,13 @@ ok(
     const body = sendHandlerMatch[0];
     ok("every Portal: note construction in /send is passed through redactDiagnosticText", (body.match(/Portal: \$\{redactDiagnosticText\(portalUrl\)\}/g) || []).length === 4);
     ok("no raw, unredacted Portal: ${portalUrl} remains in /send", !/Portal: \$\{portalUrl\}/.test(body));
-    ok("the status transition is gated to pre-send statuses only (duplicate-send guard)", /WHERE id = \$\{req\.params\.id\} AND status = ANY\(\$\{PRE_SEND_STATUSES\}\)/.test(body));
+    // The transition is gated to pre-send statuses only (duplicate-send guard).
+    // Was `status = ANY(${PRE_SEND_STATUSES})` — which drizzle renders as an
+    // invalid row-constructor and threw on every /send. Now `status IN (...)`
+    // via sql.join (see tests/documenso-proposal-signing-repair-static.test.ts).
+    ok("the status transition is gated to pre-send statuses only (duplicate-send guard)",
+      /WHERE id = \$\{req\.params\.id\} AND status IN \(\$\{preSendList\}\)/.test(body)
+      && /const preSendList = sql\.join\(PRE_SEND_STATUSES\.map/.test(body));
     ok("a no-op transition (already sent) short-circuits before emailing/logging", /if \(!transitionResult\.rowCount\)/.test(body));
   }
 }
