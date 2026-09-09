@@ -170,6 +170,69 @@ export function toLocalDocumensoStatus(status: string | undefined | null): strin
   return mapDocumensoStatus(status);
 }
 
+export type DocumensoSigningLink = { id: string | null; name: string; email: string; signingUrl?: string; token?: string; status?: string };
+
+/**
+ * Build the caller-facing signingLinks list from two Documenso sources:
+ *   - `distributed` (POST /envelope/distribute) — authoritative for token + signingUrl
+ *   - `created`     (POST /envelope/create)     — authoritative for recipient `id`
+ *
+ * The recipient `id` is what MyPayLink persists (documenso_recipient_ids /
+ * contract_signers.documenso_recipient_id) and later uses to resync signer
+ * status and regenerate signing links. If `distribute` returns recipients
+ * WITHOUT ids (or returns none at all), we must not silently drop them — merge
+ * by email so every recipient keeps its id.
+ *
+ * Pure: no network, no side effects. Exported for direct testing.
+ */
+export function mergeDocumensoRecipientSources(
+  distributedRecipients: any[] | null | undefined,
+  createdRecipients: any[] | null | undefined,
+): DocumensoSigningLink[] {
+  const publicBase = getDocumensoBaseUrlInfo().publicBaseUrl;
+  const norm = (e: any) => String(e || "").trim().toLowerCase();
+  const idOf = (r: any) => (r?.id != null ? String(r.id) : r?.recipientId != null ? String(r.recipientId) : null);
+
+  const createdById = new Map<string, any>();
+  for (const r of createdRecipients || []) {
+    const key = norm(r?.email);
+    if (key) createdById.set(key, r);
+  }
+
+  const dist = Array.isArray(distributedRecipients) ? distributedRecipients : [];
+  const seen = new Set<string>();
+  const links: DocumensoSigningLink[] = dist.map((r: any) => {
+    const email = r?.email || "";
+    const fromCreate = createdById.get(norm(email));
+    seen.add(norm(email));
+    const token = r?.token ?? fromCreate?.token ?? undefined;
+    return {
+      id: idOf(r) ?? idOf(fromCreate),
+      name: r?.name || fromCreate?.name || "",
+      email,
+      signingUrl: r?.signingUrl || fromCreate?.signingUrl || (token ? `${publicBase}/sign/${token}` : undefined),
+      token,
+      status: r?.signingStatus || r?.status || fromCreate?.status,
+    };
+  });
+
+  // Recipients that `create` knew about but `distribute` didn't echo back.
+  for (const r of createdRecipients || []) {
+    if (seen.has(norm(r?.email))) continue;
+    const token = r?.token ?? undefined;
+    links.push({
+      id: idOf(r),
+      name: r?.name || "",
+      email: r?.email || "",
+      signingUrl: r?.signingUrl || (token ? `${publicBase}/sign/${token}` : undefined),
+      token,
+      status: r?.signingStatus || r?.status,
+    });
+  }
+
+  return links;
+}
+
 export async function createDocumensoDocument({
   title,
   pdfBuffer,
@@ -228,14 +291,14 @@ export async function createDocumensoDocument({
   return {
     documentId,
     status: mapDocumensoStatus(distributed?.status || distributed?.envelope?.status || "PENDING"),
-    signingLinks: (distributed?.recipients || []).map((r: any) => ({
-      id: r.id != null ? String(r.id) : null,
-      name: r.name || "",
-      email: r.email || "",
-      signingUrl: r.signingUrl || (r.token ? `${getDocumensoBaseUrlInfo().publicBaseUrl}/sign/${r.token}` : undefined),
-      token: r.token,
-      status: r.signingStatus || r.status,
-    })),
+    // `/envelope/distribute` normally returns `recipients` with id + token +
+    // signingUrl. When it doesn't (partial response, older Documenso), fall
+    // back to the recipients from `/envelope/create` — those always carry the
+    // recipient `id`, which is what the caller persists as
+    // documenso_signature_requests.documenso_recipient_ids and
+    // contract_signers.documenso_recipient_id. Losing the id here is what made
+    // later status/resync lookups fail ("recipient IDs missing").
+    signingLinks: mergeDocumensoRecipientSources(distributed?.recipients, created?.recipients),
     auditUrl: `${getBaseUrl()}/envelope/${documentId}/audit-log`,
     rawResponse: { created, distributed },
   };
