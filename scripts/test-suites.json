@@ -35,6 +35,7 @@
         "tests/vendor-expense-cut-check-boundary.test.ts",
         "tests/vendor-expense-cut-check-discoverability-static.test.ts",
         "tests/mypaylink-payment-usability-static.test.ts",
+        "tests/inline-trade-valuation-wiring-static.test.ts",
         "tests/identity-resolver.test.ts",
         "tests/identity-onboarding-wiring-static.test.ts",
         "tests/contractor-access-requests.test.ts",
