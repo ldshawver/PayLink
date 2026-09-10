@@ -266,8 +266,8 @@ ok(
     !routes.includes("recipient?.id || recipient?.token || recipient?.recipientId || recipient?.recipient_id"),
 );
 ok(
-  "syncDocumensoContractStatus can match signers by numeric recipient id OR normalized email",
-  /documenso_recipient_id = \$\{recipientId\}\s*\n\s*OR \$\{email\} IS NOT NULL AND lower\(trim\(email\)\) = \$\{email\}/.test(routes),
+  "syncDocumensoContractStatus can match signers by recipient id OR normalized email (params explicitly ::text cast so Postgres can infer their type)",
+  /\$\{recipientIdParam\}::text IS NOT NULL AND documenso_recipient_id = \$\{recipientIdParam\}::text\)\s*\n\s*OR \(\$\{emailParam\}::text IS NOT NULL AND lower\(trim\(email\)\) = \$\{emailParam\}::text\)/.test(routes),
 );
 
 ok(
