@@ -4068,8 +4068,12 @@ function InvoiceDetailPanel({
   }
 
   // Approved fair-market-value trade / barter valuations available to apply as a
-  // trade_credit payment on this invoice.
-  const { data: tradeComps = [] } = useQuery<any[]>({
+  // trade_credit payment on this invoice. The valuation's contractor must be the
+  // invoice's payee (contractor_trade_compensation.contractor_user_id ===
+  // contractor_invoices.contractor_id) — the same link the server enforces in
+  // checkTradeCreditApplicable — and it must not already be bound to a contractor
+  // or expense payment.
+  const { data: tradeComps = [], refetch: refetchTradeComps } = useQuery<any[]>({
     queryKey: ["/api/contractor-trade-compensation", invoice.companyId, invoice.contractorId, "payable"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-trade-compensation?companyId=${invoice.companyId || ""}`, { credentials: "include" });
@@ -4078,10 +4082,50 @@ function InvoiceDetailPanel({
       return (Array.isArray(rows) ? rows : []).filter((t: any) =>
         t.approvedAt && !t.contractorPaymentId && !t.expensePaymentId &&
         String(t.valuationMethod || "").toLowerCase() === "fair_market_value" &&
-        (!invoice.contractorId || t.contractorUserId === invoice.contractorId || t.contractorId === invoice.contractorId));
+        !!invoice.contractorId && t.contractorUserId === invoice.contractorId);
     },
     enabled: isAdmin && payMethod === "trade_credit",
   });
+
+  // Inline "record + approve a valuation" for this contractor, so a trade/barter
+  // payment never dead-ends on an empty dropdown. Scoped to this invoice's
+  // company + contractor; uses the existing create + approve routes (admin/manager
+  // only). /app/trade-compensation writes an unrelated table and is not an
+  // eligible source here.
+  const [showNewValuation, setShowNewValuation] = useState(false);
+  const [newVal, setNewVal] = useState({ itemName: "", amount: "", notes: "" });
+  const [creatingVal, setCreatingVal] = useState(false);
+  const newValValid = newVal.itemName.trim().length > 0 && parseFloat(newVal.amount) > 0;
+
+  async function handleCreateValuation() {
+    if (!newValValid || !invoice.companyId || !invoice.contractorId) return;
+    setCreatingVal(true);
+    try {
+      const idempotencyKey = crypto.randomUUID();
+      const res = await apiRequest("POST", "/api/contractor-trade-compensation", {
+        companyId: invoice.companyId,
+        contractorUserId: invoice.contractorId,
+        itemName: newVal.itemName.trim(),
+        description: newVal.notes.trim() || undefined,
+        quantity: "1",
+        unitValue: parseFloat(newVal.amount).toFixed(2),
+        valuationMethod: "fair_market_value",
+        idempotencyKey,
+      });
+      const created = await res.json();
+      await apiRequest("POST", `/api/contractor-trade-compensation/${created.id}/approve`, {});
+      await queryClient.invalidateQueries({ queryKey: ["/api/contractor-trade-compensation"] });
+      await refetchTradeComps();
+      setPayTradeCompId(created.id);
+      setShowNewValuation(false);
+      setNewVal({ itemName: "", amount: "", notes: "" });
+      toast({ title: "Valuation recorded and approved" });
+    } catch (e: any) {
+      toast({ title: String(e?.message || "Could not create valuation").replace(/^\d+:\s*/, ""), variant: "destructive" });
+    } finally {
+      setCreatingVal(false);
+    }
+  }
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -4390,22 +4434,63 @@ function InvoiceDetailPanel({
                       </div>
                     </div>
                     {payMethod === "trade_credit" && (
-                      <div>
-                        <Label className="text-xs">Approved trade / barter valuation (fair market value)</Label>
-                        <Select value={payTradeCompId} onValueChange={setPayTradeCompId}>
-                          <SelectTrigger data-testid="select-trade-compensation">
-                            <SelectValue placeholder={tradeComps.length ? "Select a valuation…" : "No approved valuation available"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {tradeComps.map((t: any) => (
-                              <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {fmt(t.totalValue)}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {!tradeComps.length && (
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Requires an approved fair-market-value valuation. <a href="/app/trade-compensation" className="text-primary underline">Create one in Trade Compensation.</a>
-                          </p>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Approved trade / barter valuation (fair market value)</Label>
+                          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs"
+                            onClick={() => setShowNewValuation(v => !v)} data-testid="btn-toggle-new-valuation">
+                            {showNewValuation ? "Cancel" : "+ New valuation"}
+                          </Button>
+                        </div>
+                        {!showNewValuation && (
+                          <>
+                            <Select value={payTradeCompId} onValueChange={setPayTradeCompId}>
+                              <SelectTrigger data-testid="select-trade-compensation">
+                                <SelectValue placeholder={tradeComps.length ? "Select a valuation…" : "No approved valuation yet"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {tradeComps.map((t: any) => (
+                                  <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {fmt(t.totalValue)}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {!tradeComps.length && (
+                              <p className="text-xs text-muted-foreground">
+                                No approved fair-market-value valuation for this contractor yet. Use <span className="font-medium">+ New valuation</span> to record and approve one for this payment.
+                              </p>
+                            )}
+                          </>
+                        )}
+                        {showNewValuation && (
+                          <div className="space-y-2 rounded-md border p-3" data-testid="panel-new-valuation">
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <Label className="text-xs">Item / goods or services</Label>
+                                <Input value={newVal.itemName} onChange={e => setNewVal(v => ({ ...v, itemName: e.target.value }))}
+                                  placeholder="e.g. Reclaimed lumber" data-testid="input-new-valuation-item" />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Fair market value ($)</Label>
+                                <Input type="number" step="0.01" value={newVal.amount}
+                                  onChange={e => setNewVal(v => ({ ...v, amount: e.target.value }))}
+                                  placeholder="0.00" data-testid="input-new-valuation-amount" />
+                              </div>
+                            </div>
+                            <div>
+                              <Label className="text-xs">How the value was determined (optional)</Label>
+                              <Input value={newVal.notes} onChange={e => setNewVal(v => ({ ...v, notes: e.target.value }))}
+                                placeholder="Appraisal, invoice, catalog price…" data-testid="input-new-valuation-notes" />
+                            </div>
+                            <Button type="button" size="sm" onClick={handleCreateValuation}
+                              disabled={creatingVal || !newValValid}
+                              data-testid="btn-create-valuation">
+                              {creatingVal ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                              Record &amp; approve valuation
+                            </Button>
+                            <p className="text-xs text-muted-foreground">
+                              Records an approved fair-market-value valuation for this contractor. It can be applied once — to a contractor payment or an expense payment, never both.
+                            </p>
+                          </div>
                         )}
                       </div>
                     )}

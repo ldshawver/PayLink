@@ -19,7 +19,6 @@ import {
   CreditCard, BarChart3, RefreshCw, Eye, Building2, Printer, BanknoteIcon,
   ArrowLeftRight, ExternalLink,
 } from "lucide-react";
-import { Link } from "wouter";
 
 const EXPENSE_POLICY = "All expenses must be approved by a supervisor or manager before they are incurred, or they will not be reimbursed.";
 const INVOICE_POLICY = "A proposal must be approved before the invoice will be accepted. No work should be performed by an independent contractor unless proposal has been approved.";
@@ -910,7 +909,7 @@ export default function ExpensesPage() {
   // THIS expense's payee — the valuation's contractor must be the worker who
   // submitted the expense. Unrelated same-company valuations are never offered,
   // and the server enforces the identical worker-id link on record-payment.
-  const { data: recordPayTradeComps = [] } = useQuery<any[]>({
+  const { data: recordPayTradeComps = [], refetch: refetchRecordPayTradeComps } = useQuery<any[]>({
     queryKey: ["/api/contractor-trade-compensation", recordPayTarget?.companyId, recordPayTarget?.submitterId, "expense-payable"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-trade-compensation?companyId=${recordPayTarget?.companyId || ""}`, { credentials: "include" });
@@ -924,6 +923,47 @@ export default function ExpensesPage() {
     },
     enabled: !!recordPayTarget && recordPayForm.method === "trade_credit",
   });
+
+  // Inline "record + approve a valuation" for this expense's submitter, so a
+  // trade/barter payment never dead-ends on an empty dropdown. Scoped to the
+  // expense's company + submitter; uses the existing create + approve routes
+  // (admin/manager only). Only offered when the expense has a worker submitter to
+  // anchor the valuation to — a free-text vendor name is not an auditable link.
+  const [showNewExpenseValuation, setShowNewExpenseValuation] = useState(false);
+  const [newExpenseVal, setNewExpenseVal] = useState({ itemName: "", amount: "", notes: "" });
+  const [creatingExpenseVal, setCreatingExpenseVal] = useState(false);
+  const newExpenseValValid = newExpenseVal.itemName.trim().length > 0 && parseFloat(newExpenseVal.amount) > 0;
+  const canInlineValuation = !!recordPayTarget?.companyId && !!recordPayTarget?.submitterId;
+
+  async function handleCreateExpenseValuation() {
+    if (!newExpenseValValid || !canInlineValuation) return;
+    setCreatingExpenseVal(true);
+    try {
+      const idempotencyKey = crypto.randomUUID();
+      const res = await apiRequest("POST", "/api/contractor-trade-compensation", {
+        companyId: recordPayTarget.companyId,
+        contractorUserId: recordPayTarget.submitterId,
+        itemName: newExpenseVal.itemName.trim(),
+        description: newExpenseVal.notes.trim() || undefined,
+        quantity: "1",
+        unitValue: parseFloat(newExpenseVal.amount).toFixed(2),
+        valuationMethod: "fair_market_value",
+        idempotencyKey,
+      });
+      const created = await res.json();
+      await apiRequest("POST", `/api/contractor-trade-compensation/${created.id}/approve`, {});
+      await queryClient.invalidateQueries({ queryKey: ["/api/contractor-trade-compensation"] });
+      await refetchRecordPayTradeComps();
+      setRecordPayForm(f => ({ ...f, tradeCompensationId: created.id }));
+      setShowNewExpenseValuation(false);
+      setNewExpenseVal({ itemName: "", amount: "", notes: "" });
+      toast({ title: "Valuation recorded and approved" });
+    } catch (e: any) {
+      toast({ title: "Could not create valuation", description: String(e?.message || "").replace(/^\d+:\s*/, ""), variant: "destructive" });
+    } finally {
+      setCreatingExpenseVal(false);
+    }
+  }
 
   const recordPaymentMutation = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: typeof recordPayForm }) => {
@@ -1607,20 +1647,66 @@ export default function ExpensesPage() {
                   data-testid="input-record-payment-amount" />
               </div>
               {recordPayForm.method === "trade_credit" && (
-                <div className="col-span-2 space-y-1">
-                  <Label>Approved trade / barter valuation (fair market value) <span className="text-destructive">*</span></Label>
-                  <Select value={recordPayForm.tradeCompensationId} onValueChange={v => setRecordPayForm(f => ({ ...f, tradeCompensationId: v }))}>
-                    <SelectTrigger data-testid="select-record-payment-trade">
-                      <SelectValue placeholder={recordPayTradeComps.length ? "Select a valuation…" : "No approved valuation available"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {recordPayTradeComps.map((t: any) => (
-                        <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {formatCurrency(t.totalValue)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {!recordPayTradeComps.length && (
-                    <p className="text-xs text-muted-foreground">Missing approved trade/barter valuation. Create one in <Link href="/app/trade-compensation" className="text-primary underline">Trade Compensation</Link>.</p>
+                <div className="col-span-2 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Approved trade / barter valuation (fair market value) <span className="text-destructive">*</span></Label>
+                    {canInlineValuation && (
+                      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs"
+                        onClick={() => setShowNewExpenseValuation(v => !v)} data-testid="btn-toggle-new-valuation">
+                        {showNewExpenseValuation ? "Cancel" : "+ New valuation"}
+                      </Button>
+                    )}
+                  </div>
+                  {!showNewExpenseValuation && (
+                    <>
+                      <Select value={recordPayForm.tradeCompensationId} onValueChange={v => setRecordPayForm(f => ({ ...f, tradeCompensationId: v }))}>
+                        <SelectTrigger data-testid="select-record-payment-trade">
+                          <SelectValue placeholder={recordPayTradeComps.length ? "Select a valuation…" : "No approved valuation yet"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {recordPayTradeComps.map((t: any) => (
+                            <SelectItem key={t.id} value={t.id}>{(t.itemName || "Trade item")} — {formatCurrency(t.totalValue)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {!recordPayTradeComps.length && (
+                        <p className="text-xs text-muted-foreground">
+                          {canInlineValuation
+                            ? <>No approved fair-market-value valuation for this expense's submitter yet. Use <span className="font-medium">+ New valuation</span> to record and approve one for this payment.</>
+                            : "This expense has no worker submitter to anchor a trade/barter valuation to. Pay it with another method."}
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {showNewExpenseValuation && canInlineValuation && (
+                    <div className="space-y-2 rounded-md border p-3" data-testid="panel-new-valuation">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Item / goods or services</Label>
+                          <Input value={newExpenseVal.itemName} onChange={e => setNewExpenseVal(v => ({ ...v, itemName: e.target.value }))}
+                            placeholder="e.g. Reclaimed lumber" data-testid="input-new-valuation-item" />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Fair market value ($)</Label>
+                          <Input type="number" step="0.01" value={newExpenseVal.amount}
+                            onChange={e => setNewExpenseVal(v => ({ ...v, amount: e.target.value }))}
+                            placeholder="0.00" data-testid="input-new-valuation-amount" />
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">How the value was determined (optional)</Label>
+                        <Input value={newExpenseVal.notes} onChange={e => setNewExpenseVal(v => ({ ...v, notes: e.target.value }))}
+                          placeholder="Appraisal, invoice, catalog price…" data-testid="input-new-valuation-notes" />
+                      </div>
+                      <Button type="button" size="sm" onClick={handleCreateExpenseValuation}
+                        disabled={creatingExpenseVal || !newExpenseValValid} data-testid="btn-create-valuation">
+                        {creatingExpenseVal ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                        Record &amp; approve valuation
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        Records an approved fair-market-value valuation for this worker. It can be applied once — to an expense payment or a contractor payment, never both.
+                      </p>
+                    </div>
                   )}
                 </div>
               )}

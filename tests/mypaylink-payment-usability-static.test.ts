@@ -113,7 +113,11 @@ ok("record-payment proves the valuation is auditable-linked to THIS expense (sub
 ok("the AP trade/barter picker only offers valuations tied to the expense's submitter worker",
   expenses.includes("const payeeWorkerId = recordPayTarget?.submitterId") &&
   expenses.includes("t.contractorUserId === payeeWorkerId") &&
-  expenses.includes("Missing approved trade/barter valuation"));
+  // empty state now offers inline record+approve scoped to the submitter, instead
+  // of linking to /app/trade-compensation (an unrelated table) — see
+  // tests/inline-trade-valuation-wiring-static.test.ts
+  expenses.includes("const canInlineValuation = !!recordPayTarget?.companyId && !!recordPayTarget?.submitterId;") &&
+  !expenses.includes('Create one in <Link href="/app/trade-compensation"'));
 ok("a linked contractor-invoice expense is NOT payable as a separate expense payment (no double count)",
   mod.includes('code: "EXPENSE_LINKED_TO_CONTRACTOR_INVOICE"'));
 
