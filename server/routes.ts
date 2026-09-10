@@ -16314,7 +16314,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const row = result.rows[0] as any;
       if (!row) return res.status(404).json({ state: "invalid_link", reason: "invalid_link", safeErrorReason: "invalid_link", message: "This signing link is invalid. Please contact the sender for a new link." });
       if (row.signing_token_expires_at && new Date(row.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ state: "expired_link", reason: "expired_link", safeErrorReason: "expired_link", message: "This signing link has expired. Please contact the sender for a new link." });
-      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, updated_at = NOW() WHERE id = ${row.signer_id} AND company_id = ${row.company_id}`).catch(() => {});
+      await db.execute(sql`UPDATE contract_signers SET status = CASE WHEN status IN ('pending','sent') THEN 'viewed' ELSE status END, viewed_at = COALESCE(viewed_at, NOW()), updated_at = NOW() WHERE id = ${row.signer_id} AND company_id = ${row.company_id}`).catch(() => {});
       if ((req.path || "").includes("/status") || row.documenso_document_id) {
         await syncDocumensoContractStatus(row.contract_id).catch((err) => console.warn("[Documenso] contract status sync failed", err?.message || err));
       }
@@ -17533,18 +17533,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // regress a signer that already reached a terminal state, and only advance along
       // pending/sent -> viewed -> signed (declined/canceled are terminal-negative and may
       // be applied from any non-signed state).
+      // NOTE: the match params are explicitly cast (::text / ::timestamptz). Without the casts
+      // a bare `${recipientId} IS NOT NULL` / `COALESCE(signed_at, ${signedAt})` leaves Postgres
+      // unable to infer the parameter type ("could not determine data type of parameter"), which
+      // made this whole per-signer sync a silent no-op (it was swallowed by the old .catch).
+      const recipientIdParam = recipientId != null ? String(recipientId) : null;
+      const emailParam = email || null;
+      const signedAtParam = signedAt != null ? new Date(signedAt as any).toISOString() : null;
+      const signingUrlParam = recipient?.signingUrl || recipient?.signing_url || null;
       const updateRes = await db.execute(sql`
         UPDATE contract_signers
         SET status = ${status},
-            signed_at = CASE WHEN ${status} = 'signed' THEN COALESCE(signed_at, ${signedAt}) ELSE signed_at END,
+            signed_at = CASE WHEN ${status} = 'signed' THEN COALESCE(signed_at, ${signedAtParam}::timestamptz) ELSE signed_at END,
             viewed_at = CASE WHEN ${status} IN ('viewed','signed') THEN COALESCE(viewed_at, NOW()) ELSE viewed_at END,
             declined_at = CASE WHEN ${status} = 'declined' THEN COALESCE(declined_at, NOW()) ELSE declined_at END,
-            documenso_recipient_id = COALESCE(documenso_recipient_id, ${recipientId}),
-            documenso_signing_url = COALESCE(documenso_signing_url, ${recipient?.signingUrl || recipient?.signing_url || null}),
+            documenso_recipient_id = COALESCE(documenso_recipient_id, ${recipientIdParam}::text),
+            documenso_signing_url = COALESCE(documenso_signing_url, ${signingUrlParam}::text),
             updated_at = NOW()
         WHERE contract_id = ${contractId}
-          AND (${recipientId} IS NOT NULL AND documenso_recipient_id = ${recipientId}
-               OR ${email} IS NOT NULL AND lower(trim(email)) = ${email})
+          AND (
+            (${recipientIdParam}::text IS NOT NULL AND documenso_recipient_id = ${recipientIdParam}::text)
+            OR (${emailParam}::text IS NOT NULL AND lower(trim(email)) = ${emailParam}::text)
+          )
           AND status IS DISTINCT FROM ${status}
           AND status NOT IN ('signed','declined','canceled','cancelled','voided','replaced','expired')
           AND (
@@ -17553,7 +17563,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             OR (${status} = 'sent' AND status IN ('pending','unsent','draft'))
           )
         RETURNING id
-      `).catch(() => ({ rows: [] } as any));
+      `).catch((err) => { console.warn("[Documenso] per-signer sync update failed", err?.message || err); return { rows: [] } as any; });
       signersUpdated += Number((updateRes as any).rows?.length || 0);
     }
     // Only "real" signers count toward completion: a required signer that either has an
