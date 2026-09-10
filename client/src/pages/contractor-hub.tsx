@@ -4792,6 +4792,16 @@ function ContractDetailPanel({
     onError: (e: any) => toast({ title: e?.message || "Failed to send reminder", variant: "destructive" }),
   });
 
+  const reconcileSigningMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/contractor-contracts/${contract.id}/reconcile-signing`, {})).json(),
+    onSuccess: (data: any) => {
+      refetch();
+      const st = data?.syncResult?.status || data?.contract?.status;
+      toast({ title: "Signing status refreshed", description: st ? `Contract status: ${st.replace(/_/g, " ")}` : "Pulled the latest signer status from Documenso." });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to refresh signing status", variant: "destructive" }),
+  });
+
   const saveReminderMutation = useMutation({
     mutationFn: async (body: any) => (await apiRequest("PATCH", `/api/contractor-contracts/${contract.id}/signing-reminders`, body)).json(),
     onSuccess: () => toast({ title: "Reminder settings saved" }),
@@ -5111,6 +5121,11 @@ function ContractDetailPanel({
                   <Badge variant="outline" data-testid="badge-documenso-status">{contract.status}</Badge>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  {usesDocumenso && !terminalSigningStatuses.includes(contract.status) && (
+                    <Button size="sm" variant="outline" onClick={() => reconcileSigningMutation.mutate()} disabled={reconcileSigningMutation.isPending} data-testid="btn-refresh-signing-status">
+                      {reconcileSigningMutation.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1" />} Refresh status
+                    </Button>
+                  )}
                   {signers.length <= 1 && (
                     <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(contractLevelSigningUrl || window.location.href)} disabled={!contractLevelSigningUrl} data-testid="btn-copy-signing-link"><Copy className="h-3.5 w-3.5 mr-1" /> Copy signing link</Button>
                   )}
