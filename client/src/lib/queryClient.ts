@@ -39,6 +39,15 @@ export function normalizeApiError(error: unknown): Error {
   return error instanceof Error ? error : new Error("Unexpected request error");
 }
 
+// Concierge Launch Option A, blocker 3 — double-submit CSRF cookie. The server
+// issues a readable `csrf_token` cookie once a session exists; every mutating
+// request through apiRequest() echoes it back as a header so the server can
+// verify the two match.
+function getCsrfToken(): string | undefined {
+  const match = document.cookie.match(/(?:^|; )csrf_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const message = await readApiErrorMessage(res);
@@ -52,9 +61,14 @@ export async function apiRequest(
   data?: unknown | undefined,
 ): Promise<Response> {
   try {
+    const csrfToken = getCsrfToken();
+    const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
+    if (csrfToken && method.toUpperCase() !== "GET") {
+      headers["x-csrf-token"] = csrfToken;
+    }
     const res = await fetch(resolveUrl(url), {
       method,
-      headers: data ? { "Content-Type": "application/json" } : {},
+      headers,
       body: data ? JSON.stringify(data) : undefined,
       credentials: "include",
       cache: "no-store",

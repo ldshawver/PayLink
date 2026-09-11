@@ -10,6 +10,7 @@ import { getAppEnvironment, getAppVersion, getHealthPayload } from "./app-metada
 import fs from "fs";
 import { startWorkerOrchestrator, shutdownOrchestrator } from "./workers/orchestrator";
 import { requestDiagnostics, registerDiagnosticsRoutes, globalErrorHandler } from "./diagnostics";
+import { issueCsrfToken } from "./security-middleware";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -283,6 +284,10 @@ app.use((req, res, next) => {
     next();
   });
 });
+
+// Concierge Launch Option A, blocker 3 — issue the CSRF double-submit cookie
+// for every session-authenticated request (no-op once a token exists).
+app.use(issueCsrfToken);
 
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");

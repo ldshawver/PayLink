@@ -12,6 +12,7 @@ import path from "path";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
+import { createRateLimiter, requireCsrfToken } from "./security-middleware";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany } from "./tenant-context";
 import {
   resolveCompanyLicense,
@@ -510,6 +511,30 @@ export function expandRoleForGuard(role: string): string[] {
   }
   return [role];
 }
+
+// Concierge Launch Option A, blocker 3 — rate limits for the unauthenticated
+// account/session-creation surfaces (no CSRF token exists pre-session, so
+// throttling by IP is the mitigation for these).
+const loginRateLimit = createRateLimiter("auth-login", {
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: "Too many login attempts. Please wait 15 minutes and try again.",
+});
+const trialSignupRateLimit = createRateLimiter("trial-signup", {
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: "Too many signup attempts from this network. Please try again later.",
+});
+const demoProvisionRateLimit = createRateLimiter("demo-provision", {
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: "Too many demo requests from this network. Please try again later.",
+});
+const billingActivateRateLimit = createRateLimiter("billing-activate", {
+  windowMs: 60 * 1000,
+  max: 10,
+  message: "Too many billing requests. Please wait a moment and try again.",
+});
 
 function requireRole(...roles: string[]) {
   return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
@@ -1838,7 +1863,7 @@ export async function registerRoutes(
   app.use("/api/marketplace", requireAuth, marketplaceGate);
   app.use("/api/shift-offers", requireAuth, marketplaceGate);
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginRateLimit, async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {
@@ -26188,7 +26213,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Trial Signup (public, no auth) ─────────────────────────────────────
-  app.post("/api/trial/signup", async (req, res) => {
+  app.post("/api/trial/signup", trialSignupRateLimit, async (req, res) => {
     try {
       const { companyName, firstName, lastName, email, phone, jobTitle, employeeCount, termsAccepted, password } = req.body;
       if (!companyName || !firstName || !lastName || !email) {
@@ -26651,7 +26676,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Demo Provision (public, creates fully seeded demo tenant) ─────────────
-  app.post("/api/demo/provision", async (req, res) => {
+  app.post("/api/demo/provision", demoProvisionRateLimit, async (req, res) => {
     try {
       const demoExpiration = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const suffix = crypto.randomBytes(4).toString("hex");
@@ -27069,7 +27094,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Subscription / Billing Status Update ───────────────────────────────
-  app.post("/api/billing/activate", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post("/api/billing/activate", requireAuth, requireRole("admin"), billingActivateRateLimit, requireCsrfToken, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
