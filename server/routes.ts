@@ -12,7 +12,7 @@ import path from "path";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
-import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany } from "./tenant-context";
+import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany } from "./tenant-context";
 import {
   resolveCompanyLicense,
   listCompanyLicenses,
@@ -808,6 +808,7 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
       const gracePeriodEnd = company.grace_period_end ? new Date(company.grace_period_end) : null;
       if (gracePeriodEnd && new Date() > gracePeriodEnd) {
         await db.execute(sql`UPDATE companies SET subscription_status = 'suspended', billing_active = FALSE WHERE id = ${user.companyId}`);
+        await mirrorTenantStatusFromCompany(user.companyId, "suspended");
         return res.status(403).json({
           message: "Your grace period has expired. Account is now suspended. Please resolve billing to restore access.",
           reason: "tenant_suspended",
@@ -820,6 +821,7 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
       const trialEnd = new Date(company.trial_end);
       if (new Date() > trialEnd) {
         await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
+        await mirrorTenantStatusFromCompany(user.companyId, "trial_expired");
         return res.status(403).json({ message: "Your trial has expired. Please upgrade to continue." });
       }
     }
@@ -26330,6 +26332,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (status === "trial_active" && trialEnd && now > trialEnd) {
         status = "trial_expired";
         await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
+        await mirrorTenantStatusFromCompany(user.companyId, "trial_expired");
       }
 
       const trialSignup = await db.execute(sql`SELECT first_name, last_name FROM trial_signups WHERE company_id = ${user.companyId} LIMIT 1`);
@@ -27081,6 +27084,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         UPDATE trial_signups SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
         WHERE company_id = ${user.companyId}
       `);
+
+      await mirrorTenantStatusFromCompany(user.companyId, "active_paid");
 
       await db.execute(sql`
         INSERT INTO analytics_events (event_name, user_id, company_id, page_source)
@@ -36178,6 +36183,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
               gate_override_reason = ${reason || null}
           WHERE id = ${companyId}
         `);
+        await mirrorTenantStatusFromCompany(companyId, subscriptionStatus);
       } else {
         result = await db.execute(sql`
           UPDATE companies SET gate_override_reason = ${reason || null} WHERE id = ${companyId}
