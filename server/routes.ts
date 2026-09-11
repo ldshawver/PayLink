@@ -1645,7 +1645,7 @@ export async function registerRoutes(
   // mount-relative — so entries must NOT carry the `/api` prefix (`/webhooks/documenso`,
   // not `/api/webhooks/documenso`). The stray `/api/...` form here previously meant the
   // Documenso webhook was silently rejected with 401 before its handler ran.
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/webhooks/documenso", "/portal/", "/time-clock/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/webhooks/documenso", "/portal/", "/time-clock/"];
   // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
   // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
   // auth, analytics, and webhook paths listed in publicWritePaths.
@@ -26633,74 +26633,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  // ── Demo Login (public, creates temp demo session) ─────────────────────
-  app.post("/api/demo/login", async (req, res) => {
-    try {
-      let demoCompanyRows = await db.execute(sql`SELECT id FROM companies WHERE is_demo = TRUE LIMIT 1`);
-      let demoCompanyId: string;
-
-      if (demoCompanyRows.rows.length === 0) {
-        const result = await db.execute(sql`
-          INSERT INTO companies (name, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold)
-          VALUES ('Demo Company', 'active_paid', 'starter', TRUE, 'biweekly', 40)
-          RETURNING id
-        `);
-        demoCompanyId = result.rows[0].id as string;
-
-        const demoPass = await bcrypt.hash("demo123", 10);
-        await db.execute(sql`
-          INSERT INTO users (username, password, role, company_id)
-          VALUES ('demo_admin', ${demoPass}, 'admin', ${demoCompanyId})
-          ON CONFLICT (username) DO NOTHING
-        `);
-
-        const names = [
-          { first: "Sarah", last: "Johnson", type: "employee" },
-          { first: "Michael", last: "Chen", type: "employee" },
-          { first: "Emily", last: "Rodriguez", type: "employee" },
-          { first: "James", last: "Wilson", type: "employee" },
-          { first: "Lisa", last: "Thompson", type: "contractor" },
-        ];
-        for (const n of names) {
-          await db.execute(sql`
-            INSERT INTO workers (company_id, first_name, last_name, worker_type, status, hire_date, hourly_rate, worker_group)
-            VALUES (${demoCompanyId}, ${n.first}, ${n.last}, ${n.type}, 'active', '2024-01-15', '25.00', ${n.type === 'contractor' ? 'hourly_contractor' : 'hourly_employee'})
-          `);
-        }
-      } else {
-        demoCompanyId = demoCompanyRows.rows[0].id as string;
-      }
-
-      const demoUserRows = await db.execute(sql`SELECT id, username, role FROM users WHERE username = 'demo_admin' LIMIT 1`);
-      if (demoUserRows.rows.length === 0) {
-        return res.status(500).json({ message: "Demo environment not ready" });
-      }
-
-      const demoUser = demoUserRows.rows[0] as any;
-      req.session.userId = demoUser.id;
-      req.session.role = demoUser.role;
-      req.session.isDemo = true;
-
-      await db.execute(sql`
-        INSERT INTO analytics_events (event_name, page_source, ip_address)
-        VALUES ('demo_started', 'demo', ${req.ip || null})
-      `);
-
-      req.session.save((saveErr) => {
-        if (saveErr) {
-          console.error("Demo login session save error:", saveErr);
-          return res.status(500).json({ message: "Session save failed" });
-        }
-        res.json({
-          message: "Demo session started",
-          user: { id: demoUser.id, username: demoUser.username, role: demoUser.role, companyId: demoCompanyId },
-          isDemo: true,
-        });
-      });
-    } catch (e) {
-      console.error("Demo login error:", e);
-      res.status(500).json({ message: safeErrorMessage(e, "Failed to start demo") });
-    }
+  // ── Demo Login — RETIRED ────────────────────────────────────────────────
+  // This was a shared singleton demo (one `is_demo=TRUE` company, hardcoded
+  // demo_admin/demo123 credentials) reused across every visitor — unsafe for
+  // a multi-tenant launch (any visitor could see any other visitor's demo
+  // edits). Replaced by POST /api/demo/provision, which creates an isolated,
+  // expiring, per-visitor demo tenant. Kept as a 410 (not removed outright)
+  // so old bookmarked/cached client bundles get an unambiguous "this is gone"
+  // signal instead of a generic 404.
+  app.post("/api/demo/login", (_req, res) => {
+    res.status(410).json({
+      message: "This demo entry point has been retired. Use /api/demo/provision for an isolated demo session.",
+    });
   });
 
   // ── Demo Provision (public, creates fully seeded demo tenant) ─────────────
