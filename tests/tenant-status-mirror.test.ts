@@ -44,7 +44,7 @@ console.log("\nWiring — every raw `SET subscription_status` write site also mi
     { label: "subscription-gate: grace period expired -> suspended", marker: "SET subscription_status = 'suspended', billing_active = FALSE WHERE id = ${user.companyId}" },
     { label: "subscription-gate: trial expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n        return res.status(403)" },
     { label: "trial/status auto-transition to trial_expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n      }" },
-    { label: "billing/activate -> active_paid", marker: "await mirrorTenantStatusFromCompany(user.companyId, \"active_paid\");" },
+    { label: "billing/activate -> active_paid", marker: "await mirrorTenantStatusFromCompany(companyId, \"active_paid\");" },
     { label: "platform gate-override -> dynamic status", marker: "await mirrorTenantStatusFromCompany(companyId, subscriptionStatus);" },
   ];
   for (const site of routesWriteSites) {

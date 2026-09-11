@@ -22,7 +22,7 @@ ok("POST /api/trial/signup is rate-limited", /app\.post\("\/api\/trial\/signup",
 ok("POST /api/demo/provision is rate-limited", /app\.post\("\/api\/demo\/provision",\s*demoProvisionRateLimit/.test(routes));
 ok(
   "POST /api/billing/activate is rate-limited and CSRF-protected",
-  /app\.post\("\/api\/billing\/activate",\s*requireAuth,\s*requireRole\("admin"\),\s*billingActivateRateLimit,\s*requireCsrfToken/.test(routes)
+  /app\.post\("\/api\/billing\/activate",\s*requireAuth,\s*requirePlatformAdminRole\(\),\s*billingActivateRateLimit,\s*requireCsrfToken/.test(routes)
 );
 
 ok("server/index.ts issues the CSRF cookie on every request (post-session)", /app\.use\(issueCsrfToken\)/.test(index));
