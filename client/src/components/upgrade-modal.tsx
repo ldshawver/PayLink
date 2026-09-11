@@ -1,22 +1,19 @@
 import { useState, useEffect } from "react";
 import { useTrial } from "@/hooks/use-trial";
-import { useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Check, CreditCard, Shield, Zap } from "lucide-react";
+import { Check, Mail, Shield, Zap } from "lucide-react";
 
+// Concierge Launch Option A, blocker 2 — this used to have a self-serve
+// "Activate Subscription" button that called POST /api/billing/activate
+// directly and instantly granted active_paid status with zero payment
+// collected anywhere in the flow. Billing activation is now a platform-staff
+// action taken after payment is confirmed out-of-band (Concierge Launch has
+// no self-serve Stripe checkout), so this modal's job is just to route the
+// tenant to a human, not to flip their own subscription status.
 export function UpgradeModal() {
   const [open, setOpen] = useState(false);
-  const { isTrialExpired, isRestricted } = useTrial();
-  const { toast } = useToast();
+  const { isTrialExpired } = useTrial();
 
   useEffect(() => {
     const handler = () => setOpen(true);
@@ -30,20 +27,6 @@ export function UpgradeModal() {
       return () => clearTimeout(timer);
     }
   }, [isTrialExpired]);
-
-  const activateMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("POST", "/api/billing/activate", {});
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trial/status"] });
-      setOpen(false);
-      toast({ title: "Subscription activated", description: "You now have full access to PayLink." });
-    },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to activate subscription. Please try again.", variant: "destructive" });
-    },
-  });
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -92,14 +75,11 @@ export function UpgradeModal() {
           </div>
 
           <div className="flex gap-3">
-            <Button
-              className="flex-1 bg-gradient-to-r from-teal-600 to-blue-600 hover:opacity-90"
-              onClick={() => activateMutation.mutate()}
-              disabled={activateMutation.isPending}
-              data-testid="button-activate-subscription"
-            >
-              <CreditCard className="h-4 w-4 mr-2" />
-              {activateMutation.isPending ? "Activating..." : "Activate Subscription"}
+            <Button asChild className="flex-1 bg-gradient-to-r from-teal-600 to-blue-600 hover:opacity-90">
+              <a href="mailto:support@mypaylink.app?subject=Activate%20my%20PayLink%20subscription" data-testid="button-activate-subscription">
+                <Mail className="h-4 w-4 mr-2" />
+                Contact Us to Activate
+              </a>
             </Button>
             {!isTrialExpired && (
               <Button variant="outline" onClick={() => setOpen(false)} data-testid="button-close-upgrade">

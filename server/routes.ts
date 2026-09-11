@@ -27094,28 +27094,61 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Subscription / Billing Status Update ───────────────────────────────
-  app.post("/api/billing/activate", requireAuth, requireRole("admin"), billingActivateRateLimit, requireCsrfToken, async (req, res) => {
+  // Concierge Launch Option A, blocker 2 — this used to be requireAuth +
+  // requireRole("admin"), which any trial company's own tenant admin
+  // satisfies (expandRoleForGuard only special-cases platform roles, it does
+  // not exclude the plain "admin" role from tenant self-service). Combined
+  // with the client shipping a self-serve "Activate Subscription" button that
+  // called this with zero payment collection anywhere in the flow, any trial
+  // admin could grant their own company a permanent, free active_paid status.
+  // requirePlatformAdminRole() is the existing helper built for exactly this
+  // class of bug (see its docstring above, which already names
+  // "billing/subscription status" as a canonical use case) — billing
+  // activation is now a platform-staff action taken after payment is
+  // confirmed out-of-band, matching the Concierge Launch model (no self-serve
+  // Stripe checkout exists or is in scope here). The caller is platform
+  // staff, not the tenant, so the target company comes from the request body.
+  app.post("/api/billing/activate", requireAuth, requirePlatformAdminRole(), billingActivateRateLimit, requireCsrfToken, async (req, res) => {
     try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+
+      const { companyId, note } = req.body as { companyId?: string; note?: string };
+      if (!companyId || typeof companyId !== "string") {
+        return res.status(400).json({ message: "companyId is required" });
+      }
+
+      const companyRows = await db.execute(sql`SELECT id, subscription_status FROM companies WHERE id = ${companyId} LIMIT 1`);
+      const company = companyRows.rows[0] as { id: string; subscription_status: string } | undefined;
+      if (!company) return res.status(404).json({ message: "Company not found" });
 
       await db.execute(sql`
         UPDATE companies
         SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
-        WHERE id = ${user.companyId}
+        WHERE id = ${companyId}
       `);
 
       await db.execute(sql`
         UPDATE trial_signups SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
-        WHERE company_id = ${user.companyId}
+        WHERE company_id = ${companyId}
       `);
 
-      await mirrorTenantStatusFromCompany(user.companyId, "active_paid");
+      await mirrorTenantStatusFromCompany(companyId, "active_paid");
 
       await db.execute(sql`
         INSERT INTO analytics_events (event_name, user_id, company_id, page_source)
-        VALUES ('subscription_activated', ${user.id}, ${user.companyId}, 'billing')
+        VALUES ('subscription_activated', ${actor.id}, ${companyId}, 'billing')
       `);
+
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetResource: "companies.subscription_status",
+        changeType: "billing_activated",
+        beforeValue: company.subscription_status,
+        afterValue: "active_paid",
+        note: note || null,
+        companyId,
+      });
 
       res.json({ message: "Subscription activated", subscriptionStatus: "active_paid" });
     } catch (e) {

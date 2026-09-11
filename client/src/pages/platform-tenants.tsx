@@ -336,6 +336,20 @@ function TenantDetailPanel({
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Concierge Launch Option A, blocker 2 — billing activation is now a
+  // platform-staff action (POST /api/billing/activate requires
+  // requirePlatformAdminRole()), taken after payment is confirmed
+  // out-of-band. This is the staff-facing side of that flow; the tenant-facing
+  // self-serve button was removed from billing.tsx / upgrade-modal.tsx.
+  const activateBilling = useMutation({
+    mutationFn: (companyId: string) => apiRequest("POST", "/api/billing/activate", { companyId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId] });
+      toast({ title: "Billing activated for company" });
+    },
+    onError: (e: any) => toast({ title: "Failed to activate billing", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading) {
     return (
       <div className="p-6 flex items-center gap-3 text-muted-foreground">
@@ -431,14 +445,24 @@ function TenantDetailPanel({
                     )}
                   </div>
                   {isSuperAdmin && (
-                    <button
-                      onClick={() => removeCompany.mutate(c.id)}
-                      disabled={removeCompany.isPending}
-                      className="text-xs text-muted-foreground hover:text-destructive transition-colors shrink-0 ml-2"
-                      data-testid={`button-remove-company-${c.id}`}
-                    >
-                      Remove
-                    </button>
+                    <div className="flex items-center gap-3 shrink-0 ml-2">
+                      <button
+                        onClick={() => activateBilling.mutate(c.id)}
+                        disabled={activateBilling.isPending}
+                        className="text-xs text-teal-600 hover:text-teal-800 transition-colors"
+                        data-testid={`button-activate-billing-${c.id}`}
+                      >
+                        Activate Billing
+                      </button>
+                      <button
+                        onClick={() => removeCompany.mutate(c.id)}
+                        disabled={removeCompany.isPending}
+                        className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+                        data-testid={`button-remove-company-${c.id}`}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}

@@ -1,15 +1,12 @@
-import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTrial } from "@/hooks/use-trial";
-import { useAuth } from "@/hooks/use-auth";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
-  CreditCard, Zap, Users, DollarSign, Calendar, CheckCircle,
+  Mail, Zap, Users, Calendar, CheckCircle,
   AlertTriangle, Clock, Shield, TrendingUp, Loader2,
 } from "lucide-react";
 
@@ -26,39 +23,28 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={c.variant} data-testid="badge-subscription-status">{c.label}</Badge>;
 }
 
+// Concierge Launch Option A, blocker 2 — this page used to have a self-serve
+// "Activate Subscription" button that called POST /api/billing/activate
+// directly and instantly granted active_paid status with zero payment
+// collected anywhere in the flow. Billing activation is now a platform-staff
+// action taken after payment is confirmed out-of-band (Concierge Launch has
+// no self-serve Stripe checkout), so this page routes the tenant to a human
+// instead of flipping their own subscription status.
 export default function BillingPage() {
   const { trialStatus, isTrial, isTrialExpired, daysRemaining, subscriptionStatus } = useTrial();
-  const { user } = useAuth();
-  const { toast } = useToast();
 
   const { data: billingData, isLoading: billingLoading } = useQuery<any>({
     queryKey: ["/api/billing/summary"],
     staleTime: 30000,
   });
 
-  const activateMutation = useMutation({
-    mutationFn: async () => {
-      fetch("/api/analytics/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventName: "billing_setup_started", pageSource: "billing" }),
-      }).catch(() => {});
-      await apiRequest("POST", "/api/billing/activate", {});
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trial/status"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/billing/summary"] });
-      toast({ title: "Subscription Activated", description: "You now have full access to PayLink." });
-      fetch("/api/analytics/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventName: "billing_setup_completed", pageSource: "billing" }),
-      }).catch(() => {});
-    },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to activate subscription.", variant: "destructive" });
-    },
-  });
+  function trackContactClick() {
+    fetch("/api/analytics/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventName: "billing_setup_started", pageSource: "billing" }),
+    }).catch(() => {});
+  }
 
   useEffect(() => {
     fetch("/api/analytics/event", {
@@ -94,14 +80,15 @@ export default function BillingPage() {
                 </p>
               </div>
               <Button
+                asChild
                 size="lg"
                 className="bg-gradient-to-r from-teal-600 to-blue-600 hover:opacity-90 shrink-0"
-                onClick={() => activateMutation.mutate()}
-                disabled={activateMutation.isPending}
-                data-testid="button-activate-expired"
+                onClick={trackContactClick}
               >
-                <CreditCard className="h-4 w-4 mr-2" />
-                {activateMutation.isPending ? "Activating..." : "Activate Subscription"}
+                <a href="mailto:support@mypaylink.app?subject=Activate%20my%20PayLink%20subscription" data-testid="button-activate-expired">
+                  <Mail className="h-4 w-4 mr-2" />
+                  Contact Us to Activate
+                </a>
               </Button>
             </div>
           </CardContent>
@@ -257,14 +244,15 @@ export default function BillingPage() {
                 : "Subscribe now to ensure uninterrupted access when your trial ends. Your data is safe either way."}
             </p>
             <Button
+              asChild
               size="lg"
               className="bg-gradient-to-r from-teal-600 to-blue-600 hover:opacity-90"
-              onClick={() => activateMutation.mutate()}
-              disabled={activateMutation.isPending}
-              data-testid="button-activate-subscription"
+              onClick={trackContactClick}
             >
-              <CreditCard className="h-4 w-4 mr-2" />
-              {activateMutation.isPending ? "Activating..." : "Activate Subscription — $" + projectedMonthly + "/mo"}
+              <a href="mailto:support@mypaylink.app?subject=Activate%20my%20PayLink%20subscription" data-testid="button-activate-subscription">
+                <Mail className="h-4 w-4 mr-2" />
+                {"Contact Us to Activate — $" + projectedMonthly + "/mo"}
+              </a>
             </Button>
             <p className="text-xs text-muted-foreground">
               Cancel anytime. No long-term commitment required.
