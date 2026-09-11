@@ -359,6 +359,14 @@ export const users = pgTable("users", {
   inviteStatus: text("invite_status").default("none"), // none | invited | active | suspended
   lastLoginAt: timestamp("last_login_at"),
   emailVerifiedAt: timestamp("email_verified_at"),
+  /**
+   * Concierge Launch Option A, blocker 5. Set TRUE only by the trial-signup
+   * path; defaults FALSE so every pre-existing and every other
+   * account-creation path (invites, provisioning, etc.) is unaffected — the
+   * login-time verification gate only ever applies to accounts that opted
+   * into it at creation.
+   */
+  emailVerificationRequired: boolean("email_verification_required").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

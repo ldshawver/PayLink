@@ -57,6 +57,7 @@ const LicenseRequestsPage = lazy(() => import("@/pages/license-requests"));
 const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
 const LoginPage = lazy(() => import("@/pages/login"));
 const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
+const VerifyEmailPage = lazy(() => import("@/pages/verify-email"));
 const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
 const ContractorAccessRequestsPage = lazy(() => import("@/pages/contractor-access-requests"));
 const VendorManagementPage = lazy(() => import("@/pages/vendor-management"));
@@ -730,6 +731,16 @@ function AppContent() {
     return (
       <Suspense fallback={<PageLoader />}>
         <AcceptInvitePage />
+      </Suspense>
+    );
+  }
+
+  // Public email verification (Concierge Launch Option A, blocker 5). No
+  // session yet; the raw token in the query string is the credential.
+  if (location === "/verify-email") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <VerifyEmailPage />
       </Suspense>
     );
   }
