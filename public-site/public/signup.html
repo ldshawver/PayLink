@@ -104,20 +104,10 @@
 
           <div id="signupSuccess" class="signup-success" style="display:none;" data-testid="text-signup-success">
             <div class="success-icon">✓</div>
-            <h2>Welcome to PayLink!</h2>
-            <p>Your 30-day free trial is ready. Here are your login credentials:</p>
-            <div class="credentials-box">
-              <div class="credential-row">
-                <span class="credential-label">Username:</span>
-                <strong id="credUsername" data-testid="text-username"></strong>
-              </div>
-              <div class="credential-row" id="credPasswordRow">
-                <span class="credential-label">Password:</span>
-                <strong id="credPassword" data-testid="text-password"></strong>
-              </div>
-            </div>
-            <p class="credential-warning">Save these credentials — you'll need them to log in. You can change your password after logging in.</p>
-            <a href="/app.html?route=%2Flogin" class="btn-primary btn-lg" data-testid="link-login-now">Log In Now →</a>
+            <h2>Check your email</h2>
+            <p data-testid="text-verify-email-notice">Your 30-day free trial is ready. We've sent a verification link to <strong id="credEmail" data-testid="text-signup-email"></strong> — click it to verify your address and sign in.</p>
+            <p class="credential-warning">Didn't get it? Check your spam folder, or use the resend link on the verification page.</p>
+            <a href="/app.html?route=%2Flogin" class="btn-primary btn-lg" data-testid="link-login-now">Go to Sign In →</a>
           </div>
         </div>
 
@@ -247,37 +237,13 @@
             body: JSON.stringify({ eventName: 'trial_started', pageSource: 'signup' })
           }).catch(function() {});
 
-          var signupBody = result.body;
-          var loginPassword = formPassword || signupBody.temporaryPassword;
-
-          submitBtn.textContent = 'Logging you in\u2026';
-
-          return fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ username: signupBody.username, password: loginPassword })
-          })
-          .then(function(loginRes) {
-            return loginRes.json().then(function(loginBody) {
-              return { loginOk: loginRes.ok, loginBody: loginBody, signupBody: signupBody, loginPassword: loginPassword };
-            });
-          });
-        })
-        .then(function(r) {
-          if (r.loginOk) {
-            window.location.href = '/app/onboarding';
-          } else {
-            form.style.display = 'none';
-            document.getElementById('credUsername').textContent = r.signupBody.username;
-            var pwRow = document.getElementById('credPasswordRow');
-            if (formPassword) {
-              pwRow.style.display = 'none';
-            } else {
-              document.getElementById('credPassword').textContent = r.loginPassword;
-            }
-            successDiv.style.display = 'block';
-          }
+          // Concierge Launch Option A, blocker 5 \u2014 the account exists but is
+          // unverified; there is no password to log in with here (the
+          // response no longer echoes one back), so this just points the
+          // user at their inbox instead of auto-logging them in.
+          form.style.display = 'none';
+          document.getElementById('credEmail').textContent = data.email;
+          successDiv.style.display = 'block';
         })
         .catch(function(err) {
           errorDiv.textContent = err.message;

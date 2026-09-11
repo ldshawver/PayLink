@@ -3390,6 +3390,21 @@ Thank you,
     await run("users.invite_status",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_status TEXT DEFAULT 'none'`);
     await run("users.last_login_at",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP`);
     await run("users.email_verified_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`);
+
+    // Concierge Launch Option A, blocker 5. Additive-only; defaults FALSE so
+    // no pre-existing account is affected — see server/email-verification.ts.
+    await run("users.email_verification_required", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_required BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("email_verifications table", sql`CREATE TABLE IF NOT EXISTS email_verifications (
+      id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash  TEXT NOT NULL,
+      expires_at  TIMESTAMP NOT NULL,
+      consumed_at TIMESTAMP,
+      created_at  TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("email_verifications.token_hash uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verifications_token_hash ON email_verifications (token_hash)`);
+    await run("email_verifications.user_id idx", sql`CREATE INDEX IF NOT EXISTS idx_email_verifications_user_id ON email_verifications (user_id)`);
+
     await run("account_invites table", sql`CREATE TABLE IF NOT EXISTS account_invites (
       id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id         VARCHAR,

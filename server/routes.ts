@@ -6,7 +6,8 @@ import { calculateWorkerPay } from "./payroll-calculator";
 import { calcAllTaxes, payPeriodTypeFromSchedule, TAX_ENGINE_VERSION, type TaxEngineInput, type FilingStatus } from "./tax-engine.js";
 import bcrypt from "bcrypt";
 import multer from "multer";
-import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
+import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone, sendGenericNotificationEmail } from "./notifications";
+import { createEmailVerification, getLiveVerificationByToken, consumeEmailVerification } from "./email-verification";
 import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
 import os from "os";
@@ -1880,6 +1881,15 @@ export async function registerRoutes(
       if (user.isActive === false) {
         return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
       }
+      // Concierge Launch Option A, blocker 5. emailVerificationRequired
+      // defaults FALSE and is only ever set TRUE by trial signup, so this can
+      // never lock out a pre-existing or otherwise-created account.
+      if (user.emailVerificationRequired && !user.emailVerifiedAt) {
+        return res.status(403).json({
+          message: "Please verify your email before logging in. Check your inbox for the verification link.",
+          reason: "email_not_verified",
+        });
+      }
       // INVARIANT: platform-scoped accounts must never have a companyId.
       // A platform user with companyId set indicates a data integrity violation;
       // block login to prevent that account from bypassing tenant isolation checks.
@@ -2200,7 +2210,7 @@ function hashSigningToken(token: string): string {
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -26228,8 +26238,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "Please provide a valid email address" });
       }
 
-      if (password && password.length < 8) {
-        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      // Concierge Launch Option A, blocker 5 — a password is now required from
+      // the caller. The old fallback (generate a random password server-side)
+      // is what produced the "temporaryPassword in the response" finding: the
+      // only consumer of that value was this same response body, which
+      // amounts to echoing a live credential back over HTTP.
+      if (!password || typeof password !== "string" || password.length < 8) {
+        return res.status(400).json({ message: "Password is required and must be at least 8 characters" });
       }
 
       const existingRows = await db.execute(sql`SELECT id FROM trial_signups WHERE email = ${email} LIMIT 1`);
@@ -26246,8 +26261,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (existingUser.rows.length > 0) {
         username = baseUsername + Date.now().toString(36);
       }
-      const tempPassword = password || ("Trial" + Math.random().toString(36).substring(2, 10) + "!");
-      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+      const hashedPassword = await bcrypt.hash(password, 10);
 
       let companyId: string;
       let userId: string;
@@ -26266,8 +26280,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         companyId = companyResult.rows[0].id as string;
 
         const userResult = await db.execute(sql`
-          INSERT INTO users (username, password, role, company_id)
-          VALUES (${username}, ${hashedPassword}, 'admin', ${companyId})
+          INSERT INTO users (username, password, role, company_id, email, email_verification_required)
+          VALUES (${username}, ${hashedPassword}, 'admin', ${companyId}, ${email}, TRUE)
           RETURNING id
         `);
         userId = userResult.rows[0].id as string;
@@ -26323,17 +26337,104 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         throw txErr;
       }
 
+      // Concierge Launch Option A, blocker 5 — verify the email address before
+      // granting login. The account already has the password the caller
+      // chose, so this link only ever confirms ownership of the mailbox; it
+      // does not carry or set a password. Sending failure doesn't fail the
+      // signup itself (the account exists and can use "resend verification"),
+      // but it is logged since a lost verification email otherwise looks like
+      // a silent dead end to the new user.
+      try {
+        const { rawToken } = await createEmailVerification(userId);
+        const verifyUrl = `${getAppBaseUrl(req)}/verify-email?token=${encodeURIComponent(rawToken)}`;
+        const sendResult = await sendGenericNotificationEmail({
+          recipientName: `${firstName} ${lastName}`,
+          email,
+          title: "Verify your email to activate your PayLink trial",
+          body: "Thanks for starting your PayLink trial! Click below to verify your email address and sign in.",
+          actionUrl: verifyUrl,
+        });
+        if (!sendResult.sent) {
+          console.error("Trial signup: verification email failed to send:", sendResult.error);
+        }
+      } catch (mailErr) {
+        console.error("Trial signup: verification email failed to send:", mailErr);
+      }
+
       res.json({
-        message: "Trial account created successfully",
-        username,
-        temporaryPassword: tempPassword,
+        message: "Trial account created. Please check your email to verify your address before logging in.",
         companyId,
         trialEnd: trialEnd.toISOString(),
-        loginUrl: `${getAppBaseUrl(req)}/app`
       });
     } catch (e) {
       console.error("Trial signup error:", e);
       res.status(500).json({ message: safeErrorMessage(e, "Failed to create trial account") });
+    }
+  });
+
+  // Concierge Launch Option A, blocker 5 — establishes the session on
+  // successful verification (mirrors POST /api/auth/login's session-write
+  // shape) so the user lands signed in, not back at a login form.
+  app.post("/api/auth/verify-email", trialSignupRateLimit, async (req, res) => {
+    try {
+      const { token } = req.body as { token?: string };
+      if (!token || typeof token !== "string") {
+        return res.status(400).json({ message: "Verification token is required" });
+      }
+      const verification = await getLiveVerificationByToken(token);
+      if (!verification) {
+        return res.status(400).json({ message: "This verification link is invalid or has expired." });
+      }
+      const user = await storage.getUser(verification.userId);
+      if (!user) return res.status(400).json({ message: "This verification link is invalid or has expired." });
+
+      await consumeEmailVerification(verification.id, verification.userId);
+
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      req.session.save((err: Error | null) => {
+        if (err) {
+          console.error("Session save error (verify-email):", err);
+          return res.status(500).json({ message: "Verified, but sign-in failed. Please log in manually." });
+        }
+        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId });
+      });
+    } catch (e) {
+      console.error("Verify-email error:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to verify email") });
+    }
+  });
+
+  // Rate-limited and deliberately generic in every response (never reveals
+  // whether an account exists for the given email) to avoid turning this into
+  // an account-enumeration oracle.
+  app.post("/api/auth/resend-verification", trialSignupRateLimit, async (req, res) => {
+    const generic = { message: "If that email has a pending verification, a new link has been sent." };
+    try {
+      const { email } = req.body as { email?: string };
+      if (!email || typeof email !== "string") return res.json(generic);
+
+      const rows = await db.execute(sql`
+        SELECT id, first_name, last_name FROM users
+        WHERE email = ${email} AND email_verification_required = TRUE AND email_verified_at IS NULL
+        LIMIT 1
+      `);
+      const row = rows.rows[0] as { id: string; first_name: string | null; last_name: string | null } | undefined;
+      if (row) {
+        const { rawToken } = await createEmailVerification(row.id);
+        const verifyUrl = `${getAppBaseUrl(req)}/verify-email?token=${encodeURIComponent(rawToken)}`;
+        await sendGenericNotificationEmail({
+          recipientName: [row.first_name, row.last_name].filter(Boolean).join(" ") || "there",
+          email,
+          title: "Verify your email to activate your PayLink trial",
+          body: "Here's a fresh verification link.",
+          actionUrl: verifyUrl,
+        }).catch((e) => console.error("Resend verification email failed to send:", e));
+      }
+      res.json(generic);
+    } catch (e) {
+      console.error("Resend-verification error:", e);
+      res.json(generic);
     }
   });
 
