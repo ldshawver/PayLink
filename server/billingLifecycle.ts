@@ -4,6 +4,7 @@ import {
   sendTenantLifecycleNotification,
   getCompanyOwnerInfo,
 } from "./notifications/TenantNotificationService";
+import { mirrorTenantStatusFromCompany } from "./tenant-context";
 
 const DEFAULT_GRACE_PERIOD_DAYS = 14;
 
@@ -94,6 +95,7 @@ export async function handleTenantBillingEvent(
       WHERE id = ${company.id}
         AND subscription_status NOT IN ('suspended', 'canceled')
     `);
+    await mirrorTenantStatusFromCompany(company.id, "grace_period");
 
     await logBillingAuditEvent(
       company.id,
@@ -141,6 +143,7 @@ export async function handleTenantBillingEvent(
             grace_period_end = NULL
         WHERE id = ${company.id}
       `);
+      await mirrorTenantStatusFromCompany(company.id, "active_paid");
 
       await logBillingAuditEvent(
         company.id,
@@ -182,6 +185,7 @@ export async function handleTenantBillingEvent(
           grace_period_end = NULL
       WHERE id = ${company.id}
     `);
+    await mirrorTenantStatusFromCompany(company.id, "suspended");
 
     await logBillingAuditEvent(
       company.id,
@@ -229,6 +233,7 @@ export async function handleTenantBillingEvent(
             grace_period_end = NULL
         WHERE id = ${company.id}
       `);
+      await mirrorTenantStatusFromCompany(company.id, "active_paid");
 
       await logBillingAuditEvent(
         company.id,
@@ -266,6 +271,7 @@ export async function checkAndSuspendExpiredGracePeriods(): Promise<number> {
           billing_active = FALSE
       WHERE id = ${row.id}
     `);
+    await mirrorTenantStatusFromCompany(row.id, "suspended");
 
     await db.execute(sql`
       INSERT INTO authorization_audit_log

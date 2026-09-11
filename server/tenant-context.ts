@@ -16,6 +16,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { db } from "./db";
+import { sql } from "drizzle-orm";
 
 // ── Extend Express Request type ───────────────────────────────────────────────
 declare global {
@@ -184,6 +185,73 @@ export async function assertUserCanAccessCompany(
     err.reason = "tenant_cancelled";
     err.tenantId = tenant.id;
     throw err;
+  }
+}
+
+// ── Tenant status mirror ──────────────────────────────────────────────────────
+//
+// `companies.subscription_status` is the single authoritative source for
+// tenant gating (checkTenantGate() in tenant-enforcement.ts, and the
+// subscription-gate middleware in routes.ts both read it exclusively).
+// `tenants.status` is a read-only mirror of it — nothing should write
+// tenants.status directly except mirrorTenantStatusFromCompany() below and
+// the one-time backfill in scripts/backfill-tenant-status-mirror.ts. Before
+// this, tenants.status was set once at signup and never touched again, so it
+// silently drifted from the real (companies) status forever.
+
+export type MirroredTenantStatus = "active" | "trial" | "demo" | "suspended" | "cancelled";
+
+/**
+ * Map a companies.subscription_status value to the tenants.status vocabulary
+ * (active | trial | demo | suspended | cancelled). Unrecognized/legacy values
+ * fall back to "active" rather than risk locking a tenant out of a UI that
+ * merely displays tenants.status — companies.subscription_status remains the
+ * thing that actually gates access regardless of what this mirror says.
+ */
+export function mapSubscriptionStatusToTenantStatus(
+  subscriptionStatus: string | null | undefined,
+  isDemo?: boolean
+): MirroredTenantStatus {
+  if (isDemo) return "demo";
+  switch ((subscriptionStatus || "").toLowerCase()) {
+    case "trial_active":
+    case "trialing":
+      return "trial";
+    case "active_paid":
+    case "active":
+    case "grace_period":
+    case "grace":
+      return "active";
+    case "trial_expired":
+    case "past_due":
+    case "suspended":
+      return "suspended";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+    default:
+      return "active";
+  }
+}
+
+/**
+ * Write-follow tenants.status from a just-written companies.subscription_status.
+ * Best-effort: a mirror failure must never block or roll back the
+ * authoritative companies write, so this only logs on error.
+ */
+export async function mirrorTenantStatusFromCompany(
+  companyId: string,
+  subscriptionStatus: string | null | undefined,
+  isDemo?: boolean
+): Promise<void> {
+  try {
+    const tenantId = await getTenantIdForCompany(companyId);
+    if (!tenantId) return; // company has no tenant assignment yet — nothing to mirror
+    const mirrored = mapSubscriptionStatusToTenantStatus(subscriptionStatus, isDemo);
+    await db.execute(sql`UPDATE tenants SET status = ${mirrored}, updated_at = NOW() WHERE id = ${tenantId}`);
+    invalidateTenantCache(companyId);
+  } catch (e) {
+    console.error(`[TenantContext] Failed to mirror tenant status for company ${companyId}:`, e);
   }
 }
 

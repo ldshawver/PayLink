@@ -17,6 +17,7 @@ import {
   type DemoCleanupCandidate,
   type DemoCleanupThrottleState,
 } from "./demo-cleanup";
+import { mapSubscriptionStatusToTenantStatus } from "../tenant-context";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
 const HOUR_MS  = 60 * 60 * 1000;
@@ -140,6 +141,40 @@ async function jobDemoCleanup(): Promise<void> {
   });
 }
 
+/**
+ * Tenant Status Mirror Reconcile
+ *
+ * companies.subscription_status is the single authoritative source for
+ * tenant gating; tenants.status is a read-only mirror of it, kept in sync at
+ * write time by mirrorTenantStatusFromCompany() (server/tenant-context.ts).
+ * This job is the self-healing backstop for that mirror: it catches drift
+ * from (a) the historical gap where tenants.status was set once at signup
+ * and never touched again, and (b) any future write path that forgets to
+ * call the mirror helper. Read-only scan + targeted UPDATE only on rows that
+ * actually differ — safe to run every boot and on an interval.
+ */
+async function jobTenantStatusMirrorReconcile(): Promise<void> {
+  const rows = await db.execute(sql`
+    SELECT t.id AS tenant_id, t.status AS tenant_status,
+           c.subscription_status, c.is_demo
+    FROM tenants t
+    JOIN tenant_companies tc ON tc.tenant_id = t.id AND tc.is_primary = TRUE
+    JOIN companies c ON c.id = tc.company_id
+  `);
+
+  let reconciled = 0;
+  for (const row of (rows as any).rows as any[]) {
+    const expected = mapSubscriptionStatusToTenantStatus(row.subscription_status, row.is_demo);
+    if (row.tenant_status !== expected) {
+      await db.execute(sql`UPDATE tenants SET status = ${expected}, updated_at = NOW() WHERE id = ${row.tenant_id}`);
+      reconciled++;
+    }
+  }
+  if (reconciled > 0) {
+    console.log(`[Orchestrator][TenantStatusMirrorReconcile] Reconciled ${reconciled} drifted tenants.status row(s).`);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STUB JOBS — defined but NOT yet scheduled.
 // Uncomment the scheduleJob() call when the real implementation is ready.
@@ -254,6 +289,8 @@ async function jobDocumentRetentionCleanup(): Promise<void> {
  * Initial delays are staggered so startup DB pressure is spread out:
  *   10s  — contractor reminders (needs contractor_workflow_settings table)
  *   15s  — demo cleanup (safe additive DELETE, low priority)
+ *   20s  — document retention cleanup (archive-only, low priority)
+ *   25s  — tenant status mirror reconcile (read-mostly scan, low priority)
  */
 export function startWorkerOrchestrator(): void {
   if (orchestratorStarted) {
@@ -265,9 +302,10 @@ export function startWorkerOrchestrator(): void {
   console.log("[Orchestrator] Starting worker orchestrator...");
 
   // ── Active jobs ────────────────────────────────────────────────────────────
-  scheduleJob("ContractorReminders",      jobContractorReminders,      DAY_MS, 10_000);
-  scheduleJob("DemoCleanup",              jobDemoCleanup,              DAY_MS, 15_000);
-  scheduleJob("DocumentRetentionCleanup", jobDocumentRetentionCleanup, DAY_MS, 20_000);
+  scheduleJob("ContractorReminders",         jobContractorReminders,         DAY_MS, 10_000);
+  scheduleJob("DemoCleanup",                 jobDemoCleanup,                 DAY_MS, 15_000);
+  scheduleJob("DocumentRetentionCleanup",    jobDocumentRetentionCleanup,    DAY_MS, 20_000);
+  scheduleJob("TenantStatusMirrorReconcile", jobTenantStatusMirrorReconcile, DAY_MS, 25_000);
 
   // ── Stub jobs (uncomment to activate) ─────────────────────────────────────
   // scheduleJob("PayrollReminders",     jobPayrollReminders,     DAY_MS,        30_000);
