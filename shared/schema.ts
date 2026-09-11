@@ -4834,6 +4834,30 @@ export const insertTenantCompanySchema = createInsertSchema(tenantCompanies).omi
 export type TenantCompany = typeof tenantCompanies.$inferSelect;
 export type InsertTenantCompany = z.infer<typeof insertTenantCompanySchema>;
 
+/**
+ * Concierge Launch Option A, blocker 1 — an audited record of platform staff
+ * declaring "I'm assisting this tenant now, here's why." This is the narrow
+ * scope this launch batch targets: a logged, time-boxed grant, not a full
+ * session-impersonation / view-as-tenant capability (that's a much larger,
+ * cross-cutting change — same deferral the original Phase 0.5 plan made for
+ * "full impersonation banner/expiry UI"). Platform staff already reach any
+ * tenant's data through the existing platform-console routes (all gated by
+ * role, not company membership); what was missing was an audit trail of when
+ * and why. `expiresAt` self-expires a session that's never explicitly ended.
+ */
+export const supportSessions = pgTable("support_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  platformUserId: varchar("platform_user_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  reason: text("reason").notNull(),
+  startedAt: timestamp("started_at").defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+  endedAt: timestamp("ended_at"),
+});
+export const insertSupportSessionSchema = createInsertSchema(supportSessions).omit({ id: true, startedAt: true });
+export type SupportSession = typeof supportSessions.$inferSelect;
+export type InsertSupportSession = z.infer<typeof insertSupportSessionSchema>;
+
 // ── Earning Types ─────────────────────────────────────────────────────────────
 export const earningTypes = pgTable("earning_types", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

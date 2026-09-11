@@ -49,6 +49,16 @@ type Company = {
   status?: string;
 };
 
+type SupportSessionRow = {
+  id: string;
+  platformUsername: string;
+  companyId: string;
+  reason: string;
+  startedAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+};
+
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   active:    { label: "Active",    color: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",    icon: CheckCircle2 },
   trial:     { label: "Trial",     color: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",        icon: Clock },
@@ -226,6 +236,59 @@ function AssignCompanyDialog({ tenantId, open, onClose }: { tenantId: string; op
   );
 }
 
+// Concierge Launch Option A, blocker 1 — a logged, time-boxed "assisting this
+// tenant" grant. Requires a reason so the audit trail says why, not just who.
+function StartSupportSessionDialog({ companyId, open, onClose }: { companyId: string; open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [reason, setReason] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/platform/support-sessions", { companyId, reason }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/support-sessions", companyId] });
+      toast({ title: "Support session started" });
+      onClose();
+      setReason("");
+    },
+    onError: (e: any) => toast({ title: "Failed to start support session", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Start Support Session</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="support-session-reason">Reason</Label>
+            <Textarea
+              id="support-session-reason"
+              data-testid="input-support-session-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Investigating a payroll-run error the tenant reported"
+              rows={3}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">Logged to the audit trail. Sessions expire automatically after 1 hour.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            data-testid="button-start-support-session-submit"
+            onClick={() => mutation.mutate()}
+            disabled={reason.trim().length < 5 || mutation.isPending}
+          >
+            {mutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : null}
+            Start
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function EditTenantDialog({ tenant, open, onClose }: { tenant: TenantDetail; open: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const [form, setForm] = useState({
@@ -350,6 +413,26 @@ function TenantDetailPanel({
     onError: (e: any) => toast({ title: "Failed to activate billing", description: e.message, variant: "destructive" }),
   });
 
+  // Concierge Launch Option A, blocker 1 — audited "assisting this tenant"
+  // record, scoped to the tenant's primary company. See the
+  // supportSessions docstring in shared/schema.ts for what this is (a
+  // logged, time-boxed grant) and isn't (full session-impersonation).
+  const primaryCompanyId = tenant?.companies.find(c => c.isPrimary)?.id ?? tenant?.companies[0]?.id;
+  const { data: supportSessions = [] } = useQuery<SupportSessionRow[]>({
+    queryKey: ["/api/platform/support-sessions", primaryCompanyId],
+    queryFn: async () => (await apiRequest("GET", `/api/platform/support-sessions?companyId=${primaryCompanyId}`)).json(),
+    enabled: !!primaryCompanyId,
+  });
+  const [showSupportSession, setShowSupportSession] = useState(false);
+  const endSupportSession = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/platform/support-sessions/${id}/end`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/platform/support-sessions", primaryCompanyId] });
+      toast({ title: "Support session ended" });
+    },
+    onError: (e: any) => toast({ title: "Failed to end support session", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading) {
     return (
       <div className="p-6 flex items-center gap-3 text-muted-foreground">
@@ -469,9 +552,56 @@ function TenantDetailPanel({
             </div>
           )}
         </div>
+
+        {/* Support sessions — Concierge Launch Option A, blocker 1 */}
+        {isSuperAdmin && primaryCompanyId && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                <Users className="h-4 w-4 text-amber-500" />
+                Support Sessions
+              </h3>
+              <Button size="sm" variant="outline" onClick={() => setShowSupportSession(true)} data-testid="button-start-support-session">
+                Start Support Session
+              </Button>
+            </div>
+            {supportSessions.length === 0 ? (
+              <div className="text-center py-4 text-muted-foreground text-xs border rounded-lg border-dashed">
+                No active support sessions.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {supportSessions.map(s => (
+                  <div key={s.id} className="flex items-center justify-between p-3 rounded-lg border bg-card text-xs" data-testid={`card-support-session-${s.id}`}>
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{s.platformUsername} — {s.reason}</div>
+                      <div className="text-muted-foreground">
+                        started {new Date(s.startedAt).toLocaleString()} · expires {new Date(s.expiresAt).toLocaleString()}
+                        {s.endedAt ? " · ended" : ""}
+                      </div>
+                    </div>
+                    {!s.endedAt && (
+                      <button
+                        onClick={() => endSupportSession.mutate(s.id)}
+                        disabled={endSupportSession.isPending}
+                        className="text-xs text-muted-foreground hover:text-destructive transition-colors shrink-0 ml-2"
+                        data-testid={`button-end-support-session-${s.id}`}
+                      >
+                        End
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showEdit && <EditTenantDialog tenant={tenant} open={showEdit} onClose={() => setShowEdit(false)} />}
+      {showSupportSession && primaryCompanyId && (
+        <StartSupportSessionDialog companyId={primaryCompanyId} open={showSupportSession} onClose={() => setShowSupportSession(false)} />
+      )}
       {showAssign && <AssignCompanyDialog tenantId={tenantId} open={showAssign} onClose={() => setShowAssign(false)} />}
     </div>
   );

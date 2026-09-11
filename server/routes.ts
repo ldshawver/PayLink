@@ -536,6 +536,11 @@ const billingActivateRateLimit = createRateLimiter("billing-activate", {
   max: 10,
   message: "Too many billing requests. Please wait a moment and try again.",
 });
+const supportSessionRateLimit = createRateLimiter("support-session", {
+  windowMs: 60 * 1000,
+  max: 20,
+  message: "Too many support-session requests. Please wait a moment and try again.",
+});
 
 function requireRole(...roles: string[]) {
   return async <P extends ParamsDictionary>(req: Request<P>, res: Response, next: NextFunction) => {
@@ -34343,6 +34348,115 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to update tenant") });
+    }
+  });
+
+  // ── Platform support sessions (Concierge Launch Option A, blocker 1) ───────
+  // An audited "I'm assisting this tenant, here's why" record. See
+  // shared/schema.ts's supportSessions docstring for what this is and, just
+  // as importantly, what it deliberately is not (a session-impersonation /
+  // view-as-tenant capability — that remains a larger, later change).
+  const SUPPORT_SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+  app.get("/api/platform/support-sessions", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const { companyId } = req.query as { companyId?: string };
+      const rows = await db.execute(companyId
+        ? sql`
+            SELECT ss.id, ss.platform_user_id, u.username AS platform_username, ss.company_id, c.name AS company_name,
+                   ss.reason, ss.started_at, ss.expires_at, ss.ended_at
+            FROM support_sessions ss
+            JOIN users u ON u.id = ss.platform_user_id
+            JOIN companies c ON c.id = ss.company_id
+            WHERE ss.company_id = ${companyId}
+            ORDER BY ss.started_at DESC
+            LIMIT 50
+          `
+        : sql`
+            SELECT ss.id, ss.platform_user_id, u.username AS platform_username, ss.company_id, c.name AS company_name,
+                   ss.reason, ss.started_at, ss.expires_at, ss.ended_at
+            FROM support_sessions ss
+            JOIN users u ON u.id = ss.platform_user_id
+            JOIN companies c ON c.id = ss.company_id
+            WHERE ss.ended_at IS NULL AND ss.expires_at > NOW()
+            ORDER BY ss.started_at DESC
+            LIMIT 50
+          `);
+      res.json((rows.rows as any[]).map((r) => ({
+        id: r.id,
+        platformUserId: r.platform_user_id,
+        platformUsername: r.platform_username,
+        companyId: r.company_id,
+        companyName: r.company_name,
+        reason: r.reason,
+        startedAt: r.started_at,
+        expiresAt: r.expires_at,
+        endedAt: r.ended_at,
+      })));
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to list support sessions") });
+    }
+  });
+
+  app.post("/api/platform/support-sessions", requireAuth, requirePlatformAdminRole(), supportSessionRateLimit, requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+
+      const { companyId, reason } = req.body as { companyId?: string; reason?: string };
+      if (!companyId || typeof companyId !== "string") return res.status(400).json({ message: "companyId is required" });
+      if (!reason || typeof reason !== "string" || reason.trim().length < 5) {
+        return res.status(400).json({ message: "A reason (at least 5 characters) is required" });
+      }
+
+      const companyRows = await db.execute(sql`SELECT id FROM companies WHERE id = ${companyId} LIMIT 1`);
+      if (!companyRows.rows[0]) return res.status(404).json({ message: "Company not found" });
+
+      const expiresAt = new Date(Date.now() + SUPPORT_SESSION_TTL_MS);
+      const result = await db.execute(sql`
+        INSERT INTO support_sessions (platform_user_id, company_id, reason, expires_at)
+        VALUES (${actor.id}, ${companyId}, ${reason.trim()}, ${expiresAt})
+        RETURNING id, started_at, expires_at
+      `);
+      const row = result.rows[0] as any;
+
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetResource: "support_sessions",
+        changeType: "support_session_started",
+        afterValue: reason.trim(),
+        companyId,
+      });
+
+      res.json({ id: row.id, companyId, reason: reason.trim(), startedAt: row.started_at, expiresAt: row.expires_at });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to start support session") });
+    }
+  });
+
+  app.post("/api/platform/support-sessions/:id/end", requireAuth, requirePlatformAdminRole(), supportSessionRateLimit, requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+
+      const result = await db.execute(sql`
+        UPDATE support_sessions SET ended_at = NOW()
+        WHERE id = ${req.params.id} AND ended_at IS NULL
+        RETURNING company_id
+      `);
+      const row = result.rows[0] as { company_id: string } | undefined;
+      if (!row) return res.status(404).json({ message: "Active support session not found" });
+
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetResource: "support_sessions",
+        changeType: "support_session_ended",
+        companyId: row.company_id,
+      });
+
+      res.json({ message: "Support session ended" });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to end support session") });
     }
   });
 

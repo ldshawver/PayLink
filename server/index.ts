@@ -3872,6 +3872,19 @@ Thank you,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE (tenant_id, company_id)
     )`);
+    // Concierge Launch Option A, blocker 1 — audited platform-staff support
+    // sessions (see shared/schema.ts's supportSessions docstring for scope).
+    await run("support_sessions table", sql`CREATE TABLE IF NOT EXISTS support_sessions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      platform_user_id VARCHAR NOT NULL,
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      reason TEXT NOT NULL,
+      started_at TIMESTAMPTZ DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      ended_at TIMESTAMPTZ
+    )`);
+    await run("support_sessions.company idx", sql`CREATE INDEX IF NOT EXISTS idx_support_sessions_company ON support_sessions (company_id)`);
+    await run("support_sessions.active idx", sql`CREATE INDEX IF NOT EXISTS idx_support_sessions_active ON support_sessions (company_id) WHERE ended_at IS NULL`);
     await run("tenants seed: Alavont Holding", sql`
       INSERT INTO tenants (name, slug, status, notes)
       VALUES ('Alavont Holding', 'alavont-holding', 'active', 'Primary production tenant')
