@@ -34281,8 +34281,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const { rows: tenantRows } = await db.$client.query(`SELECT * FROM tenants WHERE id = $1`, [req.params.id]);
       if (!tenantRows.length) return res.status(404).json({ message: "Tenant not found" });
       const t = tenantRows[0];
+      // companies.status does not exist in the canonical schema (companies has
+      // subscription_status — see shared/schema.ts). subscription_status is the
+      // single authoritative source (server/tenant-context.ts); expose that,
+      // not a nonexistent column.
       const { rows: companyRows } = await db.$client.query(`
-        SELECT c.id, c.name, c.status, tc.is_primary, tc.created_at AS assigned_at
+        SELECT c.id, c.name, c.subscription_status, tc.is_primary, tc.created_at AS assigned_at
         FROM tenant_companies tc
         JOIN companies c ON c.id = tc.company_id
         WHERE tc.tenant_id = $1
@@ -34295,7 +34299,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         stripeCustomerId: t.stripe_customer_id, defaultTimezone: t.default_timezone,
         notes: t.notes, createdAt: t.created_at, updatedAt: t.updated_at,
         companies: companyRows.map((c: any) => ({
-          id: c.id, name: c.name, status: c.status,
+          id: c.id, name: c.name, subscriptionStatus: c.subscription_status,
           isPrimary: c.is_primary, assignedAt: c.assigned_at,
         })),
       });
@@ -34304,25 +34308,58 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  // tenants.status is a read-only mirror of companies.subscription_status
+  // (mirrorTenantStatusFromCompany() in server/tenant-context.ts) — see that
+  // file's "Tenant status mirror" comment. A platform-admin status change here
+  // must not write the mirror directly; it changes the tenant's primary
+  // company's canonical subscription state and re-derives the mirror the same
+  // way every other write site does. "demo" is driven by companies.is_demo,
+  // not subscription_status, so it's left out of this map (null = unchanged).
+  const TENANT_STATUS_TO_SUBSCRIPTION_STATUS: Record<string, string | null> = {
+    active: "active_paid",
+    trial: "trial_active",
+    demo: null,
+    suspended: "suspended",
+    cancelled: "cancelled",
+  };
+
   // Update tenant — platform_admin can edit status/billing; super_admin can do anything
   app.patch("/api/tenants/:id", requireAuth, requirePlatformRole(), async (req, res) => {
     try {
       const allowed = ["active", "trial", "demo", "suspended", "cancelled"];
       const { name, status, billingContactName, billingContactEmail, defaultTimezone, notes, stripeCustomerId } = req.body;
       if (status && !allowed.includes(status)) return res.status(400).json({ message: "Invalid status" });
+
+      if (status) {
+        const { rows: primaryRows } = await db.$client.query<{ company_id: string }>(
+          `SELECT company_id FROM tenant_companies WHERE tenant_id = $1 ORDER BY is_primary DESC, created_at ASC LIMIT 1`,
+          [req.params.id]
+        );
+        const primaryCompanyId = primaryRows[0]?.company_id;
+        if (!primaryCompanyId) {
+          return res.status(400).json({ message: "Cannot set status: tenant has no assigned company" });
+        }
+        const isDemo = status === "demo";
+        const subscriptionStatus = TENANT_STATUS_TO_SUBSCRIPTION_STATUS[status];
+        await db.$client.query(
+          `UPDATE companies SET subscription_status = COALESCE($1, subscription_status), is_demo = $2 WHERE id = $3`,
+          [subscriptionStatus, isDemo, primaryCompanyId]
+        );
+        await mirrorTenantStatusFromCompany(primaryCompanyId, subscriptionStatus, isDemo);
+      }
+
       const { rows } = await db.$client.query(`
         UPDATE tenants
         SET name                 = COALESCE($1, name),
-            status               = COALESCE($2, status),
-            billing_contact_name = COALESCE($3, billing_contact_name),
-            billing_contact_email= COALESCE($4, billing_contact_email),
-            default_timezone     = COALESCE($5, default_timezone),
-            notes                = COALESCE($6, notes),
-            stripe_customer_id   = COALESCE($7, stripe_customer_id),
+            billing_contact_name = COALESCE($2, billing_contact_name),
+            billing_contact_email= COALESCE($3, billing_contact_email),
+            default_timezone     = COALESCE($4, default_timezone),
+            notes                = COALESCE($5, notes),
+            stripe_customer_id   = COALESCE($6, stripe_customer_id),
             updated_at           = NOW()
-        WHERE id = $8
+        WHERE id = $7
         RETURNING *
-      `, [name || null, status || null, billingContactName ?? null, billingContactEmail ?? null,
+      `, [name || null, billingContactName ?? null, billingContactEmail ?? null,
           defaultTimezone || null, notes ?? null, stripeCustomerId || null, req.params.id]);
       if (!rows.length) return res.status(404).json({ message: "Tenant not found" });
       const t = rows[0];

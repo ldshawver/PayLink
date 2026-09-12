@@ -37,7 +37,7 @@ type TenantDetail = Tenant & {
   companies: Array<{
     id: string;
     name: string;
-    status: string;
+    subscriptionStatus: string;
     isPrimary: boolean;
     assignedAt: string;
   }>;
