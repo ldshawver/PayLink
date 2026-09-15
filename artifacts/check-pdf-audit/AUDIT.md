@@ -8,6 +8,8 @@
 - `npx tsx tests/check-pdf-rendering-audit-artifacts.test.ts`
 - `npx tsx tests/check-pdf-micr-font-inspection.test.ts`
 - `npx tsx scripts/audit-check-pdf-rendering.ts`
+- `npx tsx scripts/render-vendor-check-samples.ts` (vendorCheck path: bank logo/kind-banner/remittance-advice visual evidence; `--legacy` reproduces the pre-v2.2.7-recovery rendering for comparison)
+- `npx tsx tests/check-pdf-remote-image-ssrf.test.ts`
 - `rg -l "paycheck|print-check|MICR|contractor statement|employee earnings" tests | sort`
 
 ## Audit artifact policy
@@ -37,8 +39,8 @@ Coordinates are expressed as inches from the top-left of the 8.5 x 3.5 inch chec
 
 | Field | Old coordinate | New coordinate | Changed? | Source |
 |---|---:|---:|---|---|
-| Bank logo image | x 3.62, y 0.50, w 0.86, h 0.22 | x 3.45, y 0.46, w 1.19, h 0.28 | Yes | `page.drawImage(bankLogoImg, { x: z1x(3.45), y: z1y(0.46), width: 86, height: 20 })` |
-| Bank of America vector fallback | Not present | x 3.45, y 0.46, w 1.19, h 0.28 | New fallback only | `normalizedBankName === "bank of america"` branch |
+| Bank logo image | x 3.62, y 0.50, w 0.86, h 0.22 | x 3.35, y 0.16, w 80pt, h = 80pt × asset aspect ratio | Yes | `page.drawImage(bankLogoImg, { x: bankLogoX, y: bankLogoY, width: bankLogoWpt, height: bankLogoHpt })` |
+| Bank of America bundled asset (v2.2.7) | Not present | same box as bank logo image (never distorted — height derives from the real asset's aspect ratio) | New, replaces the old hand-drawn vector rectangle | `BANK_LOGO_ASSETS["bank of america"] → public/images/bank-logos/bank-of-america.png`, loaded from disk via `loadBundledBankLogoBytes()` — never fetched over the network |
 | Bank address | x centered on 4.18, y 0.66 | x centered on 4.18, y 0.66 | No | `page.drawText(bankAddress, ..., y: z1y(0.66))` |
 | Fractional routing numerator | x 5.25, y 0.42 | x 5.25, y 0.545 default | Yes, +0.125in down | `fracNumY = z1y(0.42) + fractionalRoutingOffY` |
 | Fractional routing rule | x 5.25, y 0.47 | x 5.25, y 0.595 default | Yes, +0.125in down | `fracLineY = z1y(0.47) + fractionalRoutingOffY` |
@@ -99,6 +101,61 @@ any MICR/position change (see `scripts/render-check-samples.ts` and the staging
   pay-to/amount rows). Tenant-uploaded logo wins; Bank of America gets a vector
   fallback only when the normalized bank name matches. Every company can now nudge
   it via `layout_config.checkLayoutCalibration.bankLogo{x,y}`. **No default change.**
+
+## Recovered check-printing work (v2.2.7 → reconciled onto post-v2.2.12 main)
+
+Ported from an uncommitted v2.2.6-era working tree (preservation commit
+`b243687` on `fix/v2.2.7-check-1099-repair`, never merged) and reconciled onto
+current `main` (post PR #154). Scope: check-face rendering only — no change to
+authorization, tenant scoping, the payment ledger, idempotency, check-number
+allocation, or the separate `payment-documents.ts` proof-document path.
+
+- **Bank logo replaced, not just repositioned**: the old hand-drawn "Bank of
+  America" vector rectangle (a synthetic substitute logo) is removed entirely.
+  Recognized bank brands (currently only Bank of America) now render the real,
+  repo-committed asset at `public/images/bank-logos/bank-of-america.png`,
+  loaded from disk (`loadBundledBankLogoBytes()`), never fetched over the
+  network and never distorted (height derives from the asset's own aspect
+  ratio). Logo box moved to x 3.35in / y 0.16in (top-left) so the taller real
+  logo and the bank name/address block below it don't collide. Priority order:
+  (1) tenant-configured upload/remote logo, (2) the bundled approved asset for
+  a recognized brand, (3) bank name/address as text only — no synthetic mark.
+- **Adiken hard-coded logo fallback removed**: `isAdikenTenant` /
+  `allowBuiltInAdikenLogo` and the blue "A" placeholder rectangle are gone.
+  No tenant — Adiken included — gets a hard-coded vector logo; a company with
+  no uploaded logo and not a recognized bank brand renders text-only (or, in
+  calibration mode only, a generic "LOGO" placeholder box for position
+  verification).
+- **Dynamic check-kind banner**: the right-column banner on a `vendorCheck`
+  (invoice/expense) check now reads "CONTRACTOR CHECK", "VENDOR CHECK", or
+  "PAYEE CHECK" based on `vendorCheck.checkKind`, set by the caller
+  (`buildContractorInvoiceCheckPdf` → `"contractor"`, `renderExpenseCheckPdf`
+  → `"vendor"`) — never hard-coded "VENDOR CHECK" for a contractor payment.
+- **Paid-to-date / remaining balance / final-payment marker**: both check
+  builders now derive `originalAmount`, `paidToDateAmount`,
+  `remainingBalanceAmount`, and `isFinalPayment` from the same canonical
+  ledger sums the existing `/document` (proof-document) endpoints already use
+  (`SUM(contractor_payments.amount) WHERE status <> 'void'` /
+  `SUM(expense_payments.amount) WHERE status <> 'void'`), not a separate or
+  invented computation. Rendered in the Zone 2 vendor-check panel and, with
+  more room, on the Zone 3 detachable remittance-advice stub alongside
+  invoice/contract reference and a line-items table (from the invoice's/
+  expense's own `line_items` column via the existing `parsePaymentDocLineItems`
+  parser). Preview renders (no payment written yet) add the previewed amount
+  to the current ledger sum; issued/replayed/reprinted checks use the ledger
+  sum as-is (it already includes that payment) — same convention the
+  proof-document endpoints already use.
+- **Remote logo fetch hardened against SSRF**: `fetchRemoteImageBytes` (used
+  for a tenant's uploaded/remote company or bank logo URL) now: rejects any
+  scheme but `http`/`https`; resolves every hostname — the initial URL and
+  each of up to 3 redirect hops — through a custom `dns.lookup` that rejects
+  loopback, RFC1918 private, link-local (including the
+  `169.254.169.254` cloud-metadata address), and other non-public ranges,
+  and pins the request to that validated address (closing the DNS-rebinding
+  TOCTOU gap between validation and connection); caps the response at 5MB;
+  and bounds total wall-clock time across all hops to 15s (8s per hop,
+  unchanged). Local `/uploads/...` paths are untouched (still a plain
+  filesystem read, no network fetch).
 - **Fractional routing**: numerator 0.545 in / rule 0.595 in / denominator 0.695 in
   from the check-face top (the +0.125 in default lowering is retained). Adjustable
   per company via `fractionalRoutingOffsetY` / `checkLayoutCalibration.fractionalRouting`.

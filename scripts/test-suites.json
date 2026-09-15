@@ -19,6 +19,7 @@
         "tests/check-micr-render.test.ts",
         "tests/check-pdf-micr-font-inspection.test.ts",
         "tests/check-pdf-rendering-audit-artifacts.test.ts",
+        "tests/check-pdf-remote-image-ssrf.test.ts",
         "tests/contract-documenso-static.test.ts",
         "tests/contractor-payment-statement-static.test.ts",
         "tests/contract-email.test.ts",

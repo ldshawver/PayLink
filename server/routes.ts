@@ -81,6 +81,7 @@ import {
   normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable,
 } from "./expense-payments";
 import { renderPaymentDocumentPdf, type PaymentDocInput } from "./payment-documents";
+import { fetchRemoteImageBytesSafe } from "./remote-image-fetch";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -230,6 +231,39 @@ async function getCompanyESignConfig(companyId: string): Promise<CompanyESignCon
 }
 
 const resolvedUploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+
+// ── Bundled bank-brand logo assets (v2.2.7) ─────────────────────────────────
+// Approved, repo-committed logo images for banks the check renderer recognizes
+// by name — embedded directly from disk (same pattern as the MICR font below),
+// never fetched over the network at render time. This is deliberate: a bank
+// wordmark on a financial instrument must be the exact approved asset, not
+// whatever a remote URL happens to return that day (redirects, CDN outages,
+// rebrands). Add an entry here only with a real, approved asset file under
+// public/images/bank-logos/ — never draw a hand-built substitute logo.
+const BANK_LOGO_ASSETS: Record<string, string> = {
+  "bank of america": "bank-of-america.png",
+};
+const bundledBankLogoCache = new Map<string, Buffer | null>();
+function loadBundledBankLogoBytes(normalizedBankName: string): Buffer | null {
+  const file = BANK_LOGO_ASSETS[normalizedBankName];
+  if (!file) return null;
+  if (bundledBankLogoCache.has(file)) return bundledBankLogoCache.get(file)!;
+  try {
+    const altDirname = path.join(__dirname, "public", "images", "bank-logos", file);
+    const altCwd     = path.join(process.cwd(), "public", "images", "bank-logos", file);
+    const altClient  = path.join(process.cwd(), "client", "public", "images", "bank-logos", file);
+    const assetPath = fs.existsSync(altDirname) ? altDirname : fs.existsSync(altCwd) ? altCwd : altClient;
+    const bytes = fs.readFileSync(assetPath);
+    bundledBankLogoCache.set(file, bytes);
+    return bytes;
+  } catch (assetErr) {
+    const cls = assetErr instanceof Error ? assetErr.name : typeof assetErr;
+    console.error(`[CHECK_PDF] Bundled bank logo asset (${file}) failed to load: ${cls}`);
+    bundledBankLogoCache.set(file, null);
+    return null;
+  }
+}
+
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, resolvedUploadDir),
   filename: (_req, file, cb) => {
@@ -11492,6 +11526,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   }, opts: { amount?: unknown; checkNumber?: string | number | null; memo?: string; payeeName?: string; payeeAddress?: string; payeeCityStateZip?: string }): Promise<Uint8Array> {
     const e = ctx.expense;
     const co = ctx.company;
+    const thisAmountCents = toCents(opts.amount ?? e.amount);
+    const totalCents = toCents(e.amount);
+    const paidRow = epRow(await db.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM expense_payments WHERE expense_id = ${e.id} AND status <> 'void'`));
+    const ledgerPaidCents = toCents(paidRow?.paid);
+    // A checkNumber means the caller is rendering a payment already written to the
+    // ledger (issue/replay/reprint) — the SUM above already includes it. In preview
+    // mode (no checkNumber yet) the SUM predates this hypothetical payment.
+    const paidToDateCents = opts.checkNumber != null ? ledgerPaidCents : ledgerPaidCents + thisAmountCents;
+    const remainingCents = Math.max(0, totalCents - paidToDateCents);
     return renderCheckPdf({
       item: null, worker: null, run: null,
       company: co ? { name: co.name || "", address: co.address || "", city: co.city || "", state: co.state || "", zip: co.zip || "", phone: co.phone || "", ein: co.ein || "", dba: co.dba || "", logoUrl: co.logo_url || "" } : null,
@@ -11504,6 +11547,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         amount: fromCents(toCents(opts.amount ?? e.amount)),
         checkNumber: opts.checkNumber != null ? String(opts.checkNumber) : undefined,
         memo: String(opts.memo || e.memo || e.description || ""),
+        checkKind: "vendor",
+        contractReference: e.contractor_invoice_id ? `Contractor invoice ${String(e.contractor_invoice_id).slice(0, 8)}` : (e.related_invoice_id ? `Invoice ${String(e.related_invoice_id).slice(0, 8)}` : null),
+        originalAmount: fromCents(totalCents),
+        priorPaidAmount: fromCents(Math.max(0, paidToDateCents - thisAmountCents)),
+        paidToDateAmount: fromCents(paidToDateCents),
+        remainingBalanceAmount: fromCents(remainingCents),
+        isFinalPayment: remainingCents <= 0,
+        lineItems: parsePaymentDocLineItems(e.line_items),
       },
     });
   }
@@ -12632,6 +12683,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       name: coRow.name || "", address: coRow.address || "", city: coRow.city || "", state: coRow.state || "",
       zip: coRow.zip || "", phone: coRow.phone || "", ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || "",
     } : null;
+    const thisAmountCents = toCents(opts.amount ?? inv.amount);
+    const totalCents = toCents(inv.amount);
+    const paidRow = cpRow(await db.execute(sql`SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM contractor_payments WHERE invoice_id = ${invoiceId} AND status <> 'void'`));
+    const ledgerPaidCents = toCents(paidRow?.paid);
+    // A checkNumber means the caller is rendering a payment already written to the
+    // ledger (issue/replay/reprint) — the SUM above already includes it. In preview
+    // mode (no checkNumber yet) the SUM predates this hypothetical payment.
+    const paidToDateCents = opts.checkNumber != null ? ledgerPaidCents : ledgerPaidCents + thisAmountCents;
+    const remainingCents = Math.max(0, totalCents - paidToDateCents);
     const pdfBytes = await renderCheckPdf({
       item: null, worker: null, run: null, company: coNorm,
       remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
@@ -12643,6 +12703,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         amount: fromCents(toCents(opts.amount ?? inv.amount)),
         checkNumber: opts.checkNumber != null ? String(opts.checkNumber) : undefined,
         memo: String(opts.memo || inv.description || inv.invoice_number || ""),
+        checkKind: "contractor",
+        invoiceNumber: inv.invoice_number || null,
+        contractReference: inv.proposal_reference || (inv.contract_id ? `Contract ${String(inv.contract_id).slice(0, 8)}` : (inv.proposal_id ? `Proposal ${String(inv.proposal_id).slice(0, 8)}` : null)),
+        originalAmount: fromCents(totalCents),
+        priorPaidAmount: fromCents(Math.max(0, paidToDateCents - thisAmountCents)),
+        paidToDateAmount: fromCents(paidToDateCents),
+        remainingBalanceAmount: fromCents(remainingCents),
+        isFinalPayment: remainingCents <= 0,
+        lineItems: parsePaymentDocLineItems(inv.line_items),
       },
     });
     return { pdfBytes, invoice: inv, companyId: String(compId) };
@@ -23286,6 +23355,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     vendorCheck?: {
       payeeName: string; payeeAddress?: string; payeeCityStateZip?: string;
       amount: number; checkNumber?: string; memo?: string;
+      // ── v2.2.7 detailed-stub fields (all optional; omitting any keeps the
+      // prior sparse rendering for callers that don't pass them) ────────────
+      /** "contractor" | "vendor" | "payee" — drives the dynamic check-type banner wording. */
+      checkKind?: "contractor" | "vendor" | "payee";
+      proposalTitle?: string | null;
+      contractReference?: string | null;
+      invoiceNumber?: string | null;
+      invoiceDate?: string | null;
+      paymentMethodLabel?: string | null;
+      /** The invoice/expense's original total, independent of what's paid so far. */
+      originalAmount?: number | null;
+      /** Sum of all completed payments on this invoice/expense BEFORE this check. */
+      priorPaidAmount?: number | null;
+      /** priorPaidAmount + this check's amount. */
+      paidToDateAmount?: number | null;
+      /** originalAmount - paidToDateAmount, floored at 0. */
+      remainingBalanceAmount?: number | null;
+      /** True when remainingBalanceAmount is (about to be) exactly 0 after this check. */
+      isFinalPayment?: boolean;
+      lineItems?: Array<{ name: string; quantity?: number | string | null; unitPrice?: number | string | null; lineTotal?: number | string | null }>;
     };
   }): Promise<Uint8Array> {
     const { PDFDocument, StandardFonts, rgb, degrees } = await import("pdf-lib");
@@ -23349,8 +23438,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const checkStockMode: CheckStockMode = cfg.checkStockMode === "blank_security" ? "blank_security" : "preprinted";
     const bankBrandingEnabled = cfg.bankBrandingEnabled !== false;
     const normalizeBrandName = (value: unknown): string => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const isAdikenTenant = normalizeBrandName((company as any)?.name || cfg.tenantSlug || cfg.companySlug) === "adiken" || String(cfg.tenantSlug || cfg.companySlug || "").toLowerCase() === "adiken";
-    const allowBuiltInAdikenLogo = isAdikenTenant && cfg.allowBuiltInAdikenLogo === true;
 
     // Per-field position overrides from check_templates.layoutConfig.positions
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
@@ -23489,9 +23576,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Contractor payment context — used in place of hard-coded "Paid" / "$0.00".
     const contractorPaymentMethod = isCalibration
       ? "Check"
-      : sanitizeForPdf(String(params.vendorCheck ? "Check" : (item?.paymentMethod || "Check")))
+      : sanitizeForPdf(String(params.vendorCheck ? (params.vendorCheck.paymentMethodLabel || "Check") : (item?.paymentMethod || "Check")))
         .replace(/_/g, " ")
         .replace(/\b\w/g, (m) => m.toUpperCase());
+
+    // ── v2.2.7 dynamic check-type wording (contractor / vendor / payee) ──────
+    // Never "Vendor Check" for a contractor-invoice payment, and never labeled
+    // as a payroll paystub — a contractor/vendor check is nonemployee
+    // compensation or an AP disbursement, not a wage statement.
+    const CHECK_KIND_LABELS: Record<"contractor" | "vendor" | "payee", string> = {
+      contractor: "CONTRACTOR CHECK", vendor: "VENDOR CHECK", payee: "PAYEE CHECK",
+    };
+    const checkKind: "contractor" | "vendor" | "payee" = params.vendorCheck?.checkKind || "payee";
+    const checkKindLabel = CHECK_KIND_LABELS[checkKind];
+    const vcOriginalAmount = params.vendorCheck?.originalAmount != null ? Number(params.vendorCheck.originalAmount) : null;
+    const vcPriorPaid      = params.vendorCheck?.priorPaidAmount != null ? Number(params.vendorCheck.priorPaidAmount) : null;
+    const vcPaidToDate     = params.vendorCheck?.paidToDateAmount != null ? Number(params.vendorCheck.paidToDateAmount) : null;
+    const vcRemaining      = params.vendorCheck?.remainingBalanceAmount != null ? Number(params.vendorCheck.remainingBalanceAmount) : null;
+    const vcIsFinal        = Boolean(params.vendorCheck?.isFinalPayment);
+    const vcLineItems      = Array.isArray(params.vendorCheck?.lineItems) ? params.vendorCheck!.lineItems!.filter((li) => li && (li.name || li.lineTotal != null)) : [];
+    const vcInvoiceNumber  = params.vendorCheck?.invoiceNumber ? sanitizeForPdf(String(params.vendorCheck.invoiceNumber)) : "";
+    const vcContractRef    = params.vendorCheck?.contractReference ? sanitizeForPdf(String(params.vendorCheck.contractReference)) : "";
 
     // Company fields
     const coName  = isCalibration ? "ACME Corporation"  : sanitizeForPdf(company?.name    || "");
@@ -23525,32 +23630,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(label, { x: x + 2, y: y + h - 8, size: 5.5, font: hv, color: rgb(0.8, 0.2, 0.2) });
     };
 
+    // SSRF-safe remote image fetch (redirect validation, private/loopback/
+    // metadata IP blocking, size + timeout bounds) — see server/remote-image-fetch.ts.
+    const fetchRemoteImageBytes = (imageUrl: string): Promise<Buffer> => fetchRemoteImageBytesSafe(imageUrl);
+
     const embedUploadOrRemoteImage = async (imageUrl: string | undefined): Promise<any | null> => {
       if (!imageUrl) return null;
+      let imageBytes: Buffer;
       try {
-        let imageBytes: Buffer;
         if (imageUrl.startsWith("/uploads/") || imageUrl.startsWith("uploads/")) {
           const relativePart = imageUrl.replace(/^\/?uploads\//, "");
           const localPath = path.join(resolvedUploadDir, relativePart);
           imageBytes = await fs.promises.readFile(localPath);
         } else {
-          const https = await import("https");
-          const http  = await import("http");
-          imageBytes = await new Promise((resolve, reject) => {
-            const proto = imageUrl.startsWith("https") ? https : http;
-            (proto as any).get(imageUrl, (res: any) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (c: Buffer) => chunks.push(c));
-              res.on("end", () => resolve(Buffer.concat(chunks)));
-              res.on("error", reject);
-            }).on("error", reject);
-          });
+          imageBytes = await fetchRemoteImageBytes(imageUrl);
         }
+      } catch (readErr) {
+        // Sanitized: never log the image URL / stored-file path — only the error
+        // class, but DO distinguish "file missing" so ops can tell a genuinely
+        // absent upload (needs re-upload) from a transient embed failure.
+        const cls = readErr instanceof Error ? readErr.name : typeof readErr;
+        const code = (readErr as any)?.code;
+        console.warn(`[CHECK_PDF] Logo image source unreadable (${cls}${code ? `/${code}` : ""}) — using text fallback`);
+        return null;
+      }
+      try {
         const isPng = imageUrl.toLowerCase().endsWith(".png") || imageBytes[0] === 0x89;
         return isPng ? await doc.embedPng(imageBytes) : await doc.embedJpg(imageBytes);
-      } catch (imageErr) {
-        // Sanitized: never log the image URL / stored-file path — only the error class.
-        const cls = imageErr instanceof Error ? imageErr.name : typeof imageErr;
+      } catch (embedErr) {
+        const cls = embedErr instanceof Error ? embedErr.name : typeof embedErr;
         console.warn(`[CHECK_PDF] Logo image embed failed (${cls}) — using text fallback`);
         return null;
       }
@@ -23607,18 +23715,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
     }
 
-    if (!logoEmbedded) {
-      // Company branding hierarchy: tenant-uploaded logo, then explicitly enabled Adiken-only
-      // vector fallback, then text company name. Never print Adiken branding globally.
-      if (!isCalibration && allowBuiltInAdikenLogo) {
-        page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH, color: rgb(0.05, 0.24, 0.50), opacity: 0.95 });
-        page.drawText("A", { x: logoX + 7, y: logoBot + 5, size: 18, font: hvB, color: rgb(1, 1, 1) });
-        logoEmbedded = true;
-      } else if (isCalibration) {
-        page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH,
-          borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
-        page.drawText("LOGO", { x: logoX + 4, y: logoBot + 4, size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
-      }
+    if (!logoEmbedded && isCalibration) {
+      // Calibration mode only: draw a placeholder box so the logo position can be
+      // visually verified. Production/live checks with no uploaded company logo
+      // fall through to the text-only company name/address block below — no
+      // synthetic icon is ever substituted for a real logo, and no single
+      // company (Adiken or otherwise) gets a hard-coded vector logo.
+      page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH,
+        borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
+      page.drawText("LOGO", { x: logoX + 4, y: logoBot + 4, size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
     }
 
     // ── Company block — x 0.68in (right of icon), name at y 0.30in ───────
@@ -23640,22 +23745,51 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : sanitizeForPdf(cfg.bankAddress || (remittanceSource as any)?.bankAddress || "");
     const bankLogoUrl: string | undefined = cfg.bankLogoUrl || cfg.bankLogo?.url;
     const normalizedBankName = normalizeBrandName(bankName);
-    const bankLogoImg = !isCalibration ? await embedUploadOrRemoteImage(bankLogoUrl) : null;
-    if (bankLogoImg) {
-      page.drawImage(bankLogoImg, { x: z1x(3.45) + bankLogoOffX, y: z1y(0.46) + bankLogoOffY, width: 86, height: 20 });
-    } else if (bankBrandingEnabled && normalizedBankName === "bank of america") {
-      const bx = z1x(3.45) + bankLogoOffX, by = z1y(0.46) + bankLogoOffY;
-      page.drawRectangle({ x: bx, y: by, width: 86, height: 20, color: rgb(0.0, 0.12, 0.40), opacity: 0.95 });
-      page.drawRectangle({ x: bx + 43, y: by, width: 43, height: 20, color: rgb(0.76, 0.02, 0.08), opacity: 0.95 });
-      page.drawText("Bank of America", { x: bx + 5, y: by + 6, size: 6.5, font: hvB, color: rgb(1, 1, 1) });
+    // Logo priority: (1) a tenant-configured upload/remote logo for this bank,
+    // (2) the repo-bundled APPROVED asset for a recognized bank brand (never
+    // fetched over the network — see BANK_LOGO_ASSETS), (3) nothing — bank
+    // name/address render as text only. There is no synthetic/hand-drawn
+    // "logo" fallback: a fake vector mark is exactly the "alternate logo"
+    // this render path must never produce.
+    let bankLogoImg: any = null;
+    let bankLogoIsRealAsset = false;
+    if (!isCalibration && bankBrandingEnabled) {
+      bankLogoImg = await embedUploadOrRemoteImage(bankLogoUrl);
+      if (bankLogoImg) bankLogoIsRealAsset = true;
+      if (!bankLogoImg) {
+        const bundledBytes = loadBundledBankLogoBytes(normalizedBankName);
+        if (bundledBytes) {
+          try { bankLogoImg = await doc.embedPng(bundledBytes); bankLogoIsRealAsset = true; }
+          catch (e) { console.error(`[CHECK_PDF] Bundled bank logo embed failed: ${e instanceof Error ? e.name : typeof e}`); }
+        }
+      }
     }
-    if (bankName) {
-      const bnW  = bankName.length    * 5.6;
-      const bnaW = bankAddress.length * 3.7;
-      const bankCenterX = z1x(4.18);
-      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2) + bankLogoOffX, y: z1y(0.52) + bankLogoOffY, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
-      if (bankAddress)
-        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(0.66) + bankLogoOffY, size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
+    // Logo box: top-left at (3.35in, 0.16in), sized to the real asset's aspect
+    // ratio (never stretched/distorted) so the approved mark prints undistorted.
+    const bankLogoTopIn = 0.16;
+    const bankLogoWpt = 80;
+    const bankLogoHpt = bankLogoImg ? Math.round(bankLogoWpt * (bankLogoImg.height / bankLogoImg.width)) : 24;
+    const bankLogoX = z1x(3.35) + bankLogoOffX;
+    const bankLogoY = z1y(bankLogoTopIn + bankLogoHpt / 72) + bankLogoOffY; // bottom-left corner (PDF Y-up)
+    if (bankLogoImg) {
+      page.drawImage(bankLogoImg, { x: bankLogoX, y: bankLogoY, width: bankLogoWpt, height: bankLogoHpt });
+    }
+    // Bank name text is only drawn when no real logo image renders — a real
+    // logo already carries the brand name, so a text label beside/under it
+    // would be redundant "substitute text" layered on the approved asset.
+    const bankTextTopIn = bankLogoImg ? bankLogoTopIn + bankLogoHpt / 72 + 0.05 : bankLogoTopIn + 0.10;
+    if (bankName && !bankLogoIsRealAsset) {
+      const bnW = bankName.length * 5.6;
+      const bankCenterX = z1x(3.35) + bankLogoWpt / 2;
+      page.drawText(bankName, { x: Math.round(bankCenterX - bnW / 2) + bankLogoOffX, y: z1y(bankTextTopIn) + bankLogoOffY, size: 10, font: hvB, color: rgb(0.08, 0.08, 0.32) });
+    }
+    // Bank address always renders — directly under the logo (or under the name
+    // text when no logo image is available) — never overlapping it.
+    if (bankAddress) {
+      const addrTopIn = bankName && !bankLogoIsRealAsset ? bankTextTopIn + 0.14 : bankTextTopIn;
+      const bnaW = bankAddress.length * 3.5;
+      const bankCenterX = z1x(3.35) + bankLogoWpt / 2;
+      page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2) + bankLogoOffX, y: z1y(addrTopIn) + bankLogoOffY, size: 7.5, font: hv, color: rgb(0.30, 0.30, 0.30) });
     }
 
     // ── Fractional ABA routing — upper-right corner (x ~5.25in), ANSI X9 requirement ─
@@ -24012,14 +24146,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     renderEmployeePaystub();
     } else {
-      // Vendor check info panel — right column of Zone 2
+      // Contractor / vendor / payee check info panel — right column of Zone 2.
+      // Banner wording is dynamic (never hard-coded "Vendor Check" for a
+      // contractor payment) and never uses payroll/paystub terminology.
       page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.08, 0.38, 0.14), opacity: 0.9 });
-      page.drawText("VENDOR CHECK", { x: psX + psW / 2 - 28, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
       const vcChkLabel = `Check No. ${fmtCheckNum}`;
+      // Left-align (rather than center) so the longer "CONTRACTOR CHECK" /
+      // "PAYEE CHECK" wording can't collide with the right-aligned check
+      // number the way a centered layout could once the label exceeds the
+      // original fixed "VENDOR CHECK" length; shrink slightly for the
+      // longest label so it always clears the check-number field.
+      const checkKindFontSize = checkKindLabel.length > 12 ? 8.5 : 10;
+      page.drawText(checkKindLabel, { x: psX + 4, y: checkBot - 14 + paystubOffY, size: checkKindFontSize, font: hvB, color: rgb(1, 1, 1) });
       page.drawText(vcChkLabel, { x: rm - Math.round(vcChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
       let vcY = checkBot - 36 + paystubOffY;
+      if (vcIsFinal) {
+        page.drawText("FINAL PAYMENT", { x: psX, y: vcY, size: 7.5, font: hvB, color: rgb(0.55, 0.05, 0.05) });
+        vcY -= 11;
+      }
       page.drawText(`Amount: $${fmtMoney(netPay)}`, { x: psX, y: vcY, size: 9, font: hvB, color: rgb(0.05, 0.3, 0.08) });
       vcY -= 14;
+      if (vcPaidToDate != null) {
+        page.drawText(`Paid to date: $${fmtMoney(vcPaidToDate)}  •  Remaining: $${fmtMoney(vcRemaining ?? 0)}`, { x: psX, y: vcY, size: 7.3, font: hv, color: rgb(0.2, 0.2, 0.2) });
+        vcY -= 11;
+      }
       if (vcMemo) {
         const vcMemoTrunc = vcMemo.length > 52 ? vcMemo.slice(0, 49) + "…" : vcMemo;
         page.drawText(`Memo: ${vcMemoTrunc}`, { x: psX, y: vcY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
@@ -24042,12 +24192,41 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const vcZ3Label = `Check No. ${fmtCheckNum}`;
       page.drawText(vcZ3Label, { x: rm - Math.round(vcZ3Label.length * 4.2), y: z3BannerYv, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
       let vcZ3Y = z3BannerYv - 18;
+      const vcZ3MinY = 8;
       page.drawText(`Payee:  ${params.vendorCheck.payeeName}`, { x: lm, y: vcZ3Y, size: 9, font: hvB, color: rgb(0, 0, 0) }); vcZ3Y -= 12;
       if (params.vendorCheck.payeeAddress) { page.drawText(params.vendorCheck.payeeAddress, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
       if (params.vendorCheck.payeeCityStateZip) { page.drawText(params.vendorCheck.payeeCityStateZip, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 14; }
+      if (vcInvoiceNumber) { page.drawText(`Invoice:  ${truncatePdfText(vcInvoiceNumber, 44)}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
+      if (vcContractRef) { page.drawText(`Contract: ${truncatePdfText(vcContractRef, 44)}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
+      if (vcIsFinal) { page.drawText("FINAL PAYMENT", { x: lm, y: vcZ3Y, size: 8, font: hvB, color: rgb(0.55, 0.05, 0.05) }); vcZ3Y -= 12; }
       page.drawText(`Amount:  $${fmtMoney(netPay)}`, { x: lm, y: vcZ3Y, size: 9, font: hvB, color: rgb(0, 0, 0.5) }); vcZ3Y -= 12;
+      if (vcOriginalAmount != null) { page.drawText(`Invoice total:  $${fmtMoney(vcOriginalAmount)}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
+      if (vcPaidToDate != null) { page.drawText(`Paid to date:  $${fmtMoney(vcPaidToDate)}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
+      if (vcRemaining != null) { page.drawText(`Remaining balance:  $${fmtMoney(vcRemaining)}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
       page.drawText(`Date:    ${payDate}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); vcZ3Y -= 12;
-      if (vcMemo) { page.drawText(`Memo:    ${vcMemo.length > 60 ? vcMemo.slice(0, 57) + "…" : vcMemo}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); }
+      if (vcMemo) { page.drawText(`Memo:    ${vcMemo.length > 60 ? vcMemo.slice(0, 57) + "…" : vcMemo}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); vcZ3Y -= 12; }
+      if (vcLineItems.length > 0 && vcZ3Y >= vcZ3MinY + 22) {
+        vcZ3Y -= 4;
+        const liQtyX = rm - 190, liUnitX = rm - 120, liTotalX = rm - 55;
+        page.drawRectangle({ x: lm - 2, y: vcZ3Y - 3, width: rm - lm + 2, height: 12, color: rgb(0.88, 0.88, 0.88) });
+        page.drawText("LINE ITEM", { x: lm, y: vcZ3Y, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+        page.drawText("QTY", { x: liQtyX, y: vcZ3Y, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+        page.drawText("UNIT", { x: liUnitX, y: vcZ3Y, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+        page.drawText("TOTAL", { x: liTotalX, y: vcZ3Y, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+        vcZ3Y -= 11;
+        for (const li of vcLineItems.slice(0, 8)) {
+          if (vcZ3Y < vcZ3MinY) break;
+          const liName = sanitizeForPdf(String(li.name || ""));
+          const liQty = li.quantity != null && li.quantity !== "" ? sanitizeForPdf(String(li.quantity)) : "";
+          const liUnit = li.unitPrice != null ? `$${fmtMoney(Number(li.unitPrice) || 0)}` : "";
+          const liTotal = li.lineTotal != null ? `$${fmtMoney(Number(li.lineTotal) || 0)}` : "";
+          page.drawText(truncatePdfText(liName, 40), { x: lm, y: vcZ3Y, size: 6.3, font: hv, color: rgb(0.2, 0.2, 0.2) });
+          if (liQty) page.drawText(liQty, { x: liQtyX, y: vcZ3Y, size: 6.3, font: cour, color: rgb(0.2, 0.2, 0.2) });
+          if (liUnit) page.drawText(liUnit, { x: liUnitX, y: vcZ3Y, size: 6.3, font: cour, color: rgb(0.2, 0.2, 0.2) });
+          if (liTotal) page.drawText(liTotal, { x: liTotalX, y: vcZ3Y, size: 6.3, font: cour, color: rgb(0.2, 0.2, 0.2) });
+          vcZ3Y -= 10;
+        }
+      }
     } else if (isContractor) {
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 3 — CONTRACTOR PAYMENT STATEMENT (detachable contractor copy)
