@@ -25226,14 +25226,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user?.workerId) return res.status(403).json({ message: "No linked worker profile" });
-      // Whitelist of fields employees are allowed to self-update
+      // Whitelist of fields employees are allowed to self-update. `preferences`
+      // is deliberately excluded — it's a JSON-serialized string, and this
+      // route has no JSON validation, so a raw client value here could
+      // corrupt it and crash My Profile's PreferencesTab (JSON.parse) on
+      // every future load. PATCH /api/my/preferences is the dedicated,
+      // JSON-validated way to update it.
       const ALLOWED_SELF_EDIT = [
         "phone", "mobilePhone", "homePhone", "workPhone", "workPhoneExt", "fax",
         "email", "homeEmail", "workEmail",
         "address", "address2", "city", "state", "zip", "country",
         "emergencyContactName", "emergencyContactRelationship",
         "emergencyContactPhone", "emergencyContactEmail",
-        "preferences", "note"
+        "note"
       ];
       const filtered: Record<string, any> = {};
       for (const key of ALLOWED_SELF_EDIT) {

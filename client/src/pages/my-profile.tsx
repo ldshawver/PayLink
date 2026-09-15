@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useHaptics } from "@/hooks/use-native-platform";
+import { safeParseWorkerPreferences } from "@/lib/worker-preferences";
 import type { Worker, WorkerDocument, Review, Qualification, WorkerLanguage, WorkerMembership } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -232,7 +233,7 @@ function ContactInfoTab({ worker }: { worker: Worker | null }) {
 
 function PreferencesTab({ worker }: { worker: Worker | null }) {
   const { toast } = useToast();
-  const prefs = worker ? JSON.parse(worker.preferences || "{}") : {};
+  const prefs = worker ? safeParseWorkerPreferences(worker.preferences) : {};
 
   const [notifyScheduleEmail, setNotifyScheduleEmail] = useState<boolean>(prefs.notifyScheduleEmail !== false);
   const [notifyScheduleSms, setNotifyScheduleSms] = useState<boolean>(!!prefs.notifyScheduleSms);
