@@ -1,10 +1,14 @@
 /**
  * v2.2.7 check-printing recovery — SSRF protection for the check-face remote
- * logo fetch (company/bank logo URLs configured per tenant). Pure unit test,
- * no DB/network/server. See server/remote-image-fetch.ts.
+ * logo fetch (company/bank logo URLs configured per tenant). See
+ * server/remote-image-fetch.ts. No DB, no real server, no external network —
+ * the live-fetch section below binds a plain node:http server to 127.0.0.1
+ * only (always available, no egress required) purely to prove a request
+ * naming a blocked address is never even attempted.
  */
 import assert from "node:assert/strict";
-import { isDisallowedRemoteImageIp, isBlockedRemoteImageHostname } from "../server/remote-image-fetch.ts";
+import http from "node:http";
+import { isDisallowedRemoteImageIp, isBlockedRemoteImageHostname, fetchRemoteImageBytesSafe } from "../server/remote-image-fetch.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.error(`  ✗ ${name}`); } };
@@ -47,6 +51,42 @@ ok("foo.localhost is blocked", isBlockedRemoteImageHostname("foo.localhost"));
 ok("metadata.internal is blocked", isBlockedRemoteImageHostname("metadata.internal"));
 ok("printer.local is blocked", isBlockedRemoteImageHostname("printer.local"));
 ok("a real public hostname is allowed", !isBlockedRemoteImageHostname("cdn.example.com"));
+
+console.log("\n=== check-face remote logo fetch: connection-level SSRF bypass regression ===\n");
+console.log("(A prior version of fetchRemoteImageBytesSafe validated the resolved address only");
+console.log(" via a `lookup` option passed to http.get()/https.get(). Node's own connection logic");
+console.log(" recognizes a hostname that already looks like an IP — including forms net.isIP()");
+console.log(" itself doesn't, such as bare-decimal or hex — and connects straight to it WITHOUT");
+console.log(" ever invoking `lookup`, so any such spelling of a blocked address bypassed the");
+console.log(" filter entirely. These assertions prove the fetch is now blocked before a socket is");
+console.log(" even opened, for every encoding that reached the real server unfiltered before the fix.\n");
+
+async function liveBypassRegressionChecks() {
+  let requestsReceived = 0;
+  const server = http.createServer((_req, res) => { requestsReceived++; res.writeHead(200); res.end("should-never-be-reached"); });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as any).port;
+
+  const blockedHostForms = [
+    `http://127.0.0.1:${port}/`,          // dotted-decimal loopback
+    `http://2130706433:${port}/`,          // pure-decimal encoding of 127.0.0.1
+    `http://0x7f000001:${port}/`,          // hex encoding of 127.0.0.1
+    `http://[::1]:${port}/`,               // bracketed IPv6 loopback literal
+  ];
+  for (const url of blockedHostForms) {
+    try {
+      await fetchRemoteImageBytesSafe(url);
+      ok(`${url} is blocked`, false);
+    } catch (e: any) {
+      ok(`${url} is blocked (${e.message})`, e.message === "BLOCKED_HOST");
+    }
+  }
+  ok("the local test server never received any of the blocked-host requests", requestsReceived === 0);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+await liveBypassRegressionChecks();
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

@@ -31,6 +31,16 @@ type LineItem = { name: string; quantity?: number | string | null; unitPrice?: n
 type Scenario = {
   slug: string;
   companyName: string; companyAddr1: string; companyAddr2: string;
+  /** companies.dba — set on this synthetic company's record but, per the current
+   * server/routes.ts renderCheckPdf() (coName = sanitizeForPdf(company?.name || "")),
+   * NOT read anywhere in the server-rendered check-PDF path. Documented on the
+   * scenario and in the audit report for traceability; deliberately NOT drawn on
+   * the check face, so this evidence faithfully reflects real renderer behavior
+   * instead of fabricating branding the production PDF renderer doesn't produce.
+   * (client/src/pages/print-expense-check.tsx, a separate legacy client-rendered
+   * page unrelated to this PR, does render "DBA: {company.dba}" — pre-existing
+   * divergence, not introduced or touched by PR #155.) */
+  companyDba?: string;
   bankName: string; bankAddress: string; bankBrandingEnabled: boolean;
   routing: string; account: string; checkNumber: string;
   checkKind: "contractor" | "vendor" | "payee";
@@ -101,6 +111,23 @@ const SCENARIOS: Scenario[] = [
       { name: "Disposal / haul-away", quantity: 1, unitPrice: 200, lineTotal: 200 },
     ],
   },
+  {
+    // Issuer DBA coverage: same legal company/bank account as adiken-inc-partial
+    // above (same companyId, same funding account) but with companies.dba set —
+    // tests whether the check-PDF renderer's issuer branding changes for a DBA,
+    // NOT a different company (no cross-company data substitution: address,
+    // routing, and account all remain Adiken Inc.'s own).
+    slug: "adiken-inc-dba-lucifer-cruz",
+    companyName: "Adiken Inc.", companyDba: "Lucifer Cruz", companyAddr1: "4820 Meridian Business Park Dr, Suite 220", companyAddr2: "Charlotte, NC 28217",
+    bankName: "Bank of America", bankAddress: "100 N Tryon St, Charlotte, NC 28255", bankBrandingEnabled: true,
+    routing: "021000021", account: "8873041256", checkNumber: "1050",
+    checkKind: "vendor",
+    payeeName: "Sequoia Grounds Maintenance LLC", payeeAddress: "220 Wilkinson Blvd", payeeCityStateZip: "Charlotte, NC 28208",
+    amount: 625.00, memo: "Landscaping - September", payDate: "09/15/2026",
+    invoiceNumber: "INV-2091", contractReference: null,
+    originalAmount: 625.00, priorPaidAmount: 0, paidToDateAmount: 625.00, remainingBalanceAmount: 0, isFinalPayment: true,
+    lineItems: [{ name: "Monthly grounds maintenance", quantity: 1, unitPrice: 625, lineTotal: 625 }],
+  },
 ];
 
 const BANK_LOGO_ASSETS: Record<string, string> = { "bank of america": "bank-of-america.png" };
@@ -115,6 +142,14 @@ async function main() {
   const normalizeBrandName = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
   const micrPath = fs.existsSync("public/fonts/micrenc.ttf") ? "public/fonts/micrenc.ttf" : "client/public/fonts/micrenc.ttf";
+
+  const sourceSha = await (async () => {
+    try {
+      const { execFileSync } = await import("node:child_process");
+      return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    } catch { return "unknown"; }
+  })();
+  const manifest: Array<{ slug: string; checkKind: string; issuer: { name: string; dba?: string; address: string }; payee: { name: string; address: string }; amount: number; isFinalPayment: boolean }> = [];
 
   for (const sc of SCENARIOS) {
     const doc = await PDFDocument.create();
@@ -269,7 +304,18 @@ async function main() {
     const outPath = path.join(OUT_DIR, `${sc.slug}.pdf`);
     fs.writeFileSync(outPath, bytes);
     console.log(`${OUT}/${sc.slug}.pdf — ${micrString.length} MICR chars, ${sc.lineItems.length} line items, checkKind=${sc.checkKind}, final=${sc.isFinalPayment}`);
+    manifest.push({
+      slug: sc.slug, checkKind: sc.checkKind,
+      issuer: { name: sc.companyName, dba: sc.companyDba, address: `${sc.companyAddr1}, ${sc.companyAddr2}` },
+      payee: { name: sc.payeeName, address: `${sc.payeeAddress}, ${sc.payeeCityStateZip}` },
+      amount: sc.amount, isFinalPayment: sc.isFinalPayment,
+    });
   }
+
+  fs.writeFileSync(path.join(OUT_DIR, "manifest.json"), JSON.stringify({
+    generatedAt: new Date().toISOString(), sourceSha, legacy: LEGACY, scenarios: manifest,
+  }, null, 2));
+  console.log(`${OUT}/manifest.json — sourceSha ${sourceSha}`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

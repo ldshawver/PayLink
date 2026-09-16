@@ -11,11 +11,25 @@
  *    resolve to a public IP. Loopback, RFC1918 private ranges, link-local
  *    (including the 169.254.169.254 cloud-metadata address), and other
  *    non-public ranges are rejected.
- *  - The resolved address is pinned via a custom `dns.lookup` passed to the
- *    request, so the connection cannot be re-resolved to a different
- *    (rebound) address after validation (DNS-rebinding TOCTOU).
+ *  - Resolution and validation happen in application code BEFORE the request
+ *    is made, and the socket connects directly to that already-validated
+ *    address (Host/SNI still carry the original hostname) — never to a
+ *    `lookup` hook passed to http.get()/https.get(). An earlier version of
+ *    this file passed a validating `lookup` function as a request option
+ *    instead; that is NOT equivalent and was a live SSRF bypass: Node's own
+ *    connection logic recognizes a hostname that already looks like an IP —
+ *    including forms `net.isIP()` itself doesn't recognize, such as bare
+ *    decimal (`http://2130706433/` = 127.0.0.1) or hex (`http://0x7f000001/`)
+ *    — and connects straight to it without ever invoking `lookup`, so a
+ *    logo URL (or a redirect Location) spelling a blocked address as
+ *    anything other than plain dotted-decimal sailed through unfiltered.
+ *    Resolving explicitly here, once, and connecting to that literal
+ *    address closes that gap regardless of how the host was spelled, and
+ *    the single resolve-then-connect-to-that-address sequence also prevents
+ *    a DNS-rebinding TOCTOU (no second, unvalidated resolution ever happens).
  *  - Response size is capped; total wall-clock time across all redirect hops
- *    is bounded.
+ *    is bounded by an explicit deadline timer (not just a per-hop idle
+ *    socket timeout, which a slow steady trickle would never trip).
  */
 import net from "net";
 
@@ -54,23 +68,17 @@ export function isBlockedRemoteImageHostname(hostname: string): boolean {
   return lower === "localhost" || lower.endsWith(".localhost") || lower.endsWith(".internal") || lower.endsWith(".local");
 }
 
-/**
- * A `dns.lookup`-compatible function that rejects any resolved address
- * `isDisallowedRemoteImageIp` flags, so the caller can pass it as the
- * `lookup` option of `http.get`/`https.get` — the same address that was
- * validated is the one actually connected to.
- */
-export function createSsrfSafeLookup() {
-  return (hostname: string, options: any, callback: any) => {
-    const cb: any = typeof options === "function" ? options : callback;
-    import("dns").then((dns) => {
-      dns.lookup(hostname, {}, (err, address, family) => {
-        if (err) return cb(err);
-        if (isDisallowedRemoteImageIp(address)) return cb(new Error("BLOCKED_HOST"));
-        cb(null, address, family);
-      });
-    }, cb);
-  };
+/** Resolve `hostname` and reject if it lands on a disallowed address. Strips
+ * the brackets URL puts around a literal IPv6 host (`[::1]` -> `::1`) before
+ * resolving, since a bracketed literal isn't itself a valid dns.lookup input. */
+async function resolveAndValidateHost(hostname: string): Promise<{ address: string; family: number }> {
+  const dns = await import("dns");
+  const bare = hostname.replace(/^\[/, "").replace(/\]$/, "");
+  const { address, family } = await new Promise<{ address: string; family: number }>((resolve, reject) => {
+    dns.lookup(bare, {}, (err, address, family) => (err ? reject(err) : resolve({ address, family })));
+  });
+  if (isDisallowedRemoteImageIp(address)) throw new Error("BLOCKED_HOST");
+  return { address, family };
 }
 
 /**
@@ -91,18 +99,33 @@ export async function fetchRemoteImageBytesSafe(
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("BLOCKED_PROTOCOL");
   if (isBlockedRemoteImageHostname(parsed.hostname)) throw new Error("BLOCKED_HOST");
   if (Date.now() > deadline) throw new Error("TOTAL_TIMEOUT");
-  const lookup = createSsrfSafeLookup();
+
+  // Resolve + validate BEFORE connecting, once, here in application code —
+  // see the file-level comment for why a `lookup` request option is not safe.
+  const { address } = await resolveAndValidateHost(parsed.hostname);
+
   return new Promise((resolve, reject) => {
     const proto = parsed.protocol === "https:" ? https : http;
-    const req = (proto as any).get(imageUrl, { timeout: REMOTE_IMAGE_PER_HOP_TIMEOUT_MS, lookup }, (res: any) => {
+    const reqOptions: any = {
+      protocol: parsed.protocol,
+      hostname: address, // connect directly to the pre-validated literal address
+      port: parsed.port ? Number(parsed.port) : (parsed.protocol === "https:" ? 443 : 80),
+      path: `${parsed.pathname}${parsed.search}`,
+      headers: { Host: parsed.host }, // preserve virtual-hosting / original Host
+      timeout: REMOTE_IMAGE_PER_HOP_TIMEOUT_MS,
+    };
+    if (parsed.protocol === "https:") reqOptions.servername = parsed.hostname; // correct SNI + cert-hostname check
+    const req = (proto as any).get(reqOptions, (res: any) => {
       const status = res.statusCode || 0;
       if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+        clearTimeout(hardDeadlineTimer);
         res.resume();
         const next = new URL(res.headers.location, imageUrl).toString();
         fetchRemoteImageBytesSafe(next, redirectsLeft - 1, deadline).then(resolve, reject);
         return;
       }
       if (status < 200 || status >= 300) {
+        clearTimeout(hardDeadlineTimer);
         res.resume();
         reject(new Error(`HTTP_${status}`));
         return;
@@ -117,10 +140,17 @@ export async function fetchRemoteImageBytesSafe(
         }
         chunks.push(c);
       });
-      res.on("end", () => resolve(Buffer.concat(chunks)));
-      res.on("error", reject);
+      res.on("end", () => { clearTimeout(hardDeadlineTimer); resolve(Buffer.concat(chunks)); });
+      res.on("error", (e: any) => { clearTimeout(hardDeadlineTimer); reject(e); });
     });
     req.on("timeout", () => req.destroy(new Error("TIMEOUT")));
-    req.on("error", reject);
+    req.on("error", (e: any) => { clearTimeout(hardDeadlineTimer); reject(e); });
+    // Per-hop `timeout` above is a socket IDLE timeout (resets on every byte
+    // received) — on its own a slow, steady trickle of small chunks could
+    // hold a single (non-redirecting) request open indefinitely without ever
+    // going idle long enough to trip it. This hard deadline aborts the
+    // request at the wall-clock cutoff regardless of ongoing activity, so
+    // REMOTE_IMAGE_TOTAL_TIMEOUT_MS bounds real elapsed time, not just idle time.
+    const hardDeadlineTimer = setTimeout(() => req.destroy(new Error("TOTAL_TIMEOUT")), Math.max(0, deadline - Date.now()));
   });
 }

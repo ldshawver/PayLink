@@ -79,6 +79,10 @@ Confirmations:
 
 Fresh Adiken Inc. and Adiken Properties PDFs, full check-face screenshots, 300-DPI MICR crops, extracted text, and coordinate reports must be generated under `/tmp/paylink-check-audit/` or CI artifacts. They are intentionally excluded from Git.
 
+**Generated 2026-09-16, source SHA `51d22e2f3a332e371cb54ad05dca7a3e74c2cd9e`** (this PR's head, plus an uncommitted `scripts/render-vendor-check-samples.ts` tooling addition — a 5th DBA-coverage scenario and a `manifest.json` writer, no production code touched): `scripts/render-vendor-check-samples.ts --out after` (current candidate) and `--legacy --out before` (pre-recovery, for comparison), covering all 5 requested entities — Adiken Inc., Adiken Properties, Refined Mind, Contractor Hub (payee Lucifer Alexander Cruz-Villanueva), and a new `adiken-inc-dba-lucifer-cruz` scenario (Adiken Inc. issuing with `companies.dba = "Lucifer Cruz"` set, same company/bank account, different payee — see the DBA finding below). For each of the 5 scenarios: full-page screenshot at 150 DPI (`check-evidence-output/after/full-page-150dpi/`) and a 300-DPI crop of the MICR clear band (`check-evidence-output/after/micr-crop-300dpi/`), plus `check-evidence-output/after/manifest.json` (issuer/DBA/payee/amount per scenario, source SHA, generation timestamp). The prior session's evidence at the same source SHA (before this tooling addition, 4 scenarios, no manifest) is preserved separately, unmodified, at `check-evidence-output/historical-51d22e2/`. All of `check-evidence-output/` remains gitignored, not committed — reproducible from the script and this doc. MICR crops confirm clean E-13B glyphs with no `=` at 300 DPI for all 5 scenarios; full-page screenshots confirm no clipping/overlap and correct dynamic check-kind banners.
+
+**DBA finding (pre-existing, not introduced or fixed by this PR)**: `companies.dba` is fetched and threaded into the `company` object passed to `renderCheckPdf()` in both check-PDF entry points (`server/routes.ts` ~11540, ~12684 — unchanged by this PR's diff, present since PR #112), but `renderCheckPdf()` itself only reads `company?.name` for the printed issuer name (`coName` at ~23602) — `dba` is never drawn. The `adiken-inc-dba-lucifer-cruz` scenario reproduces this faithfully: the check face prints "Adiken Inc.", never "Lucifer Cruz". A separate, unrelated legacy page, `client/src/pages/print-expense-check.tsx` (routed at `/app/print-expense-check`, no in-app link found pointing to it), does render `DBA: {company.dba}` — a pre-existing divergence between two independent check-rendering implementations, out of scope for this PR to fix.
+
 ## Physical print status
 
 Not completed in this Codex environment. Staging must print at Actual Size / 100%, with no Fit to Page and no Shrink Oversized Pages, then validate MICR and layout against the intended check stock before production deployment.
@@ -148,14 +152,17 @@ allocation, or the separate `payment-documents.ts` proof-document path.
 - **Remote logo fetch hardened against SSRF**: `fetchRemoteImageBytes` (used
   for a tenant's uploaded/remote company or bank logo URL) now: rejects any
   scheme but `http`/`https`; resolves every hostname — the initial URL and
-  each of up to 3 redirect hops — through a custom `dns.lookup` that rejects
-  loopback, RFC1918 private, link-local (including the
-  `169.254.169.254` cloud-metadata address), and other non-public ranges,
-  and pins the request to that validated address (closing the DNS-rebinding
-  TOCTOU gap between validation and connection); caps the response at 5MB;
-  and bounds total wall-clock time across all hops to 15s (8s per hop,
-  unchanged). Local `/uploads/...` paths are untouched (still a plain
-  filesystem read, no network fetch).
+  each of up to 3 redirect hops — and rejects loopback, RFC1918 private,
+  link-local (including the `169.254.169.254` cloud-metadata address), and
+  other non-public ranges; caps the response at 5MB; and bounds total
+  wall-clock time across all hops to 15s (8s per hop). Local `/uploads/...`
+  paths are untouched (still a plain filesystem read, no network fetch).
+
+  **2026-09-16 review correction — the mechanism above was fixed twice more before merge, both found during this session's focused re-review, neither found by the automated review bot (unavailable, usage limit):**
+  1. **Critical: the original `lookup`-hook design was a live SSRF bypass, closed.** The initial recovery validated the resolved address only via a custom `dns.lookup` passed as the `lookup` option to `http.get()`/`https.get()`. Verified live (local loopback test server, no external network) that Node's own connection logic recognizes a hostname that already looks like an IP — including encodings `net.isIP()` itself does not recognize, such as bare-decimal (`http://2130706433/`, equal to `127.0.0.1`) or hex (`http://0x7f000001/`) — and connects straight to it **without ever invoking `lookup`**. A tenant-configured (or attacker-supplied, or a malicious redirect's) logo URL spelling a blocked address in any of these forms sailed through completely unfiltered, including the exact `169.254.169.254` cloud-metadata address the hardening's own commit message named as blocked. Confirmed exploitable end-to-end against a local test server before the fix (fetched real bytes from `127.0.0.1`, a decimal-encoded loopback, and a hex-encoded loopback); confirmed blocked after. Fixed by resolving and validating the hostname explicitly in application code *before* opening any connection, then connecting directly to that already-validated literal address (`Host`/TLS `servername` still carry the original hostname for correct virtual-hosting/SNI/cert checks) — this also strengthens the DNS-rebinding protection, since there is now exactly one resolution per hop, not a `lookup` hook that some inputs never reach. New regression test in `tests/check-pdf-remote-image-ssrf.test.ts` (loopback-only, no external network) proves all four encodings are now blocked before a socket is opened.
+  2. **The 15s total-timeout was not actually enforced as a wall-clock cutoff.** It was checked only once, at the start of each hop; a single non-redirecting response trickling data slowly enough to keep resetting the 8s *idle* socket timeout (which the per-hop `timeout` option is) could run indefinitely. Fixed with an explicit deadline timer that destroys the request at the wall-clock cutoff regardless of ongoing activity. Verified live: a synthetic slow-drip server (1 byte/500ms, forever) is now aborted at the deadline (~2000ms in the test) instead of hanging.
+
+  Both fixes verified with real sockets (loopback for the bypass regression; the developer's own public IP, reachable only from itself, for the redirect-chain/size-cap/timeout behavioral checks — not committed as tests, since a non-loopback address is not portable to CI runners behind NAT). `pnpm test:required` 101/101, `pnpm check`/`pnpm build` clean, `route-inventory:check`/`storage-scope-trace:check` current after these changes.
 - **Fractional routing**: numerator 0.545 in / rule 0.595 in / denominator 0.695 in
   from the check-face top (the +0.125 in default lowering is retained). Adjustable
   per company via `fractionalRoutingOffsetY` / `checkLayoutCalibration.fractionalRouting`.
