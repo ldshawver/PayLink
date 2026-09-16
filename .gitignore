@@ -18,3 +18,4 @@ storage/
 artifacts/check-pdf-audit/*
 !artifacts/check-pdf-audit/AUDIT.md
 *.bbox.html
+check-evidence-output/
