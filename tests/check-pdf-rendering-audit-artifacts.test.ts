@@ -10,10 +10,18 @@ assert(routes.includes('type CheckStockMode = "preprinted" | "blank_security"'),
 assert(routes.includes('cfg.checkStockMode === "blank_security" ? "blank_security" : "preprinted"'), "existing tenants default to preprinted stock");
 assert(routes.includes("const fractionalRoutingDefaultDownIn = 0.125"), "fractional routing group has a safe downward default offset");
 assert(routes.includes("Number(cfg.fractionalRoutingOffsetY ?? fractionalRoutingDefaultDownIn)"), "fractionalRoutingOffsetY is configurable per company/template");
-assert(routes.includes('normalizedBankName === "bank of america"'), "Bank of America vector fallback is gated by normalized bank name");
+// v2.2.7: the hand-drawn "Bank of America" vector rectangle was replaced by a
+// real, repo-committed logo asset (public/images/bank-logos/) embedded from
+// disk — never a synthetic vector substitute, never fetched over the network.
+assert(routes.includes("const BANK_LOGO_ASSETS: Record<string, string> = {"), "recognized bank brands map to a real bundled logo asset");
+assert(routes.includes('"bank of america": "bank-of-america.png"'), "Bank of America maps to the approved bundled asset");
+assert(routes.includes("function loadBundledBankLogoBytes("), "bundled bank logo is loaded from disk, never fetched remotely");
+assert(!routes.includes('page.drawText("Bank of America", { x: bx + 5'), "no hand-drawn vector substitute for a real bank logo remains");
 assert(routes.includes('cfg.bankLogoUrl || cfg.bankLogo?.url'), "tenant-uploaded bank logo takes precedence");
 assert(routes.includes('cfg.bankAddress || (remittanceSource as any)?.bankAddress || ""'), "bank address comes from configuration/remittance source only");
-assert(routes.includes('allowBuiltInAdikenLogo'), "Adiken fallback logo is explicit and tenant-gated");
+// v2.2.7: the Adiken-only hard-coded vector logo escape hatch was removed
+// entirely — no tenant, Adiken included, gets a synthetic logo fallback.
+assert(!routes.includes("allowBuiltInAdikenLogo") && !routes.includes("isAdikenTenant"), "no tenant-specific hard-coded logo fallback remains");
 assert(routes.includes('Company Copy - Employee Paystub'), "employee company copy heading is classification-specific");
 assert(routes.includes('"CONTRACTOR PAYMENT STATEMENT — NONEMPLOYEE COMPENSATION"'), "contractor statement carries the exact nonemployee-compensation heading");
 assert(routes.includes('"Not an employee wage statement. No payroll taxes were withheld."'), "contractor statement carries the nonemployee disclaimer");
