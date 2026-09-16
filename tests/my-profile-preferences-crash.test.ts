@@ -65,8 +65,16 @@ const routes = fs.readFileSync("server/routes.ts", "utf8");
   const block = routes.slice(start, end);
   ok("ALLOWED_SELF_EDIT no longer whitelists the raw, unvalidated preferences field",
     !/"preferences"/.test(block));
-  ok("the dedicated, JSON-validated /api/my/preferences endpoint is unchanged and still present",
-    /const existing = JSON\.parse\(worker\.preferences \|\| "\{\}"\);/.test(routes));
+}
+{
+  const start = routes.indexOf('app.patch("/api/my/preferences"');
+  const end = routes.indexOf('app.get("/api/my/paystubs"');
+  ok("found PATCH /api/my/preferences", start > -1 && end > start);
+  const block = routes.slice(start, end);
+  ok("the dedicated /api/my/preferences endpoint still parses/merges/stringifies preferences",
+    /JSON\.parse\(worker\.preferences \|\| "\{\}"\)/.test(block) && /JSON\.stringify\(merged\)/.test(block));
+  ok("a malformed existing preferences value no longer fails the save (merge is guarded, same as the client's safeParseWorkerPreferences)",
+    /try \{[\s\S]*?JSON\.parse\(worker\.preferences \|\| "\{\}"\)[\s\S]*?catch/.test(block));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

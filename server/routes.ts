@@ -25268,7 +25268,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       const worker = await storage.getWorker(user.workerId);
       if (!worker) return res.status(404).json({ message: "Worker not found" });
-      const existing = JSON.parse(worker.preferences || "{}");
+      // Same defensive parse as safeParseWorkerPreferences (client/src/lib/worker-preferences.ts):
+      // a pre-existing malformed/non-object `preferences` value must not block a worker from
+      // saving a fresh, valid value here — that would leave the crash fix in
+      // PreferencesTab half-closed (page loads, but preferences can never be saved again).
+      let existing: Record<string, any> = {};
+      try {
+        const parsed = JSON.parse(worker.preferences || "{}");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed;
+      } catch { /* malformed existing value — start from {} instead of failing the save */ }
       const merged = { ...existing, ...req.body };
       const updated = await storage.updateWorker(user.workerId, { preferences: JSON.stringify(merged) });
       res.json(updated);
