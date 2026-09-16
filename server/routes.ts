@@ -25405,14 +25405,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user?.workerId) return res.status(403).json({ message: "No linked worker profile" });
-      // Whitelist of fields employees are allowed to self-update
+      // Whitelist of fields employees are allowed to self-update. `preferences`
+      // is deliberately excluded — it's a JSON-serialized string, and this
+      // route has no JSON validation, so a raw client value here could
+      // corrupt it and crash My Profile's PreferencesTab (JSON.parse) on
+      // every future load. PATCH /api/my/preferences is the dedicated,
+      // JSON-validated way to update it.
       const ALLOWED_SELF_EDIT = [
         "phone", "mobilePhone", "homePhone", "workPhone", "workPhoneExt", "fax",
         "email", "homeEmail", "workEmail",
         "address", "address2", "city", "state", "zip", "country",
         "emergencyContactName", "emergencyContactRelationship",
         "emergencyContactPhone", "emergencyContactEmail",
-        "preferences", "note"
+        "note"
       ];
       const filtered: Record<string, any> = {};
       for (const key of ALLOWED_SELF_EDIT) {
@@ -25442,7 +25447,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       const worker = await storage.getWorker(user.workerId);
       if (!worker) return res.status(404).json({ message: "Worker not found" });
-      const existing = JSON.parse(worker.preferences || "{}");
+      // Same defensive parse as safeParseWorkerPreferences (client/src/lib/worker-preferences.ts):
+      // a pre-existing malformed/non-object `preferences` value must not block a worker from
+      // saving a fresh, valid value here — that would leave the crash fix in
+      // PreferencesTab half-closed (page loads, but preferences can never be saved again).
+      let existing: Record<string, any> = {};
+      try {
+        const parsed = JSON.parse(worker.preferences || "{}");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed;
+      } catch { /* malformed existing value — start from {} instead of failing the save */ }
       const merged = { ...existing, ...req.body };
       const updated = await storage.updateWorker(user.workerId, { preferences: JSON.stringify(merged) });
       res.json(updated);

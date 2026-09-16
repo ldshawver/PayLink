@@ -107,7 +107,8 @@
         "tests/documenso-proposal-signing-repair-static.test.ts",
         "tests/documenso-post-signing-lifecycle-static.test.ts",
         "tests/public-signing-route-whitelist-behavior.test.ts",
-        "tests/documenso-per-signer-sync-param-types-static.test.ts"
+        "tests/documenso-per-signer-sync-param-types-static.test.ts",
+        "tests/my-profile-preferences-crash.test.ts"
       ]
     },
     "db": {
