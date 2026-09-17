@@ -11179,6 +11179,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
       data.submitterId = user.workerId;
+      data.companyId = user.companyId;
 
       if (!data.amount || parseFloat(data.amount) <= 0) {
         return res.status(400).json({ message: "Positive amount required" });
