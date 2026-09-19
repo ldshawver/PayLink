@@ -10,6 +10,7 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePh
 import { createEmailVerification, getLiveVerificationByToken, consumeEmailVerification } from "./email-verification";
 import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
+import { fileURLToPath } from "url";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
@@ -82,6 +83,34 @@ import {
 } from "./expense-payments";
 import { renderPaymentDocumentPdf, type PaymentDocInput } from "./payment-documents";
 import { fetchRemoteImageBytesSafe } from "./remote-image-fetch";
+
+// This module is ESM ("type": "module" in package.json) and has no native
+// __dirname/__filename. The compiled production/staging bundle (dist/index.cjs)
+// is real CommonJS where both exist natively as module-wrapper parameters —
+// but `pnpm dev` (plain `tsx server/index.ts`, no bundling) runs the source as
+// true ESM, where the bare `__dirname` used by the MICR-font and bundled-bank-logo
+// loaders below throws ReferenceError, hard-failing every check PDF (payroll or
+// vendor/contractor).
+//
+// IMPORTANT: `import.meta.url` alone is NOT a safe fix here — esbuild leaves
+// `import.meta` empty in this project's CJS bundle output ("'import.meta' is
+// not available with the 'cjs' output format" — a build warning, not an
+// error), so `fileURLToPath(import.meta.url)` throws
+// `ERR_INVALID_ARG_TYPE: path ... Received undefined` and crashes the real
+// production/staging process at boot. Verified by actually booting the built
+// dist/index.cjs with an import.meta.url-only version of this line before
+// landing on the version below.
+//
+// `typeof __filename` is a safe existence check even where `__filename` has
+// no binding at all (unlike referencing the bare identifier, which throws):
+// it evaluates to "undefined" under tsx/ESM (falls through to the
+// import.meta.url branch, which works correctly there) and to "string" in
+// the real CJS bundle (uses the native __filename instead, so the
+// import.meta.url branch — empty under esbuild's cjs output — is never
+// evaluated there at all).
+const __dirname: string = typeof __filename !== "undefined"
+  ? path.dirname(__filename)
+  : path.dirname(fileURLToPath(import.meta.url));
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -11179,6 +11208,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
       data.submitterId = user.workerId;
+      data.companyId = user.companyId;
 
       if (!data.amount || parseFloat(data.amount) <= 0) {
         return res.status(400).json({ message: "Positive amount required" });
@@ -23390,7 +23420,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     let micrFont: any = null;
     let micrFontLoaded = false;
     const MICR_FONT_FILE = "micrenc.ttf";             // E-13B mapping used by buildMicrStr/client preview
-    const MICR_FONT_SIZE = 12;                         // 12pt — reduced to match standard payroll check MICR sizing
+    // ANSI X9.100-181 (E-13B) specifies a nominal printed character height of
+    // 0.117in (8.424pt). micrenc.ttf's own design (unitsPerEm 4096, digit glyph
+    // bbox height 1873 units) renders at only 1873/4096*12 = 5.49pt (0.076in) —
+    // about 35% short of spec — at the previous 12pt setting, which was sized by
+    // eye/comparison rather than measured against the font's own metrics.
+    // 12 * (8.424 / 5.487) = 18.42pt reproduces the documented 0.117in height
+    // from this font's actual glyph geometry. Verified this does not overflow
+    // the check face: a realistic 30-char MICR line (9-digit routing + 10-digit
+    // account + 4-digit check number + symbols) is ~276pt wide at 18.42pt,
+    // against ~576pt available from the 0.5in left margin to the right edge.
+    const MICR_FONT_SIZE = 18.42;
     let micrFontName = "(none)";
     try {
       // Try __dirname-relative first (reliable in both dev and production PM2 regardless of cwd)
@@ -23550,8 +23590,34 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       : fmtDate(run?.payDate);
     const pStart   = isCalibration ? "01/01/2025" : fmtDate(run?.periodStart);
     const pEnd     = isCalibration ? "01/15/2025" : fmtDate(run?.periodEnd);
-    const fmtMoney = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Coerce first: Postgres NUMERIC/DECIMAL columns (payroll_items.regular_pay
+    // etc.) come back from node-postgres as STRINGS, not numbers, to avoid
+    // float precision loss. A bare string also has a (no-op) toLocaleString()
+    // inherited from Object, so calling it directly on an uncoerced numeric
+    // string silently returns the original string with no thousands separator
+    // instead of throwing — this was the actual cause of a payroll stub
+    // showing "$2240.00" (uncoerced item.regularPay) next to "$22,050.00"
+    // (grossPay, which happened to already be wrapped in Number(...) at its
+    // own call site) in the same row. Matches fmt2's existing Number(v||0).
+    const fmtMoney = (v: number | string | null | undefined) => Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const fmt2     = (v: any)    => Number(v || 0).toFixed(2);
+    // Right-align a dollar-amount column to a fixed right edge instead of
+    // drawing left-aligned from a fixed x — a left-aligned amount's rendered
+    // width grows with the value (e.g. "$1,234.56" vs "$99,999.99") and can
+    // run into whatever's drawn next, regardless of how generous the column
+    // start position looks for a small sample value.
+    // Fit a dollar-amount cell within [leftEdge, rightEdge]: right-align at the
+    // default size, and if it's still wider than the slot (right-aligning
+    // alone just moves the overflow into whatever is on the LEFT instead of
+    // fixing it), shrink the font until it fits or the legibility floor is
+    // hit — never left it silently overlap a neighboring column either way.
+    const fitCell = (text: string, leftEdge: number, rightEdge: number, defaultSize: number, font: any, minSize = 5.5): { x: number; size: number } => {
+      let size = defaultSize;
+      let w = font.widthOfTextAtSize(text, size);
+      const avail = rightEdge - leftEdge;
+      while (w > avail && size > minSize) { size -= 0.25; w = font.widthOfTextAtSize(text, size); }
+      return { x: rightEdge - w, size };
+    };
     const amtWords = numToWords(netPay);
     const ytdGross = isCalibration ? 9876.54 : Number(item?.ytdGross      || 0);
     const ytdDed   = isCalibration ? 1167.65 : Number(item?.ytdDeductions || 0);
@@ -23862,10 +23928,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const legalLineY  = z1y(1.84) + amountInWordsOffset.y;
     const writtenX    = z1x(1.30) + amountInWordsOffset.x;
     const writtenEndX = z1x(7.20) + amountInWordsOffset.x;
-    const writtenStr  = amtWords.length > 58 ? amtWords.slice(0, 55) + "..." : amtWords;
+    // Never truncate the legal amount — dropping "and NN/100" changes what the
+    // check legally says. Measure the actual string at the default size and
+    // shrink-to-fit within the available width instead, down to a legible
+    // floor; only past that floor (an unrealistically long amount) does it run
+    // past the line, which is still strictly better than silently altering the
+    // dollar amount in words.
+    const writtenAvailW = writtenEndX - writtenX;
+    const WRITTEN_DEFAULT_SIZE = 10.5, WRITTEN_MIN_SIZE = 7;
+    let writtenSize = WRITTEN_DEFAULT_SIZE;
+    while (hv.widthOfTextAtSize(amtWords, writtenSize) > writtenAvailW && writtenSize > WRITTEN_MIN_SIZE) {
+      writtenSize -= 0.25;
+    }
+    const writtenStr = amtWords;
     drawGuide(z1x(0.30), legalLineY - 2, writtenEndX - z1x(0.30), Math.round(0.15*72), "LEGAL AMT");
     page.drawText("The Sum of", { x: z1x(0.30), y: legalY, size: 9,   font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(writtenStr,   { x: writtenX,   y: legalY, size: 10.5, font: hv,  color: rgb(0, 0, 0) });
+    page.drawText(writtenStr,   { x: writtenX,   y: legalY, size: writtenSize, font: hv,  color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: writtenX, y: legalLineY }, end: { x: writtenEndX, y: legalLineY },
       color: rgb(0, 0, 0), thickness: 0.6 });
 
@@ -24044,9 +24122,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
     page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    page.drawText(statementLabel, { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    // Reserve the check-number label's own measured width on the right, then
+    // shrink-to-fit the statement label into whatever remains on the left —
+    // the previous fixed "-22" centering offset assumed a short fixed label
+    // and collided with "Check No. NNNN" for the real (longer) label text.
     const psChkLabel = `Check No. ${fmtCheckNum}`;
-    page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
+    const PS_CHK_SIZE = 8.5;
+    const psChkLabelW = hvB.widthOfTextAtSize(psChkLabel, PS_CHK_SIZE);
+    const psChkLabelX = rm - psChkLabelW;
+    const psBannerGap = 6;
+    const psLabelAvailW = (psChkLabelX - psBannerGap) - psX;
+    let psLabelSize = 10;
+    while (hvB.widthOfTextAtSize(statementLabel, psLabelSize) > psLabelAvailW && psLabelSize > 6) psLabelSize -= 0.25;
+    page.drawText(statementLabel, { x: psX + 2, y: checkBot - 14 + paystubOffY, size: psLabelSize, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText(psChkLabel, { x: psChkLabelX, y: checkBot - 14 + paystubOffY, size: PS_CHK_SIZE, font: hvB, color: rgb(1, 1, 1) });
 
     // Company + EIN
     const coEinLine = coEin ? `${coName} - EIN: ${coEin}` : coName;
@@ -24057,8 +24146,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(`Pay Date: ${payDate}`,        { x: psX, y: checkBot - 62 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
 
     // Compact earnings table
-    const psC1 = psX, psC2 = psX + 115, psC3 = psX + 160, psC4 = psX + 210;
-    const psC5 = Math.min(psX + 262, rm - 5); // capped so YTD column never overflows right margin
+    // Narrower desc/hours/rate columns than the original layout — those hold
+    // short fixed-shape values ("Overtime (1.5x)", "80.00", "$42.00/hr") — to
+    // give the two dollar-value columns enough room to hold a real
+    // comma-formatted amount ("$22,050.00") without needing to shrink past
+    // legibility. Reserving the YTD column's own 40pt-plus width up front
+    // (rather than capping it right at the margin) is what actually fixes
+    // the overflow — shrink-to-fit alone can't help a column with no width.
+    const psC1 = psX, psC2 = psX + 85, psC3 = psX + 122, psC4 = psX + 172;
+    const psC5 = Math.max(psC4 + 45, rm - 40);
+    const psC4Right = psC5 - 6, psC5Right = rm - 2; // value columns right-align to just before the next column / margin
     let psY = checkBot - 88 + paystubOffY;
     page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
     page.drawText(isContractor ? "SERVICES / COMPENSATION" : "EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
@@ -24076,28 +24173,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } else if (item) {
       const rate = Number(item.payRate || 0);
       const rh = Number(item.regularHours || 0);
-      if (rh > 0) { earnRows.push(["Regular", fmt2(rh), rate > 0 ? `$${fmt2(rate)}/hr` : "—", `$${fmt2(item.regularPay)}`, showYtdTotals ? `$${fmtMoney(ytdGross)}` : ""]); totalHrs += rh; }
+      if (rh > 0) { earnRows.push(["Regular", fmt2(rh), rate > 0 ? `$${fmt2(rate)}/hr` : "—", `$${fmtMoney(item.regularPay)}`, showYtdTotals ? `$${fmtMoney(ytdGross)}` : ""]); totalHrs += rh; }
       const oh = Number(item.overtimeHours || 0);
-      if (oh > 0) { earnRows.push(["Overtime (1.5x)", fmt2(oh), rate > 0 ? `$${fmt2(rate*1.5)}/hr` : "—", `$${fmt2(item.overtimePay)}`, "—"]); totalHrs += oh; }
+      if (oh > 0) { earnRows.push(["Overtime (1.5x)", fmt2(oh), rate > 0 ? `$${fmt2(rate*1.5)}/hr` : "—", `$${fmtMoney(item.overtimePay)}`, "—"]); totalHrs += oh; }
       const dh = Number(item.doubleTimeHours || 0);
-      if (dh > 0) { earnRows.push(["Double Time (2x)", fmt2(dh), rate > 0 ? `$${fmt2(rate*2)}/hr` : "—", `$${fmt2(item.doubleTimePay)}`, "—"]); totalHrs += dh; }
-      if (Number(item.salaryPay  || 0) > 0) earnRows.push(["Salary",     "", "", `$${fmt2(item.salaryPay)}`,  "—"]);
-      if (Number(item.bonusPay   || 0) > 0) earnRows.push(["Bonus",      "", "", `$${fmt2(item.bonusPay)}`,   "—"]);
-      if (Number(item.tipsPay    || 0) > 0) earnRows.push(["Tips",       "", "", `$${fmt2(item.tipsPay)}`,    "—"]);
+      if (dh > 0) { earnRows.push(["Double Time (2x)", fmt2(dh), rate > 0 ? `$${fmt2(rate*2)}/hr` : "—", `$${fmtMoney(item.doubleTimePay)}`, "—"]); totalHrs += dh; }
+      if (Number(item.salaryPay  || 0) > 0) earnRows.push(["Salary",     "", "", `$${fmtMoney(item.salaryPay)}`,  "—"]);
+      if (Number(item.bonusPay   || 0) > 0) earnRows.push(["Bonus",      "", "", `$${fmtMoney(item.bonusPay)}`,   "—"]);
+      if (Number(item.tipsPay    || 0) > 0) earnRows.push(["Tips",       "", "", `$${fmtMoney(item.tipsPay)}`,    "—"]);
       const ph = Number(item.ptoHours || 0);
-      if (Number(item.ptoPay || 0) > 0)     { earnRows.push(["PTO", fmt2(ph), "", `$${fmt2(item.ptoPay)}`, "—"]);     totalHrs += ph; }
+      if (Number(item.ptoPay || 0) > 0)     { earnRows.push(["PTO", fmt2(ph), "", `$${fmtMoney(item.ptoPay)}`, "—"]);     totalHrs += ph; }
       const sh = Number(item.sickHours || 0);
-      if (Number(item.sickPay || 0) > 0)    { earnRows.push(["Sick Leave", fmt2(sh), "", `$${fmt2(item.sickPay)}`, "—"]); totalHrs += sh; }
+      if (Number(item.sickPay || 0) > 0)    { earnRows.push(["Sick Leave", fmt2(sh), "", `$${fmtMoney(item.sickPay)}`, "—"]); totalHrs += sh; }
       const hh = Number(item.holidayHours || 0);
-      if (Number(item.holidayPay || 0) > 0) { earnRows.push(["Holiday", fmt2(hh), "", `$${fmt2(item.holidayPay)}`, "—"]); totalHrs += hh; }
+      if (Number(item.holidayPay || 0) > 0) { earnRows.push(["Holiday", fmt2(hh), "", `$${fmtMoney(item.holidayPay)}`, "—"]); totalHrs += hh; }
     }
     for (const [desc, hrs, rate, cur, ytd] of earnRows) {
       if (psY < mailBot + 8) break;
       page.drawText(desc, { x: psC1, y: psY, size: 7,   font: hv,   color: rgb(0, 0, 0) });
       page.drawText(hrs,  { x: psC2, y: psY, size: 7,   font: cour, color: rgb(0, 0, 0) });
       page.drawText(rate, { x: psC3, y: psY, size: 7,   font: cour, color: rgb(0, 0, 0) });
-      page.drawText(cur,  { x: psC4, y: psY, size: 7,   font: cour, color: rgb(0, 0, 0) });
-      if (showYtdTotals) page.drawText(ytd, { x: psC5, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) });
+      const psCurFit = fitCell(cur, psC4, psC4Right, 7, cour);
+      page.drawText(cur,  { x: psCurFit.x, y: psY, size: psCurFit.size, font: cour, color: rgb(0, 0, 0) });
+      if (showYtdTotals) { const psYtdFit = fitCell(ytd, psC5, psC5Right, 7, cour); page.drawText(ytd, { x: psYtdFit.x, y: psY, size: psYtdFit.size, font: cour, color: rgb(0, 0, 0) }); }
       psY -= 11;
     }
     if (totalHrs > 0 && psY >= mailBot + 8) {
@@ -24114,12 +24212,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (showYtdTotals) page.drawText("YTD", { x: psC5, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
       psY -= 13;
       if (isCalibration) {
-        if (psY >= mailBot + 8) { page.drawText("Federal Income Tax",     { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) }); page.drawText("-$98.45",  { x: psC4, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) }); psY -= 11; }
-        if (psY >= mailBot + 8) { page.drawText("Social Security (6.2%)", { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) }); page.drawText("-$47.22",  { x: psC4, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) }); psY -= 11; }
+        if (psY >= mailBot + 8) { page.drawText("Federal Income Tax",     { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) }); const f = fitCell("-$98.45", psC4, psC4Right, 7, cour); page.drawText("-$98.45",  { x: f.x, y: psY, size: f.size, font: cour, color: rgb(0, 0, 0) }); psY -= 11; }
+        if (psY >= mailBot + 8) { page.drawText("Social Security (6.2%)", { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) }); const f = fitCell("-$47.22", psC4, psC4Right, 7, cour); page.drawText("-$47.22",  { x: f.x, y: psY, size: f.size, font: cour, color: rgb(0, 0, 0) }); psY -= 11; }
       } else if (totalDed > 0 && psY >= mailBot + 8) {
         page.drawText("Taxes & Deductions",      { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) });
-        page.drawText(`-$${fmtMoney(totalDed)}`, { x: psC4, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) });
-        if (showYtdTotals) page.drawText(`-$${fmtMoney(ytdDed)}`, { x: psC5, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) });
+        const psDedCur = `-$${fmtMoney(totalDed)}`;
+        const psDedCurFit = fitCell(psDedCur, psC4, psC4Right, 7, cour);
+        page.drawText(psDedCur, { x: psDedCurFit.x, y: psY, size: psDedCurFit.size, font: cour, color: rgb(0, 0, 0) });
+        if (showYtdTotals) { const psDedYtd = `-$${fmtMoney(ytdDed)}`; const f = fitCell(psDedYtd, psC5, psC5Right, 7, cour); page.drawText(psDedYtd, { x: f.x, y: psY, size: f.size, font: cour, color: rgb(0, 0, 0) }); }
         psY -= 11;
       } else if (psY >= mailBot + 8) {
         page.drawText("No deductions", { x: psC1, y: psY, size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) }); psY -= 11;
@@ -24130,17 +24230,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (psY >= mailBot + 34) {
       page.drawLine({ start: { x: psC1 - 2, y: psY + 8 }, end: { x: rm + 2, y: psY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
       page.drawText(isContractor ? "TOTAL COMPENSATION" : "GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`$${fmtMoney(grossPay)}`, { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
-      if (showYtdTotals) page.drawText(`$${fmtMoney(ytdGross)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      const psGrossCur = `$${fmtMoney(grossPay)}`;
+      const psGrossCurFit = fitCell(psGrossCur, psC4, psC4Right, 7.5, hvB);
+      page.drawText(psGrossCur, { x: psGrossCurFit.x, y: psY, size: psGrossCurFit.size, font: hvB, color: rgb(0, 0, 0) });
+      if (showYtdTotals) { const psGrossYtd = `$${fmtMoney(ytdGross)}`; const f = fitCell(psGrossYtd, psC5, psC5Right, 7.5, hvB); page.drawText(psGrossYtd, { x: f.x, y: psY, size: f.size, font: hvB, color: rgb(0, 0, 0) }); }
       psY -= 11;
       page.drawText(isContractor ? "TRADE COMPENSATION - GOODS" : "TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
-      page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
-      if (showYtdTotals) page.drawText(`-$${fmtMoney(isContractor ? totalTradeCredit : ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      const psTotDedCur = `-$${fmtMoney(isContractor ? totalTradeCredit : totalDed)}`;
+      const psTotDedCurFit = fitCell(psTotDedCur, psC4, psC4Right, 7.5, hvB);
+      page.drawText(psTotDedCur, { x: psTotDedCurFit.x, y: psY, size: psTotDedCurFit.size, font: hvB, color: rgb(0.6, 0, 0) });
+      if (showYtdTotals) { const psTotDedYtd = `-$${fmtMoney(isContractor ? totalTradeCredit : ytdDed)}`; const f = fitCell(psTotDedYtd, psC5, psC5Right, 7.5, hvB); page.drawText(psTotDedYtd, { x: f.x, y: psY, size: f.size, font: hvB, color: rgb(0.6, 0, 0) }); }
       psY -= 11;
       page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
       page.drawText(isContractor ? "CASH PAYMENT / CHECK AMOUNT" : "NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
-      page.drawText(`$${fmtMoney(netPay)}`, { x: psC4, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
-      if (showYtdTotals) page.drawText(`$${fmtMoney(ytdNet)}`, { x: psC5, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      const psNetCur = `$${fmtMoney(netPay)}`;
+      const psNetCurFit = fitCell(psNetCur, psC4, psC4Right, 8, hvB);
+      page.drawText(psNetCur, { x: psNetCurFit.x, y: psY, size: psNetCurFit.size, font: hvB, color: rgb(0, 0, 0.55) });
+      if (showYtdTotals) { const psNetYtd = `$${fmtMoney(ytdNet)}`; const f = fitCell(psNetYtd, psC5, psC5Right, 8, hvB); page.drawText(psNetYtd, { x: f.x, y: psY, size: f.size, font: hvB, color: rgb(0, 0, 0.55) }); }
       psY -= 14;
     }
 
@@ -24286,13 +24392,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Banner
     const z3BannerY = mailBot - 14;
     page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
-    page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
-    page.drawText(companyCopyHeading, { x: lm, y: z3BannerY - 13, size: 6.5, font: hvB, color: rgb(0.25, 0.25, 0.25) });
+    // Reserve the check-number label's own measured width on the right (was a
+    // char-count estimate, `length * 4.2`, which under/overshoots for real
+    // font metrics) and shrink-to-fit the banner title into what remains.
     const z3ChkLabel = `Check No. ${fmtCheckNum}`;
-    page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    const Z3_CHK_SIZE = 7;
+    const z3ChkLabelW = hvB.widthOfTextAtSize(z3ChkLabel, Z3_CHK_SIZE);
+    const z3ChkLabelX = rm - z3ChkLabelW;
+    const z3BannerGap = 6;
+    const z3TitleText = "EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING";
+    let z3TitleSize = 7;
+    const z3TitleAvailW = (z3ChkLabelX - z3BannerGap) - lm;
+    while (hvB.widthOfTextAtSize(z3TitleText, z3TitleSize) > z3TitleAvailW && z3TitleSize > 5) z3TitleSize -= 0.25;
+    page.drawText(z3TitleText, { x: lm, y: z3BannerY, size: z3TitleSize, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(companyCopyHeading, { x: lm, y: z3BannerY - 12, size: 6.5, font: hvB, color: rgb(0.25, 0.25, 0.25) });
+    page.drawText(z3ChkLabel, { x: z3ChkLabelX, y: z3BannerY, size: Z3_CHK_SIZE, font: hvB, color: rgb(0.3, 0.3, 0.3) });
 
-    // Employee info (left) + period dates (right)
-    let z3Y = z3BannerY - 14;
+    // Employee info (left) + period dates (right). companyCopyHeading above
+    // ends its own line at z3BannerY-12 (6.5pt text); give wName (9pt, bold)
+    // a full line of its own below that instead of the previous 1pt gap
+    // (z3BannerY-14 vs -13), which made the two lines render on top of each
+    // other.
+    let z3Y = z3BannerY - 12 - 12;
     page.drawText(wName, { x: lm, y: z3Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
     page.drawText(`Pay Period Start: ${pStart}`, { x: rm - 160, y: z3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) });
     z3Y -= 12;
@@ -24313,9 +24434,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const midX  = Math.round(W / 2) - 5;
     const rHalf = midX + 10;
     // e1=DESCRIPTION e2=HOURS e3=RATE e4=CURRENT e5=YTD  (left-to-right, no overlap)
-    // midX≈301; old e5=midX-55=246 < e4=250 caused YTDCURRENT merge & "$400" display bug
-    const e1 = lm, e2 = lm + 110, e3 = lm + 162, e4 = lm + 210, e5 = lm + 245;
-    const d1 = rHalf + 8, d4 = rm - 82,  d5 = rm - 28;
+    // Narrower desc/hours/rate columns than the original layout, and e5/d5
+    // given their own reserved width up front instead of being capped right
+    // at midX/rm — a value column with no width can't be fixed by shrinking
+    // its font (shrinking still needs *some* room to shrink into).
+    const e1 = lm, e2 = lm + 95, e3 = lm + 130, e4 = lm + 175;
+    const e5 = Math.max(e4 + 45, midX - 45);
+    const d1 = rHalf + 8;
+    const d5 = rm - 45, d4 = d5 - 6 - 40;
+    // Right edges for right-aligning dollar values within each column instead
+    // of drawing left-aligned from a fixed x, which overflows into the next
+    // column for larger amounts regardless of how generous the gap looks for
+    // a small sample value (see fitCell above).
+    const e4Right = e5 - 6, e5Right = midX - 6, d4Right = d5 - 6, d5Right = rm - 2;
 
     page.drawRectangle({ x: lm - 2,     y: z3Y - 4, width: midX - lm + 2,  height: 14, color: rgb(0.88, 0.88, 0.88) });
     page.drawRectangle({ x: rHalf - 2,  y: z3Y - 4, width: rm - rHalf + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
@@ -24339,8 +24470,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(desc, { x: e1, y: z3EarnY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
       page.drawText(hrs,  { x: e2, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
       page.drawText(rate, { x: e3, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
-      page.drawText(cur,  { x: e4, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
-      page.drawText(ytd,  { x: e5, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      const z3CurFit = fitCell(cur, e4, e4Right, 7.5, cour), z3YtdFit = fitCell(ytd, e5, e5Right, 7.5, cour);
+      page.drawText(cur,  { x: z3CurFit.x, y: z3EarnY, size: z3CurFit.size, font: cour, color: rgb(0, 0, 0) });
+      page.drawText(ytd,  { x: z3YtdFit.x, y: z3EarnY, size: z3YtdFit.size, font: cour, color: rgb(0, 0, 0) });
       z3EarnY -= 11;
     }
     if (totalHrs > 0) {
@@ -24352,13 +24484,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Deductions rows (right)
     let z3DedY = z3Y;
     if (isCalibration) {
-      page.drawText("Federal Income Tax",      { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$98.45",    { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText("-$786.00",   { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
-      page.drawText("Social Security (6.2%)",  { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$47.22",    { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText("-$377.76",   { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
-      page.drawText("Medicare (1.45%)",         { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$11.05",    { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText("-$88.40",    { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
+      { const f1 = fitCell("-$98.45", d4, d4Right, 7.5, cour), f2 = fitCell("-$786.00", d5, d5Right, 7.5, cour);
+      page.drawText("Federal Income Tax",      { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$98.45",    { x: f1.x, y: z3DedY, size: f1.size, font: cour, color: rgb(0,0,0) }); page.drawText("-$786.00",   { x: f2.x, y: z3DedY, size: f2.size, font: cour, color: rgb(0,0,0) }); z3DedY -= 11; }
+      { const f1 = fitCell("-$47.22", d4, d4Right, 7.5, cour), f2 = fitCell("-$377.76", d5, d5Right, 7.5, cour);
+      page.drawText("Social Security (6.2%)",  { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$47.22",    { x: f1.x, y: z3DedY, size: f1.size, font: cour, color: rgb(0,0,0) }); page.drawText("-$377.76",   { x: f2.x, y: z3DedY, size: f2.size, font: cour, color: rgb(0,0,0) }); z3DedY -= 11; }
+      { const f1 = fitCell("-$11.05", d4, d4Right, 7.5, cour), f2 = fitCell("-$88.40", d5, d5Right, 7.5, cour);
+      page.drawText("Medicare (1.45%)",         { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$11.05",    { x: f1.x, y: z3DedY, size: f1.size, font: cour, color: rgb(0,0,0) }); page.drawText("-$88.40",    { x: f2.x, y: z3DedY, size: f2.size, font: cour, color: rgb(0,0,0) }); z3DedY -= 11; }
     } else if (totalDed > 0) {
       page.drawText("Taxes & Deductions",          { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) });
-      page.drawText(`-$${fmtMoney(totalDed)}`,     { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) });
-      page.drawText(`-$${fmtMoney(ytdDed)}`,       { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
+      const z3DedCur = `-$${fmtMoney(totalDed)}`, z3DedYtd = `-$${fmtMoney(ytdDed)}`;
+      const z3DedCurFit = fitCell(z3DedCur, d4, d4Right, 7.5, cour), z3DedYtdFit = fitCell(z3DedYtd, d5, d5Right, 7.5, cour);
+      page.drawText(z3DedCur,     { x: z3DedCurFit.x, y: z3DedY, size: z3DedCurFit.size, font: cour, color: rgb(0,0,0) });
+      page.drawText(z3DedYtd,       { x: z3DedYtdFit.x, y: z3DedY, size: z3DedYtdFit.size, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
     } else {
       page.drawText("No deductions", { x: d1, y: z3DedY, size: 7.5, font: hv, color: rgb(0.5, 0.5, 0.5) }); z3DedY -= 11;
     }
@@ -24367,19 +24504,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     z3Y = Math.min(z3EarnY, z3DedY) - 5;
     page.drawLine({ start: { x: lm - 2, y: z3Y + 6 }, end: { x: rm + 2, y: z3Y + 6 }, color: rgb(0.55, 0.55, 0.55), thickness: 0.5 });
 
+    const z3TotDedCur = `$${fmtMoney(totalDed)}`, z3TotDedYtd = `$${fmtMoney(ytdDed)}`;
+    const z3TotDedCurFit = fitCell(z3TotDedCur, d4, d4Right, 8, hvB), z3TotDedYtdFit = fitCell(z3TotDedYtd, d5, d5Right, 8, hvB);
     page.drawText("TOTAL DEDUCTIONS",        { x: d1, y: z3Y, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(`$${fmtMoney(totalDed)}`,  { x: d4, y: z3Y, size: 8, font: hvB, color: rgb(0.6, 0, 0) });
-    page.drawText(`$${fmtMoney(ytdDed)}`,    { x: d5, y: z3Y, size: 8, font: hvB, color: rgb(0.6, 0, 0) });
+    page.drawText(z3TotDedCur,  { x: z3TotDedCurFit.x, y: z3Y, size: z3TotDedCurFit.size, font: hvB, color: rgb(0.6, 0, 0) });
+    page.drawText(z3TotDedYtd,    { x: z3TotDedYtdFit.x, y: z3Y, size: z3TotDedYtdFit.size, font: hvB, color: rgb(0.6, 0, 0) });
     z3Y -= 11;
 
     page.drawLine({ start: { x: lm - 2, y: z3Y + 9 }, end: { x: rm + 2, y: z3Y + 9 }, color: rgb(0.35, 0.35, 0.35), thickness: 0.8 });
+    const z3GrossCur = `$${fmtMoney(grossPay)}`, z3GrossYtd = `$${fmtMoney(ytdGross)}`;
+    const z3GrossCurFit = fitCell(z3GrossCur, e4, e4Right, 8.5, hvB), z3GrossYtdFit = fitCell(z3GrossYtd, e5, e5Right, 8.5, hvB);
     page.drawText("GROSS PAY",               { x: e1, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(`$${fmtMoney(grossPay)}`,  { x: e4, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(`$${fmtMoney(ytdGross)}`,  { x: e5, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(z3GrossCur,  { x: z3GrossCurFit.x, y: z3Y, size: z3GrossCurFit.size, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(z3GrossYtd,  { x: z3GrossYtdFit.x, y: z3Y, size: z3GrossYtdFit.size, font: hvB, color: rgb(0, 0, 0) });
     page.drawRectangle({ x: rHalf - 2, y: z3Y - 3, width: rm - rHalf + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+    const z3NetCur = `$${fmtMoney(netPay)}`, z3NetYtd = `$${fmtMoney(ytdNet)}`;
+    const z3NetCurFit = fitCell(z3NetCur, d4, d4Right, 8.5, hvB);
     page.drawText("NET PAY",                 { x: d1, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
-    page.drawText(`$${fmtMoney(netPay)}`,    { x: d4, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
-    page.drawText(`$${fmtMoney(ytdNet)}`,    { x: d5, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
+    page.drawText(z3NetCur,    { x: z3NetCurFit.x, y: z3Y, size: z3NetCurFit.size, font: hvB, color: rgb(0, 0, 0.55) });
+    const z3NetYtdFit = fitCell(z3NetYtd, d5, d5Right, 8.5, hvB);
+    page.drawText(z3NetYtd,    { x: z3NetYtdFit.x, y: z3Y, size: z3NetYtdFit.size, font: hvB, color: rgb(0, 0, 0.55) });
     z3Y -= 18;
     } // end Zone 3 employee earnings statement
 
