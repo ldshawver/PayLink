@@ -653,9 +653,14 @@ function EmployeeTab() {
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Pay Rate</Label>
+              <Label>Pay Rate {form.payType === "salary" ? "(annual $/year)" : "(hourly $/hour)"}</Label>
               <Input data-testid="input-payRate" type="number" value={form.payRate}
                 onChange={e => setForm(f => ({ ...f, payRate: e.target.value }))} />
+              <p className="text-xs text-muted-foreground">
+                {form.payType === "salary"
+                  ? "Enter the full annual salary — it's divided across pay periods automatically."
+                  : "Enter the rate paid per hour worked."}
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Pay Type</Label>
@@ -826,19 +831,21 @@ function EmployeeTab() {
             if (submitData.defaultDepartmentId === "none") submitData.defaultDepartmentId = "";
             if (submitData.policyGroupId === "none") submitData.policyGroupId = "";
             if (submitData.payPeriodScheduleId === "none") submitData.payPeriodScheduleId = "";
+            // Same rule the server enforces (shared/worker-pay-rate-rules.ts):
+            // only an Invoiced Contractor (1099) may leave Pay Rate blank.
+            // Checking it here avoids an unnecessary round trip and gives
+            // an immediate, type-specific message instead of a generic
+            // server error. Applies to both Add and Edit — a salary change
+            // is exactly as capable of being submitted blank/negative as an
+            // initial pay rate.
+            const payRateCheck = normalizeWorkerPayRate(submitData);
+            if (!payRateCheck.ok) {
+              toast({ title: "Error", description: payRateCheck.message, variant: "destructive" });
+              return;
+            }
             if (isEdit && editWorker) {
               updateMutation.mutate({ id: editWorker.id, data: submitData });
             } else {
-              // Same rule the server enforces (shared/worker-pay-rate-rules.ts):
-              // only an Invoiced Contractor (1099) may leave Pay Rate blank.
-              // Checking it here avoids an unnecessary round trip and gives
-              // an immediate, type-specific message instead of a generic
-              // server error.
-              const payRateCheck = normalizeWorkerPayRate(submitData);
-              if (!payRateCheck.ok) {
-                toast({ title: "Error", description: payRateCheck.message, variant: "destructive" });
-                return;
-              }
               createMutation.mutate(submitData);
             }
           }}
@@ -1691,9 +1698,14 @@ function WagesTab() {
     }
   });
 
-  const wages = wageHistoryQuery.data || [];
-  const workers = workersQuery.data || [];
-  const companies = companiesQuery.data || [];
+  // Same render-time-throw hardening as the Employee Add/Edit dialogs
+  // (EmployeeDialogBoundary + asList/selectableOptions): never hand a
+  // non-array query result to .map(), never render a <SelectItem> with a
+  // blank/null id (Radix throws, and this tab has no local error boundary
+  // of its own without the wrap below).
+  const wages = asList<WageHistory>(wageHistoryQuery.data);
+  const workers = selectableOptions<Worker>(workersQuery.data);
+  const companies = selectableOptions<Company>(companiesQuery.data);
   const workerMap = new Map(workers.map(w => [w.id, `${w.firstName} ${w.lastName}`]));
   const filteredWages = workerFilter === "all" ? wages : wages.filter(w => w.workerId === workerFilter);
 
@@ -1752,7 +1764,9 @@ function WagesTab() {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Wage Amount</Label>
+            <Label>
+              Wage Amount {form.wageType === "salary" ? "(annual $/year)" : form.wageType === "commission" ? "($/commission)" : "(hourly $/hour)"}
+            </Label>
             <Input data-testid="input-wage" type="number" value={form.wage}
               onChange={e => setForm(f => ({ ...f, wage: e.target.value }))} />
           </div>
@@ -1824,7 +1838,9 @@ function WagesTab() {
           </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Wage Entry</DialogTitle></DialogHeader>
-            {renderWageForm(false)}
+            <EmployeeDialogBoundary onClose={() => { setAddOpen(false); setForm({ ...emptyWageForm }); }}>
+              {renderWageForm(false)}
+            </EmployeeDialogBoundary>
           </DialogContent>
         </Dialog>
       </div>
@@ -1892,7 +1908,9 @@ function WagesTab() {
       <Dialog open={editOpen} onOpenChange={v => { setEditOpen(v); if (!v) { setEditEntry(null); setForm({ ...emptyWageForm }); } }}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Wage Entry</DialogTitle></DialogHeader>
-          {renderWageForm(true)}
+          <EmployeeDialogBoundary onClose={() => { setEditOpen(false); setEditEntry(null); setForm({ ...emptyWageForm }); }}>
+            {renderWageForm(true)}
+          </EmployeeDialogBoundary>
         </DialogContent>
       </Dialog>
     </div>
