@@ -20518,10 +20518,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           companyId,
         }).catch(() => {});
       } else {
-        const targetCompanyId = bodyCompanyId || user.companyId || null;
-        if (!targetCompanyId) {
+        // Check companyless BEFORE looking at any body-supplied companyId, not
+        // after: canAccessCompany() treats "caller has no companyId" the same
+        // as a platform/global admin (`!u.companyId || role.startsWith("platform_")`
+        // — a pre-existing bypass in that shared helper, used by ~70 other
+        // routes, too wide a blast radius to change here). A companyless
+        // non-platform admin/manager naming an arbitrary companyId in the body
+        // would otherwise sail through that check and create a remittance
+        // source — real bank routing/account numbers — under any tenant's
+        // company. Reject before canAccessCompany() is ever consulted for
+        // this branch; only a platform_* role gets to name an acting company.
+        if (!user.companyId) {
           return res.status(400).json({ error: "INVALID_COMPANY_CONTEXT", message: "Your account is not associated with a company. Contact an administrator." });
         }
+        const targetCompanyId = bodyCompanyId || user.companyId;
         if (targetCompanyId !== user.companyId &&
             !(await canAccessCompany({ id: user.id, companyId: user.companyId, role: user.role }, targetCompanyId))) {
           return res.status(403).json({ error: "COMPANY_ACCESS_DENIED", message: "You cannot create a remittance source for that company." });

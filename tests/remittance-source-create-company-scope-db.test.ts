@@ -150,6 +150,16 @@ async function main() {
     check("orphaned-company tenant admin → 400 INVALID_COMPANY_CONTEXT", r6b.status === 400 && (r6b.body as any)?.error === "INVALID_COMPANY_CONTEXT", `status=${r6b.status} body=${JSON.stringify(r6b.body)}`);
     check("no rows created for either", (await anySourceNamed(`Synthetic NoCo ${sfx}`)) === 0 && (await anySourceNamed(`Synthetic Orphan ${sfx}`)) === 0);
 
+    // Codex review finding (PR #158): canAccessCompany() treats "caller has no
+    // companyId" the same as a platform admin (a pre-existing bug in that
+    // shared helper, out of scope to fix globally here — see server/routes.ts
+    // comment above the fix). A companyless non-platform admin naming an
+    // arbitrary company's id in the body must still be rejected, not silently
+    // routed through canAccessCompany()'s bypass.
+    const r6c = await apiRequest(base, "POST", "/api/remittance-sources", sNoCo, formPayload(`Synthetic NoCo Explicit ${sfx}`, { companyId: companyB }));
+    check("companyless admin naming another tenant's company explicitly → still 400, not 201/403-via-bypass", r6c.status === 400 && (r6c.body as any)?.error === "INVALID_COMPANY_CONTEXT", `status=${r6c.status} body=${JSON.stringify(r6c.body)}`);
+    check("no row created for company B from the companyless-admin bypass attempt", (await countSources(companyB)) === 0);
+
     console.log("\n── 7. Platform super-admin: explicit, validated acting company ──");
     const r7a = await apiRequest(base, "POST", "/api/remittance-sources", sPSA, formPayload(`Synthetic PSA ${sfx}`, { companyId: companyB }));
     check("valid acting company → 201 scoped to it", r7a.status === 201 && (r7a.body as any)?.companyId === companyB, `status=${r7a.status} body=${JSON.stringify(r7a.body)}`);
