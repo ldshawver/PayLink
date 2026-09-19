@@ -3526,6 +3526,7 @@ function TaxesDeductionsTab() {
 
 function RemittanceSourcesTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<RemittanceSource | null>(null);
   const [selectedCompany, setSelectedCompany] = useState<string>("all");
@@ -3554,7 +3555,12 @@ function RemittanceSourcesTab() {
 
   const openAdd = () => {
     setEditingSource(null);
-    setFormData(emptyForm);
+    // Preselect the user's own company (or the only company available) so the
+    // form never posts an empty companyId, which the API cannot store.
+    const defaultCompanyId =
+      (user?.companyId && companies.some(c => c.id === user.companyId) ? user.companyId : null) ??
+      (companies.length === 1 ? companies[0].id : "");
+    setFormData({ ...emptyForm, companyId: defaultCompanyId });
     setDialogOpen(true);
   };
 
@@ -3623,6 +3629,14 @@ function RemittanceSourcesTab() {
     if (editingSource) {
       updateMutation.mutate({ id: editingSource.id, data: formData });
     } else {
+      if (!formData.companyId) {
+        toast({ title: "Select a company", description: "Choose the company this remittance source belongs to.", variant: "destructive" });
+        return;
+      }
+      if (!formData.name.trim()) {
+        toast({ title: "Name required", description: "Enter a name for the remittance source.", variant: "destructive" });
+        return;
+      }
       createMutation.mutate(formData);
     }
   };
