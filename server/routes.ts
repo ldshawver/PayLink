@@ -20484,11 +20484,77 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/remittance-sources", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    // Company scope is resolved server-side (same contract as POST /api/customers).
+    // The Add dialog posts `companyId: ""` until a company is picked, and
+    // company_id is NOT NULL + FK, so the raw-body insert used to fail with an
+    // opaque 500 — and, with a company supplied, trusted ANY company id.
+    //  - tenant user: body companyId (if any) or the session company, which the
+    //    user must be entitled to act for (canAccessCompany: own company,
+    //    enterprise sibling, company_user_access);
+    //  - platform admin: must name an acting company; validated + audited.
     try {
-      const source = await storage.createRemittanceSource(req.body);
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const bodyCompanyId =
+        typeof req.body?.companyId === "string" && req.body.companyId.trim() ? req.body.companyId.trim() : null;
+
+      let companyId: string;
+      if (isGlobalDiagnosticsRole(user.role)) {
+        if (!bodyCompanyId) {
+          return res.status(400).json({ error: "INVALID_COMPANY_CONTEXT", message: "Select a company before adding a remittance source." });
+        }
+        if (!(await storage.getCompany(bodyCompanyId))) {
+          return res.status(400).json({ error: "INVALID_COMPANY_CONTEXT", message: "The selected company was not found." });
+        }
+        if (!(await canAccessCompany({ id: user.id, companyId: user.companyId, role: user.role }, bodyCompanyId))) {
+          return res.status(403).json({ error: "COMPANY_ACCESS_DENIED", message: "You are not permitted to act for the selected company." });
+        }
+        companyId = bodyCompanyId;
+        await writeAuditLog({
+          actorUserId: user.id,
+          targetResource: `company:${companyId}`,
+          changeType: "platform_acting_company",
+          note: "remittance_source.create",
+          companyId,
+        }).catch(() => {});
+      } else {
+        const targetCompanyId = bodyCompanyId || user.companyId || null;
+        if (!targetCompanyId) {
+          return res.status(400).json({ error: "INVALID_COMPANY_CONTEXT", message: "Your account is not associated with a company. Contact an administrator." });
+        }
+        if (targetCompanyId !== user.companyId &&
+            !(await canAccessCompany({ id: user.id, companyId: user.companyId, role: user.role }, targetCompanyId))) {
+          return res.status(403).json({ error: "COMPANY_ACCESS_DENIED", message: "You cannot create a remittance source for that company." });
+        }
+        if (!(await storage.getCompany(targetCompanyId))) {
+          return res.status(400).json({ error: "INVALID_COMPANY_CONTEXT", message: "The selected company was not found." });
+        }
+        companyId = targetCompanyId;
+      }
+
+      // id / createdAt / lastBatchNumber are server-owned; companyId is resolved above.
+      const { id: _id, companyId: _bodyCompanyId, createdAt: _createdAt, lastBatchNumber: _lastBatch, ...rest } =
+        (req.body ?? {}) as Record<string, unknown>;
+      if (typeof rest.name !== "string" || !rest.name.trim()) {
+        return res.status(400).json({ error: "REMITTANCE_SOURCE_INVALID", message: "A name is required for the remittance source." });
+      }
+      rest.name = rest.name.trim();
+      // A cleared "Last Check Number" input posts null/NaN; let the column default (0) apply
+      // rather than storing NULL, which would break next-check-number allocation.
+      if (rest.lastCheckNumber === null || rest.lastCheckNumber === undefined || rest.lastCheckNumber === "") {
+        delete rest.lastCheckNumber;
+      } else if (!Number.isInteger(rest.lastCheckNumber) || (rest.lastCheckNumber as number) < 0) {
+        return res.status(400).json({ error: "REMITTANCE_SOURCE_INVALID", message: "Last check number must be a whole number, zero or greater." });
+      }
+
+      const source = await storage.createRemittanceSource({ ...(rest as any), companyId });
       res.status(201).json(source);
     } catch (error) {
-      console.error(error);
+      const code = (error as { code?: string })?.code;
+      if (code === "23502" || code === "23503" || code === "22P02") {
+        return res.status(400).json({ error: "REMITTANCE_SOURCE_INVALID", message: "A required field or the company reference was invalid." });
+      }
+      console.error("[RemittanceSources] create failed:", (error as Error).message);
       res.status(500).json({ message: "Failed to create remittance source" });
     }
   });

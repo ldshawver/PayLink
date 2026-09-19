@@ -137,6 +137,7 @@
         "tests/contractor-w9-document-routing-db.test.ts",
         "tests/contractor-w9-upload-lifecycle-db.test.ts",
         "tests/customer-create-company-scope-db.test.ts",
+        "tests/remittance-source-create-company-scope-db.test.ts",
         "tests/contractor-invoice-payments-db.test.ts",
         "tests/identity-onboarding-db.test.ts",
         "tests/contractor-access-requests-db.test.ts",
