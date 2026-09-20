@@ -1,9 +1,11 @@
 /**
- * Defensive guards for the Employee dialogs (employee-add freeze hardening).
+ * Defensive guards for the Employee dialogs (Add and Edit — the Edit path is
+ * how a salary/pay-rate change is made, and shares this same render code with
+ * Add via `renderForm(isEdit)`).
  *
- * Two failure modes took out the whole page from inside the Add/Edit Employee
+ * Two failure modes take out the whole page from inside the Add/Edit Employee
  * modal, because a throw during render in a modal with no local error boundary
- * unmounts the app shell:
+ * propagates up and unmounts the app shell:
  *
  *   1. A lookup query (`/api/employee-titles`, `/api/departments`, …) resolving
  *      to a non-array body — an error object served with a 200, a

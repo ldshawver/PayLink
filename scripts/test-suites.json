@@ -117,12 +117,13 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 25,
+      "fileCount": 26,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
         "tests/expense-record-payment-db.test.ts",
         "tests/worker-create-payrate-null-db.test.ts",
+        "tests/wage-history-company-scope-db.test.ts",
         "tests/contractor-contract-email-projection-db.test.ts",
         "tests/proposal-send-idempotency-db.test.ts",
         "tests/worker-create-invoiced-contractor-http.test.ts",

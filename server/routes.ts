@@ -3353,6 +3353,25 @@ function hashSigningToken(token: string): string {
       if (Object.prototype.hasOwnProperty.call(req.body, "companyId") && req.body.companyId !== existing.companyId) {
         return res.status(403).json({ message: "Forbidden: a worker's company cannot be changed through this endpoint" });
       }
+
+      // A pay-rate change is a partial update — validate it the same way
+      // POST /api/workers does (shared/worker-pay-rate-rules.ts), but only
+      // when payRate is actually part of this request, and against the
+      // worker's existing worker/contractor type when this request doesn't
+      // also change those. Without this, PATCH silently accepted a blank or
+      // negative pay rate that POST would have rejected.
+      if (Object.prototype.hasOwnProperty.call(req.body, "payRate")) {
+        const payRateResult = normalizeWorkerPayRate({
+          workerType: req.body.workerType ?? existing.workerType,
+          contractorType: req.body.contractorType ?? existing.contractorType,
+          payRate: req.body.payRate,
+        });
+        if (!payRateResult.ok) {
+          return res.status(400).json({ message: payRateResult.message });
+        }
+        req.body.payRate = payRateResult.payRate;
+      }
+
       const updateData = { ...req.body, companyId: existing.companyId };
 
       const worker = await storage.updateWorker(req.params.id as string, updateData);
@@ -21508,7 +21527,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }
         }
       }
-      const entries = await storage.getWageHistory(workerId);
+      // No workerId (the Wages tab's default load): scope to the caller's own
+      // company, same as GET /api/workers — never hand a tenant manager every
+      // company's wage_history rows platform-wide. Platform users keep the
+      // existing unscoped-unless-?companyId behavior, matching /api/workers.
+      let effectiveCompanyId: string | undefined;
+      if (!workerId) {
+        if (!isPlatformUser(user?.role)) {
+          effectiveCompanyId = user?.companyId ?? undefined;
+        } else {
+          const qCompanyId = queryStr(req.query.companyId);
+          if (qCompanyId && qCompanyId !== "all") effectiveCompanyId = qCompanyId;
+        }
+      }
+      const entries = await storage.getWageHistory(workerId, effectiveCompanyId);
       res.json(entries);
     } catch (error) {
       console.error(error);
@@ -21519,7 +21551,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/wage-history", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const entry = await storage.createWageHistory(req.body);
+      // Company scope is resolved server-side, never trusted from the client
+      // body — same pattern as POST /api/remittance-sources (PR #158).
+      let companyId: string | undefined;
+      if (!isPlatformUser(user?.role)) {
+        companyId = user?.companyId ?? undefined;
+        if (!companyId) {
+          return res.status(403).json({ message: "Forbidden: no company context for this account" });
+        }
+      } else {
+        companyId = typeof req.body?.companyId === "string" && req.body.companyId ? req.body.companyId : undefined;
+        if (!companyId) {
+          return res.status(400).json({ message: "companyId is required" });
+        }
+      }
+      const targetWorker = await storage.getWorker(req.body?.workerId);
+      if (!targetWorker || targetWorker.companyId !== companyId) {
+        return res.status(403).json({ message: "Forbidden: worker does not belong to this company" });
+      }
+      const entry = await storage.createWageHistory({ ...req.body, companyId });
       await writeAuditLog({
         actorUserId: req.session.userId!,
         targetResource: `wage_history:${entry.id}`,
@@ -21537,13 +21587,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.patch("/api/wage-history/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const entry = await storage.updateWageHistory(req.params.id, req.body);
+      const existing = await storage.getWageHistoryEntry(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      // Company ownership guard: tenant users may only update wage history
+      // in their own company (same pattern as PATCH /api/workers/:id).
+      const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+      if (isTenant && existing.companyId !== user!.companyId) {
+        return res.status(403).json({ message: "Forbidden: wage history entry belongs to a different company" });
+      }
+      // companyId is immutable through this endpoint, for every caller.
+      const { companyId: _ignoredCompanyId, ...rest } = req.body ?? {};
+      const entry = await storage.updateWageHistory(req.params.id, rest);
       if (!entry) return res.status(404).json({ message: "Not found" });
       await writeAuditLog({
         actorUserId: req.session.userId!,
         targetResource: `wage_history:${req.params.id}`,
         changeType: "wage_history_updated",
-        afterValue: JSON.stringify({ updatedFields: Object.keys(req.body) }),
+        afterValue: JSON.stringify({ updatedFields: Object.keys(rest) }),
         companyId: user?.companyId,
       });
       res.json(entry);
@@ -21556,6 +21616,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/wage-history/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
+      const existing = await storage.getWageHistoryEntry(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+      if (isTenant && existing.companyId !== user!.companyId) {
+        return res.status(403).json({ message: "Forbidden: wage history entry belongs to a different company" });
+      }
       await storage.deleteWageHistory(req.params.id);
       await writeAuditLog({
         actorUserId: req.session.userId!,

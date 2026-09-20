@@ -397,7 +397,8 @@ export interface IStorage {
   updateEmployeeGroup(id: string, data: Partial<EmployeeGroup>): Promise<EmployeeGroup | undefined>;
   deleteEmployeeGroup(id: string): Promise<void>;
 
-  getWageHistory(workerId?: string): Promise<WageHistory[]>;
+  getWageHistory(workerId?: string, companyId?: string): Promise<WageHistory[]>;
+  getWageHistoryEntry(id: string): Promise<WageHistory | undefined>;
   createWageHistory(data: InsertWageHistory): Promise<WageHistory>;
   updateWageHistory(id: string, data: Partial<WageHistory>): Promise<WageHistory | undefined>;
   deleteWageHistory(id: string): Promise<void>;
@@ -2095,11 +2096,18 @@ export class DatabaseStorage implements IStorage {
     await db.delete(employeeGroups).where(eq(employeeGroups.id, id));
   }
 
-  async getWageHistory(workerId?: string): Promise<WageHistory[]> {
+  async getWageHistory(workerId?: string, companyId?: string): Promise<WageHistory[]> {
     if (workerId) {
       return db.select().from(wageHistory).where(eq(wageHistory.workerId, workerId)).orderBy(desc(wageHistory.effectiveDate));
     }
+    if (companyId) {
+      return db.select().from(wageHistory).where(eq(wageHistory.companyId, companyId)).orderBy(desc(wageHistory.effectiveDate));
+    }
     return db.select().from(wageHistory).orderBy(desc(wageHistory.effectiveDate));
+  }
+  async getWageHistoryEntry(id: string): Promise<WageHistory | undefined> {
+    const [entry] = await db.select().from(wageHistory).where(eq(wageHistory.id, id));
+    return entry;
   }
   async createWageHistory(data: InsertWageHistory): Promise<WageHistory> {
     const [entry] = await db.insert(wageHistory).values(data).returning();
