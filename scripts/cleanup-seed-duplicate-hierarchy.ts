@@ -81,7 +81,7 @@ async function main() {
     await collectReferencedIds(client, "legal_entities", "%legal_entit%");
 
     await client.query(`
-      CREATE TEMP TABLE _del_departments AS
+      CREATE TEMP TABLE _dup_departments AS
       SELECT id, company_id FROM (
         SELECT d.id, d.company_id,
                row_number() OVER (PARTITION BY (to_jsonb(d) - 'id' - 'created_at') ORDER BY d.created_at NULLS LAST, d.id) AS rn
@@ -89,16 +89,18 @@ async function main() {
          WHERE ((d.name = 'Headquarters' AND d.code = 'HQ') OR (d.name = 'Engineering' AND d.code = 'ENG'))
            AND d.division_id IS NULL AND d.parent_id IS NULL AND d.manager_id IS NULL
       ) x
-      WHERE rn > 1 AND NOT EXISTS (SELECT 1 FROM _refs_departments r WHERE r.id = x.id)`);
+      WHERE rn > 1`);
+    await client.query(`CREATE TEMP TABLE _del_departments AS SELECT id, company_id FROM _dup_departments x WHERE NOT EXISTS (SELECT 1 FROM _refs_departments r WHERE r.id = x.id)`);
     await client.query(`
-      CREATE TEMP TABLE _del_legal_entities AS
+      CREATE TEMP TABLE _dup_legal_entities AS
       SELECT id, company_id FROM (
         SELECT le.id, le.company_id,
                row_number() OVER (PARTITION BY (to_jsonb(le) - 'id' - 'created_at') ORDER BY le.created_at NULLS LAST, le.id) AS rn
           FROM legal_entities le
          WHERE le.type = 'llc' AND le.status = 'active' AND le.ein IS NULL
       ) x
-      WHERE rn > 1 AND NOT EXISTS (SELECT 1 FROM _refs_legal_entities r WHERE r.id = x.id)`);
+      WHERE rn > 1`);
+    await client.query(`CREATE TEMP TABLE _del_legal_entities AS SELECT id, company_id FROM _dup_legal_entities x WHERE NOT EXISTS (SELECT 1 FROM _refs_legal_entities r WHERE r.id = x.id)`);
 
     for (const t of ["departments", "legal_entities"] as const) {
       const total = (await client.query(`SELECT count(*)::int n FROM ${t}`)).rows[0].n;
@@ -106,7 +108,8 @@ async function main() {
         `SELECT company_id, count(*)::int n FROM _del_${t} GROUP BY 1 ORDER BY 2 DESC`,
       );
       const n = del.rows.reduce((s, r) => s + r.n, 0);
-      console.log(`\n${t}: ${total} rows total, ${n} duplicate seed rows eligible for deletion, ${total - n} would remain`);
+      const dup = (await client.query(`SELECT count(*)::int n FROM _dup_${t}`)).rows[0].n;
+      console.log(`\n${t}: ${total} rows total, ${dup} non-oldest seed-shaped duplicates, ${dup - n} kept because referenced, ${n} eligible for deletion, ${total - n} would remain`);
       for (const r of del.rows) console.log(`  company ${r.company_id ?? "(null)"}: ${r.n}`);
     }
 
