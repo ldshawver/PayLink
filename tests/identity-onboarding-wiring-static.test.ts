@@ -56,7 +56,7 @@ ok("account failure never fails the worker create (try/catch, employee still ret
 console.log("\nroutes — account status / resend / disable / accept");
 ok("GET /api/workers/accounts registered before /api/workers/:id", routes.indexOf('app.get("/api/workers/accounts"') < routes.indexOf('app.get("/api/workers/:id"'));
 ok("worker-account routes are admin/manager gated", /app\.get\("\/api\/workers\/:id\/account", requireRole\("admin", "manager"\)/.test(routes) && /app\.post\("\/api\/workers\/:id\/resend-invite", requireRole\("admin", "manager"\)/.test(routes));
-ok("worker-account routes company-scope via loadWorkerForAccountRoute", /function loadWorkerForAccountRoute[\s\S]{0,500}?worker\.companyId !== actingUser!?\.companyId/.test(routes));
+ok("worker-account routes company-scope via loadWorkerForAccountRoute", /function loadWorkerForAccountRoute[\s\S]{0,600}?worker\.companyId !== (?:actingUser!?\.companyId|tenantCompanyId)/.test(routes));
 ok("disable flips the linked users row is_active (reuses existing enforcement)", /UPDATE users\s+SET is_active = \$\{enabled\}/.test(idb));
 ok("public accept route bcrypt-hashes the chosen password before acceptInviteWithUser", /app\.post\("\/api\/account-invites\/accept"[\s\S]{0,1000}?bcrypt\.hash\(String\(password\), 10\)[\s\S]{0,160}?acceptInviteWithUser\(/.test(routes));
 ok("accept route enforces a minimum password length", /password.{0,20}length < 8/.test(routes));

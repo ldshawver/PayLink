@@ -304,6 +304,8 @@ export interface IStorage {
   updateAccrualBalance(id: string, data: Partial<AccrualBalance>): Promise<AccrualBalance | undefined>;
 
   getEmployeeContacts(workerId?: string): Promise<EmployeeContact[]>;
+  getEmployeeContact(id: string): Promise<EmployeeContact | undefined>;
+  getEmployeeContactsByCompany(companyId: string): Promise<EmployeeContact[]>;
   createEmployeeContact(data: InsertEmployeeContact): Promise<EmployeeContact>;
   updateEmployeeContact(id: string, data: Partial<EmployeeContact>): Promise<EmployeeContact | undefined>;
   deleteEmployeeContact(id: string): Promise<void>;
@@ -1678,6 +1680,17 @@ export class DatabaseStorage implements IStorage {
   async getEmployeeContacts(workerId?: string): Promise<EmployeeContact[]> {
     if (workerId) return db.select().from(employeeContacts).where(eq(employeeContacts.workerId, workerId));
     return db.select().from(employeeContacts);
+  }
+  async getEmployeeContact(id: string): Promise<EmployeeContact | undefined> {
+    const [c] = await db.select().from(employeeContacts).where(eq(employeeContacts.id, id));
+    return c;
+  }
+  // Contacts of the workers belonging to one company (employee_contacts has no
+  // company_id column of its own — ownership is through the worker).
+  async getEmployeeContactsByCompany(companyId: string): Promise<EmployeeContact[]> {
+    return db.select().from(employeeContacts).where(
+      inArray(employeeContacts.workerId, db.select({ id: workers.id }).from(workers).where(eq(workers.companyId, companyId)))
+    );
   }
   async createEmployeeContact(data: InsertEmployeeContact): Promise<EmployeeContact> {
     const [c] = await db.insert(employeeContacts).values(data).returning();
