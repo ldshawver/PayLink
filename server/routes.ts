@@ -730,6 +730,24 @@ function isPlatformUser(role: string | null | undefined): boolean {
   return role.startsWith("platform_");
 }
 
+/**
+ * The company a tenant (non-platform) user acts within: users.company_id, or —
+ * when that is null — the company of the user's linked worker record (the
+ * fallback GET /api/workers already used). Returns null when neither resolves;
+ * callers must treat null as "no tenant scope" and deny, never as "all companies".
+ */
+async function resolveTenantCompanyId(
+  user: { companyId?: string | null; workerId?: string | null } | null | undefined,
+): Promise<string | null> {
+  if (!user) return null;
+  if (user.companyId) return user.companyId;
+  if (user.workerId) {
+    const workerRec = await storage.getWorker(user.workerId);
+    return workerRec?.companyId ?? null;
+  }
+  return null;
+}
+
 function isGlobalDiagnosticsRole(role: string | null | undefined): boolean {
   return role === "platform_super_admin" || role === "platform_admin" || role === "platform_owner";
 }
@@ -2629,13 +2647,11 @@ function hashSigningToken(token: string): string {
       // 3. Platform users may pass ?companyId to narrow to a specific company.
       let effectiveCompanyId: string | undefined;
       if (!isPlatformUser(user?.role)) {
-        // Resolve companyId — fall back to worker record if user.companyId is null
-        let resolvedCompanyId = user?.companyId ?? null;
-        if (!resolvedCompanyId && user?.workerId) {
-          const workerRec = await storage.getWorker(user.workerId);
-          resolvedCompanyId = workerRec?.companyId ?? null;
-        }
-        effectiveCompanyId = resolvedCompanyId ?? undefined;
+        // Resolve companyId — fall back to worker record if user.companyId is null.
+        // No resolvable company → nothing (previously fell through to every tenant's workers).
+        const resolvedCompanyId = await resolveTenantCompanyId(user);
+        if (!resolvedCompanyId) return res.json([]);
+        effectiveCompanyId = resolvedCompanyId;
       } else if (qCompanyId && qCompanyId !== "all") {
         // Platform user requesting a specific company
         effectiveCompanyId = qCompanyId;
@@ -2691,8 +2707,8 @@ function hashSigningToken(token: string): string {
 
       // Managers/admins: enforce role_permissions scope columns (view_own / view_department / view_company)
       // via the authorization module in addition to the company-level tenant isolation check.
-      const effectiveCompanyId = user?.companyId ?? null;
-      if (effectiveCompanyId && worker.companyId !== effectiveCompanyId) {
+      const effectiveCompanyId = await resolveTenantCompanyId(user);
+      if (!effectiveCompanyId || worker.companyId !== effectiveCompanyId) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -2731,9 +2747,11 @@ function hashSigningToken(token: string): string {
       if (!req.body.lastName) return res.status(400).json({ message: "Last name is required" });
       // Tenant users may only create workers in their own company
       const actingUser = await storage.getUser(req.session.userId!);
-      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-      if (isTenant && req.body.companyId !== actingUser!.companyId) {
-        return res.status(403).json({ message: "Forbidden: cannot create a worker in a different company" });
+      if (!isPlatformUser(actingUser?.role)) {
+        const tenantCompanyId = await resolveTenantCompanyId(actingUser);
+        if (!tenantCompanyId || req.body.companyId !== tenantCompanyId) {
+          return res.status(403).json({ message: "Forbidden: cannot create a worker in a different company" });
+        }
       }
       if (req.body.workerType && !isValidWorkerType(req.body.workerType)) {
         return res.status(400).json({ message: "Worker type must be 'employee' or 'contractor'" });
@@ -2845,9 +2863,11 @@ function hashSigningToken(token: string): string {
     const worker = await storage.getWorker(req.params.id as string);
     if (!worker) { res.status(404).json({ message: "Worker not found" }); return null; }
     const actingUser = await storage.getUser(req.session.userId!);
-    const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-    if (isTenant && worker.companyId !== actingUser!.companyId) {
-      res.status(403).json({ message: "Forbidden" }); return null;
+    if (!isPlatformUser(actingUser?.role)) {
+      const tenantCompanyId = await resolveTenantCompanyId(actingUser);
+      if (!tenantCompanyId || worker.companyId !== tenantCompanyId) {
+        res.status(403).json({ message: "Forbidden" }); return null;
+      }
     }
     return { worker, companyId: worker.companyId };
   }
@@ -3340,9 +3360,11 @@ function hashSigningToken(token: string): string {
 
       // Company ownership guard: tenant users may only update workers in their own company
       const actingUser = await storage.getUser(req.session.userId!);
-      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-      if (isTenant && existing.companyId !== actingUser!.companyId) {
-        return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
+      if (!isPlatformUser(actingUser?.role)) {
+        const tenantCompanyId = await resolveTenantCompanyId(actingUser);
+        if (!tenantCompanyId || existing.companyId !== tenantCompanyId) {
+          return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
+        }
       }
 
       // companyId is immutable through this general-purpose update endpoint, for every
@@ -3398,9 +3420,11 @@ function hashSigningToken(token: string): string {
       }
       // Company ownership guard: tenant users may only delete workers in their own company
       const actingUser = await storage.getUser(req.session.userId!);
-      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-      if (isTenant && worker.companyId !== actingUser!.companyId) {
-        return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
+      if (!isPlatformUser(actingUser?.role)) {
+        const tenantCompanyId = await resolveTenantCompanyId(actingUser);
+        if (!tenantCompanyId || worker.companyId !== tenantCompanyId) {
+          return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
+        }
       }
       await storage.deleteWorker(req.params.id as string);
       await writeAuditLog({
@@ -9339,9 +9363,16 @@ function hashSigningToken(token: string): string {
     try {
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
-      const companyId = isPlatformUser(user.role)
-        ? (queryStr(req.query.companyId))
-        : (user.companyId ?? undefined);
+      let companyId: string | undefined;
+      if (isPlatformUser(user.role)) {
+        companyId = queryStr(req.query.companyId);
+      } else {
+        // Tenant users: own company (worker fallback). No resolvable company →
+        // nothing, never every tenant's rows (storage treats undefined as "all").
+        const tenantCompanyId = await resolveTenantCompanyId(user);
+        if (!tenantCompanyId) return res.json([]);
+        companyId = tenantCompanyId;
+      }
       const departments = await storage.getDepartments(companyId);
       res.json(departments);
     } catch (error) {
@@ -9392,9 +9423,16 @@ function hashSigningToken(token: string): string {
     try {
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
-      const companyId = isPlatformUser(user.role)
-        ? (queryStr(req.query.companyId))
-        : (user.companyId ?? undefined);
+      let companyId: string | undefined;
+      if (isPlatformUser(user.role)) {
+        companyId = queryStr(req.query.companyId);
+      } else {
+        // Tenant users: own company (worker fallback). No resolvable company →
+        // nothing, never every tenant's rows (storage treats undefined as "all").
+        const tenantCompanyId = await resolveTenantCompanyId(user);
+        if (!tenantCompanyId) return res.json([]);
+        companyId = tenantCompanyId;
+      }
       const branches = await storage.getBranches(companyId);
       res.json(branches);
     } catch (error) {
@@ -10029,16 +10067,42 @@ function hashSigningToken(token: string): string {
   });
 
   // Employee Contacts
+  // employee_contacts has no company_id; ownership is through the contact's
+  // worker. Platform users: unrestricted. Non-manager tenant users: only their
+  // own worker. Tenant managers/admins: only workers in their own company.
+  async function canAccessContactWorker(
+    user: Awaited<ReturnType<typeof storage.getUser>>,
+    workerId: string | null | undefined,
+  ): Promise<boolean> {
+    if (!user || !workerId) return false;
+    if (isPlatformUser(user.role)) return true;
+    if (!isManagerRole(user.role)) return !!user.workerId && user.workerId === workerId;
+    const tenantCompanyId = await resolveTenantCompanyId(user);
+    if (!tenantCompanyId) return false;
+    const target = await storage.getWorker(workerId);
+    return !!target && target.companyId === tenantCompanyId;
+  }
+
   app.get("/api/employee-contacts", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let workerId = queryStr(req.query.workerId);
-      // Non-manager tenant users can only see their own contacts
-      if (user && user.workerId && !isManagerRole(user.role)) {
-        workerId = user.workerId;
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const workerId = queryStr(req.query.workerId);
+      if (isPlatformUser(user.role)) {
+        return res.json(await storage.getEmployeeContacts(workerId));
       }
-      const contacts = await storage.getEmployeeContacts(workerId);
-      res.json(contacts);
+      // Non-manager tenant users can only see their own contacts
+      if (!isManagerRole(user.role)) {
+        return res.json(user.workerId ? await storage.getEmployeeContacts(user.workerId) : []);
+      }
+      // A foreign or nonexistent workerId both yield [] (no existence oracle).
+      if (workerId) {
+        if (!(await canAccessContactWorker(user, workerId))) return res.json([]);
+        return res.json(await storage.getEmployeeContacts(workerId));
+      }
+      const tenantCompanyId = await resolveTenantCompanyId(user);
+      if (!tenantCompanyId) return res.json([]);
+      res.json(await storage.getEmployeeContactsByCompany(tenantCompanyId));
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch employee contacts" });
@@ -10050,8 +10114,11 @@ function hashSigningToken(token: string): string {
       const user = await storage.getUser(req.session.userId!);
       const data = { ...req.body };
       // Non-manager tenant users can only create contacts for themselves
-      if (user && user.workerId && !isManagerRole(user.role)) {
+      if (user && user.workerId && !isManagerRole(user.role) && !isPlatformUser(user.role)) {
         data.workerId = user.workerId;
+      }
+      if (!(await canAccessContactWorker(user, data.workerId))) {
+        return res.status(403).json({ message: "Not authorized" });
       }
       const contact = await storage.createEmployeeContact(data);
       await writeAuditLog({
@@ -10071,11 +10138,16 @@ function hashSigningToken(token: string): string {
   app.patch("/api/employee-contacts/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      // Non-manager tenant users can only edit their own contacts
-      if (user && user.workerId && !isManagerRole(user.role)) {
-        const existing = await storage.getEmployeeContacts(user.workerId);
-        const isOwned = existing.some(c => c.id === req.params.id);
-        if (!isOwned) return res.status(403).json({ message: "Not authorized" });
+      const existing = await storage.getEmployeeContact(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Employee contact not found" });
+      }
+      if (!(await canAccessContactWorker(user, existing.workerId))) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      // A contact cannot be moved to a different worker through this endpoint.
+      if (Object.prototype.hasOwnProperty.call(req.body, "workerId") && req.body.workerId !== existing.workerId) {
+        return res.status(403).json({ message: "Not authorized" });
       }
       const contact = await storage.updateEmployeeContact(req.params.id, req.body);
       if (!contact) {
@@ -10098,6 +10170,13 @@ function hashSigningToken(token: string): string {
   app.delete("/api/employee-contacts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
+      const existing = await storage.getEmployeeContact(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Employee contact not found" });
+      }
+      if (!(await canAccessContactWorker(user, existing.workerId))) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
       await storage.deleteEmployeeContact(req.params.id);
       await writeAuditLog({
         actorUserId: req.session.userId!,

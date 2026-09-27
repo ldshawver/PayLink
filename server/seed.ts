@@ -1284,8 +1284,12 @@ export async function seedDatabase() {
   try {
     const existingCompanies = await db.select().from(companies);
     if (existingCompanies.length > 0) {
-      // Companies already exist — still seed hierarchy (idempotent)
-      await seedDemoHierarchy();
+      // Companies already exist — do NOT seed the demo hierarchy. It was never
+      // idempotent here: its "Demo Corp" guard never matches an existing
+      // database, so every boot inserted another legal entity + 2 departments
+      // into whichever real tenant came back first from an unordered SELECT.
+      // Those accumulated rows are what made GET /api/departments return a
+      // ~100 MB body and freeze the Add/Edit Employee dialog.
       return;
     }
   } catch (e) {
