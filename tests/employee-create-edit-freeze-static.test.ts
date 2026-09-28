@@ -38,11 +38,17 @@ const handler = (method: string, route: string) => {
   return routes.slice(start, next < 0 ? undefined : next);
 };
 ok("resolveTenantCompanyId helper exists", /async function resolveTenantCompanyId\(/.test(routes));
-for (const route of ["/api/departments", "/api/branches"]) {
-  const h = handler("get", route);
+// SaaS PR 1 routes every org-hierarchy GET (departments and branches included)
+// through the shared orgResourceHandlers().list handler, which carries the
+// same invariant for all of them.
+const regStart = routes.indexOf("function orgResourceHandlers(");
+const regGet = regStart >= 0 ? routes.slice(regStart, routes.indexOf("const create = async", regStart)) : "";
+for (const [route, handlerVar] of [["/api/departments", "orgDepartments"], ["/api/branches", "orgBranches"]]) {
+  ok(`GET ${route} is served by the shared org list handler`,
+    handler("get", route).split("\n")[0].trimEnd().endsWith(`${handlerVar}.list);`) && regGet.includes("const list = async"));
   ok(`GET ${route} resolves tenant company and returns [] when unresolved`,
-    h.includes("resolveTenantCompanyId(user)") && h.includes("if (!tenantCompanyId) return res.json([]);"));
-  ok(`GET ${route} no longer uses user.companyId ?? undefined`, !h.includes("user.companyId ?? undefined"));
+    regGet.includes("companyId = await resolveTenantCompanyId(user);") && regGet.includes("if (!companyId) return res.json([]);"));
+  ok(`GET ${route} no longer uses user.companyId ?? undefined`, !regGet.includes("user.companyId ?? undefined"));
 }
 for (const [m, r] of [["post", "/api/workers"], ["patch", "/api/workers/:id"], ["delete", "/api/workers/:id"]] as const) {
   const h = handler(m, r);

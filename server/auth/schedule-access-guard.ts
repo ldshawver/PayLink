@@ -12,9 +12,11 @@
  * time entries, payroll), this leaked cross-tenant write access.
  *
  * Cross-company scheduling is a legitimate product feature (a worker may be
- * scheduled at any company they're authorized for), so access is decided with
- * the same canAccessCompany semantics used elsewhere — own company, enterprise
- * sibling within the same tenant, or an explicit company_user_access grant.
+ * scheduled at any company they're authorized for). The route resolves the
+ * target through the scheduling-only scope (resolveSchedulingCompanyIds in
+ * routes.ts: own company, explicit company_user_access grants, and
+ * platform-defined enterprise siblings within the same tenant). That scope
+ * authorizes scheduling only — never general company access.
  *
  * Design: this function is intentionally pure. The route handler resolves the
  * DB-dependent facts (whether the requestor is a platform user, the requestor's
