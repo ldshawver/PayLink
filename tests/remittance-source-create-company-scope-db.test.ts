@@ -14,9 +14,9 @@
  * client set arbitrary columns (`id`, `lastBatchNumber`, ...).
  *
  * Fix: resolve company scope server-side (same contract as POST /api/customers,
- * but a tenant may still act for a company it is entitled to — sibling
- * companies of the same enterprise / company_user_access — via the existing
- * canAccessCompany helper), validate `name`/`lastCheckNumber`, strip server-owned columns (id, createdAt, lastBatchNumber),
+ * but a tenant may still act for a company it is explicitly entitled to via a
+ * company_user_access grant, through the canAccessCompany helper — since SaaS
+ * PR 1 an enterprise sibling alone is NOT entitlement to its bank data), validate `name`/`lastCheckNumber`, strip server-owned columns (id, createdAt, lastBatchNumber),
  * and map constraint violations to a sanitized 4xx.
  *
  * Real running server, real HTTP, disposable database, synthetic fixtures only.
@@ -138,10 +138,17 @@ async function main() {
     check("no source row created for company B", (await countSources(companyB)) === 0);
     check("no source row leaked anywhere", (await anySourceNamed(n4)) === 0);
 
-    console.log("\n── 5. Multi-company tenants keep working: enterprise sibling company ──");
+    console.log("\n── 5. Multi-company tenants: explicit grant required (enterprise sibling alone is not enough) ──");
     const n5 = `Synthetic Source Sibling ${sfx}`;
+    const r5a = await apiRequest(base, "POST", "/api/remittance-sources", sAdminA, formPayload(n5, { companyId: companyA2 }));
+    check("admin of A creating for enterprise sibling A2 WITHOUT a grant → 403", r5a.status === 403 && (await countSources(companyA2)) === 0, `status=${r5a.status} body=${JSON.stringify(r5a.body)}`);
+    await pool.query(
+      `INSERT INTO company_user_access (user_id, company_id, role, is_default_company, is_active, worker_type)
+       SELECT id, $2, 'admin', FALSE, TRUE, 'manager' FROM users WHERE username = $1`,
+      [uAdminA, companyA2],
+    );
     const r5 = await apiRequest(base, "POST", "/api/remittance-sources", sAdminA, formPayload(n5, { companyId: companyA2 }));
-    check("admin of A creating for enterprise sibling A2 → 201", r5.status === 201 && (r5.body as any)?.companyId === companyA2, `status=${r5.status} body=${JSON.stringify(r5.body)}`);
+    check("admin of A with explicit company_user_access grant to A2 → 201", r5.status === 201 && (r5.body as any)?.companyId === companyA2, `status=${r5.status} body=${JSON.stringify(r5.body)}`);
 
     console.log("\n── 6. Tenant session without a usable company → clean 400 ──");
     const r6a = await apiRequest(base, "POST", "/api/remittance-sources", sNoCo, formPayload(`Synthetic NoCo ${sfx}`));
@@ -210,6 +217,7 @@ async function main() {
     try {
       await pool.query(`DELETE FROM authorization_audit_log WHERE actor_user_id IN (SELECT id FROM users WHERE username LIKE $1)`, [`rs_%_${sfx}`]).catch(() => {});
       await pool.query(`DELETE FROM remittance_sources WHERE company_id = ANY($1::varchar[])`, [companyIds]);
+      await pool.query(`DELETE FROM company_user_access WHERE user_id IN (SELECT id FROM users WHERE username LIKE $1)`, [`rs_%_${sfx}`]);
       await pool.query(`DELETE FROM session WHERE sess->>'userId' IN (SELECT id FROM users WHERE username LIKE $1)`, [`rs_%_${sfx}`]).catch(() => {});
       await pool.query(`DELETE FROM users WHERE username LIKE $1`, [`rs_%_${sfx}`]);
       await cascadeDelete(pool, "companies", companyIds);

@@ -35,6 +35,10 @@ import {
 } from "./app-doctor/revalidation-logic";
 import { evaluateUserProvisioning } from "./auth/user-provisioning-guard.js";
 import { evaluateScheduleAccess } from "./auth/schedule-access-guard.js";
+import {
+  isPlatformCompanyBypassRole, isPlatformOrgAdminRole, normalizeRequestedCompanyId,
+  evaluateOrgCreate, evaluateOrgMutation, filterTenantCompanyPatch,
+} from "./auth/org-ownership-guard.js";
 import { db } from "./db";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
@@ -753,18 +757,28 @@ function isGlobalDiagnosticsRole(role: string | null | undefined): boolean {
 }
 
 /**
- * Shared company access helper — the single source of truth for cross-company
- * permission checks. Access is granted when ANY of the following is true:
- *  1. targetCompanyId is null/undefined (record is not company-scoped)
- *  2. User is a platform/global admin (no companyId or role starts with 'platform_')
- *  3. User's default company === targetCompanyId
- *  4. User and target share the same non-null enterprise_id (enterprise siblings)
- *  5. User has an active company_user_access row for targetCompanyId
+ * Shared company access helper — the single source of truth for general
+ * cross-company permission checks (SaaS PR 1). Access is granted ONLY when:
+ *  1. targetCompanyId is null/undefined (record is not company-scoped), or
+ *  2. the user holds an explicitly listed platform role
+ *     (PLATFORM_COMPANY_BYPASS_ROLES — never inferred from a NULL company_id), or
+ *  3. the user's own company === targetCompanyId, or
+ *  4. the user has an active company_user_access row for targetCompanyId.
  *
- * Accepts either:
- *  - A full user object `{ id, companyId?, role? }` (preferred — enables platform
- *    admin bypass and company_user_access lookup)
- *  - A plain companyId string (legacy callers; enterprise + CUA checks still run)
+ * company_user_access is the authoritative explicit-membership table (the one
+ * getAccessibleCompanyIds() and this helper read). user_company_access is a
+ * schema-only table that does not exist in production and grants nothing.
+ *
+ * Deliberately NOT granted here:
+ *  - enterprise siblings. Sharing an enterprise_id is not authorization over
+ *    another company's users, payroll, bank, tax or org data (the audit's
+ *    enterprise-hop takeover). Cross-company SCHEDULING keeps its enterprise
+ *    reach through resolveSchedulingCompanyIds() only.
+ *  - "any company" for a user whose company_id is NULL. Such a user reaches only
+ *    companies with an explicit company_user_access grant.
+ *
+ * Accepts a full user object (preferred) or, for legacy callers, a plain
+ * companyId string — the string form can only match the same company.
  */
 async function canAccessCompany(
   userOrCompanyId: string | { id: string; companyId?: string | null; role?: string | null },
@@ -772,50 +786,84 @@ async function canAccessCompany(
 ): Promise<boolean> {
   if (!targetCompanyId) return true;
 
-  let userId: string | null = null;
-  let userCompanyId: string | null = null;
-
   if (typeof userOrCompanyId === "string") {
-    userCompanyId = userOrCompanyId;
-  } else {
-    const u = userOrCompanyId;
-    userId = u.id;
-    // Platform / global admins bypass all company restrictions
-    if (!u.companyId || (u.role ?? "").startsWith("platform_")) return true;
-    userCompanyId = u.companyId;
+    return userOrCompanyId === targetCompanyId;
   }
 
-  if (!userCompanyId) return true;
-  if (userCompanyId === targetCompanyId) return true;
+  const u = userOrCompanyId;
+  if (isPlatformCompanyBypassRole(u.role)) return true;
+  if (u.companyId && u.companyId === targetCompanyId) return true;
+  if (!u.id) return false;
 
-  // Enterprise sibling check — only allowed if both companies share an enterprise_id
-  // AND belong to the same tenant (or neither is yet assigned to a tenant).
-  // Phase 3A: cross-tenant enterprise sibling access is explicitly denied.
-  const entRes = await db.execute(sql`
-    SELECT 1 FROM companies c1
-    JOIN companies c2 ON c1.enterprise_id = c2.enterprise_id AND c1.enterprise_id IS NOT NULL
-    LEFT JOIN tenant_companies tc1 ON tc1.company_id = c1.id
-    LEFT JOIN tenant_companies tc2 ON tc2.company_id = c2.id
-    WHERE c1.id = ${userCompanyId} AND c2.id = ${targetCompanyId}
-      AND (
-        tc1.tenant_id IS NULL
-        OR tc2.tenant_id IS NULL
-        OR tc1.tenant_id = tc2.tenant_id
-      )
-    LIMIT 1
-  `);
-  if ((entRes.rows ?? []).length > 0) return true;
-
-  // company_user_access — explicit secondary-company assignment
-  const cuaFilter = userId
-    ? sql`user_id = ${userId}`
-    : sql`user_id IN (SELECT id FROM users WHERE company_id = ${userCompanyId} LIMIT 1)`;
   const cuaRes = await db.execute(sql`
     SELECT 1 FROM company_user_access
-    WHERE ${cuaFilter} AND company_id = ${targetCompanyId} AND is_active = TRUE
+    WHERE user_id = ${u.id} AND company_id = ${targetCompanyId} AND is_active = TRUE
     LIMIT 1
   `);
   return (cuaRes.rows ?? []).length > 0;
+}
+
+/** Scheduling-only reach check (see resolveSchedulingCompanyIds). */
+async function canScheduleIntoCompany(
+  user: { id: string; companyId?: string | null; workerId?: string | null; role?: string | null } | null | undefined,
+  companyId: string | null | undefined,
+): Promise<boolean> {
+  if (!user || !companyId) return false;
+  if (isPlatformCompanyBypassRole(user.role)) return true;
+  const scope = await resolveSchedulingCompanyIds(user);
+  return scope.all.includes(companyId);
+}
+
+/** Minimal worker shape for the cross-company schedule picker. */
+function toSchedulingWorker(w: any, includePay: boolean) {
+  return {
+    id: w.id,
+    companyId: w.companyId,
+    firstName: w.firstName,
+    lastName: w.lastName,
+    employeeNumber: w.employeeNumber ?? null,
+    jobTitle: w.jobTitle ?? null,
+    department: w.department ?? null,
+    workerType: w.workerType,
+    status: w.status ?? null,
+    isActive: w.isActive,
+    ...(includePay ? { payRate: w.payRate ?? null, payType: w.payType ?? null } : {}),
+  };
+}
+
+/**
+ * Companies a tenant actor may SCHEDULE into / pick workers from. This is the
+ * one place enterprise grouping still matters: cross-company scheduling within
+ * an enterprise is a live product capability. enterprise_id is
+ * platform-controlled (tenants cannot write it — see filterTenantCompanyPatch
+ * and the platform-only enterprise routes), and siblings in different tenants
+ * are excluded. Grants scheduling reach ONLY — callers must not use it to
+ * authorize any other resource.
+ */
+async function resolveSchedulingCompanyIds(
+  user: { id: string; companyId?: string | null; workerId?: string | null; role?: string | null },
+): Promise<{ all: string[]; fullAccess: Set<string> }> {
+  const own = await resolveTenantCompanyId(user);
+  const cuaRes = await db.execute(sql`
+    SELECT company_id FROM company_user_access WHERE user_id = ${user.id} AND is_active = TRUE
+  `);
+  const fullAccess = new Set<string>([
+    ...(own ? [own] : []),
+    ...((cuaRes.rows ?? []) as any[]).map((r) => r.company_id as string),
+  ]);
+  const all = new Set<string>(fullAccess);
+  if (own) {
+    const sibRes = await db.execute(sql`
+      SELECT c2.id FROM companies c1
+      JOIN companies c2 ON c2.enterprise_id = c1.enterprise_id AND c1.enterprise_id IS NOT NULL
+      LEFT JOIN tenant_companies tc1 ON tc1.company_id = c1.id
+      LEFT JOIN tenant_companies tc2 ON tc2.company_id = c2.id
+      WHERE c1.id = ${own}
+        AND (tc1.tenant_id IS NULL OR tc2.tenant_id IS NULL OR tc1.tenant_id = tc2.tenant_id)
+    `);
+    for (const r of (sibRes.rows ?? []) as any[]) all.add(r.id as string);
+  }
+  return { all: Array.from(all), fullAccess };
 }
 
 async function getSessionCompanyId(req: Request): Promise<string | null> {
@@ -2205,7 +2253,7 @@ function hashSigningToken(token: string): string {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const isPlatformAdmin = !user.companyId || (user.role ?? "").startsWith("platform_");
+      const isPlatformAdmin = isPlatformCompanyBypassRole(user.role);
 
       // Fetch explicit company_user_access assignments
       const cuaRows = await db.execute(sql`
@@ -2216,24 +2264,12 @@ function hashSigningToken(token: string): string {
         ORDER BY cua.is_default_company DESC, co.name ASC
       `);
 
-      // Fetch enterprise sibling companies (if applicable)
-      let enterpriseCompanies: any[] = [];
-      if (user.companyId) {
-        const entRes = await db.execute(sql`
-          SELECT c.id, c.name, c.enterprise_id
-          FROM companies c
-          JOIN companies uc ON uc.enterprise_id = c.enterprise_id AND uc.enterprise_id IS NOT NULL
-          WHERE uc.id = ${user.companyId}
-          ORDER BY c.name ASC
-        `);
-        enterpriseCompanies = entRes.rows as any[];
-      }
-
-      // Accessible company IDs (union of default + enterprise + CUA)
+      // Same rules as canAccessCompany(): own company + active explicit grants.
+      // Enterprise siblings grant scheduling reach only (schedulingCompanyIds).
       const accessibleIds = new Set<string>();
       if (user.companyId) accessibleIds.add(user.companyId);
       for (const r of cuaRows.rows as any[]) if (r.is_active) accessibleIds.add(r.company_id);
-      for (const r of enterpriseCompanies) accessibleIds.add(r.id);
+      const scheduling = isPlatformAdmin ? null : await resolveSchedulingCompanyIds(user);
 
       res.json({
         userId: user.id,
@@ -2242,10 +2278,10 @@ function hashSigningToken(token: string): string {
         isPlatformAdmin,
         defaultCompanyId: user.companyId,
         accessibleCompanyIds: Array.from(accessibleIds),
+        schedulingCompanyIds: scheduling ? scheduling.all : null,
         companyUserAccess: cuaRows.rows,
-        enterpriseSiblings: enterpriseCompanies,
         permissionNote: isPlatformAdmin
-          ? "Platform admin — bypasses all company restrictions"
+          ? "Platform role — bypasses company restrictions"
           : `Tenant-scoped to ${user.companyId} with ${accessibleIds.size} accessible company/companies`,
       });
     } catch (e: any) { res.status(500).json({ message: "Failed to resolve effective access: " + e.message }); }
@@ -2509,22 +2545,26 @@ function hashSigningToken(token: string): string {
   app.get("/api/companies", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let companies = await storage.getCompanies();
-      // Tenant users see their own company plus all enterprise siblings (same enterpriseId).
-      // Platform users see everything.
-      if (user && !isPlatformUser(user.role)) {
-        if (!user.companyId) return res.status(403).json({ message: "Access denied" });
-        const userCompany = companies.find(c => c.id === user.companyId);
-        const enterpriseId = userCompany?.enterpriseId;
-        if (enterpriseId) {
-          // Show all companies in the same enterprise group
-          companies = companies.filter(c => c.enterpriseId === enterpriseId);
-        } else {
-          // No enterprise — only their own company
-          companies = companies.filter(c => c.id === user.companyId);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const companies = await storage.getCompanies();
+      if (isPlatformCompanyBypassRole(user.role)) return res.json(companies);
+      // Tenant users: full records only for companies they can access (own +
+      // explicit company_user_access). Enterprise siblings they may schedule
+      // into are listed as a minimal, non-sensitive projection so the schedule
+      // page can still target them — never their EIN/tax/billing/Stripe fields.
+      const scope = await resolveSchedulingCompanyIds(user);
+      if (scope.all.length === 0) return res.status(403).json({ message: "Access denied" });
+      const result: any[] = [];
+      for (const c of companies) {
+        if (scope.fullAccess.has(c.id)) result.push(c);
+        else if (scope.all.includes(c.id)) {
+          result.push({
+            id: c.id, name: c.name, enterpriseId: c.enterpriseId, logoUrl: c.logoUrl,
+            iconUrl: c.iconUrl, timezone: c.timezone, schedulingOnly: true,
+          });
         }
       }
-      res.json(companies);
+      res.json(result);
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch companies" });
@@ -2534,12 +2574,14 @@ function hashSigningToken(token: string): string {
   app.get("/api/companies/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
       const company = await storage.getCompany(req.params.id);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
       }
-      // Tenant users can only read their own company record
-      if (user && !isPlatformUser(user.role) && user.companyId && user.companyId !== req.params.id) {
+      // Tenant users read only companies they can access (own or explicit grant).
+      // A NULL users.company_id no longer means "any company".
+      if (!(await canAccessCompany(user, req.params.id))) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
       res.json(company);
@@ -2549,7 +2591,10 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.post("/api/companies", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+  // Creating a company establishes ownership/tenant linkage (and, via
+  // enterpriseId, scheduling reach) — platform administrators only. Tenant
+  // self-service company creation belongs to the future provisioning service.
+  app.post("/api/companies", requirePlatformAdminRole(), requireActiveSubscription, async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
@@ -2581,22 +2626,39 @@ function hashSigningToken(token: string): string {
         return res.status(404).json({ message: "Company not found" });
       }
 
-      // Tenant admins/managers may only modify their own company. Platform-scoped roles
-      // (platform_super_admin, platform_admin, etc.) are never company-scoped and are not
-      // restricted here — the same platform-vs-tenant distinction already applied on
-      // GET /api/companies/:id (server/routes.ts:2095). No hardcoded company id or
-      // per-role exception is added beyond that existing distinction.
       const actingUser = await storage.getUser(req.session.userId!);
-      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
-      if (isTenant && actingUser!.companyId !== req.params.id) {
-        return res.status(403).json({ message: "Forbidden: cannot modify a different company's record" });
+      if (!actingUser) return res.status(401).json({ message: "User not found" });
+      const platformAdmin = isPlatformOrgAdminRole(actingUser.role);
+
+      let data: Record<string, any>;
+      if (platformAdmin) {
+        data = { ...req.body };
+      } else {
+        // Tenant admins/managers: only companies they can access, and only the
+        // tenant-safe field allowlist. Ownership/control fields (enterpriseId,
+        // subscription/trial/billing/demo, Stripe) are platform-controlled.
+        if (!(await canAccessCompany(actingUser, existing.id))) {
+          return res.status(403).json({ message: "Forbidden: cannot modify a different company's record" });
+        }
+        const filtered = filterTenantCompanyPatch(req.body ?? {}, existing as unknown as Record<string, unknown>);
+        if (!filtered.allowed) {
+          return res.status(filtered.status ?? 403).json({ message: filtered.message, fields: filtered.rejectedFields });
+        }
+        data = filtered.data!;
       }
 
-      const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
       if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
       if (data.timezoneConfirmed !== undefined) data.timezoneConfirmed = data.timezoneConfirmed === true || data.timezoneConfirmed === "true";
+      // A tenant may point the company at a legal entity only if that entity is its own.
+      if (!platformAdmin && data.legalEntityId && data.legalEntityId !== existing.legalEntityId) {
+        const le = await db.execute(sql`SELECT company_id FROM legal_entities WHERE id = ${data.legalEntityId} LIMIT 1`);
+        const leCompany = (le.rows?.[0] as any)?.company_id ?? null;
+        if (leCompany !== existing.id) {
+          return res.status(403).json({ message: "Forbidden: legal entity does not belong to this company", fields: ["legalEntityId"] });
+        }
+      }
       // Audit timezone changes — these affect punch dates, OT, and payroll grouping
       if (data.timezone && existing.timezone !== data.timezone) {
         await writeAuditLog({
@@ -2609,6 +2671,7 @@ function hashSigningToken(token: string): string {
           companyId: req.params.id as string,
         });
       }
+      if (Object.keys(data).length === 0) return res.json(existing);
       const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
@@ -2633,11 +2696,24 @@ function hashSigningToken(token: string): string {
         const selfWorker = await storage.getWorker(user.workerId);
         return res.json(selfWorker ? [selfWorker] : []);
       }
-      // When a manager is building a schedule they may need to assign workers from other companies.
-      // Return all active workers in this case so cross-company scheduling works.
+      // Cross-company scheduling picker. Returns a narrow projection (never the
+      // full worker: no SSN, bank, tax, address or contact data) and only for
+      // companies the actor may schedule into — own, explicit company_user_access,
+      // and platform-defined enterprise siblings (resolveSchedulingCompanyIds).
+      // payRate (labor-cost display) is included only for companies the actor
+      // already has full access to; scheduling-only companies never expose pay.
       if (forScheduling && isManagerRole(user?.role)) {
-        const allWorkers = await storage.getWorkers();
-        return res.json(allWorkers);
+        if (isPlatformCompanyBypassRole(user?.role)) {
+          const all = await storage.getWorkers(qCompanyId && qCompanyId !== "all" ? qCompanyId : undefined);
+          return res.json(all.map((w) => toSchedulingWorker(w, true)));
+        }
+        const scope = await resolveSchedulingCompanyIds(user!);
+        const out: any[] = [];
+        for (const cid of scope.all) {
+          const ws = await storage.getWorkers(cid);
+          for (const w of ws) out.push(toSchedulingWorker(w, scope.fullAccess.has(cid)));
+        }
+        return res.json(out);
       }
       // Determine effective company scope:
       // 1. Platform users (platform_* role) are NEVER force-scoped — they may have a companyId
@@ -8222,28 +8298,23 @@ function hashSigningToken(token: string): string {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
       // Company ownership guard — tenant users may only create schedules in
-      // companies they can access (own company, enterprise sibling, or explicit
-      // grant). Platform users are unchanged. Cross-company scheduling for an
-      // authorized company is still allowed; cross-tenant writes are blocked.
+      // companies within their scheduling scope (own company, explicit grant,
+      // or platform-defined enterprise sibling). Platform users are unchanged.
+      // Cross-tenant writes are blocked.
       const schedCreator = await storage.getUser(req.session.userId!);
       const schedAccess = evaluateScheduleAccess({
         isPlatformUser: isPlatformUser(schedCreator?.role),
         requestorCompanyId: schedCreator?.companyId,
         targetCompanyId: companyId,
-        targetCompanyAccessible: schedCreator
-          ? await canAccessCompany(
-              { id: schedCreator.id, companyId: schedCreator.companyId, role: schedCreator.role },
-              companyId,
-            )
-          : false,
+        targetCompanyAccessible: await canScheduleIntoCompany(schedCreator, companyId),
       });
       if (!schedAccess.allowed) {
         return res.status(schedAccess.status ?? 403).json({ message: schedAccess.message });
       }
-      // Validate worker exists — cross-company scheduling is explicitly allowed
-      // (a worker may be scheduled at any company, not just their home company)
+      // Cross-company scheduling is allowed only within the actor's scheduling
+      // scope: the worker's home company must be schedulable by the actor too.
       const schedWorker = await storage.getWorker(workerId);
-      if (!schedWorker) {
+      if (!schedWorker || !(await canScheduleIntoCompany(schedCreator, schedWorker.companyId))) {
         return res.status(400).json({ message: "Worker not found" });
       }
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
@@ -8414,9 +8485,7 @@ function hashSigningToken(token: string): string {
       const { companyId } = req.body || {};
       if (!companyId) return res.status(400).json({ message: "companyId, sourceWeekStart, and targetWeekStart are required" });
       const actor = await storage.getUser(req.session.userId!);
-      const hasCompanyAccess = actor && companyId
-        ? await canAccessCompany({ id: actor.id, companyId: actor.companyId, role: actor.role }, companyId)
-        : false;
+      const hasCompanyAccess = await canScheduleIntoCompany(actor, companyId);
       if (!isPlatformUser(actor?.role) && !hasCompanyAccess) {
         return res.status(403).json({ message: "Forbidden: cannot access company" });
       }
@@ -8471,12 +8540,7 @@ function hashSigningToken(token: string): string {
         isPlatformUser: isPlatformUser(publishUser?.role),
         requestorCompanyId: publishUser?.companyId,
         targetCompanyId: publishCompanyId,
-        targetCompanyAccessible: publishUser
-          ? await canAccessCompany(
-              { id: publishUser.id, companyId: publishUser.companyId, role: publishUser.role },
-              publishCompanyId,
-            )
-          : false,
+        targetCompanyAccessible: await canScheduleIntoCompany(publishUser, publishCompanyId),
       });
       if (!publishAccess.allowed) {
         return res.status(publishAccess.status ?? 403).json({ message: publishAccess.message });
@@ -9359,140 +9423,287 @@ function hashSigningToken(token: string): string {
   });
 
   // Departments
-  app.get("/api/departments", requireAuth, async (req, res) => {
+  // ── Organization hierarchy (SaaS PR 1) ─────────────────────────────────────
+  // Departments, branches, divisions, positions, cost centers, jobs and legal
+  // entities share ONE ownership boundary (server/auth/org-ownership-guard.ts):
+  //  - LIST: tenant users see their own company (or an explicitly accessible
+  //    ?companyId), plus universal rows where the resource already showed them;
+  //    no resolvable company → []. Platform roles may pass ?companyId.
+  //  - CREATE: never trusts an arbitrary body companyId; omitted/"universal"
+  //    resolves to the actor's own company. Only platform org admins create
+  //    universal rows.
+  //  - PATCH/DELETE: load the row, authorize its STORED company, then write.
+  //    Tenants cannot touch universal rows or reassign a row's company.
+  //  - Referenced org rows (divisionId, departmentId, …) must belong to the same
+  //    company or be universal; referenced workers must belong to the company.
+  type OrgRef = { field: string; table: "divisions" | "departments" | "positions" | "cost_centers" | "workers" };
+  type OrgResourceSpec = {
+    path: string;
+    table: "departments" | "branches" | "divisions" | "positions" | "cost_centers" | "jobs" | "legal_entities";
+    label: string;
+    list: (companyId?: string) => Promise<any[]>;
+    create: (data: any) => Promise<any>;
+    update: (id: string, data: any) => Promise<any>;
+    remove: (id: string) => Promise<void>;
+    normalize?: (data: Record<string, any>) => void;
+    parseCreate?: (data: any) => any;
+    refs?: OrgRef[];
+  };
+
+  async function loadOrgRowCompany(table: OrgResourceSpec["table"], id: string): Promise<{ found: boolean; companyId: string | null }> {
+    const r = await db.execute(sql`SELECT company_id FROM ${sql.identifier(table)} WHERE id = ${id} LIMIT 1`);
+    const row = (r.rows ?? [])[0] as any;
+    return row ? { found: true, companyId: row.company_id ?? null } : { found: false, companyId: null };
+  }
+
+  async function validateOrgRefs(spec: OrgResourceSpec, data: Record<string, any>, targetCompanyId: string | null): Promise<string | null> {
+    for (const ref of spec.refs ?? []) {
+      const value = data[ref.field];
+      if (value === undefined || value === null || value === "") continue;
+      const r = await db.execute(sql`SELECT company_id FROM ${sql.identifier(ref.table)} WHERE id = ${String(value)} LIMIT 1`);
+      const row = (r.rows ?? [])[0] as any;
+      if (!row) return `${ref.field} does not exist`;
+      const refCompany: string | null = row.company_id ?? null;
+      const ok = ref.table === "workers"
+        ? targetCompanyId !== null && refCompany === targetCompanyId
+        : refCompany === null || refCompany === targetCompanyId;
+      if (!ok) return `${ref.field} does not belong to this company`;
+    }
+    return null;
+  }
+
+  // Returns the four guarded handlers; each route below is still registered
+  // with a literal path so the route-security inventory keeps seeing it.
+  function orgResourceHandlers(spec: OrgResourceSpec) {
+    const list = async (req: Request, res: Response) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!user) return res.status(401).json({ message: "User not found" });
+        const requested = queryStr(req.query.companyId);
+        if (isPlatformCompanyBypassRole(user.role)) {
+          return res.json(await spec.list(requested && requested !== "all" ? requested : undefined));
+        }
+        let companyId: string | null;
+        if (requested && requested !== "all") {
+          if (!(await canAccessCompany(user, requested))) {
+            return res.status(403).json({ message: "Access denied: company mismatch" });
+          }
+          companyId = requested;
+        } else {
+          // Own company (worker fallback). No resolvable company → nothing,
+          // never every tenant's rows (storage treats undefined as "all").
+          companyId = await resolveTenantCompanyId(user);
+        }
+        if (!companyId) return res.json([]);
+        res.json(await spec.list(companyId));
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: `Failed to fetch ${spec.label}` });
+      }
+    };
+
+    const create = async (req: Request, res: Response) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!user) return res.status(401).json({ message: "User not found" });
+        const data: Record<string, any> = { ...req.body };
+        delete data.id; delete data.createdAt;
+        spec.normalize?.(data);
+        const requestedCompanyId = normalizeRequestedCompanyId(data.companyId);
+        const decision = evaluateOrgCreate({
+          isPlatformOrgAdmin: isPlatformOrgAdminRole(user.role),
+          actorCompanyId: await resolveTenantCompanyId(user),
+          requestedCompanyId,
+          requestedCompanyAccessible: requestedCompanyId ? await canAccessCompany(user, requestedCompanyId) : false,
+        });
+        if (!decision.allowed) return res.status(decision.status ?? 403).json({ message: decision.message });
+        data.companyId = decision.companyId ?? null;
+        const refError = await validateOrgRefs(spec, data, data.companyId);
+        if (refError) return res.status(400).json({ message: refError });
+        const created = await spec.create(spec.parseCreate ? spec.parseCreate(data) : data);
+        res.status(201).json(created);
+      } catch (error: any) {
+        if (error?.name === "ZodError") {
+          return res.status(400).json({ message: "Validation failed", errors: error.errors });
+        }
+        console.error(error);
+        res.status(500).json({ message: `Failed to create ${spec.label}` });
+      }
+    };
+
+    const update = async (req: Request, res: Response) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!user) return res.status(401).json({ message: "User not found" });
+        const id = String(req.params.id);
+        const stored = await loadOrgRowCompany(spec.table, id);
+        if (!stored.found) return res.status(404).json({ message: "Not found" });
+        const data: Record<string, any> = { ...req.body };
+        delete data.id; delete data.createdAt;
+        spec.normalize?.(data);
+        const requestedCompanyId = normalizeRequestedCompanyId(data.companyId);
+        const decision = evaluateOrgMutation({
+          isPlatformOrgAdmin: isPlatformOrgAdminRole(user.role),
+          storedCompanyId: stored.companyId,
+          storedCompanyAccessible: stored.companyId ? await canAccessCompany(user, stored.companyId) : false,
+          requestedCompanyId,
+        });
+        if (!decision.allowed) return res.status(decision.status ?? 403).json({ message: decision.message });
+        if (requestedCompanyId === undefined) delete data.companyId;
+        else data.companyId = decision.companyId ?? null;
+        const refError = await validateOrgRefs(spec, data, decision.companyId ?? null);
+        if (refError) return res.status(400).json({ message: refError });
+        const updated = await spec.update(id, data);
+        if (!updated) return res.status(404).json({ message: "Not found" });
+        res.json(updated);
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: `Failed to update ${spec.label}` });
+      }
+    };
+
+    const remove = async (req: Request, res: Response) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!user) return res.status(401).json({ message: "User not found" });
+        const id = String(req.params.id);
+        const stored = await loadOrgRowCompany(spec.table, id);
+        if (!stored.found) return res.status(404).json({ message: "Not found" });
+        const decision = evaluateOrgMutation({
+          isPlatformOrgAdmin: isPlatformOrgAdminRole(user.role),
+          storedCompanyId: stored.companyId,
+          storedCompanyAccessible: stored.companyId ? await canAccessCompany(user, stored.companyId) : false,
+        });
+        if (!decision.allowed) return res.status(decision.status ?? 403).json({ message: decision.message });
+        await spec.remove(id);
+        res.json({ message: `${spec.label} deleted` });
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: `Failed to delete ${spec.label}` });
+      }
+    };
+
+    return { list, create, update, remove };
+  }
+
+  const emptyToNull = (data: Record<string, any>, fields: string[]) => {
+    for (const f of fields) if (data[f] === "") data[f] = null;
+  };
+
+  const orgDepartments = orgResourceHandlers({
+    path: "/api/departments", table: "departments", label: "Department",
+    list: (cid) => storage.getDepartments(cid),
+    create: (d) => storage.createDepartment(d),
+    update: (id, d) => storage.updateDepartment(id, d),
+    remove: (id) => storage.deleteDepartment(id),
+    normalize: (d) => emptyToNull(d, ["divisionId", "parentId", "managerId", "code"]),
+    refs: [{ field: "divisionId", table: "divisions" }, { field: "parentId", table: "departments" }, { field: "managerId", table: "workers" }],
+  });
+  app.get("/api/departments", requireAuth, orgDepartments.list);
+  app.post("/api/departments", requireRole("admin", "manager"), orgDepartments.create);
+  app.patch("/api/departments/:id", requireRole("admin", "manager"), orgDepartments.update);
+  app.delete("/api/departments/:id", requireRole("admin", "manager"), orgDepartments.remove);
+  const orgBranches = orgResourceHandlers({
+    path: "/api/branches", table: "branches", label: "Branch",
+    list: (cid) => storage.getBranches(cid),
+    create: (d) => storage.createBranch(d),
+    update: (id, d) => storage.updateBranch(id, d),
+    remove: (id) => storage.deleteBranch(id),
+    normalize: (d) => emptyToNull(d, ["divisionId"]),
+    refs: [{ field: "divisionId", table: "divisions" }],
+  });
+  app.get("/api/branches", requireAuth, orgBranches.list);
+  app.post("/api/branches", requireRole("admin", "manager"), orgBranches.create);
+  app.patch("/api/branches/:id", requireRole("admin", "manager"), orgBranches.update);
+  app.delete("/api/branches/:id", requireRole("admin", "manager"), orgBranches.remove);
+  const orgDivisions = orgResourceHandlers({
+    path: "/api/divisions", table: "divisions", label: "Division",
+    list: (cid) => storage.getDivisions(cid),
+    create: (d) => storage.createDivision(d),
+    update: (id, d) => storage.updateDivision(id, d),
+    remove: (id) => storage.deleteDivision(id),
+    parseCreate: (d) => insertDivisionSchema.parse(d),
+  });
+  app.get("/api/divisions", requireAuth, orgDivisions.list);
+  app.post("/api/divisions", requireRole("admin", "manager"), orgDivisions.create);
+  app.patch("/api/divisions/:id", requireRole("admin", "manager"), orgDivisions.update);
+  app.delete("/api/divisions/:id", requireRole("admin", "manager"), orgDivisions.remove);
+  const orgPositions = orgResourceHandlers({
+    path: "/api/positions", table: "positions", label: "Position",
+    list: (cid) => storage.getPositions(cid),
+    create: (d) => storage.createPosition(d),
+    update: (id, d) => storage.updatePosition(id, d),
+    remove: (id) => storage.deletePosition(id),
+    normalize: (d) => emptyToNull(d, ["departmentId", "reportsToPositionId", "salaryRangeMin", "salaryRangeMax", "description", "payType"]),
+    refs: [{ field: "departmentId", table: "departments" }, { field: "reportsToPositionId", table: "positions" }],
+  });
+  app.get("/api/positions", requireAuth, orgPositions.list);
+  app.post("/api/positions", requireRole("admin", "manager"), orgPositions.create);
+  app.patch("/api/positions/:id", requireRole("admin", "manager"), orgPositions.update);
+  app.delete("/api/positions/:id", requireRole("admin", "manager"), orgPositions.remove);
+  const orgCostCenters = orgResourceHandlers({
+    path: "/api/cost-centers", table: "cost_centers", label: "Cost center",
+    list: (cid) => storage.getCostCenters(cid),
+    create: (d) => storage.createCostCenter(d),
+    update: (id, d) => storage.updateCostCenter(id, d),
+    remove: (id) => storage.deleteCostCenter(id),
+    parseCreate: (d) => insertCostCenterSchema.parse(d),
+  });
+  app.get("/api/cost-centers", requireAuth, orgCostCenters.list);
+  app.post("/api/cost-centers", requireRole("admin", "manager"), orgCostCenters.create);
+  app.patch("/api/cost-centers/:id", requireRole("admin", "manager"), orgCostCenters.update);
+  app.delete("/api/cost-centers/:id", requireRole("admin", "manager"), orgCostCenters.remove);
+  const orgJobs = orgResourceHandlers({
+    path: "/api/jobs", table: "jobs", label: "Job",
+    list: (cid) => storage.getJobs(cid),
+    create: (d) => storage.createJob(d),
+    update: (id, d) => storage.updateJob(id, d),
+    remove: (id) => storage.deleteJob(id),
+    normalize: (d) => emptyToNull(d, ["costCenterId", "departmentId", "defaultWage", "startDate", "endDate"]),
+    refs: [{ field: "costCenterId", table: "cost_centers" }, { field: "departmentId", table: "departments" }],
+  });
+  app.get("/api/jobs", requireAuth, orgJobs.list);
+  app.post("/api/jobs", requireRole("admin", "manager"), orgJobs.create);
+  app.patch("/api/jobs/:id", requireRole("admin", "manager"), orgJobs.update);
+  app.delete("/api/jobs/:id", requireRole("admin", "manager"), orgJobs.remove);
+  // Legal entities carry legal names and EINs: admin/manager read only (the
+  // same roles that already managed them), scoped like every org resource.
+  const orgLegalEntities = orgResourceHandlers({
+    path: "/api/legal-entities", table: "legal_entities", label: "Legal entity",
+    list: (cid) => storage.getLegalEntities(cid),
+    create: (d) => storage.createLegalEntity(d),
+    update: (id, d) => storage.updateLegalEntity(id, d),
+    remove: (id) => storage.deleteLegalEntity(id),
+    normalize: (d) => emptyToNull(d, ["startDate", "endDate", "classificationCode", "ein"]),
+  });
+  app.get("/api/legal-entities", requireRole("admin", "manager"), orgLegalEntities.list);
+  app.post("/api/legal-entities", requireRole("admin", "manager"), orgLegalEntities.create);
+  app.patch("/api/legal-entities/:id", requireRole("admin", "manager"), orgLegalEntities.update);
+  app.delete("/api/legal-entities/:id", requireRole("admin", "manager"), orgLegalEntities.remove);
+
+  // Enterprises group companies and define cross-company SCHEDULING reach, so
+  // they are platform-controlled. Tenant users may read only the enterprise(s)
+  // of companies they can fully access.
+  app.get("/api/enterprises", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session!.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
-      let companyId: string | undefined;
-      if (isPlatformUser(user.role)) {
-        companyId = queryStr(req.query.companyId);
-      } else {
-        // Tenant users: own company (worker fallback). No resolvable company →
-        // nothing, never every tenant's rows (storage treats undefined as "all").
-        const tenantCompanyId = await resolveTenantCompanyId(user);
-        if (!tenantCompanyId) return res.json([]);
-        companyId = tenantCompanyId;
-      }
-      const departments = await storage.getDepartments(companyId);
-      res.json(departments);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch departments" });
-    }
-  });
-
-  app.post("/api/departments", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      const department = await storage.createDepartment(data);
-      res.status(201).json(department);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to create department" });
-    }
-  });
-
-  app.patch("/api/departments/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      const department = await storage.updateDepartment(req.params.id, data);
-      if (!department) {
-        return res.status(404).json({ message: "Department not found" });
-      }
-      res.json(department);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update department" });
-    }
-  });
-
-  app.delete("/api/departments/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deleteDepartment(req.params.id);
-      res.json({ message: "Department deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete department" });
-    }
-  });
-
-  // Branches
-  app.get("/api/branches", requireAuth, async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session!.userId!);
-      if (!user) return res.status(401).json({ message: "User not found" });
-      let companyId: string | undefined;
-      if (isPlatformUser(user.role)) {
-        companyId = queryStr(req.query.companyId);
-      } else {
-        // Tenant users: own company (worker fallback). No resolvable company →
-        // nothing, never every tenant's rows (storage treats undefined as "all").
-        const tenantCompanyId = await resolveTenantCompanyId(user);
-        if (!tenantCompanyId) return res.json([]);
-        companyId = tenantCompanyId;
-      }
-      const branches = await storage.getBranches(companyId);
-      res.json(branches);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch branches" });
-    }
-  });
-
-  app.post("/api/branches", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      const branch = await storage.createBranch(data);
-      res.status(201).json(branch);
-    } catch (error: any) {
-      if (error.name === "ZodError") {
-        return res.status(400).json({ message: "Validation failed", errors: error.errors });
-      }
-      console.error(error);
-      res.status(500).json({ message: "Failed to create branch" });
-    }
-  });
-
-  app.patch("/api/branches/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      const branch = await storage.updateBranch(req.params.id, data);
-      if (!branch) {
-        return res.status(404).json({ message: "Branch not found" });
-      }
-      res.json(branch);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update branch" });
-    }
-  });
-
-  app.delete("/api/branches/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deleteBranch(req.params.id);
-      res.json({ message: "Branch deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete branch" });
-    }
-  });
-
-  // Enterprises
-  app.get("/api/enterprises", requireAuth, async (_req, res) => {
-    try {
       const result = await storage.getEnterprises();
-      res.json(result);
+      if (isPlatformCompanyBypassRole(user.role)) return res.json(result);
+      const scope = await resolveSchedulingCompanyIds(user);
+      const allowed = new Set<string>();
+      for (const cid of Array.from(scope.fullAccess)) {
+        const c = await storage.getCompany(cid);
+        if (c?.enterpriseId) allowed.add(c.enterpriseId);
+      }
+      res.json(result.filter((e) => allowed.has(e.id)));
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch enterprises" });
     }
   });
 
-  app.post("/api/enterprises", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/enterprises", requirePlatformAdminRole(), async (req, res) => {
     try {
       const parsed = insertEnterpriseSchema.parse(req.body);
       const enterprise = await storage.createEnterprise(parsed);
@@ -9505,9 +9716,10 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.patch("/api/enterprises/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/enterprises/:id", requirePlatformAdminRole(), async (req, res) => {
     try {
-      const enterprise = await storage.updateEnterprise(req.params.id, req.body);
+      const { id: _id, createdAt: _ca, ...data } = req.body ?? {};
+      const enterprise = await storage.updateEnterprise(req.params.id, data);
       if (!enterprise) {
         return res.status(404).json({ message: "Enterprise not found" });
       }
@@ -9518,250 +9730,13 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.delete("/api/enterprises/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.delete("/api/enterprises/:id", requirePlatformAdminRole(), async (req, res) => {
     try {
       await storage.deleteEnterprise(req.params.id);
       res.json({ message: "Enterprise deleted" });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to delete enterprise" });
-    }
-  });
-
-  // Divisions
-  app.get("/api/divisions", requireAuth, async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session!.userId!);
-      if (!user) return res.status(401).json({ message: "User not found" });
-      const companyId = isPlatformUser(user.role)
-        ? (queryStr(req.query.companyId))
-        : (user.companyId ?? undefined);
-      const result = await storage.getDivisions(companyId);
-      res.json(result);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch divisions" });
-    }
-  });
-
-  app.post("/api/divisions", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const parsed = insertDivisionSchema.parse(req.body);
-      const division = await storage.createDivision(parsed);
-      res.status(201).json(division);
-    } catch (error: any) {
-      if (error.name === "ZodError") {
-        return res.status(400).json({ message: "Validation failed", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to create division" });
-    }
-  });
-
-  app.patch("/api/divisions/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const division = await storage.updateDivision(req.params.id, req.body);
-      if (!division) {
-        return res.status(404).json({ message: "Division not found" });
-      }
-      res.json(division);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update division" });
-    }
-  });
-
-  app.delete("/api/divisions/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deleteDivision(req.params.id);
-      res.json({ message: "Division deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete division" });
-    }
-  });
-
-  // Positions
-  app.get("/api/positions", requireAuth, async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session!.userId!);
-      if (!user) return res.status(401).json({ message: "User not found" });
-      const companyId = isPlatformUser(user.role)
-        ? (queryStr(req.query.companyId))
-        : (user.companyId ?? undefined);
-      const result = await storage.getPositions(companyId);
-      res.json(result);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch positions" });
-    }
-  });
-
-  app.post("/api/positions", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      if (data.departmentId === "") data.departmentId = null;
-      if (data.reportsToPositionId === "") data.reportsToPositionId = null;
-      if (data.salaryRangeMin === "") data.salaryRangeMin = null;
-      if (data.salaryRangeMax === "") data.salaryRangeMax = null;
-      if (data.description === "") data.description = null;
-      if (data.payType === "") data.payType = null;
-      const position = await storage.createPosition(data);
-      res.status(201).json(position);
-    } catch (error: any) {
-      console.error(error);
-      if (error.name === "ZodError") {
-        return res.status(400).json({ message: "Validation failed", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to create position" });
-    }
-  });
-
-  app.patch("/api/positions/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (data.departmentId === "") data.departmentId = null;
-      if (data.reportsToPositionId === "") data.reportsToPositionId = null;
-      if (data.salaryRangeMin === "") data.salaryRangeMin = null;
-      if (data.salaryRangeMax === "") data.salaryRangeMax = null;
-      if (data.description === "") data.description = null;
-      if (data.payType === "") data.payType = null;
-      const position = await storage.updatePosition(req.params.id as string, data);
-      if (!position) {
-        return res.status(404).json({ message: "Position not found" });
-      }
-      res.json(position);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update position" });
-    }
-  });
-
-  app.delete("/api/positions/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deletePosition(req.params.id);
-      res.json({ message: "Position deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete position" });
-    }
-  });
-
-  // Cost Centers
-  app.get("/api/cost-centers", requireAuth, async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session!.userId!);
-      if (!user) return res.status(401).json({ message: "User not found" });
-      const companyId = isPlatformUser(user.role)
-        ? (queryStr(req.query.companyId))
-        : (user.companyId ?? undefined);
-      const result = await storage.getCostCenters(companyId);
-      res.json(result);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch cost centers" });
-    }
-  });
-
-  app.post("/api/cost-centers", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const parsed = insertCostCenterSchema.parse(req.body);
-      const costCenter = await storage.createCostCenter(parsed);
-      res.status(201).json(costCenter);
-    } catch (error: any) {
-      if (error.name === "ZodError") {
-        return res.status(400).json({ message: "Validation failed", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to create cost center" });
-    }
-  });
-
-  app.patch("/api/cost-centers/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const costCenter = await storage.updateCostCenter(req.params.id, req.body);
-      if (!costCenter) {
-        return res.status(404).json({ message: "Cost center not found" });
-      }
-      res.json(costCenter);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update cost center" });
-    }
-  });
-
-  app.delete("/api/cost-centers/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deleteCostCenter(req.params.id);
-      res.json({ message: "Cost center deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete cost center" });
-    }
-  });
-
-  // Jobs
-  app.get("/api/jobs", requireAuth, async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session!.userId!);
-      if (!user) return res.status(401).json({ message: "User not found" });
-      const companyId = isPlatformUser(user.role)
-        ? (queryStr(req.query.companyId))
-        : (user.companyId ?? undefined);
-      const result = await storage.getJobs(companyId);
-      res.json(result);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch jobs" });
-    }
-  });
-
-  app.post("/api/jobs", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      if (data.costCenterId === "") data.costCenterId = null;
-      if (data.departmentId === "") data.departmentId = null;
-      if (data.defaultWage === "") data.defaultWage = null;
-      if (data.startDate === "") data.startDate = null;
-      if (data.endDate === "") data.endDate = null;
-      const job = await storage.createJob(data);
-      res.status(201).json(job);
-    } catch (error: any) {
-      if (error.name === "ZodError") {
-        return res.status(400).json({ message: "Validation failed", errors: error.errors });
-      }
-      console.error(error);
-      res.status(500).json({ message: "Failed to create job" });
-    }
-  });
-
-  app.patch("/api/jobs/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
-      if (data.costCenterId === "") data.costCenterId = null;
-      if (data.departmentId === "") data.departmentId = null;
-      if (data.defaultWage === "") data.defaultWage = null;
-      if (data.startDate === "") data.startDate = null;
-      if (data.endDate === "") data.endDate = null;
-      const job = await storage.updateJob(req.params.id, data);
-      if (!job) {
-        return res.status(404).json({ message: "Job not found" });
-      }
-      res.json(job);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update job" });
-    }
-  });
-
-  app.delete("/api/jobs/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deleteJob(req.params.id);
-      res.json({ message: "Job deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete job" });
     }
   });
 
@@ -22743,59 +22718,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to set up rounding policies" });
-    }
-  });
-
-  app.get("/api/legal-entities", requireAuth, async (_req, res) => {
-    try {
-      const items = await storage.getLegalEntities();
-      res.json(items);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch legal entities" });
-    }
-  });
-
-  app.post("/api/legal-entities", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (data.startDate === "") data.startDate = null;
-      if (data.endDate === "") data.endDate = null;
-      if (data.classificationCode === "") data.classificationCode = null;
-      if (data.companyId === "") data.companyId = null;
-      if (data.ein === "") data.ein = null;
-      const item = await storage.createLegalEntity(data);
-      res.status(201).json(item);
-    } catch (error: any) {
-      console.error("Legal entity creation error:", error?.message || error);
-      res.status(500).json({ message: "Failed to create legal entity" });
-    }
-  });
-
-  app.patch("/api/legal-entities/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      const data = { ...req.body };
-      if (data.startDate === "") data.startDate = null;
-      if (data.endDate === "") data.endDate = null;
-      if (data.classificationCode === "") data.classificationCode = null;
-      if (data.companyId === "") data.companyId = null;
-      if (data.ein === "") data.ein = null;
-      const item = await storage.updateLegalEntity(req.params.id, data);
-      if (!item) return res.status(404).json({ message: "Not found" });
-      res.json(item);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to update legal entity" });
-    }
-  });
-
-  app.delete("/api/legal-entities/:id", requireRole("admin", "manager"), async (req, res) => {
-    try {
-      await storage.deleteLegalEntity(req.params.id);
-      res.json({ message: "Deleted" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to delete legal entity" });
     }
   });
 
