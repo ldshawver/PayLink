@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 105,
+      "fileCount": 107,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -111,7 +111,9 @@
         "tests/my-profile-preferences-crash.test.ts",
         "tests/employee-create-edit-freeze-static.test.ts",
         "server/__tests__/org-ownership-guard.test.ts",
-        "tests/saas-pr1-company-authz-static.test.ts"
+        "tests/saas-pr1-company-authz-static.test.ts",
+        "server/__tests__/stored-resource-guard.test.ts",
+        "tests/saas-pr2-stored-ownership-static.test.ts"
       ]
     },
     "db": {
@@ -120,7 +122,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 29,
+      "fileCount": 30,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
@@ -150,7 +152,8 @@
         "tests/app-doctor-revalidation-db.test.ts",
         "tests/documenso-repair-diagnostic-db.test.ts",
         "tests/employee-create-edit-freeze-db.test.ts",
-        "tests/saas-pr1-company-authz-db.test.ts"
+        "tests/saas-pr1-company-authz-db.test.ts",
+        "tests/saas-pr2-stored-ownership-db.test.ts"
       ]
     },
     "e2e": {
