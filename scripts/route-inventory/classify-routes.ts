@@ -175,8 +175,11 @@ function resolveAuth(route: RawRoute, mounts: RawMount[]): AuthSignal {
 const RE_CLIENT_QUERY = /req\.query(?:\?\.|\.)companyId\b|\{\s*[^}]*\bcompanyId\b[^}]*\}\s*=\s*req\.query\b/;
 const RE_CLIENT_BODY = /req\.body(?:\?\.|\.)companyId\b|\{\s*[^}]*\bcompanyId\b[^}]*\}\s*=\s*req\.body\b/;
 const RE_CLIENT_PARAMS = /req\.params(?:\?\.|\.)companyId\b|\{\s*[^}]*\bcompanyId\b[^}]*\}\s*=\s*req\.params\b/;
-const RE_SESSION_DERIVED = /req\.resolvedCompanyId\b|getSessionCompanyId\(|req\.session(?:\?\.)?\.companyId\b|user\??\.companyId\b|req\.user(?:\?\.)?\.companyId\b/;
-const RE_MEMBERSHIP_CHECK = /\bcanAccessCompany\(|\bassertUserCanAccessCompany\(/;
+// SaaS PR 2 primitives (server/routes.ts): resolveListScope() derives/authorizes the
+// list company from the session actor; authorizeStoredResource() and
+// canAccessStoredCompany() authorize the STORED owner via canAccessCompany().
+const RE_SESSION_DERIVED = /req\.resolvedCompanyId\b|getSessionCompanyId\(|req\.session(?:\?\.)?\.companyId\b|user\??\.companyId\b|req\.user(?:\?\.)?\.companyId\b|\bresolveListScope\(|\bauthorizeStoredResource\(|\bcanAccessStoredCompany\(/;
+const RE_MEMBERSHIP_CHECK = /\bcanAccessCompany\(|\bassertUserCanAccessCompany\(|\bcanAccessStoredCompany\(|\bauthorizeStoredResource\(|\bresolveListScope\(/;
 const RE_ENFORCE_SCOPE_MW = /enforceCompanyScope\(/;
 const RE_PLATFORM_CHECK_INLINE = /isPlatformUser\(|isGlobalDiagnosticsRole\(/;
 
@@ -233,7 +236,7 @@ const TOKEN_PATH_RE = /:token\b|\/sign\/|\/verify\b|\/portal\/:|\/pay\/:token|ma
 // implied by the URL shape (e.g. /api/portal/proposals/:id?token=... validated
 // via validatePortalToken(...)) — path alone would under-detect these as
 // "public anonymous" instead of "public token-protected".
-const RE_INLINE_TOKEN_CHECK = /validatePortalToken\(|getPortalAccessTokenByToken\(|req\.(query|params|body)(?:\?\.)?\.(token|accessToken|shareToken|magicToken)\b|\{\s*token\b[^}]*\}\s*=\s*req\.(query|body|params)\b/;
+const RE_INLINE_TOKEN_CHECK = /validatePortalToken\(|approveProposalViaShareToken\(|getPortalAccessTokenByToken\(|req\.(query|params|body)(?:\?\.)?\.(token|accessToken|shareToken|magicToken)\b|\{\s*token\b[^}]*\}\s*=\s*req\.(query|body|params)\b/;
 const LEGACY_RE = /deprecated|legacy/i;
 
 // Hand-reviewed exceptions for the handful of session-establishment/auth-boundary
