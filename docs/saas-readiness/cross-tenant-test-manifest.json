@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-24",
+  "generatedAt": "2026-10-06",
   "version": 1,
   "sourceStorageScopeTraceManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "routesTested": 5,
@@ -24,7 +24,7 @@
         {
           "case": "3. Tenant A admin submits Tenant B companyId as a query param",
           "disposition": "PASS",
-          "detail": "Non-platform role: session-derived companyId is used, client-supplied ?companyId is ignored per source (server/routes.ts:2186-2198). status=200 leaksTenantB=false"
+          "detail": "Non-platform role: a foreign ?companyId is refused by the supplied-companyId gate (SaaS PR 2B) or ignored by the handler. status=403 leaksTenantB=false"
         },
         {
           "case": "2. by-ID access / 4. ID+companyId combos",
@@ -88,12 +88,12 @@
         {
           "case": "Omitting companyId preserves the worker's existing company",
           "disposition": "PASS",
-          "detail": "status=200 companyId=0e9f8b91-36d1-47ec-8042-f8b0d1ffebed lastNameUpdated=true"
+          "detail": "status=200 companyId=8e622d53-4e0f-4f9c-8b48-5ba9a03fcc80 lastNameUpdated=true"
         },
         {
           "case": "Submitting the same (current) companyId succeeds and does not change tenancy",
           "disposition": "PASS",
-          "detail": "status=200 companyId=0e9f8b91-36d1-47ec-8042-f8b0d1ffebed"
+          "detail": "status=200 companyId=8e622d53-4e0f-4f9c-8b48-5ba9a03fcc80"
         },
         {
           "case": "2. Tenant A admin accesses a Tenant B worker by ID",

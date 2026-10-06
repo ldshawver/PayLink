@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-24",
+  "generatedAt": "2026-10-06",
   "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "summary": {
     "PASS": 53,
@@ -83,7 +83,7 @@
         {
           "case": "2. Tenant A admin lists Tenant B's check templates via ?companyId=",
           "disposition": "PASS",
-          "detail": "status=200 count=1 (force-scoped to caller's own company; Tenant B not present)"
+          "detail": "status=403 count=0 (force-scoped to caller's own company; Tenant B not present)"
         },
         {
           "case": "3. Tenant A admin omits companyId entirely",
@@ -243,7 +243,7 @@
         {
           "case": "2. Tenant A admin lists Tenant B's worker memberships via ?companyId=",
           "disposition": "PASS",
-          "detail": "status=200 count=2 (force-scoped to caller's own company; Tenant B not present)"
+          "detail": "status=403 count=0 (force-scoped to caller's own company; Tenant B not present)"
         },
         {
           "case": "3. Tenant A admin omits companyId entirely",

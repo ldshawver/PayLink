@@ -142,7 +142,12 @@ async function main() {
     check("B's row still exists", (stillExists.rowCount ?? 0) === 1);
 
     console.log("\n── 5. Own-tenant PATCH still works; companyId is immutable through this endpoint ──");
-    const p2 = await apiRequest(base, "PATCH", `/api/wage-history/${wageA}`, sAdminA, { wage: "19500", companyId: companyB });
+    // SaaS PR 2B: naming a foreign company is rejected up front by the global
+    // supplied-companyId gate (previously silently ignored) — the row is untouched.
+    const p2x = await apiRequest(base, "PATCH", `/api/wage-history/${wageA}`, sAdminA, { wage: "19400", companyId: companyB });
+    const afterP2x = await pool.query(`SELECT company_id, wage FROM wage_history WHERE id = $1`, [wageA]);
+    check("PATCH naming a foreign companyId → 403, row not reassigned", p2x.status === 403 && afterP2x.rows[0]?.company_id === companyA && String(afterP2x.rows[0]?.wage) !== "19400", `status=${p2x.status}`);
+    const p2 = await apiRequest(base, "PATCH", `/api/wage-history/${wageA}`, sAdminA, { wage: "19500", companyId: companyA });
     check("own-tenant PATCH → 200", p2.status === 200, `status=${p2.status}`);
     check("wage updated", (p2.body as any)?.wage === "19500", `wage=${(p2.body as any)?.wage}`);
     check("companyId ignored, not reassigned", (p2.body as any)?.companyId === companyA, `companyId=${(p2.body as any)?.companyId}`);
@@ -157,7 +162,7 @@ async function main() {
     const post2 = await apiRequest(base, "POST", "/api/wage-history", sAdminA, {
       workerId: workerA, companyId: companyB, wageType: "salary", wage: "22000", effectiveDate: "2026-03-01",
     });
-    check("client-supplied foreign companyId ignored → still A", post2.status === 201 && (post2.body as any)?.companyId === companyA, `status=${post2.status} companyId=${(post2.body as any)?.companyId}`);
+    check("client-supplied foreign companyId → 403 (SaaS PR 2B supplied-companyId gate)", post2.status === 403, `status=${post2.status}`);
 
     console.log("\n── 7. POST rejects a worker that does not belong to the resolved company ──");
     const post3 = await apiRequest(base, "POST", "/api/wage-history", sAdminA, {

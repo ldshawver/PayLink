@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-08-24",
+  "generatedAt": "2026-10-06",
   "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "summary": {
-    "PASS": 61,
+    "PASS": 60,
     "FAIL": 0,
-    "INCONCLUSIVE": 0,
+    "INCONCLUSIVE": 1,
     "EXPECTED GLOBAL": 3,
     "N/A": 0
   },
@@ -36,7 +36,7 @@
         {
           "case": "5. Nonexistent companyId — no company-existence check; LEFT JOIN yields default (non-overridden) feature state rather than an error, no data leaked",
           "disposition": "PASS",
-          "detail": "status=200 count=36"
+          "detail": "status=200 count=27"
         },
         {
           "case": "6. Missing authentication",
@@ -114,7 +114,7 @@
         {
           "case": "1. Platform super admin reads Tenant A's provisioning status",
           "disposition": "PASS",
-          "detail": "status=200 gate.companyId=88d71245-2eb0-41ad-92bc-c4f5bb8e8c35"
+          "detail": "status=200 gate.companyId=b82a56e8-42d8-47ad-a905-30b9f56e6451"
         },
         {
           "case": "2. Same session reads Tenant B's provisioning status via a different companyId — correctly returns B's own (null, no gate row yet) state rather than A's",
@@ -207,7 +207,7 @@
         {
           "case": "2. REGRESSION (batch-5 audit finding 2, was FAIL): client-supplied companyId reassignment via the update branch — PATCH targets Tenant A's gate row via the URL, request body also carries companyId=Tenant B; storage.upsertTenantCommercialGate now forces `{ ...data, companyId, updatedAt }` (companyId always last/wins, server/storage.ts) so the body's companyId can no longer override the URL's tenant scoping, while every other field in the body (notes) still applies",
           "disposition": "PASS",
-          "detail": "status=200, company_id unchanged (88d71245-2eb0-41ad-92bc-c4f5bb8e8c35), notes applied (CT5 reassignment attempt)"
+          "detail": "status=200, company_id unchanged (b82a56e8-42d8-47ad-a905-30b9f56e6451), notes applied (CT5 reassignment attempt)"
         },
         {
           "case": "3. Hardening: PATCH .../gates now validates the target company exists (storage.getCompany) before calling upsertTenantCommercialGate — a nonexistent companyId 404s instead of silently creating (or, per finding 2, misdirecting) a gate row. This also closes the insert-branch companyId-override code path noted in the original audit (server/storage.ts's insert `values({ ...data, companyId })` uses the same companyId-always-wins ordering as the update branch fixed in case 2), since the insert branch can now only be reached for a companyId that has already been confirmed to exist.",
@@ -376,8 +376,8 @@
         },
         {
           "case": "2. Tenant A admin attempts to override scope via ?companyId=Tenant B — resolvedCompanyId ignores the query param for non-platform_super_admin roles (server/routes.ts:31097-31099)",
-          "disposition": "PASS",
-          "detail": "status=200 count=1 (force-scoped to caller's own company)"
+          "disposition": "INCONCLUSIVE",
+          "detail": "status=403 count=0 (force-scoped to caller's own company)"
         },
         {
           "case": "3. REGRESSION (batch-5 audit finding 10, was FAIL): platform_admin (NOT platform_super_admin) is now blocked outright rather than silently falling through to an unfiltered cross-tenant read — role-alias escalation via expandRoleForGuard()'s \"admin\" alias (server/routes.ts:260-280) is closed by an explicit isSuperAdmin-or-has-own-companyId check before resolvedCompanyId is computed. Same code path also now blocks platform_support/platform_implementation (not independently re-tested here — see the batch-5 findings doc for why one representative role is sufficient).",

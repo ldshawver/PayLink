@@ -116,7 +116,9 @@ test("canAccessStoredCompany: missing actor → false, NULL owner → platform o
 test("resolveListScope authorizes a supplied companyId and uses the pure decision", () => {
   const b = stripComments(fnBody(routes, "async function resolveListScope("));
   assert.ok(/normalizeListCompanyId\(requested\)/.test(b));
-  assert.ok(/requestedAccessible: requestedCompanyId \? await canAccessCompany\(user, requestedCompanyId\)/.test(b));
+  assert.ok(/requestedCompanyId\s*\?\s*\(await canAccessCompany\(user, requestedCompanyId\)\)/.test(b));
+  // PR 2B: scheduling reach is opt-in per endpoint, never the default.
+  assert.ok(/!!opts\.schedulingReach && await canScheduleIntoCompany\(user, requestedCompanyId\)/.test(b));
   assert.ok(/decideListScope\(/.test(b));
   assert.ok(/isPlatformCompanyBypassRole\(user\.role\)/.test(b), "platform must come from the explicit role list, never a NULL companyId");
 });
