@@ -567,10 +567,15 @@ async function main() {
       const leakedB = Math.round(b2?.grandTotal?.grossPay ?? 0) === 9000;
       cases.push({
         case: "2. Tenant A admin explicitly requests ?companyId=<Tenant B> — confirms the isTenantSummaryUser override (server/routes.ts:1914-1917) actually holds under a live attempt, not just from reading the source",
-        disposition: r2.status === 200 && !leakedB && Math.round(b2?.grandTotal?.grossPay ?? 0) === 3000 ? "PASS" : leakedB ? "FAIL" : "INCONCLUSIVE",
+        // SaaS PR 2: a foreign ?companyId is now denied (403) before any query instead of
+        // being silently re-scoped to the caller's company — both outcomes leak nothing.
+        disposition: leakedB ? "FAIL"
+          : (r2.status === 403 || (r2.status === 200 && Math.round(b2?.grandTotal?.grossPay ?? 0) === 3000)) ? "PASS" : "INCONCLUSIVE",
         detail: leakedB
           ? `VERIFIED DEFECT: the ?companyId= query param overrode the tenant scope. status=${r2.status}, grossPay=${b2?.grandTotal?.grossPay} matches Tenant B's fixture value.`
-          : `status=${r2.status} runCount=${b2?.runCount} grossPay=${b2?.grandTotal?.grossPay} (still scoped to Tenant A despite the injection attempt)`,
+          : r2.status === 403
+            ? `status=403 (foreign companyId denied before the query; no Tenant B data)`
+            : `status=${r2.status} runCount=${b2?.runCount} grossPay=${b2?.grandTotal?.grossPay} (still scoped to Tenant A despite the injection attempt)`,
       });
 
       const rEmp = await apiRequest(baseUrl, "GET", `/api/payroll-summary?year=${year}`, sessionAEmployee);
