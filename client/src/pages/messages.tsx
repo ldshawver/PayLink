@@ -24,7 +24,6 @@ import {
   ChevronLeft,
   Reply,
   Users,
-  Globe,
   User,
   Clock,
   MailOpen,
@@ -96,7 +95,6 @@ const DELIVERY_OPTIONS = [
 const SCOPE_OPTIONS = [
   { value: "one", label: "Individual", icon: User },
   { value: "company", label: "Entire Company", icon: Users },
-  { value: "sitewide", label: "All Staff (Site-wide)", icon: Globe },
 ];
 
 function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () => void }) {
