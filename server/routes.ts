@@ -34071,6 +34071,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // GET /api/messages/workers — list workers available to message (must be before /:id)
+  // worker_type is the enum (employee, contractor): compare it as text, because a
+  // literal outside the enum (independent_contractor, vendor) raises and 500s the list.
   app.get("/api/messages/workers", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
@@ -34086,23 +34088,25 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       let result: any;
       // Determine the companyId to scope by for tenant users
       const scopeCompanyId: string | null = user?.companyId || myCompanyId;
-      const isPlatformAdmin = !scopeCompanyId && (userRole === "admin" || (userRole || "").startsWith("platform_"));
+      // Only real platform roles get the cross-tenant list. A company-less tenant role
+      // (e.g. "admin" with no company) is not a platform user and gets nothing.
+      const isPlatformAdmin = isPlatformCompanyBypassRole(userRole);
 
       if (isPlatformAdmin) {
         // Platform admins see all workers
         result = myWorkerId
           ? await db.execute(sql`
               SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name, w.worker_type,
-                     CASE WHEN w.worker_type = 'independent_contractor' THEN 'Contractor'
-                          WHEN w.worker_type = 'vendor' THEN 'Vendor'
+                     CASE WHEN w.worker_type::text IN ('contractor', 'independent_contractor') THEN 'Contractor'
+                          WHEN w.worker_type::text = 'vendor' THEN 'Vendor'
                           ELSE 'Employee' END AS recipient_type
               FROM workers w LEFT JOIN companies c ON c.id = w.company_id
               WHERE w.id != ${myWorkerId} ORDER BY w.first_name, w.last_name
             `)
           : await db.execute(sql`
               SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name, w.worker_type,
-                     CASE WHEN w.worker_type = 'independent_contractor' THEN 'Contractor'
-                          WHEN w.worker_type = 'vendor' THEN 'Vendor'
+                     CASE WHEN w.worker_type::text IN ('contractor', 'independent_contractor') THEN 'Contractor'
+                          WHEN w.worker_type::text = 'vendor' THEN 'Vendor'
                           ELSE 'Employee' END AS recipient_type
               FROM workers w LEFT JOIN companies c ON c.id = w.company_id
               ORDER BY w.first_name, w.last_name
@@ -34112,8 +34116,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const selfExclude = myWorkerId ? sql`AND w.id != ${myWorkerId}` : sql``;
         result = await db.execute(sql`
           SELECT DISTINCT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name, w.worker_type,
-                 CASE WHEN w.worker_type = 'independent_contractor' THEN 'Contractor'
-                      WHEN w.worker_type = 'vendor' THEN 'Vendor'
+                 CASE WHEN w.worker_type::text IN ('contractor', 'independent_contractor') THEN 'Contractor'
+                      WHEN w.worker_type::text = 'vendor' THEN 'Vendor'
                       ELSE 'Employee' END AS recipient_type
           FROM workers w
           LEFT JOIN companies c ON c.id = w.company_id
@@ -39036,6 +39040,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       // 5. Break violations (break sessions exceeding 60 minutes — still on break with no break_end)
       if (isManager) {
         const breakThresholdMinutes = 60;
+        // make_interval keeps the threshold a real bind parameter: an interpolation inside
+        // a quoted INTERVAL literal is not a placeholder and broke the bind count (08P01).
         let breakRows: any[];
         if (workerFilter) {
           const r = await db.execute(sql`
@@ -39054,9 +39060,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                 WHERE tp2.worker_id = tp.worker_id
                   AND tp2.punch_type = 'break_end'
                   AND tp2.punch_time > tp.punch_time
-                  AND tp2.punch_time <= tp.punch_time + INTERVAL '${breakThresholdMinutes} minutes'
+                  AND tp2.punch_time <= tp.punch_time + make_interval(mins => ${breakThresholdMinutes})
               )
-              AND tp.punch_time < NOW() - INTERVAL '${breakThresholdMinutes} minutes'
+              AND tp.punch_time < NOW() - make_interval(mins => ${breakThresholdMinutes})
             ORDER BY tp.punch_time DESC
             LIMIT 20
           `);
@@ -39077,9 +39083,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                 WHERE tp2.worker_id = tp.worker_id
                   AND tp2.punch_type = 'break_end'
                   AND tp2.punch_time > tp.punch_time
-                  AND tp2.punch_time <= tp.punch_time + INTERVAL '${breakThresholdMinutes} minutes'
+                  AND tp2.punch_time <= tp.punch_time + make_interval(mins => ${breakThresholdMinutes})
               )
-              AND tp.punch_time < NOW() - INTERVAL '${breakThresholdMinutes} minutes'
+              AND tp.punch_time < NOW() - make_interval(mins => ${breakThresholdMinutes})
             ORDER BY tp.punch_time DESC
             LIMIT 20
           `);
