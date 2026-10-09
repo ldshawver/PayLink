@@ -52,8 +52,17 @@ for (const [route, handlerVar] of [["/api/departments", "orgDepartments"], ["/ap
 }
 for (const [m, r] of [["post", "/api/workers"], ["patch", "/api/workers/:id"], ["delete", "/api/workers/:id"]] as const) {
   const h = handler(m, r);
+  // The guard may resolve the company directly, or through the shared administered-company
+  // set (resolveEmployeeAdminCompanyIds), which itself starts from resolveTenantCompanyId.
   ok(`${m.toUpperCase()} ${r} guard does not skip when acting user's companyId is null`,
-    h.includes("resolveTenantCompanyId(actingUser)") && !h.includes("&& !!actingUser?.companyId"));
+    (h.includes("resolveTenantCompanyId(actingUser)") || h.includes("resolveEmployeeAdminCompanyIds(actingUser)"))
+      && !h.includes("&& !!actingUser?.companyId"));
+}
+{
+  const s = routes.indexOf("async function resolveEmployeeAdminCompanyIds(");
+  const body = s >= 0 ? routes.slice(s, routes.indexOf("\n}\n", s)) : "";
+  ok("resolveEmployeeAdminCompanyIds starts from resolveTenantCompanyId (null company never widens)",
+    s < 0 || (body.includes("await resolveTenantCompanyId(user)") && body.includes("is_active = TRUE")));
 }
 ok("worker account routes guard does not skip when acting user's companyId is null",
   /async function loadWorkerForAccountRoute[\s\S]*?resolveTenantCompanyId\(actingUser\)[\s\S]*?return \{ worker, companyId/.test(routes));
