@@ -1079,6 +1079,30 @@ async function resolveSchedulingCompanyIds(
   return { all: Array.from(all), fullAccess };
 }
 
+/**
+ * Companies whose full employee (HR) records a non-platform manager administers:
+ * the home company plus explicit, active company_user_access grants held with a
+ * manager-level role. Enterprise siblings reachable only for scheduling
+ * (resolveSchedulingCompanyIds().all) are never included, and an employee-level
+ * grant does not confer HR access. List, detail, create and update of workers all
+ * use this one set so the Employee list and Add/Edit agree.
+ */
+function isEmployeeAdminRole(role: string | null | undefined): boolean {
+  // isManagerRole, plus every role requireRole("admin", "manager") admits (owner, system_admin).
+  return isManagerRole(role) || expandRoleForGuard(role || "").some((r) => r === "admin" || r === "manager");
+}
+
+async function resolveEmployeeAdminCompanyIds(user: AuthzActor): Promise<string[]> {
+  const ids = new Set<string>();
+  const own = await resolveTenantCompanyId(user);
+  if (own) ids.add(own);
+  const grants = await db.execute(sql`
+    SELECT company_id, role FROM company_user_access WHERE user_id = ${user.id} AND is_active = TRUE
+  `);
+  for (const g of (grants.rows ?? []) as any[]) if (isEmployeeAdminRole(g.role)) ids.add(g.company_id as string);
+  return Array.from(ids);
+}
+
 async function getSessionCompanyId(req: Request): Promise<string | null> {
   if (!req.session?.userId) return null;
   const user = await storage.getUser(req.session.userId);
@@ -2970,6 +2994,17 @@ function hashSigningToken(token: string): string {
       //    If user.companyId is null, fall back to the worker record's companyId.
       // 3. Platform users may pass ?companyId to narrow to a specific company.
       let effectiveCompanyId: string | undefined;
+      if (user && !isPlatformUser(user.role) && isEmployeeAdminRole(user.role)) {
+        // Tenant managers: every company they administer (home + manager-level grants),
+        // or just the requested one, which must be in that set.
+        const adminCompanies = await resolveEmployeeAdminCompanyIds(user);
+        if (qCompanyId && qCompanyId !== "all") {
+          if (!adminCompanies.includes(qCompanyId)) return res.status(403).json({ message: "Access denied to this company" });
+          return res.json(await storage.getWorkers(qCompanyId));
+        }
+        const lists = await Promise.all(adminCompanies.map((cid) => storage.getWorkers(cid)));
+        return res.json(lists.flat());
+      }
       if (!isPlatformUser(user?.role)) {
         // Resolve companyId — fall back to worker record if user.companyId is null.
         // No resolvable company → nothing (previously fell through to every tenant's workers).
@@ -2995,19 +3030,45 @@ function hashSigningToken(token: string): string {
     try {
       const actingUser = await storage.getUser(req.session.userId!);
       const qCompany = queryStr(req.query.companyId);
-      const companyId = isPlatformUser(actingUser?.role)
-        ? (qCompany && qCompany !== "all" ? qCompany : null)
-        : (actingUser?.companyId || null);
-      if (!companyId) return res.json({});
-      const map = await loadWorkerAccountStates(companyId);
+      let companyIds: string[];
+      if (isPlatformUser(actingUser?.role)) {
+        companyIds = qCompany && qCompany !== "all" ? [qCompany] : [];
+      } else {
+        // Same company set as GET /api/workers, so every listed row gets a status chip.
+        const adminCompanies = actingUser && isEmployeeAdminRole(actingUser.role) ? await resolveEmployeeAdminCompanyIds(actingUser) : [];
+        if (qCompany && qCompany !== "all") {
+          if (!adminCompanies.includes(qCompany)) return res.status(403).json({ message: "Access denied to this company" });
+          companyIds = [qCompany];
+        } else {
+          companyIds = adminCompanies;
+        }
+      }
       const out: Record<string, { status: string; username: string | null; inviteId: string | null; inviteEmail: string | null }> = {};
-      for (const [workerId, s] of map) {
-        out[workerId] = { status: s.status, username: s.username, inviteId: s.inviteId, inviteEmail: s.inviteEmail };
+      for (const companyId of companyIds) {
+        const map = await loadWorkerAccountStates(companyId);
+        for (const [workerId, s] of map) {
+          out[workerId] = { status: s.status, username: s.username, inviteId: s.inviteId, inviteEmail: s.inviteEmail };
+        }
       }
       res.json(out);
     } catch (e) {
       console.error("GET /api/workers/accounts failed:", e);
       res.status(500).json({ message: "Failed to load account statuses" });
+    }
+  });
+
+  // Companies whose employees this user administers (home + manager-level grants),
+  // so the Employee page's company filter and Add form offer only companies the
+  // list/create/update routes accept. companyIds null = platform user (all companies).
+  app.get("/api/workers/admin-companies", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (isPlatformUser(user.role)) return res.json({ companyIds: null });
+      res.json({ companyIds: isEmployeeAdminRole(user.role) ? await resolveEmployeeAdminCompanyIds(user) : [] });
+    } catch (e) {
+      console.error("GET /api/workers/admin-companies failed:", e);
+      res.status(500).json({ message: "Failed to load companies" });
     }
   });
 
@@ -3031,16 +3092,17 @@ function hashSigningToken(token: string): string {
 
       // Managers/admins: enforce role_permissions scope columns (view_own / view_department / view_company)
       // via the authorization module in addition to the company-level tenant isolation check.
-      const effectiveCompanyId = await resolveTenantCompanyId(user);
-      if (!effectiveCompanyId || worker.companyId !== effectiveCompanyId) {
+      if (!user || !worker.companyId || !(await resolveEmployeeAdminCompanyIds(user)).includes(worker.companyId)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
       // Secondary check — role_permissions scope columns. This enforces granular
       // canViewOwn / canViewDepartment / canViewCompany flags from the RBAC matrix.
       // On deny we return 403; on authorization-module error we fall through
-      // (company-level isolation above already applied).
-      try {
+      // (company-level isolation above already applied). The RBAC scope is evaluated
+      // against the user's home company, so it only applies there; in a granted
+      // company the manager-level company_user_access grant is the authorization.
+      if (worker.companyId === (await resolveTenantCompanyId(user))) try {
         const { checkPermission: cpCheck } = await import("./auth/authorization.js");
         const authResult = await cpCheck(
           req.session.userId!,
@@ -3069,11 +3131,12 @@ function hashSigningToken(token: string): string {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
       if (!req.body.lastName) return res.status(400).json({ message: "Last name is required" });
-      // Tenant users may only create workers in their own company
+      // Tenant users may only create workers in a company they administer (home +
+      // manager-level grants — the GET /api/workers set)
       const actingUser = await storage.getUser(req.session.userId!);
       if (!isPlatformUser(actingUser?.role)) {
-        const tenantCompanyId = await resolveTenantCompanyId(actingUser);
-        if (!tenantCompanyId || req.body.companyId !== tenantCompanyId) {
+        const adminCompanies = actingUser && isEmployeeAdminRole(actingUser.role) ? await resolveEmployeeAdminCompanyIds(actingUser) : [];
+        if (!adminCompanies.includes(req.body.companyId)) {
           return res.status(403).json({ message: "Forbidden: cannot create a worker in a different company" });
         }
       }
@@ -3682,11 +3745,12 @@ function hashSigningToken(token: string): string {
       const existing = await storage.getWorker(req.params.id as string);
       if (!existing) return res.status(404).json({ message: "Worker not found" });
 
-      // Company ownership guard: tenant users may only update workers in their own company
+      // Company ownership guard: tenant users may only update workers in a company they
+      // administer (home + manager-level grants — the GET /api/workers set)
       const actingUser = await storage.getUser(req.session.userId!);
       if (!isPlatformUser(actingUser?.role)) {
-        const tenantCompanyId = await resolveTenantCompanyId(actingUser);
-        if (!tenantCompanyId || existing.companyId !== tenantCompanyId) {
+        const adminCompanies = actingUser && isEmployeeAdminRole(actingUser.role) ? await resolveEmployeeAdminCompanyIds(actingUser) : [];
+        if (!existing.companyId || !adminCompanies.includes(existing.companyId)) {
           return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
         }
       }

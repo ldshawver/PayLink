@@ -180,6 +180,7 @@ function EmployeeTab() {
   const [form, setForm] = useState(emptyForm);
 
   const companiesQuery = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const adminCompaniesQuery = useQuery<{ companyIds: string[] | null }>({ queryKey: ["/api/workers/admin-companies"] });
   const workersQuery = useQuery<Worker[]>({
     queryKey: ["/api/workers", companyFilter],
     queryFn: async () => {
@@ -388,7 +389,11 @@ function EmployeeTab() {
   const workers = asList<Worker>(workersQuery.data);
   // Company/branch/dept/title/group/policy/schedule feed <SelectItem value={id}> —
   // only options with a real non-empty id are kept (see selectableOptions).
-  const companies = selectableOptions<Company>(companiesQuery.data);
+  // Only companies whose employees this user administers (home + manager-level
+  // grants) — the same set the worker list/create/update routes accept.
+  const adminCompanyIds = adminCompaniesQuery.data?.companyIds;
+  const companies = selectableOptions<Company>(companiesQuery.data)
+    .filter((c) => adminCompanyIds == null || adminCompanyIds.includes(c.id));
   const branches = selectableOptions<Branch>(branchesQuery.data);
   const deptList = selectableOptions<Department>(departmentsQuery.data);
   const titlesList = selectableOptions<EmployeeTitle>(titlesQuery.data);
