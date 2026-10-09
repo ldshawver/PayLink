@@ -34088,7 +34088,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       let result: any;
       // Determine the companyId to scope by for tenant users
       const scopeCompanyId: string | null = user?.companyId || myCompanyId;
-      const isPlatformAdmin = !scopeCompanyId && (userRole === "admin" || (userRole || "").startsWith("platform_"));
+      // Only real platform roles get the cross-tenant list. A company-less tenant role
+      // (e.g. "admin" with no company) is not a platform user and gets nothing.
+      const isPlatformAdmin = isPlatformCompanyBypassRole(userRole);
 
       if (isPlatformAdmin) {
         // Platform admins see all workers

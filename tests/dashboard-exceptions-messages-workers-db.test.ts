@@ -51,7 +51,7 @@ async function main() {
   const uid = () => crypto.randomUUID();
   const [C, X] = [uid(), uid()];
   const [empW, conW, otherW] = [uid(), uid(), uid()];
-  const users = { admin: uid(), emp: uid() };
+  const users = { admin: uid(), emp: uid(), noco: uid(), plat: uid() };
   let server: TestServer | undefined;
 
   try {
@@ -65,8 +65,10 @@ async function main() {
     await mkWorker(otherW, X, `Other-${sfx}`, "employee", `ZZDXO${sfx}`);
     const pw = await bcrypt.hash("Dx!Synthetic", 10);
     await q(`INSERT INTO users (id,username,password,role,company_id,worker_id,is_active) VALUES
-      ($1,$2,$3,'admin',$4,NULL,true),($5,$6,$3,'employee',$4,$7,true)`,
-      [users.admin, `dx_admin_${sfx}`, pw, C, users.emp, `dx_emp_${sfx}`, empW]);
+      ($1,$2,$3,'admin',$4,NULL,true),($5,$6,$3,'employee',$4,$7,true),
+      ($8,$9,$3,'admin',NULL,NULL,true),($10,$11,$3,'platform_admin',NULL,NULL,true)`,
+      [users.admin, `dx_admin_${sfx}`, pw, C, users.emp, `dx_emp_${sfx}`, empW,
+       users.noco, `dx_noco_${sfx}`, users.plat, `dx_plat_${sfx}`]);
     // Open break: break_start 2 hours ago, no break_end → a >60 min break violation.
     const punch = uid();
     await q(`INSERT INTO time_punches (id,worker_id,company_id,punch_type,punch_time) VALUES ($1,$2,$3,'break_start', NOW() - INTERVAL '2 hours')`, [punch, empW, C]);
@@ -75,6 +77,8 @@ async function main() {
     const base = server.baseUrl;
     const admin = await login(base, `dx_admin_${sfx}`, "Dx!Synthetic");
     const emp = await login(base, `dx_emp_${sfx}`, "Dx!Synthetic");
+    const noco = await login(base, `dx_noco_${sfx}`, "Dx!Synthetic");
+    const plat = await login(base, `dx_plat_${sfx}`, "Dx!Synthetic");
 
     console.log("\n── GET /api/dashboard/exceptions ──");
     let r = await apiRequest(base, "GET", "/api/dashboard/exceptions", admin);
@@ -95,6 +99,12 @@ async function main() {
     r = await apiRequest(base, "GET", "/api/messages/workers", emp);
     const er = Array.isArray(r.body) ? (r.body as any[]) : [];
     check("employee → 200, excludes self, includes coworker contractor", r.status === 200 && !er.some((w) => w.id === empW) && er.some((w) => w.id === conW), `status=${r.status}`);
+    // Company-less tenant role is not a platform user: no cross-tenant directory.
+    r = await apiRequest(base, "GET", "/api/messages/workers", noco);
+    check("company-less admin → 200 [] (no cross-tenant list)", r.status === 200 && Array.isArray(r.body) && (r.body as any[]).length === 0, `status=${r.status} n=${Array.isArray(r.body) ? (r.body as any[]).length : "?"}`);
+    r = await apiRequest(base, "GET", "/api/messages/workers", plat);
+    const pr = Array.isArray(r.body) ? (r.body as any[]) : [];
+    check("platform_admin → 200, sees both companies", r.status === 200 && pr.some((w) => w.id === conW) && pr.some((w) => w.id === otherW), `status=${r.status}`);
   } finally {
     if (server) await server.stop().catch(() => {});
     try {
