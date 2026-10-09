@@ -197,8 +197,10 @@ async function main() {
       const leaksB2 = listA2.some((w) => w.companyId === companyB);
       cases.push({
         case: "3. Tenant A admin submits Tenant B companyId as a query param",
-        disposition: r3.status === 200 && !leaksB2 ? "PASS" : "FAIL",
-        detail: `Non-platform role: session-derived companyId is used, client-supplied ?companyId is ignored per source (server/routes.ts:2186-2198). status=${r3.status} leaksTenantB=${leaksB2}`,
+        // SaaS PR 2B: the global supplied-companyId gate refuses a foreign ?companyId (403)
+        // before the handler; previously it was ignored (200, own scope). Both leak nothing.
+        disposition: (r3.status === 200 || r3.status === 403) && !leaksB2 ? "PASS" : "FAIL",
+        detail: `Non-platform role: a foreign ?companyId is refused by the supplied-companyId gate (SaaS PR 2B) or ignored by the handler. status=${r3.status} leaksTenantB=${leaksB2}`,
       });
       cases.push({ case: "2. by-ID access / 4. ID+companyId combos", disposition: "N/A", detail: "Route has no :id param — not applicable to a list endpoint." });
 

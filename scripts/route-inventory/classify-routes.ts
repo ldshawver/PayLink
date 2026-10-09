@@ -178,7 +178,9 @@ const RE_CLIENT_PARAMS = /req\.params(?:\?\.|\.)companyId\b|\{\s*[^}]*\bcompanyI
 // SaaS PR 2 primitives (server/routes.ts): resolveListScope() derives/authorizes the
 // list company from the session actor; authorizeStoredResource() and
 // canAccessStoredCompany() authorize the STORED owner via canAccessCompany().
-const RE_SESSION_DERIVED = /req\.resolvedCompanyId\b|getSessionCompanyId\(|req\.session(?:\?\.)?\.companyId\b|user\??\.companyId\b|req\.user(?:\?\.)?\.companyId\b|\bresolveListScope\(|\bauthorizeStoredResource\(|\bcanAccessStoredCompany\(/;
+// SaaS PR 2B: authorizeOwnedById() (table-driven stored owner) and
+// scopeCompanyRows() (list scope over an unfiltered config list).
+const RE_SESSION_DERIVED = /req\.resolvedCompanyId\b|getSessionCompanyId\(|req\.session(?:\?\.)?\.companyId\b|user\??\.companyId\b|req\.user(?:\?\.)?\.companyId\b|\bresolveListScope\(|\bauthorizeStoredResource\(|\bcanAccessStoredCompany\(|\bauthorizeOwnedById\(|\bscopeCompanyRows\(/;
 const RE_MEMBERSHIP_CHECK = /\bcanAccessCompany\(|\bassertUserCanAccessCompany\(|\bcanAccessStoredCompany\(|\bauthorizeStoredResource\(|\bresolveListScope\(/;
 const RE_ENFORCE_SCOPE_MW = /enforceCompanyScope\(/;
 const RE_PLATFORM_CHECK_INLINE = /isPlatformUser\(|isGlobalDiagnosticsRole\(/;

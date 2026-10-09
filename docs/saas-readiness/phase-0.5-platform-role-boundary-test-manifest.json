@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-25",
+  "generatedAt": "2026-10-06",
   "sourceReport": "docs/saas-readiness/phase-0.5-security-convergence-report.md",
   "rootCause": "expandRoleForGuard() aliased platform_support/platform_implementation to [\"admin\",\"manager\",role], contradicting GET /api/platform/audit/roles' documented aliases:[] for both.",
   "fix": "server/routes.ts expandRoleForGuard(): removed the platform_support/platform_implementation special case; both now fall through to the default return [role].",
@@ -222,7 +222,7 @@
         {
           "case": "platform_super_admin — expect role gate passes (reaches handler)",
           "disposition": "PASS",
-          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+          "detail": "status=200"
         },
         {
           "case": "platform_owner — expect 403",
@@ -232,22 +232,22 @@
         {
           "case": "platform_admin — expect role gate passes (reaches handler)",
           "disposition": "PASS",
-          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+          "detail": "status=200"
         },
         {
           "case": "platform_auditor — expect role gate passes (reaches handler)",
           "disposition": "PASS",
-          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+          "detail": "status=200"
         },
         {
           "case": "platform_support — expect role gate passes (reaches handler)",
           "disposition": "PASS",
-          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+          "detail": "status=200"
         },
         {
           "case": "platform_implementation — expect role gate passes (reaches handler)",
           "disposition": "PASS",
-          "detail": "status=500 — reached handler; 500 is the pre-existing companies.status bug documented above, not a role-boundary failure"
+          "detail": "status=200"
         },
         {
           "case": "tenant_admin — expect 403",

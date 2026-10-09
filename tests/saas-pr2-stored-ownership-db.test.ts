@@ -351,7 +351,9 @@ async function main() {
       }
       const r0 = await call("adminA", "PATCH", `/api/expenses/${R.A1.exp}`, { companyId: B1, description: "own edit" });
       const expCo = (await q(`SELECT company_id FROM expenses WHERE id=$1`, [R.A1.exp])).rows[0].company_id;
-      check("PATCH own expense cannot re-parent it to another tenant (companyId ignored)", r0.status === 200 && expCo === A1, `status=${r0.status}`);
+      // PR 2: companyId ignored (200). PR 2B: naming a foreign company is refused up front
+      // by the supplied-companyId gate (403). Either way the expense stays in A1.
+      check("PATCH own expense cannot re-parent it to another tenant (companyId ignored or refused)", (r0.status === 200 || r0.status === 403) && expCo === A1, `status=${r0.status}`);
       // remittance source / customer / funding account deletes
       for (const [table, p, id] of [["remittance_sources", "/api/remittance-sources/", R.B1.rs], ["customers", "/api/customers/", R.B1.cust],
         ["funding_accounts", "/api/funding-accounts/", R.B1.fa]] as Array<[string, string, string]>) {

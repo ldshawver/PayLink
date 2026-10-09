@@ -113,7 +113,8 @@
         "server/__tests__/org-ownership-guard.test.ts",
         "tests/saas-pr1-company-authz-static.test.ts",
         "server/__tests__/stored-resource-guard.test.ts",
-        "tests/saas-pr2-stored-ownership-static.test.ts"
+        "tests/saas-pr2-stored-ownership-static.test.ts",
+        "tests/saas-pr2b-remaining-ownership-static.test.ts"
       ]
     },
     "db": {
@@ -153,7 +154,8 @@
         "tests/documenso-repair-diagnostic-db.test.ts",
         "tests/employee-create-edit-freeze-db.test.ts",
         "tests/saas-pr1-company-authz-db.test.ts",
-        "tests/saas-pr2-stored-ownership-db.test.ts"
+        "tests/saas-pr2-stored-ownership-db.test.ts",
+        "tests/saas-pr2b-remaining-ownership-db.test.ts"
       ]
     },
     "e2e": {

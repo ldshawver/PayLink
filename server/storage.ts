@@ -617,7 +617,7 @@ export interface IStorage {
   createSavedReport(data: InsertSavedReport): Promise<SavedReport>;
   deleteSavedReport(id: string): Promise<void>;
 
-  getDashboardStats(): Promise<{
+  getDashboardStats(companyId?: string): Promise<{
     totalEmployees: number;
     totalContractors: number;
     activeToday: number;
@@ -2037,17 +2037,17 @@ export class DatabaseStorage implements IStorage {
     await db.delete(users).where(eq(users.id, id));
   }
 
-  async getDashboardStats() {
-    const allWorkers = await db.select().from(workers);
+  async getDashboardStats(companyId?: string) {
+    const allWorkers = companyId ? await db.select().from(workers).where(eq(workers.companyId, companyId)) : await db.select().from(workers);
     const activeWorkers = allWorkers.filter(w => w.isActive);
     const totalEmployees = activeWorkers.filter(w => w.workerType === "employee").length;
     const totalContractors = activeWorkers.filter(w => w.workerType === "contractor").length;
 
     const today = new Date().toISOString().split("T")[0];
-    const todayEntries = await db.select().from(timeEntries).where(eq(timeEntries.date, today));
+    const todayEntries = await db.select().from(timeEntries).where(companyId ? and(eq(timeEntries.date, today), eq(timeEntries.companyId, companyId)) : eq(timeEntries.date, today));
     const activeToday = new Set(todayEntries.map(e => e.workerId)).size;
 
-    const allEntries = await db.select().from(timeEntries);
+    const allEntries = companyId ? await db.select().from(timeEntries).where(eq(timeEntries.companyId, companyId)) : await db.select().from(timeEntries);
     const pendingTimesheets = allEntries.filter(e => e.status === "pending").length;
 
     const now = new Date();

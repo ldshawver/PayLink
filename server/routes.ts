@@ -41,6 +41,8 @@ import {
 } from "./auth/org-ownership-guard.js";
 import {
   normalizeListCompanyId, decideListScope, decideStoredResourceAccess, stripOwnershipFields, toComplianceWorker,
+  extractSuppliedCompanyIds, decideSuppliedCompanyAccess, SUPPLIED_COMPANY_GATE_EXEMPT_PREFIXES,
+  OWNED_RESOURCES, decideOwnedOrSelfAccess, type OwnedResourceKind,
 } from "./auth/stored-resource-guard.js";
 import type { User } from "@shared/schema";
 import { db } from "./db";
@@ -853,16 +855,21 @@ async function resolveListScope(
   req: Request<any, any, any, any>,
   res: Response,
   requested: unknown,
-  opts: { allowPlatformAll: boolean },
+  opts: { allowPlatformAll: boolean; schedulingReach?: boolean },
 ): Promise<{ user: User; companyId: string | undefined; isPlatform: boolean } | null> {
   const user = req.session?.userId ? await storage.getUser(req.session.userId) : undefined;
   if (!user) { res.status(401).json({ message: "Not authenticated" }); return null; }
   const isPlatform = isPlatformCompanyBypassRole(user.role);
   const requestedCompanyId = normalizeListCompanyId(requested);
+  // schedulingReach (SaaS PR 2B): scheduling-data lists also accept an
+  // enterprise-sibling company the actor may schedule into (PR 1 scheduling reach).
+  const requestedAccessible = requestedCompanyId
+    ? (await canAccessCompany(user, requestedCompanyId)) || (!!opts.schedulingReach && await canScheduleIntoCompany(user, requestedCompanyId))
+    : false;
   const decision = decideListScope({
     isPlatform,
     requestedCompanyId,
-    requestedAccessible: requestedCompanyId ? await canAccessCompany(user, requestedCompanyId) : false,
+    requestedAccessible,
     defaultCompanyId: isPlatform || requestedCompanyId ? null : await resolveDefaultCompanyScope(user),
     allowPlatformAll: opts.allowPlatformAll,
   });
@@ -910,6 +917,74 @@ async function loadPayMethodOwner(id: string): Promise<{ id: string; workerId: s
   const r = await db.execute(sql`SELECT pm.id, pm.worker_id, w.company_id FROM pay_methods pm LEFT JOIN workers w ON w.id = pm.worker_id WHERE pm.id = ${id}`);
   const row = (r.rows ?? [])[0] as any;
   return row ? { id: row.id, workerId: row.worker_id, companyId: row.company_id ?? null } : undefined;
+}
+
+/**
+ * SaaS PR 2B: load a by-id resource and its STORED owning company using the
+ * OWNED_RESOURCES map (table + owner expression are compile-time constants).
+ */
+async function loadOwnedResource(kind: OwnedResourceKind, id: string): Promise<{ exists: boolean; companyId: string | null; row: any }> {
+  const spec = OWNED_RESOURCES[kind];
+  const r = await db.execute(sql`SELECT r.*, ${sql.raw(spec.owner)} AS __owner_company_id FROM ${sql.raw(spec.table)} r WHERE r.id = ${String(id)} LIMIT 1`);
+  const row = (r.rows ?? [])[0] as any;
+  if (!row) return { exists: false, companyId: null, row: undefined };
+  const { __owner_company_id, ...rest } = row;
+  return { exists: true, companyId: (__owner_company_id as string | null) ?? null, row: rest };
+}
+
+/**
+ * SaaS PR 2B by-id gate: id → load → STORED owner → canAccessCompany → operate.
+ * A NULL owner (universal/shared row) is platform-only for writes and for these
+ * reads. `selfWorkerId` lets the worker/contractor the record belongs to through
+ * (their own invoice, proposal, preferences) regardless of company grants.
+ * `schedulingReach` additionally accepts a company the actor may schedule into
+ * (scheduling data only — recurring schedules, schedule preferences).
+ * Sends 401/404/403 itself and returns null when denied.
+ */
+async function authorizeOwnedById(
+  req: Request<any, any, any, any>,
+  res: Response,
+  kind: OwnedResourceKind,
+  id: string,
+  opts: { selfWorkerId?: string | null; schedulingReach?: boolean } = {},
+): Promise<{ user: User; companyId: string | null; row: any } | null> {
+  const user = req.session?.userId ? await storage.getUser(req.session.userId) : undefined;
+  if (!user) { res.status(401).json({ message: "Not authenticated" }); return null; }
+  const loaded = await loadOwnedResource(kind, id);
+  const isPlatform = isPlatformCompanyBypassRole(user.role);
+  const isSelf = !!(opts.selfWorkerId && user.workerId && user.workerId === opts.selfWorkerId);
+  const decision = decideOwnedOrSelfAccess({
+    exists: loaded.exists,
+    storedCompanyId: loaded.companyId,
+    isPlatform,
+    storedAccessible: loaded.exists && loaded.companyId && !isPlatform
+      ? (await canAccessCompany(user, loaded.companyId)) || (!!opts.schedulingReach && await canScheduleIntoCompany(user, loaded.companyId))
+      : false,
+    label: OWNED_RESOURCES[kind].label,
+    isSelf,
+  });
+  if (!decision.allowed) { res.status(decision.status).json({ message: decision.message }); return null; }
+  return { user, companyId: loaded.companyId, row: loaded.row };
+}
+
+/**
+ * SaaS PR 2B: scope an unfiltered company-config list (storage getter with no
+ * company argument) to the actor: the resolved list company's rows plus
+ * universal (company_id NULL) shared defaults. Platform without a companyId
+ * keeps the full list. Sends the error response and returns null when denied.
+ */
+async function scopeCompanyRows<T extends { companyId?: string | null }>(
+  req: Request<any, any, any, any>, res: Response, rows: T[],
+): Promise<T[] | null> {
+  const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+  if (!listScope) return null;
+  if (!listScope.companyId) return rows;
+  return rows.filter((r) => !r.companyId || r.companyId === listScope.companyId);
+}
+
+/** Companies an actor has GENERAL access to (own + explicit grants). Never enterprise siblings. */
+async function resolveGeneralCompanyIds(user: AuthzActor): Promise<string[]> {
+  return Array.from((await resolveSchedulingCompanyIds(user)).fullAccess);
 }
 
 /** Stored worker document row (id + owning worker) or undefined. */
@@ -2525,6 +2600,38 @@ function hashSigningToken(token: string): string {
     return res.status(403).json({ message: "Vendor portal accounts can only access the vendor portal." });
   });
 
+  // ── Supplied-companyId gate (SaaS PR 2B) ─────────────────────────────────
+  // A companyId named by the client (?companyId / body.companyId, camel or
+  // snake case) is authorized BEFORE any handler runs: a tenant actor can never
+  // address a company outside its reach by supplying its id, on any route.
+  // Reads accept general access or scheduling reach (sensitive lists are scoped
+  // again per route by resolveListScope); writes accept scheduling reach only on
+  // scheduling paths. Platform roles and public/token flows are not inspected.
+  // This does NOT replace per-route scoping: an OMITTED companyId and by-id
+  // ownership are still enforced by resolveListScope / authorizeOwnedById.
+  app.use("/api", async (req, res, next) => {
+    try {
+      const user = (req as any).user as User | undefined;
+      if (!user) return next();
+      if (SUPPLIED_COMPANY_GATE_EXEMPT_PREFIXES.some((p) => req.path === p || req.path.startsWith(p))) return next();
+      const ids = extractSuppliedCompanyIds(req.query, req.body);
+      if (ids.length === 0) return next();
+      const isPlatform = isPlatformCompanyBypassRole(user.role);
+      const general: Record<string, boolean> = {};
+      const scheduling: Record<string, boolean> = {};
+      for (const id of ids) {
+        general[id] = isPlatform || await canAccessCompany(user, id);
+        scheduling[id] = general[id] || isPlatform ? true : await canScheduleIntoCompany(user, id);
+      }
+      const decision = decideSuppliedCompanyAccess({ method: req.method, path: req.path, isPlatform, general, scheduling });
+      if (!decision.allowed) return res.status(decision.status).json({ message: decision.message });
+      next();
+    } catch (e) {
+      console.error("[supplied-company-gate]", e);
+      res.status(500).json({ message: "Authorization check failed" });
+    }
+  });
+
   app.get("/api/payroll-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { year, quarter, companyId } = req.query;
@@ -2671,9 +2778,11 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.get("/api/dashboard/stats", requireAuth, async (_req, res) => {
+  app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
     try {
-      const stats = await storage.getDashboardStats();
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const stats = await storage.getDashboardStats(listScope.companyId);
       res.json(stats);
     } catch (error) {
       console.error(error);
@@ -7760,8 +7869,10 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/time-punches/pending", requireAuth, async (req, res) => {
     try {
-      const { companyId } = req.query;
-      const punches = await storage.getPendingPunches(companyId as string | undefined);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      const punches = await storage.getPendingPunches(companyId);
       res.json(punches);
     } catch (error) {
       console.error(error);
@@ -7795,7 +7906,9 @@ function hashSigningToken(token: string): string {
     try {
       const user = await storage.getUser(req.session.userId!);
       const { companyId, status } = req.query;
-      const scopedCompany = user?.role === "manager" && user.companyId ? user.companyId : (companyId as string | undefined);
+      const listScope = await resolveListScope(req, res, companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const scopedCompany = listScope.companyId;
       let rows: any[];
       if (scopedCompany && status) {
         const r = await db.execute(sql`
@@ -8080,7 +8193,10 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/schedule/labor-summary", requireAuth, async (req, res) => {
     try {
-      const { companyId, startDate, endDate } = req.query;
+      const { startDate, endDate } = req.query;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId || !startDate || !endDate) {
         return res.status(400).json({ message: "companyId, startDate, endDate required" });
       }
@@ -10057,7 +10173,9 @@ function hashSigningToken(token: string): string {
   // Accrual Accounts
   app.get("/api/accrual-accounts", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const accounts = await storage.getAccrualAccounts(companyId);
       res.json(accounts);
     } catch (error) {
@@ -10078,7 +10196,9 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/accrual-accounts/:id", requireRole("admin"), async (req, res) => {
     try {
-      const account = await storage.updateAccrualAccount(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "accrualAccount", req.params.id);
+      if (!owned) return;
+      const account = await storage.updateAccrualAccount(req.params.id, stripOwnershipFields(req.body));
       if (!account) {
         return res.status(404).json({ message: "Accrual account not found" });
       }
@@ -10091,6 +10211,8 @@ function hashSigningToken(token: string): string {
 
   app.delete("/api/accrual-accounts/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "accrualAccount", req.params.id);
+      if (!owned) return;
       const deleted = await storage.deleteAccrualAccount(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Accrual account not found" });
@@ -10405,7 +10527,9 @@ function hashSigningToken(token: string): string {
   // Pay Periods
   app.get("/api/pay-periods", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const periods = await storage.getPayPeriods(companyId);
       res.json(periods);
     } catch (error) {
@@ -10426,7 +10550,9 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/pay-periods/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const period = await storage.updatePayPeriod(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "payPeriod", req.params.id);
+      if (!owned) return;
+      const period = await storage.updatePayPeriod(req.params.id, stripOwnershipFields(req.body));
       if (!period) {
         return res.status(404).json({ message: "Pay period not found" });
       }
@@ -10440,7 +10566,9 @@ function hashSigningToken(token: string): string {
   // Taxes & Deductions
   app.get("/api/taxes-deductions", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const taxesDeductions = await storage.getTaxesDeductions(companyId);
       res.json(taxesDeductions);
     } catch (error) {
@@ -10461,7 +10589,9 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/taxes-deductions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const taxDeduction = await storage.updateTaxDeduction(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "taxDeduction", req.params.id);
+      if (!owned) return;
+      const taxDeduction = await storage.updateTaxDeduction(req.params.id, stripOwnershipFields(req.body));
       if (!taxDeduction) {
         return res.status(404).json({ message: "Tax/deduction not found" });
       }
@@ -10474,6 +10604,8 @@ function hashSigningToken(token: string): string {
 
   app.delete("/api/taxes-deductions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "taxDeduction", req.params.id);
+      if (!owned) return;
       await storage.deleteTaxDeduction(req.params.id);
       res.json({ message: "Tax/deduction deleted" });
     } catch (error) {
@@ -10538,7 +10670,9 @@ function hashSigningToken(token: string): string {
   // Policy Groups
   app.get("/api/policy-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const groups = await storage.getPolicyGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -10608,7 +10742,9 @@ function hashSigningToken(token: string): string {
   // Pay Codes
   app.get("/api/pay-codes", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const codes = await storage.getPayCodes(companyId);
       res.json(codes);
     } catch (error) {
@@ -10629,7 +10765,9 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/pay-codes/:id", requireRole("admin"), async (req, res) => {
     try {
-      const code = await storage.updatePayCode(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "payCode", req.params.id);
+      if (!owned) return;
+      const code = await storage.updatePayCode(req.params.id, stripOwnershipFields(req.body));
       if (!code) {
         return res.status(404).json({ message: "Pay code not found" });
       }
@@ -10642,6 +10780,8 @@ function hashSigningToken(token: string): string {
 
   app.delete("/api/pay-codes/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payCode", req.params.id);
+      if (!owned) return;
       await storage.deletePayCode(req.params.id);
       res.json({ message: "Pay code deleted" });
     } catch (error) {
@@ -10683,7 +10823,9 @@ function hashSigningToken(token: string): string {
   // Holidays
   app.get("/api/holidays", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const holidays = await storage.getHolidays(companyId);
       res.json(holidays);
     } catch (error) {
@@ -10761,8 +10903,15 @@ function hashSigningToken(token: string): string {
   // Qualifications
   app.get("/api/qualifications", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
-      const workerId = queryStr(req.query.workerId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      let workerId = queryStr(req.query.workerId);
+      // Employees / contractors see only their own records (HR-private).
+      if (!listScope.isPlatform && ["employee", "contractor"].includes(listScope.user.role || "")) {
+        if (!listScope.user.workerId) return res.json([]);
+        workerId = listScope.user.workerId;
+      } else if (workerId && !(await authorizeOwnedById(req, res, "worker", workerId, { selfWorkerId: workerId }))) return;
       const qualifications = await storage.getQualifications(companyId, workerId);
       res.json(qualifications);
     } catch (error) {
@@ -10807,8 +10956,15 @@ function hashSigningToken(token: string): string {
   // Reviews
   app.get("/api/reviews", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
-      const workerId = queryStr(req.query.workerId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      let workerId = queryStr(req.query.workerId);
+      // Employees / contractors see only their own records (HR-private).
+      if (!listScope.isPlatform && ["employee", "contractor"].includes(listScope.user.role || "")) {
+        if (!listScope.user.workerId) return res.json([]);
+        workerId = listScope.user.workerId;
+      } else if (workerId && !(await authorizeOwnedById(req, res, "worker", workerId, { selfWorkerId: workerId }))) return;
       const reviews = await storage.getReviews(companyId, workerId);
       res.json(reviews);
     } catch (error) {
@@ -10852,7 +11008,9 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/kpi-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const groups = await storage.getKpiGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -10894,7 +11052,9 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/qualification-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const groups = await storage.getQualificationGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -10936,7 +11096,9 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/worker-languages", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const languages = await storage.getWorkerLanguages(companyId);
       res.json(languages);
     } catch (error) {
@@ -10957,7 +11119,9 @@ function hashSigningToken(token: string): string {
 
   app.patch("/api/worker-languages/:id", requireAuth, async (req, res) => {
     try {
-      const language = await storage.updateWorkerLanguage(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "workerLanguage", req.params.id);
+      if (!owned) return;
+      const language = await storage.updateWorkerLanguage(req.params.id, stripOwnershipFields(req.body));
       if (!language) return res.status(404).json({ message: "Language not found" });
       res.json(language);
     } catch (error) {
@@ -10968,6 +11132,8 @@ function hashSigningToken(token: string): string {
 
   app.delete("/api/worker-languages/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "workerLanguage", req.params.id);
+      if (!owned) return;
       await storage.deleteWorkerLanguage(req.params.id);
       res.json({ message: "Language deleted" });
     } catch (error) {
@@ -11056,7 +11222,9 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/stations", async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const items = await storage.getStations(companyId);
       res.json(items);
     } catch (error) {
@@ -11105,7 +11273,10 @@ function hashSigningToken(token: string): string {
 
   app.get("/api/receipts", requireAuth, async (req, res) => {
     try {
-      const { companyId, costCenterId, jobId } = req.query as Record<string, string>;
+      const { costCenterId, jobId } = req.query as Record<string, string>;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const items = await storage.getReceipts(companyId, costCenterId, jobId);
       res.json(items);
     } catch (error) {
@@ -11273,15 +11444,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { jsPDF } = await import("jspdf");
       const autoTable = (await import("jspdf-autotable")).default;
 
-      const allReceipts = await storage.getReceipts();
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const allReceipts = await storage.getReceipts(listScope.companyId);
       const companies = await storage.getCompanies();
       const workers = await storage.getWorkers();
       const jobs = await storage.getJobs();
       const costCenters = await storage.getCostCenters();
 
-      const { companyId, status, dateFrom, dateTo, type } = req.query as Record<string, string>;
+      const { status, dateFrom, dateTo, type } = req.query as Record<string, string>;
+      const companyId = listScope.companyId;
       let filtered = allReceipts;
-      if (companyId && companyId !== "all") filtered = filtered.filter(r => r.companyId === companyId);
+      if (companyId) filtered = filtered.filter(r => r.companyId === companyId);
       if (status && status !== "all") filtered = filtered.filter(r => r.status === status);
       if (dateFrom) filtered = filtered.filter(r => r.receiptDate >= dateFrom);
       if (dateTo) filtered = filtered.filter(r => r.receiptDate <= dateTo);
@@ -11366,12 +11540,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.post("/api/expense-categories", requireAuth, requireRole("admin", "manager"), async (req, res) => {
-    try { res.status(201).json(await storage.createExpenseCategory(req.body)); }
+    try {
+      const catActor = await storage.getUser(req.session.userId!);
+      if (!isPlatformCompanyBypassRole(catActor?.role)) return res.status(403).json({ message: "Expense categories are shared platform-wide; only platform administrators can change them" });
+      res.status(201).json(await storage.createExpenseCategory(req.body)); }
     catch (e) { res.status(500).json({ message: "Failed to create category" }); }
   });
 
   app.patch("/api/expense-categories/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const catActor = await storage.getUser(req.session.userId!);
+      if (!isPlatformCompanyBypassRole(catActor?.role)) return res.status(403).json({ message: "Expense categories are shared platform-wide; only platform administrators can change them" });
+     
       const r = await storage.updateExpenseCategory(req.params.id, req.body);
       if (!r) return res.status(404).json({ message: "Not found" });
       res.json(r);
@@ -12450,7 +12630,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices", requireAuth, requireFeature("tenant.finance.contractor-hub"), async (req, res) => {
     try {
-      const { companyId, contractorId, status, showArchived, showCompleted, showVoided } = req.query as Record<string, string>;
+      const { contractorId, status, showArchived, showCompleted, showVoided } = req.query as Record<string, string>;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const showArchivedBool = showArchived === "true";
       const showCompletedBool = showCompleted === "true";
       const showVoidedBool = showVoided === "true";
@@ -12468,6 +12651,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const r = await storage.getContractorInvoice(req.params.id);
       if (!r) return res.status(404).json({ message: "Not found" });
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id, { selfWorkerId: r.contractorId });
+      if (!owned) return;
       const user = await storage.getUser(req.session.userId!);
       const isManager = user?.role === "admin" || user?.role === "manager";
       if (!isManager && user?.workerId !== r.contractorId) return res.status(403).json({ message: "Not authorized" });
@@ -12630,6 +12815,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-invoices/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id);
+      if (!owned) return;
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
       if (inv.status !== "submitted") return res.status(400).json({ message: "Only submitted invoices can be approved" });
@@ -12668,6 +12855,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-invoices/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id);
+      if (!owned) return;
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
       if (!["submitted", "draft"].includes(inv.status || "")) return res.status(400).json({ message: "Only submitted or draft invoices can be rejected" });
@@ -13193,13 +13382,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   app.get("/api/contractor-invoices/:id/audit", requireAuth, async (req, res) => {
-    try { res.json(await storage.getExpenseApprovalActions("contractor_invoice", req.params.id)); }
+    try {
+      const invOwner = (await loadOwnedResource("contractorInvoice", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id, { selfWorkerId: invOwner?.contractor_id });
+      if (!owned) return; res.json(await storage.getExpenseApprovalActions("contractor_invoice", req.params.id)); }
     catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
   // ── Recurring Expense Templates ───────────────────────────────────────
   app.get("/api/recurring-expenses", requireAuth, async (req, res) => {
-    try { res.json(await storage.getRecurringExpenseTemplates(queryStr(req.query.companyId))); }
+    try { const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      res.json(await storage.getRecurringExpenseTemplates(listScope.companyId)); }
     catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
@@ -13214,7 +13408,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/recurring-expenses/:id", requireAuth, async (req, res) => {
     try {
-      const r = await storage.updateRecurringExpenseTemplate(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "recurringExpense", req.params.id);
+      if (!owned) return;
+      const r = await storage.updateRecurringExpenseTemplate(req.params.id, stripOwnershipFields(req.body));
       if (!r) return res.status(404).json({ message: "Not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: "Failed" }); }
@@ -13236,6 +13432,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-reimbursements/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payrollReimbursement", req.params.id);
+      if (!owned) return;
       const existing = await storage.getPayrollReimbursementItem(req.params.id);
       if (!existing) return res.status(404).json({ message: "Not found" });
 
@@ -13252,7 +13450,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       // Auto-stamp includedInPayrollAt when status transitions to "included"
-      const updates: Record<string, unknown> = { ...req.body };
+      const updates: Record<string, unknown> = stripOwnershipFields(req.body);
+      // A re-link target run must belong to the reimbursement's own company.
+      if (typeof req.body.payrollRunId === "string" && req.body.payrollRunId) {
+        const targetRun = await storage.getPayrollRun(req.body.payrollRunId);
+        if (!targetRun || targetRun.companyId !== owned.companyId) return res.status(403).json({ message: "Payroll run belongs to a different company" });
+        updates.payrollRunId = req.body.payrollRunId;
+      }
       if (req.body.status === "included" && existing.status !== "included") {
         updates.includedInPayrollAt = new Date();
       }
@@ -13269,7 +13473,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Accounting Export ─────────────────────────────────────────────────
   app.get("/api/expenses/export/csv", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
-      const allExpenses = await storage.getExpenses(queryStr(req.query.companyId));
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const allExpenses = await storage.getExpenses(listScope.companyId);
       const allWorkers = await storage.getWorkers();
       const allCompanies = await storage.getCompanies();
 
@@ -13299,7 +13505,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices/export/csv", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
-      const allInvs = await storage.getContractorInvoices(queryStr(req.query.companyId));
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const allInvs = await storage.getContractorInvoices(listScope.companyId);
       const allWorkers = await storage.getWorkers();
       const allCompanies = await storage.getCompanies();
 
@@ -13468,6 +13676,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const showCompleted = req.query.showCompleted === "true";
       const lifecycleGroup = queryStr(req.query.lifecycleGroup); // active | archived | all
       const filterCompanyId = isPlatformUser ? (queryStr(req.query.companyId)) : companyId;
+      // SaaS PR 2B: a tenant sees its own company plus explicitly granted ones —
+      // never enterprise siblings (sharing an enterprise is not general access).
+      const generalCompanyIds = isPlatformUser ? [] : await resolveGeneralCompanyIds(user!);
 
       // Lifecycle group constants — define what statuses belong to each group
       const PROPOSAL_ACTIVE_STATUSES = ['draft', 'submitted', 'reviewed', 'revision_requested', 'negotiation', 'sent', 'viewed', 'pending', 'under_review'];
@@ -13501,13 +13712,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           companyFilter = sql``;
         } else {
           // Resolve the enterprise_id of the user's company; include all companies sharing that enterprise
-          const entRes = await db.execute(sql`SELECT enterprise_id FROM companies WHERE id = ${filterCompanyId} LIMIT 1`);
-          const enterpriseId = ((entRes.rows ?? (entRes as any))[0] as any)?.enterprise_id as string | null | undefined;
-          if (enterpriseId) {
-            companyFilter = sql`AND cp.company_id IN (SELECT id FROM companies WHERE enterprise_id = ${enterpriseId})`;
-          } else {
-            companyFilter = sql`AND cp.company_id = ${filterCompanyId}`;
-          }
+          const ids = isPlatformUser ? [filterCompanyId] : (generalCompanyIds.length ? generalCompanyIds : [filterCompanyId]);
+          companyFilter = sql`AND cp.company_id IN (${sql.join(ids.map((c: string) => sql`${c}`), sql`, `)})`;
         }
         const result = await db.execute(sql`
           SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
@@ -14090,7 +14296,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.deleted_at) return res.status(410).json({ message: "Proposal has already been deleted" });
       const isOwner = user?.workerId === proposal.contractor_id;
-      const isManager = ["admin", "manager"].includes(user?.role || "");
+      const isManager = ["admin", "manager"].includes(user?.role || "") && await canAccessStoredCompany(user,
+        (proposal.company_id as string | null) ?? (await workerOwnerCompanyId(proposal.contractor_id as string)));
       if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
       if (!["draft", "rejected"].includes((proposal.status ?? "") as string)) {
         return res.status(400).json({ message: "Only draft or rejected proposals can be deleted" });
@@ -14796,6 +15003,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/contractor-proposals/:id/line-items
   app.get("/api/contractor-proposals/:id/line-items", requireAuth, async (req, res) => {
     try {
+      const propOwner = (await loadOwnedResource("contractorProposal", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorProposal", req.params.id, { selfWorkerId: propOwner?.contractor_id });
+      if (!owned) return;
       const result = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id} ORDER BY sort_order ASC, created_at ASC`);
       res.json(result.rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch line items" }); }
@@ -14804,6 +15014,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/contractor-proposals/:id/line-items
   app.post("/api/contractor-proposals/:id/line-items", requireAuth, async (req, res) => {
     try {
+      const propOwner = (await loadOwnedResource("contractorProposal", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorProposal", req.params.id, { selfWorkerId: propOwner?.contractor_id });
+      if (!owned) return;
       const { name, description, category, quantity, unit, unitPrice, cost, markupPercent, taxable, optional, selected, sortOrder, aiGenerated } = req.body;
       if (!name) return res.status(400).json({ message: "name is required" });
       const qty = parseFloat(quantity ?? "1") || 1;
@@ -14978,6 +15191,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/contractor-proposals/:id/events
   app.get("/api/contractor-proposals/:id/events", requireAuth, async (req, res) => {
     try {
+      const propOwner = (await loadOwnedResource("contractorProposal", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorProposal", req.params.id, { selfWorkerId: propOwner?.contractor_id });
+      if (!owned) return;
       const result = await db.execute(sql`SELECT * FROM proposal_approval_events WHERE proposal_id = ${req.params.id} ORDER BY created_at ASC`);
       res.json(result.rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch events" }); }
@@ -15365,6 +15581,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/contractor-proposals/:id/current-version — redirect to the active (non-superseded) version
   app.get("/api/contractor-proposals/:id/current-version", requireAuth, async (req, res) => {
     try {
+      const propOwner = (await loadOwnedResource("contractorProposal", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorProposal", req.params.id, { selfWorkerId: propOwner?.contractor_id });
+      if (!owned) return;
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       // Walk the superseded_by_id chain to find the latest non-superseded version
@@ -15463,6 +15682,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/contractor-invoices/:id/payments
   app.get("/api/contractor-invoices/:id/payments", requireAuth, async (req, res) => {
     try {
+      const invOwner = (await loadOwnedResource("contractorInvoice", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id, { selfWorkerId: invOwner?.contractor_id });
+      if (!owned) return;
       const result = await db.execute(sql`SELECT * FROM contractor_payments WHERE invoice_id = ${req.params.id} ORDER BY paid_at DESC`);
       res.json(result.rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch payments" }); }
@@ -15858,6 +16080,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/contractor-invoices/:id/stripe-checkout-session — create Stripe Checkout session for online payment
   app.post("/api/contractor-invoices/:id/stripe-checkout-session", requireAuth, async (req, res) => {
     try {
+      const invOwner = (await loadOwnedResource("contractorInvoice", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id, { selfWorkerId: invOwner?.contractor_id });
+      if (!owned) return;
       const invoiceRes = await db.execute(sql`SELECT ci.*, w.first_name, w.last_name, w.work_email FROM contractor_invoices ci LEFT JOIN workers w ON w.id = ci.contractor_id WHERE ci.id = ${req.params.id}`);
       if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
       const invoice = invoiceRes.rows[0] as any;
@@ -15908,6 +16133,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // GET /api/contractor-invoices/:id/reminder-logs
   app.get("/api/contractor-invoices/:id/reminder-logs", requireAuth, async (req, res) => {
     try {
+      const invOwner = (await loadOwnedResource("contractorInvoice", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id, { selfWorkerId: invOwner?.contractor_id });
+      if (!owned) return;
       const result = await db.execute(sql`SELECT * FROM contractor_reminder_logs WHERE entity_type = 'invoice' AND entity_id = ${req.params.id} ORDER BY sent_at DESC`);
       res.json(result.rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch reminder logs" }); }
@@ -15916,6 +16144,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/contractor-invoices/:id/send-reminder — manually send reminder
   app.post("/api/contractor-invoices/:id/send-reminder", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id);
+      if (!owned) return;
       const invoiceRes = await db.execute(sql`SELECT ci.*, w.first_name, w.last_name, w.work_email, w.home_email, w.mobile_phone FROM contractor_invoices ci JOIN workers w ON w.id = ci.contractor_id WHERE ci.id = ${req.params.id}`);
       if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
       const invoice = invoiceRes.rows[0] as any;
@@ -16284,7 +16514,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const completedFilterC = showCompletedC ? sql`` : sql`AND cc.status NOT IN ('completed', 'terminated', 'void')`;
       if (isAdmin) {
         // Admins can see company contracts; platform roles see all if no companyId filter
-        const cid = companyId || user?.companyId;
+        const listScope = await resolveListScope(req, res, companyId, { allowPlatformAll: true });
+        if (!listScope) return;
+        const cid = listScope.companyId;
         const isPlatform = (user?.role || "").startsWith("platform_");
         let result;
         if (isPlatform && !cid) {
@@ -16293,11 +16525,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.is_archived IS NOT TRUE ${completedFilterC} ORDER BY cc.created_at DESC LIMIT 500`);
         } else {
           // Enterprise-aware: include all sibling companies sharing the same enterprise_id
-          const entRes = await db.execute(sql`SELECT enterprise_id FROM companies WHERE id = ${cid} LIMIT 1`);
-          const contractsEnterpriseId = (entRes.rows[0] as any)?.enterprise_id as string | null | undefined;
-          const contractsCompanyFilter = contractsEnterpriseId
-            ? sql`cc.company_id IN (SELECT id FROM companies WHERE enterprise_id = ${contractsEnterpriseId})`
-            : sql`cc.company_id = ${cid}`;
+          // SaaS PR 2B: requested company only, or (none requested) own + explicit grants —
+          // never enterprise siblings.
+          const contractIds = req.query.companyId || isPlatform ? [cid!] : await resolveGeneralCompanyIds(user!);
+          const contractsCompanyFilter = sql`cc.company_id IN (${sql.join((contractIds.length ? contractIds : [cid!]).map((c: string) => sql`${c}`), sql`, `)})`;
           result = showArchivedC
             ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} ${completedFilterC} ORDER BY cc.created_at DESC`)
             : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE ${contractsCompanyFilter} AND cc.is_archived IS NOT TRUE ${completedFilterC} ORDER BY cc.created_at DESC`);
@@ -16572,6 +16803,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-hub/contracts/:id/sign", requireAuth, async (req, res) => {
     try {
+      const ctr = (await loadOwnedResource("contractorContract", req.params.id)).row;
+      // A signer listed on the contract may also see its signing status.
+      const signUser = await storage.getUser(req.session.userId!);
+      const isSigner = !!ctr && !!signUser && ((await db.execute(sql`SELECT 1 FROM contract_signers WHERE contract_id = ${req.params.id} AND (user_id = ${signUser.id} OR (worker_id IS NOT NULL AND worker_id = ${signUser.workerId ?? null})) LIMIT 1`)).rows ?? []).length > 0;
+      if (!ctr) return res.status(404).json({ message: "Contract not found" });
+      if (!isSigner) {
+        const owned = await authorizeOwnedById(req, res, "contractorContract", req.params.id, { selfWorkerId: ctr.contractor_id });
+      if (!owned) return;
+      }
       const signers = await db.execute(sql`SELECT id, name, email, role, signer_role, signer_type, status, signed_at, signing_order FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY COALESCE(signing_order, "order", 1) ASC`);
       res.json({ contractId: req.params.id, signers: signers.rows });
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch signing details" }); }
@@ -19110,7 +19350,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/document-hub/assets", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const cid = (req.query.companyId as string) || user?.companyId || null;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const cid = listScope.companyId ?? null;
       const search = typeof req.query.search === "string" ? `%${req.query.search}%` : null;
       const result = await db.execute(sql`SELECT * FROM dam_documents WHERE (${cid ? sql`company_id = ${cid}` : sql`TRUE`}) ${search ? sql`AND (title ILIKE ${search} OR file_name ILIKE ${search} OR document_type ILIKE ${search})` : sql``} ORDER BY created_at DESC`);
       res.json(result.rows);
@@ -19247,7 +19489,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const showArchivedBool = showArchived === "true";
       let result;
       if (isAdmin) {
-        const cid = companyId || user?.companyId;
+        const listScope = await resolveListScope(req, res, companyId, { allowPlatformAll: true });
+        if (!listScope) return;
+        const cid = listScope.companyId;
         // Build folder→documentType mapping
         const folderTypeMap: Record<string, string[]> = {
           proposals: ["proposal_pdf", "proposal"],
@@ -20215,8 +20459,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/shift-offers", requireAuth, async (req, res) => {
     try {
-      const { companyId } = req.query as Record<string, string>;
-      const items = await storage.getShiftOffers(companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true, schedulingReach: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      // storage.getShiftOffers ignores companyId; scope through the offered shift's company.
+      let items = await storage.getShiftOffers(companyId);
+      if (!listScope.isPlatform || companyId) {
+        const allowed = companyId ? [companyId] : (await resolveSchedulingCompanyIds(listScope.user)).all;
+        const ok = allowed.length
+          ? new Set(((await db.execute(sql`SELECT so.id FROM shift_offers so JOIN schedules s ON s.id = so.schedule_id WHERE s.company_id IN (${sql.join(allowed.map((c) => sql`${c}`), sql`, `)})`)).rows as any[]).map((r) => r.id))
+          : new Set<string>();
+        items = items.filter((o: any) => ok.has(o.id));
+      }
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -20481,7 +20735,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/secondary-wage-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const items = await storage.getSecondaryWageGroups(companyId);
       res.json(items);
     } catch (error) {
@@ -20506,7 +20762,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.patch("/api/secondary-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const data = { ...req.body };
+      const owned = await authorizeOwnedById(req, res, "secondaryWageGroup", req.params.id);
+      if (!owned) return;
+      const data = stripOwnershipFields(req.body);
       if (data.description === "") data.description = null;
       if (data.hourlyRate === "") data.hourlyRate = "0";
       if (data.overtimeRate === "") data.overtimeRate = "0";
@@ -20520,6 +20778,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.delete("/api/secondary-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "secondaryWageGroup", req.params.id);
+      if (!owned) return;
       await storage.deleteSecondaryWageGroup(req.params.id as string);
       res.json({ message: "Secondary wage group deleted" });
     } catch (error) {
@@ -20557,6 +20817,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
   app.delete("/api/employee-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "employeeWageGroup", req.params.id);
+      if (!owned) return;
       await storage.deleteEmployeeWageGroup(req.params.id as string);
       res.json({ message: "Wage group assignment removed" });
     } catch (error) {
@@ -20567,7 +20829,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/currencies", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const items = await storage.getCurrencies(companyId);
       res.json(items);
     } catch (error) {
@@ -20647,7 +20911,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Recurring Schedules
   app.get("/api/recurring-schedules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true, schedulingReach: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const schedules = await storage.getRecurringSchedules(companyId);
       res.json(schedules);
     } catch (error) {
@@ -20674,12 +20940,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/recurring-schedules/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "recurringSchedule", req.params.id, { schedulingReach: true });
+      if (!owned) return;
       // Validate worker exists if workerId is being changed — cross-company is allowed
       if (req.body.workerId) {
         const recurWorker = await storage.getWorker(req.body.workerId);
         if (!recurWorker) return res.status(400).json({ message: "Worker not found" });
       }
-      const schedule = await storage.updateRecurringSchedule(req.params.id, req.body);
+      const recurBody = stripOwnershipFields(req.body);
+      if (req.body.workerId) {
+        // Reassignment stays within the actor's scheduling reach (PR 1 cross-company scheduling).
+        const target = await storage.getWorker(req.body.workerId);
+        if (!target || !(await canScheduleIntoCompany(owned.user, target.companyId))) return res.status(403).json({ message: "Worker is outside your scheduling scope" });
+        recurBody.workerId = req.body.workerId;
+      }
+      const schedule = await storage.updateRecurringSchedule(req.params.id, recurBody);
       if (!schedule) {
         return res.status(404).json({ message: "Recurring schedule not found" });
       }
@@ -20692,6 +20967,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/recurring-schedules/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "recurringSchedule", req.params.id, { schedulingReach: true });
+      if (!owned) return;
       await storage.deleteRecurringSchedule(req.params.id);
       res.json({ message: "Recurring schedule deleted" });
     } catch (error) {
@@ -20831,7 +21108,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/remittance-agencies", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const agencies = await storage.getRemittanceAgencies(companyId);
       res.json(agencies);
     } catch (error) {
@@ -21043,7 +21322,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/saved-reports", requireAuth, async (req, res) => {
     try {
-      const reports = await storage.getSavedReports();
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      let reports = await storage.getSavedReports();
+      if (!listScope.isPlatform || listScope.companyId) {
+        const reach = new Set(listScope.companyId && listScope.isPlatform ? [listScope.companyId] : await resolveGeneralCompanyIds(listScope.user));
+        reports = reports.filter((r: any) => (r.companyId && reach.has(r.companyId)) || (!r.companyId && r.createdBy === listScope.user.username));
+      }
       res.json(reports);
     } catch (error) {
       console.error(error);
@@ -21053,6 +21338,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/saved-reports/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "savedReport", req.params.id);
+      if (!owned) return;
       const report = await storage.getSavedReport(req.params.id as string);
       if (!report) return res.status(404).json({ message: "Report not found" });
       res.json(report);
@@ -21072,7 +21359,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         name,
         reportType,
         category,
-        companyId: companyId || null,
+        companyId: companyId || (await resolveTenantCompanyId((await storage.getUser(req.session.userId!))!)) || null,
         filters: filters || null,
         data: typeof data === "string" ? data : JSON.stringify(data),
         headers: typeof headers === "string" ? headers : JSON.stringify(headers),
@@ -21088,6 +21375,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/saved-reports/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "savedReport", req.params.id);
+      if (!owned) return;
       await storage.deleteSavedReport(req.params.id as string);
       res.json({ message: "Report deleted" });
     } catch (error) {
@@ -21098,7 +21387,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-stub-accounts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const accounts = await storage.getPayStubAccounts(companyId);
       res.json(accounts);
     } catch (error) {
@@ -21119,7 +21410,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/pay-stub-accounts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const account = await storage.updatePayStubAccount(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "payStubAccount", req.params.id);
+      if (!owned) return;
+      const account = await storage.updatePayStubAccount(req.params.id, stripOwnershipFields(req.body));
       if (!account) return res.status(404).json({ message: "Not found" });
       res.json(account);
     } catch (error) {
@@ -21130,6 +21423,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/pay-stub-accounts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payStubAccount", req.params.id);
+      if (!owned) return;
       await storage.deletePayStubAccount(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21182,7 +21477,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-stub-amendments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const amendments = await storage.getPayStubAmendments(companyId);
       res.json(amendments);
     } catch (error) {
@@ -21212,7 +21509,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/pay-stub-amendments/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const body = { ...req.body };
+      const owned = await authorizeOwnedById(req, res, "payStubAmendment", req.params.id);
+      if (!owned) return;
+      const body = stripOwnershipFields(req.body);
       // Auto-fill companyId from the worker if not provided
       if ((!body.companyId || body.companyId === "") && body.workerId) {
         const w = await storage.getWorker(body.workerId);
@@ -21229,6 +21528,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/pay-stub-amendments/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payStubAmendment", req.params.id);
+      if (!owned) return;
       await storage.deletePayStubAmendment(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21239,7 +21540,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-stub-transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const transactions = await storage.getPayStubTransactions(companyId);
       res.json(transactions);
     } catch (error) {
@@ -21270,6 +21573,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/pay-stub-transactions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payStubTransaction", req.params.id);
+      if (!owned) return;
       const { payStubTransactions: pstTable, payrollItems: piTable } = await import("../shared/schema.js");
       const [existing] = await db.select().from(pstTable).where(eq(pstTable.id, req.params.id));
       if (existing?.payrollItemId) {
@@ -21281,7 +21586,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }
         }
       }
-      const transaction = await storage.updatePayStubTransaction(req.params.id, req.body);
+      const transaction = await storage.updatePayStubTransaction(req.params.id, stripOwnershipFields(req.body));
       if (!transaction) return res.status(404).json({ message: "Not found" });
       res.json(transaction);
     } catch (error) {
@@ -21293,7 +21598,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Earning Types ─────────────────────────────────────────────────────────
   app.get("/api/earning-types", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const types = await storage.getEarningTypes(companyId);
       res.json(types);
@@ -21363,7 +21670,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Must be declared BEFORE /:id to avoid route conflict.
   app.get("/api/pay-period-schedules/resolve-period", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const payDate = queryStr(req.query.payDate);
       if (!companyId || !payDate) {
         return res.status(400).json({ message: "companyId and payDate are required" });
@@ -21397,7 +21706,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Deactivate all but the most-recently-updated active schedule ─────────
   app.post("/api/pay-period-schedules/deactivate-extras", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId) ?? req.body?.companyId;
+      const listScope = await resolveListScope(req, res, queryStr(req.query.companyId) ?? req.body?.companyId, { allowPlatformAll: false });
+      if (!listScope) return;
+      if (!listScope.isPlatform && !["admin", "manager"].includes(listScope.user.role || "") && !(listScope.user.role || "").startsWith("tenant_")) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const schedules = await storage.getPayPeriodSchedules(companyId);
       const active = schedules.filter(s => s.isActive);
@@ -21426,6 +21740,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/pay-period-schedules/:companyId/resolve-debug", requireAuth, async (req, res) => {
     try {
       const { companyId } = req.params;
+      const debugUser = await storage.getUser(req.session.userId!);
+      if (!(await canAccessStoredCompany(debugUser, companyId))) return res.status(403).json({ message: "You do not have access to this company" });
       const dateParam = queryStr(req.query.date) || new Date().toISOString().split("T")[0];
 
       const schedules = await storage.getPayPeriodSchedules(companyId);
@@ -21490,7 +21806,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/pay-period-schedules", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const schedules = await storage.getPayPeriodSchedules(companyId);
       res.json(schedules);
     } catch (error) {
@@ -21518,6 +21836,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/pay-period-schedules/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payPeriodSchedule", req.params.id);
+      if (!owned) return;
       const existing = await storage.getPayPeriodSchedule(req.params.id);
       if (!existing) return res.status(404).json({ message: "Not found" });
 
@@ -21574,6 +21894,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/pay-period-schedules/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payPeriodSchedule", req.params.id);
+      if (!owned) return;
       await storage.deletePayPeriodSchedule(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21585,7 +21907,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Employee Titles
   app.get("/api/employee-titles", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const titles = await storage.getEmployeeTitles(companyId);
       res.json(titles);
     } catch (error) {
@@ -21597,7 +21921,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/employee-titles", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const titleActor = await storage.getUser(req.session.userId!);
+      if (isPlatformCompanyBypassRole(titleActor?.role)) {
+        if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      } else {
+        // Tenants create titles in their own (or a granted) company — never universal rows.
+        const own = titleActor ? await resolveTenantCompanyId(titleActor) : null;
+        if (!data.companyId || data.companyId === "__universal__") data.companyId = own;
+        if (!data.companyId) return res.status(403).json({ message: "Your account is not scoped to a company" });
+      }
       const title = await storage.createEmployeeTitle(data);
       res.status(201).json(title);
     } catch (error) {
@@ -21608,8 +21940,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/employee-titles/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const data = { ...req.body };
-      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const owned = await authorizeOwnedById(req, res, "employeeTitle", req.params.id);
+      if (!owned) return;
+      // Only platform may re-scope a title (incl. to universal); a tenant PATCH can never
+      // NULL company_id and publish its row to every tenant.
+      const data = isPlatformCompanyBypassRole(owned.user.role) ? { ...req.body } : stripOwnershipFields(req.body);
+      if (isPlatformCompanyBypassRole(owned.user.role) && (!data.companyId || data.companyId === "__universal__")) data.companyId = null;
       const title = await storage.updateEmployeeTitle(req.params.id, data);
       if (!title) return res.status(404).json({ message: "Not found" });
       res.json(title);
@@ -21621,6 +21957,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/employee-titles/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "employeeTitle", req.params.id);
+      if (!owned) return;
       await storage.deleteEmployeeTitle(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21632,7 +21970,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Employee Groups
   app.get("/api/employee-groups", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const groups = await storage.getEmployeeGroups(companyId);
       res.json(groups);
     } catch (error) {
@@ -21653,7 +21993,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/employee-groups/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const group = await storage.updateEmployeeGroup(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "employeeGroup", req.params.id);
+      if (!owned) return;
+      const group = await storage.updateEmployeeGroup(req.params.id, stripOwnershipFields(req.body));
       if (!group) return res.status(404).json({ message: "Not found" });
       res.json(group);
     } catch (error) {
@@ -21664,6 +22006,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/employee-groups/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "employeeGroup", req.params.id);
+      if (!owned) return;
       await storage.deleteEmployeeGroup(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21813,7 +22157,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // New Hire Defaults
   app.get("/api/new-hire-defaults", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const defaults = await storage.getNewHireDefaults(companyId);
       res.json(defaults);
     } catch (error) {
@@ -21854,9 +22200,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Pay Formulas
-  app.get("/api/pay-formulas", requireAuth, async (_req, res) => {
+  app.get("/api/pay-formulas", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getPayFormulas();
+      const items = await scopeCompanyRows(req, res, await storage.getPayFormulas());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -21876,7 +22223,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/pay-formulas/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updatePayFormula(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "payFormula", req.params.id);
+      if (!owned) return;
+      const item = await storage.updatePayFormula(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -21887,6 +22236,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/pay-formulas/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "payFormula", req.params.id);
+      if (!owned) return;
       await storage.deletePayFormula(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21926,9 +22277,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Contributing Pay Codes
-  app.get("/api/contributing-pay-codes", requireAuth, async (_req, res) => {
+  app.get("/api/contributing-pay-codes", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getContributingPayCodes();
+      const items = await scopeCompanyRows(req, res, await storage.getContributingPayCodes());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -21948,7 +22300,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contributing-pay-codes/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateContributingPayCode(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "contributingPayCode", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateContributingPayCode(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -21959,6 +22313,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/contributing-pay-codes/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "contributingPayCode", req.params.id);
+      if (!owned) return;
       await storage.deleteContributingPayCode(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -21999,9 +22355,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Contributing Shifts
-  app.get("/api/contributing-shifts", requireAuth, async (_req, res) => {
+  app.get("/api/contributing-shifts", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getContributingShifts();
+      const items = await scopeCompanyRows(req, res, await storage.getContributingShifts());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22021,7 +22378,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contributing-shifts/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateContributingShift(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "contributingShift", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateContributingShift(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22032,6 +22391,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/contributing-shifts/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "contributingShift", req.params.id);
+      if (!owned) return;
       await storage.deleteContributingShift(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22071,9 +22432,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Regular Time Policies
-  app.get("/api/regular-time-policies", requireAuth, async (_req, res) => {
+  app.get("/api/regular-time-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getRegularTimePolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getRegularTimePolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22093,7 +22455,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/regular-time-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateRegularTimePolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "regularTimePolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateRegularTimePolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22104,6 +22468,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/regular-time-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "regularTimePolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteRegularTimePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22137,9 +22503,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Overtime Policies
-  app.get("/api/overtime-policies", requireAuth, async (_req, res) => {
+  app.get("/api/overtime-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getOvertimePolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getOvertimePolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22159,7 +22526,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/overtime-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateOvertimePolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "overtimePolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateOvertimePolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22170,6 +22539,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/overtime-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "overtimePolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteOvertimePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22204,9 +22575,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Premium Policies
-  app.get("/api/premium-policies", requireAuth, async (_req, res) => {
+  app.get("/api/premium-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getPremiumPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getPremiumPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22226,7 +22598,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/premium-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updatePremiumPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "premiumPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updatePremiumPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22237,6 +22611,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/premium-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "premiumPolicy", req.params.id);
+      if (!owned) return;
       await storage.deletePremiumPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22246,9 +22622,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Meal Policies
-  app.get("/api/meal-policies", requireAuth, async (_req, res) => {
+  app.get("/api/meal-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getMealPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getMealPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22268,7 +22645,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/meal-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateMealPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "mealPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateMealPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22279,6 +22658,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/meal-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "mealPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteMealPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22312,9 +22693,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Break Policies
-  app.get("/api/break-policies", requireAuth, async (_req, res) => {
+  app.get("/api/break-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getBreakPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getBreakPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22334,7 +22716,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/break-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateBreakPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "breakPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateBreakPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22345,6 +22729,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/break-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "breakPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteBreakPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22378,9 +22764,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Schedule Policies
-  app.get("/api/schedule-policies", requireAuth, async (_req, res) => {
+  app.get("/api/schedule-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getSchedulePolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getSchedulePolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22400,7 +22787,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/schedule-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateSchedulePolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "schedulePolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateSchedulePolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22411,6 +22800,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/schedule-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "schedulePolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteSchedulePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22420,9 +22811,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Exception Policies
-  app.get("/api/exception-policies", requireAuth, async (_req, res) => {
+  app.get("/api/exception-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getExceptionPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getExceptionPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22442,7 +22834,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/exception-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateExceptionPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "exceptionPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateExceptionPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22453,6 +22847,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/exception-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "exceptionPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteExceptionPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22462,9 +22858,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Accrual Policies
-  app.get("/api/accrual-policies", requireAuth, async (_req, res) => {
+  app.get("/api/accrual-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getAccrualPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getAccrualPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22484,7 +22881,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/accrual-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateAccrualPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "accrualPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateAccrualPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22495,6 +22894,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/accrual-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "accrualPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteAccrualPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22528,6 +22929,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/accrual-policy-milestones/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "accrualPolicyMilestone", req.params.id);
+      if (!owned) return;
       await storage.deleteAccrualPolicyMilestone(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22537,9 +22940,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Absence Policies
-  app.get("/api/absence-policies", requireAuth, async (_req, res) => {
+  app.get("/api/absence-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getAbsencePolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getAbsencePolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22559,7 +22963,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/absence-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateAbsencePolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "absencePolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateAbsencePolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22570,6 +22976,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/absence-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "absencePolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteAbsencePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22579,9 +22987,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Holiday Policies
-  app.get("/api/holiday-policies", requireAuth, async (_req, res) => {
+  app.get("/api/holiday-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getHolidayPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getHolidayPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22601,7 +23010,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/holiday-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateHolidayPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "holidayPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateHolidayPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22612,6 +23023,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/holiday-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "holidayPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteHolidayPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -22621,9 +23034,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Rounding Policies
-  app.get("/api/rounding-policies", requireAuth, async (_req, res) => {
+  app.get("/api/rounding-policies", requireAuth, async (req, res) => {
     try {
-      const items = await storage.getRoundingPolicies();
+      const items = await scopeCompanyRows(req, res, await storage.getRoundingPolicies());
+      if (!items) return;
       res.json(items);
     } catch (error) {
       console.error(error);
@@ -22643,7 +23057,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/rounding-policies/:id", requireRole("admin"), async (req, res) => {
     try {
-      const item = await storage.updateRoundingPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "roundingPolicy", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateRoundingPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
@@ -22654,6 +23070,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/rounding-policies/:id", requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "roundingPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteRoundingPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -23274,7 +23692,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Tax Wizard — Real Backend Calculations + Filing Snapshots ────────────
   app.get("/api/tax-wizard/snapshots", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const snapshots = await storage.getTaxFilingSnapshots(companyId);
       res.json(snapshots);
@@ -23418,6 +23838,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/tax-wizard/snapshots/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "taxFilingSnapshot", req.params.id);
+      if (!owned) return;
       const { status, notes, reviewedByUserId, approvedByUserId, filedByUserId } = req.body;
       const userId = req.session?.userId;
       const updates: any = {};
@@ -23436,6 +23858,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/tax-wizard/snapshots/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "taxFilingSnapshot", req.params.id);
+      if (!owned) return;
       await storage.deleteTaxFilingSnapshot(req.params.id);
       res.json({ message: "Deleted" });
     } catch (err) { res.status(500).json({ message: "Failed to delete snapshot" }); }
@@ -26322,7 +26746,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Schedule Preferences ───────────────────────────────────────────────────
   app.get("/api/schedule-preferences", requireAuth, async (req, res) => {
     try {
-      const { companyId, workerId } = req.query as Record<string, string>;
+      const { workerId: requestedWorkerId } = req.query as Record<string, string>;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true, schedulingReach: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      let workerId = requestedWorkerId;
+      if (!listScope.isPlatform && ["employee", "contractor"].includes(listScope.user.role || "")) {
+        if (!listScope.user.workerId) return res.json([]);
+        workerId = listScope.user.workerId;
+      }
       const items = await storage.getSchedulePreferences(companyId, workerId);
       res.json(items);
     } catch (e) { res.status(500).json({ message: "Failed to fetch schedule preferences" }); }
@@ -26339,7 +26771,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/schedule-preferences/:id", requireAuth, async (req, res) => {
     try {
-      const item = await storage.updateSchedulePreference(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "schedulePreference", req.params.id, { schedulingReach: true });
+      if (!owned) return;
+      const item = await storage.updateSchedulePreference(req.params.id, stripOwnershipFields(req.body));
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (e) { res.status(500).json({ message: "Failed to update schedule preference" }); }
@@ -26347,6 +26781,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/schedule-preferences/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "schedulePreference", req.params.id, { schedulingReach: true });
+      if (!owned) return;
       await storage.deleteSchedulePreference(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete schedule preference" }); }
@@ -26354,7 +26790,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/payroll-audit", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const issues: { severity: "error" | "warning" | "info"; category: string; message: string; entity?: string }[] = [];
 
       const companies = await storage.getCompanies();
@@ -26431,7 +26869,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Shift Marketplace Listings ────────────────────────────────────────────
   app.get("/api/marketplace/listings", requireAuth, requireFeature("tenant.schedule.marketplace"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true, schedulingReach: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const status = queryStr(req.query.status);
       const listings = await storage.getMarketplaceListings(companyId, status);
       res.json(listings);
@@ -26815,7 +27255,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Eligibility Rule Sets ───────────────────────────────────────────────
   app.get("/api/eligibility-rule-sets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const sets = await storage.getEligibilityRuleSets(companyId);
       res.json(sets);
     } catch (e) { res.status(500).json({ message: "Failed to fetch eligibility rule sets" }); }
@@ -26846,7 +27288,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Schedule Audit Logs ─────────────────────────────────────────────────
   app.get("/api/schedule-audit-logs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const limit = req.query.limit ? parseInt(queryStr(req.query.limit) ?? "0") : undefined;
       const logs = await storage.getScheduleAuditLogs(companyId, limit);
       res.json(logs);
@@ -26856,6 +27300,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Notification Preferences ────────────────────────────────────────────
   app.get("/api/notification-preferences/:workerId", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "worker", req.params.workerId, { selfWorkerId: req.params.workerId });
+      if (!owned) return;
       const prefs = await storage.getNotificationPreferences(req.params.workerId);
       res.json(prefs);
     } catch (e) { res.status(500).json({ message: "Failed to fetch notification preferences" }); }
@@ -28076,7 +28522,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/invoice-templates", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const rows = await storage.getInvoiceTemplates(companyId);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice templates") }); }
@@ -28091,7 +28539,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/invoice-templates/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
-      const r = await storage.updateInvoiceTemplate(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "invoiceTemplate", req.params.id);
+      if (!owned) return;
+      const r = await storage.updateInvoiceTemplate(req.params.id, stripOwnershipFields(req.body));
       if (!r) return res.status(404).json({ message: "Template not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update invoice template") }); }
@@ -28099,6 +28549,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/invoice-templates/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "invoiceTemplate", req.params.id);
+      if (!owned) return;
       await storage.deleteInvoiceTemplate(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete invoice template") }); }
@@ -28109,7 +28561,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/invoices", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getInvoices(companyId);
       res.json(rows);
@@ -28475,7 +28929,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getPayments(companyId);
       res.json(rows);
@@ -28505,7 +28961,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/payment-method-configs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       let configs = await storage.getPaymentMethodConfigs(companyId);
       if (configs.length === 0) {
@@ -28526,7 +28984,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/payment-method-configs/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
-      const result = await storage.updatePaymentMethodConfig(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "paymentMethodConfig", req.params.id);
+      if (!owned) return;
+      const result = await storage.updatePaymentMethodConfig(req.params.id, stripOwnershipFields(req.body));
       res.json(result);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update payment method config") }); }
   });
@@ -28540,6 +29000,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.delete("/api/payment-method-configs/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "paymentMethodConfig", req.params.id);
+      if (!owned) return;
       await storage.deletePaymentMethodConfig(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete payment method config") }); }
@@ -28888,7 +29350,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/recurring-billing", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getRecurringBillingProfiles(companyId);
       res.json(rows);
@@ -29434,7 +29898,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/document-folders/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
-      const r = await storage.updateDocumentFolder(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "documentFolder", req.params.id);
+      if (!owned) return;
+      const r = await storage.updateDocumentFolder(req.params.id, stripOwnershipFields(req.body));
       if (!r) return res.status(404).json({ message: "Folder not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update folder") }); }
@@ -29442,6 +29908,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.delete("/api/document-folders/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "documentFolder", req.params.id);
+      if (!owned) return;
       const folder = await storage.getDocumentFolder(req.params.id);
       if (!folder) return res.status(404).json({ message: "Folder not found" });
       const sessionCompanyId = await getSessionCompanyId(req);
@@ -29633,7 +30101,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/document-retention-policies/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
-      const r = await storage.updateDocumentRetentionPolicy(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "documentRetentionPolicy", req.params.id);
+      if (!owned) return;
+      const r = await storage.updateDocumentRetentionPolicy(req.params.id, stripOwnershipFields(req.body));
       if (!r) return res.status(404).json({ message: "Policy not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update retention policy") }); }
@@ -29641,6 +30111,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.delete("/api/document-retention-policies/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "documentRetentionPolicy", req.params.id);
+      if (!owned) return;
       await storage.deleteDocumentRetentionPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete retention policy") }); }
@@ -30035,7 +30507,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/invoice-approval-workflows/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
-      const r = await storage.updateInvoiceApprovalWorkflow(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "invoiceApprovalWorkflow", req.params.id);
+      if (!owned) return;
+      const r = await storage.updateInvoiceApprovalWorkflow(req.params.id, stripOwnershipFields(req.body));
       if (!r) return res.status(404).json({ message: "Workflow not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update invoice workflow") }); }
@@ -30046,7 +30520,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/automation-rules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
       const rows = await storage.getAutomationRules(companyId);
       res.json(rows);
@@ -30080,9 +30556,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ══════════════════════════════════════════════════════════════════════
   app.get("/api/notifications", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
-      const userId = queryStr(req.query.userId);
+      const requestedUserId = queryStr(req.query.userId);
+      const isNotifAdmin = listScope.isPlatform || ["admin", "manager"].includes(listScope.user.role || "") || (listScope.user.role || "").startsWith("tenant_");
+      const userId = isNotifAdmin ? requestedUserId : listScope.user.id;
       const rows = await storage.getNotifications(companyId, userId);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch notifications") }); }
@@ -30790,6 +31270,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.post("/api/app-doctor/reports/:id/analyze", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "appDoctorReport", req.params.id);
+      if (!owned) return;
       const report = await analyzeAppDoctorReport(String(req.params.id));
       if (!report) return res.status(404).json({ message: "Report not found" });
       res.json(report);
@@ -31165,6 +31647,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const companyId = isPlatform
         ? (typeof req.query.companyId === "string" ? req.query.companyId : undefined)
         : user?.companyId;
+      // SaaS PR 2B: a company-less non-platform actor is not a platform actor.
+      if (!isPlatform && !companyId) return res.status(403).json({ message: "Your account is not scoped to a company" });
       const rows = companyId
         ? pgRows<any>(await db.execute(sql`
             SELECT t.*, r.title as report_title, r.severity as report_severity, r.source as report_source
@@ -34071,7 +34555,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── Trade / Non-Cash Compensation ─────────────────────────────────────────
   app.get("/api/trade-transactions", requireAuth, requireFeature("tenant.finance.trade-compensation"), async (req: any, res) => {
     try {
-      const { companyId, status, year } = req.query;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      const { companyId: _requestedCompanyId, status, year } = req.query;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const rows = await storage.getTradeTransactions(companyId as string, status as string | undefined, year ? parseInt(year as string) : undefined);
       res.json(rows);
@@ -34080,7 +34567,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/trade-transactions/reporting-summary", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {
-      const { companyId, year } = req.query;
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
+      const { companyId: _requestedCompanyId, year } = req.query;
       if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
       const rows = await storage.getTradeReportingSummary(companyId as string, parseInt(year as string));
       res.json(rows);
@@ -34518,6 +35008,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/permissions/effective/:userId", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "user", req.params.userId);
+      if (!owned) return;
       const { checkPermission, getEffectivePermissions } = await import("./auth/authorization.js");
       const effectivePerms = await getEffectivePermissions(req.params.userId);
       res.json(effectivePerms);
@@ -35316,7 +35808,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ─── Agreement Templates ───────────────────────────────────────────────────
   app.get("/api/agreement-templates", requireAuth, async (req, res) => {
     try {
-      const companyId = queryStr(req.query.companyId);
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       const templates = await storage.getAgreementTemplates(companyId);
       res.json(templates);
     } catch (e) { res.status(500).json({ message: "Failed to fetch agreement templates" }); }
@@ -35356,7 +35850,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ─── Worker Agreements ─────────────────────────────────────────────────────
   app.get("/api/worker-agreements", requireAuth, async (req, res) => {
     try {
-      const { companyId, workerId } = req.query as { companyId: string; workerId?: string };
+      const { workerId } = req.query as { workerId?: string };
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const agreements = await storage.getWorkerAgreements(companyId, workerId);
       res.json(agreements);
@@ -35367,6 +35864,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const a = await storage.getWorkerAgreement(req.params.id);
       if (!a) return res.status(404).json({ message: "Agreement not found" });
+      const owned = await authorizeOwnedById(req, res, "workerAgreement", req.params.id, { selfWorkerId: a.workerId });
+      if (!owned) return;
       res.json(a);
     } catch (e) { res.status(500).json({ message: "Failed to fetch agreement" }); }
   });
@@ -35381,7 +35880,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/worker-agreements/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const a = await storage.updateWorkerAgreement(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "workerAgreement", req.params.id);
+      if (!owned) return;
+      const a = await storage.updateWorkerAgreement(req.params.id, stripOwnershipFields(req.body));
       if (!a) return res.status(404).json({ message: "Agreement not found" });
       res.json(a);
     } catch (e) { res.status(500).json({ message: "Failed to update agreement" }); }
@@ -35389,6 +35890,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.delete("/api/worker-agreements/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "workerAgreement", req.params.id);
+      if (!owned) return;
       await storage.deleteWorkerAgreement(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete agreement" }); }
@@ -35397,6 +35900,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Sign endpoint (admin/manager marks as signed on behalf, or triggered internally)
   app.post("/api/worker-agreements/:id/sign", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "workerAgreement", req.params.id);
+      if (!owned) return;
       const { signedByName, signatureData } = req.body;
       const a = await storage.updateWorkerAgreement(req.params.id, {
         status: "signed",
@@ -35414,10 +35919,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const user = await storage.getUser(req.session.userId!);
       // Managers can only see onboardings for their company
-      let companyId = queryStr(req.query.companyId);
-      if (user?.role === "manager" && user.companyId) {
-        companyId = user.companyId;
-      }
+      const listScope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: true });
+      if (!listScope) return;
+      const companyId = listScope.companyId;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const list = await storage.getWorkerOnboardings(companyId);
       res.json(list);
@@ -35482,7 +35986,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/worker-onboarding/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const o = await storage.updateWorkerOnboarding(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
+      if (!owned) return;
+      const o = await storage.updateWorkerOnboarding(req.params.id, stripOwnershipFields(req.body));
       if (!o) return res.status(404).json({ message: "Onboarding not found" });
       res.json(o);
     } catch (e) { res.status(500).json({ message: "Failed to update onboarding" }); }
@@ -35490,6 +35996,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.delete("/api/worker-onboarding/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
+      if (!owned) return;
       await storage.deleteWorkerOnboarding(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete onboarding" }); }
@@ -35498,6 +36006,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Regenerate invite token
   app.post("/api/worker-onboarding/:id/regenerate-token", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
+      if (!owned) return;
       const rawToken = crypto.randomBytes(32).toString("hex");
       const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -35510,6 +36020,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Review/approve/reject
   app.post("/api/worker-onboarding/:id/review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
+      if (!owned) return;
       const { action, notes } = req.body; // action: 'approve' | 'reject'
       if (!["approve", "reject"].includes(action)) return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
       const newStatus = action === "approve" ? "approved" : "rejected";
@@ -35605,7 +36117,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Update a step (admin)
   app.patch("/api/worker-onboarding/:id/steps/:stepId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const step = await storage.updateOnboardingStep(req.params.stepId, req.body);
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
+      if (!owned) return;
+      const stepOwner = await db.execute(sql`SELECT 1 FROM onboarding_steps WHERE id = ${req.params.stepId} AND onboarding_id = ${req.params.id}`);
+      if (!(stepOwner.rows ?? []).length) return res.status(404).json({ message: "Step not found" });
+      const step = await storage.updateOnboardingStep(req.params.stepId, stripOwnershipFields(req.body, ["onboardingId"]));
       if (!step) return res.status(404).json({ message: "Step not found" });
       res.json(step);
     } catch (e) { res.status(500).json({ message: "Failed to update step" }); }
@@ -35614,6 +36130,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Get documents for an onboarding
   app.get("/api/worker-onboarding/:id/documents", requireAuth, async (req, res) => {
     try {
+      const ob = (await loadOwnedResource("workerOnboarding", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id, { selfWorkerId: ob?.worker_id });
+      if (!owned) return;
       const docs = await storage.getWorkerOnboardingDocuments(req.params.id);
       res.json(docs);
     } catch (e) { res.status(500).json({ message: "Failed to fetch documents" }); }
@@ -35622,6 +36141,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Get audit log for an onboarding
   app.get("/api/worker-onboarding/:id/audit-log", requireAuth, async (req, res) => {
     try {
+      const ob = (await loadOwnedResource("workerOnboarding", req.params.id)).row;
+      const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id, { selfWorkerId: ob?.worker_id });
+      if (!owned) return;
       const log = await storage.getOnboardingAuditLog(req.params.id);
       res.json(log);
     } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
@@ -36092,13 +36614,17 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.patch("/api/biz-document-items/:id", requireAuth, async (req, res) => {
     try {
-      const item = await storage.updateBizDocumentItem(req.params.id, req.body);
+      const owned = await authorizeOwnedById(req, res, "bizDocumentItem", req.params.id);
+      if (!owned) return;
+      const item = await storage.updateBizDocumentItem(req.params.id, stripOwnershipFields(req.body, ["documentId"]));
       res.json(item);
     } catch (e) { res.status(500).json({ message: "Failed to update item" }); }
   });
 
   app.delete("/api/biz-document-items/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "bizDocumentItem", req.params.id);
+      if (!owned) return;
       await storage.deleteBizDocumentItem(req.params.id);
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete item" }); }
@@ -36135,6 +36661,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.delete("/api/biz-document-attachments/:id", requireAuth, async (req, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "bizDocumentAttachment", req.params.id);
+      if (!owned) return;
       await storage.deleteBizDocumentAttachment(req.params.id);
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
@@ -40490,6 +41018,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // PATCH endpoint to update legal basis and purpose description on a retention policy
   app.patch("/api/document-retention-policies/:id/legal-basis", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
+      const owned = await authorizeOwnedById(req, res, "documentRetentionPolicy", req.params.id);
+      if (!owned) return;
       const userId = req.session.userId as string;
       const { id } = req.params;
       const { legalBasis, purposeDescription } = req.body;

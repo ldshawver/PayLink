@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-24",
+  "generatedAt": "2026-10-06",
   "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "summary": {
     "PASS": 38,
@@ -248,7 +248,7 @@
         {
           "case": "2. Tenant A admin explicitly requests ?companyId=<Tenant B> — confirms the isTenantSummaryUser override (server/routes.ts:1914-1917) actually holds under a live attempt, not just from reading the source",
           "disposition": "PASS",
-          "detail": "status=200 runCount=1 grossPay=3000 (still scoped to Tenant A despite the injection attempt)"
+          "detail": "status=403 (foreign companyId denied before the query; no Tenant B data)"
         },
         {
           "case": "3. Unauthorized same-tenant role (employee)",

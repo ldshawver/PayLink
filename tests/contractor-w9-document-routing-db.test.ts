@@ -272,7 +272,9 @@ async function main() {
 
     console.log("\n── 10. A contractor from another tenant cannot be read / uploaded to / downloaded / changed ──");
     const xList = await listDocs(sAdminB, contractorA);
-    check("cross-tenant list → 403 CROSS_TENANT", xList.status === 403 && (xList.body as any)?.error === "CROSS_TENANT", `status=${xList.status}`);
+    // SaaS PR 2B: a foreign ?companyId may be refused earlier by the global supplied-companyId gate.
+    const refusedByGate = (r: { status: number; body: unknown }) => r.status === 403 && /do not have access to this company/.test(JSON.stringify(r.body));
+    check("cross-tenant list → 403 CROSS_TENANT (or supplied-companyId gate)", xList.status === 403 && ((xList.body as any)?.error === "CROSS_TENANT" || refusedByGate(xList)), `status=${xList.status}`);
     const xUp = await uploadFile(base, sAdminB, "/api/contractor-documents/upload",
       { companyId: companyA, workerId: contractorA, documentType: "w9" }, { name: "x.pdf", type: "application/pdf", bytes: tinyPdf("x") });
     check("cross-tenant upload → 403", xUp.status === 403, `status=${xUp.status}`);
@@ -291,7 +293,7 @@ async function main() {
       { companyId: companyB, workerId: contractorA, documentType: "w9" }, { name: "m.pdf", type: "application/pdf", bytes: tinyPdf("mm") });
     check("upload with companyId != contractor's company → 400 COMPANY_MISMATCH", mm.status === 400 && mm.body?.error === "COMPANY_MISMATCH", `status=${mm.status} body=${JSON.stringify(mm.body)}`);
     const mmList = await apiRequest(base, "GET", `/api/contractor-documents?companyId=${companyB}&workerId=${contractorA}`, sAdminA);
-    check("list with mismatched companyId → 400 COMPANY_MISMATCH", (mmList.body as any)?.error === "COMPANY_MISMATCH");
+    check("list with mismatched companyId → 400 COMPANY_MISMATCH (or supplied-companyId gate 403)", (mmList.body as any)?.error === "COMPANY_MISMATCH" || refusedByGate(mmList));
 
     console.log("\n── 12. Unauthorized roles cannot read or upload W-9s ──");
     const sList = await listDocs(sStaffA, contractorA);

@@ -164,7 +164,11 @@ async function main() {
     // arbitrary company's id in the body must still be rejected, not silently
     // routed through canAccessCompany()'s bypass.
     const r6c = await apiRequest(base, "POST", "/api/remittance-sources", sNoCo, formPayload(`Synthetic NoCo Explicit ${sfx}`, { companyId: companyB }));
-    check("companyless admin naming another tenant's company explicitly → still 400, not 201/403-via-bypass", r6c.status === 400 && (r6c.body as any)?.error === "INVALID_COMPANY_CONTEXT", `status=${r6c.status} body=${JSON.stringify(r6c.body)}`);
+    // SaaS PR 2B: when the body is JSON the global supplied-companyId gate refuses the
+    // foreign company first (403 "You do not have access to this company"); otherwise the
+    // handler's INVALID_COMPANY_CONTEXT 400 applies. Either way nothing is created (next check).
+    const r6cGate = r6c.status === 403 && /do not have access to this company/.test(JSON.stringify(r6c.body));
+    check("companyless admin naming another tenant's company explicitly → rejected (400 handler or 403 gate), not 201", (r6c.status === 400 && (r6c.body as any)?.error === "INVALID_COMPANY_CONTEXT") || r6cGate, `status=${r6c.status} body=${JSON.stringify(r6c.body)}`);
     check("no row created for company B from the companyless-admin bypass attempt", (await countSources(companyB)) === 0);
 
     console.log("\n── 7. Platform super-admin: explicit, validated acting company ──");
