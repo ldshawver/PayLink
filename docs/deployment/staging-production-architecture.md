@@ -93,6 +93,29 @@ CloudPanel owns reverse proxy configuration. Deployment workflows must not requi
 - Restart staging with `pm2 restart paylink-staging --update-env` if staging rollback is needed.
 - Verify `curl https://app.mypaylink.app/health` after rollback.
 
+### Pre-deploy backup verification and restore
+
+`deploy-production.yml` aborts **before** checkout and the PM2 swap unless the pre-deploy backup
+(`predeploy-<tag>-<UTC>.sql.gz`, plain-format `pg_dump`, gzip) passes all of: non-empty, contains the
+`-- PostgreSQL database dump complete` marker, `gzip -t`, and a `.sql.gz.sha256` checksum is written
+next to it. The job log prints the backup path; record it.
+
+Code rollback (no data change): re-run `deploy-production.yml` with `release_tag=<previous tag>`.
+A release with no migrations does **not** by itself make a database restore unnecessary — if the
+failed release wrote bad data (or a background job did), a restore may still be required. Decide
+with the Global Admin; a restore discards every write made after the backup was taken.
+
+Restore (Global Admin approval required; restore into a fresh database, never over the live one):
+
+1. `sha256sum -c <backup>.sql.gz.sha256 && gzip -t <backup>.sql.gz`
+2. Stop writers: `pm2 stop paylink`.
+3. Create an empty database (e.g. `mypaylink_restore_<UTC>`) owned by the app role.
+4. `gunzip -c <backup>.sql.gz | psql -v ON_ERROR_STOP=1 -d <restore db>` (psql ≥ 16.10 understands the
+   `\restrict` lines newer `pg_dump` writes).
+5. Spot-check row counts of `companies`, `workers`, `payroll_runs`, `payments` against expectations.
+6. Point `DATABASE_URL` in `/etc/paylink/.env` at the restored database (keep the old one for forensics),
+   redeploy the previous tag, and verify `/health` reports `database: connected`.
+
 ## Migration safety
 
 - Prefer reversible migrations whenever possible.
