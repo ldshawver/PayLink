@@ -34254,6 +34254,41 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (scope === "company" && !effectiveCompanyId) {
         return res.status(400).json({ message: "Company ID is required for company-wide messages" });
       }
+      if (scope === "one" && !recipientWorkerId) {
+        return res.status(400).json({ message: "Recipient required for individual messages" });
+      }
+
+      // Tenant scoping: a non-platform sender only reaches workers its own tenant may
+      // message (same set GET /api/messages/workers lists). "sitewide" selects every
+      // worker on the platform, so no company account may use it. Checked before the
+      // message row is written so a rejected send leaves nothing behind.
+      if (!isPlatformCompanyBypassRole(userRole)) {
+        if (!user || !senderCompanyId) {
+          return res.status(403).json({ message: "No company scope for messaging" });
+        }
+        if (scope === "sitewide") {
+          return res.status(403).json({ message: "Site-wide messages are limited to platform administrators" });
+        }
+        if (scope === "company" && !(await canAccessCompany(user, effectiveCompanyId))) {
+          return res.status(403).json({ message: "Access denied to this company" });
+        }
+        if (scope === "one") {
+          const target = await storage.getWorker(String(recipientWorkerId));
+          const reachable = !!target && (
+            target.companyId === senderCompanyId
+            || (await canAccessCompany(user, target.companyId))
+            || ((await db.execute(sql`
+                SELECT 1 FROM contractor_proposals WHERE company_id = ${senderCompanyId} AND contractor_id = ${target.id}
+                UNION ALL
+                SELECT 1 FROM contractor_contracts WHERE company_id = ${senderCompanyId} AND contractor_id = ${target.id}
+                UNION ALL
+                SELECT 1 FROM contractor_invoices WHERE company_id = ${senderCompanyId} AND contractor_id = ${target.id}
+                LIMIT 1
+              `)).rows?.length ?? 0) > 0
+          );
+          if (!reachable) return res.status(404).json({ message: "Recipient not found" });
+        }
+      }
 
       // Create message record — persist sender_name and sender_user_id for stable attribution.
       // Explicitly set created_at to UTC now so the timestamp reflects true send time
@@ -34270,7 +34305,6 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       // Determine recipients
       let recipientWorkers: any[] = [];
       if (scope === "one") {
-        if (!recipientWorkerId) return res.status(400).json({ message: "Recipient required for individual messages" });
         const rw = await db.execute(sql`
           SELECT id, first_name, last_name, email, mobile_phone, phone, preferences
           FROM workers
