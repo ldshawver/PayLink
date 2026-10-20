@@ -17,6 +17,7 @@ import {
   type DemoCleanupCandidate,
   type DemoCleanupThrottleState,
 } from "./demo-cleanup";
+import { purgeExpiredDemoCompany } from "./demo-tenant-purge";
 import { mapSubscriptionStatusToTenantStatus } from "../tenant-context";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
@@ -105,8 +106,8 @@ async function jobContractorReminders(): Promise<void> {
  * historical parents restored by an integrity repair. They are excluded from
  * eligibility in runDemoCleanup() and are never deleted or mutated; their
  * dependent records and the NO ACTION foreign keys stay intact. Each remaining
- * candidate is deleted in its own statement so one FK-blocked company cannot
- * abort the others. See server/workers/demo-cleanup.ts.
+ * candidate is purged in its own transaction so one refused company cannot
+ * abort the others. See server/workers/demo-cleanup.ts and demo-tenant-purge.ts.
  */
 const demoCleanupThrottle: DemoCleanupThrottleState = { lastProtectedSignature: null };
 
@@ -123,17 +124,14 @@ async function jobDemoCleanup(): Promise<void> {
       `);
       return ((result as any).rows ?? []) as DemoCleanupCandidate[];
     },
+    // One transaction per company: the demo and every row that depends on it
+    // are removed together, or nothing is (see server/workers/demo-tenant-purge.ts).
     deleteCompany: async (id: string) => {
-      const result = await db.execute(sql`
-        DELETE FROM companies
-        WHERE  id         = ${id}
-          AND  is_demo    = TRUE
-          AND  trial_end  IS NOT NULL
-          AND  trial_end  < NOW() - INTERVAL '2 hours'
-          AND  name NOT IN ('Demo Corp', '__demo_provision__')
-          AND  (gate_override_reason IS NULL OR gate_override_reason NOT LIKE 'integrity-repair%')
-      `);
-      return (result as any).rowCount ?? 0;
+      const result = await db.transaction((tx) => purgeExpiredDemoCompany(tx, id));
+      if (result.companiesRemoved > 0) {
+        console.log(`[Orchestrator][DemoCleanup] Purged expired demo company ${id} (${result.rowsRemoved} rows).`);
+      }
+      return result.companiesRemoved;
     },
     log:  (message: string) => console.log(`[Orchestrator][DemoCleanup] ${message}`),
     warn: (message: string) => console.warn(`[Orchestrator][DemoCleanup] ${message}`),

@@ -198,7 +198,8 @@ ok("marker is the documented 'integrity-repair' prefix", INTEGRITY_REPAIR_MARKER
 {
   const core = fs.readFileSync("server/workers/demo-cleanup.ts", "utf8");
   const orch = fs.readFileSync("server/workers/orchestrator.ts", "utf8");
-  const both = core + "\n" + orch;
+  const purge = fs.readFileSync("server/workers/demo-tenant-purge.ts", "utf8");
+  const both = core + "\n" + orch + "\n" + purge;
 
   ok(
     "no cascade / constraint mutation / trigger bypass introduced",
@@ -207,22 +208,33 @@ ok("marker is the documented 'integrity-repair' prefix", INTEGRITY_REPAIR_MARKER
     ),
   );
   ok(
-    "cleanup still only ever DELETEs from the companies table",
-    (both.match(/DELETE\s+FROM\s+(\w+)/gi) ?? []).every((m) => /companies/i.test(m)),
+    "orchestrator + core never DELETE directly — removal only goes through the tenant-scoped purge",
+    !/DELETE\s+FROM/i.test(core + "\n" + orch.slice(orch.indexOf("async function jobDemoCleanup"), orch.indexOf("Tenant Status Mirror Reconcile"))),
   );
   ok(
-    "per-company DELETE keeps the full demo-expiry predicate",
-    /DELETE FROM companies[\s\S]*?is_demo\s+=\s+TRUE[\s\S]*?trial_end\s+IS NOT NULL[\s\S]*?INTERVAL '2 hours'[\s\S]*?name NOT IN \('Demo Corp', '__demo_provision__'\)/.test(
-      orch,
+    "purge DELETEs are only the ctid-scoped dependent-row statement or tenant-core rows keyed to this company",
+    (purge.match(/DELETE\s+FROM\s+(\$\{ident\(t\)\}|\w+)/gi) ?? []).every((m) =>
+      /\$\{ident\(t\)\}|company_user_access|onboarding_progress|tenant_license_events|tenant_licenses|tenant_companies|tenants/.test(m))
+    && /WHERE ctid = ANY\(\$\{purgeRows\(t\)\}\)/.test(purge),
+  );
+  ok(
+    "purge re-asserts the full demo-expiry predicate on the company row FOR UPDATE",
+    /SELECT id FROM companies[\s\S]*?is_demo\s+=\s+TRUE[\s\S]*?trial_end\s+IS NOT NULL[\s\S]*?INTERVAL '2 hours'[\s\S]*?name NOT IN \('Demo Corp', '__demo_provision__'\)[\s\S]*?FOR UPDATE/.test(
+      purge,
     ),
   );
   ok(
-    "per-company DELETE also refuses integrity-repair rows in SQL (defence in depth)",
-    /gate_override_reason NOT LIKE 'integrity-repair%'/.test(orch),
+    "purge also refuses integrity-repair rows in SQL (defence in depth)",
+    /gate_override_reason NOT LIKE 'integrity-repair%'/.test(purge),
   );
   ok(
-    "candidates are processed one id at a time (no multi-row companies DELETE without an id bound)",
-    /deleteCompany:\s*async \(id: string\)/.test(orch) && /WHERE\s+id\s+=\s+\$\{id\}/.test(orch),
+    "candidates are processed one id at a time, each in its own transaction",
+    /deleteCompany:\s*async \(id: string\)/.test(orch) && /db\.transaction\(\(tx\) => purgeExpiredDemoCompany\(tx, id\)\)/.test(orch),
+  );
+  ok(
+    "purge walks foreign keys parent → child only and refuses rows of another company",
+    /WHERE \(\$\{childTuple\}\) IN \(SELECT \$\{parentTuple\} FROM \$\{ident\(e\.parent\)\}/.test(purge)
+    && /throw new DemoPurgeRefusedError\(`\$\{t\} row of another company depends on this demo`\)/.test(purge),
   );
 }
 
