@@ -99,8 +99,17 @@ jobs:
             echo "Creating pre-deploy database backup"
             pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
             test -s "$BACKUP_FILE"
+            # Integrity gate: a plain-format dump that ran to completion ends with this
+            # marker (pg_dump >= 16.10 follows it with a \unrestrict line). Abort the
+            # deploy before any app change if it is missing or the gzip does not verify.
+            if [ "$(tail -n 10 "$BACKUP_FILE" | grep -c -- '-- PostgreSQL database dump complete')" -lt 1 ]; then
+              echo "ERROR: pre-deploy backup is incomplete (no completion marker); aborting deploy" >&2
+              exit 1
+            fi
             gzip -f "$BACKUP_FILE"
-            echo "Database backup created: ${BACKUP_FILE}.gz"
+            gzip -t "${BACKUP_FILE}.gz"
+            sha256sum "${BACKUP_FILE}.gz" > "${BACKUP_FILE}.gz.sha256"
+            echo "Database backup created and verified: ${BACKUP_FILE}.gz ($(du -h "${BACKUP_FILE}.gz" | cut -f1), sha256 $(cut -c1-16 "${BACKUP_FILE}.gz.sha256"))"
 
             cd "$APP_PATH"
             git fetch origin --tags
