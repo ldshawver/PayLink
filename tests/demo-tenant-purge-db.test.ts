@@ -51,7 +51,7 @@ async function main() {
   process.env.DATABASE_URL = url;
   const { db } = await import("../server/db");
   const { provisionDemoTenant } = await import("../server/demo-seed");
-  const { purgeExpiredDemoCompany, DemoPurgeRefusedError } = await import("../server/workers/demo-tenant-purge");
+  const { purgeExpiredDemoCompany, purgeExpiredDemoCompanyInTransaction, DemoPurgeRefusedError } = await import("../server/workers/demo-tenant-purge");
   const { runDemoCleanup } = await import("../server/workers/demo-cleanup");
 
   const tables = (await q(`SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'`)).rows.map((r) => r.table_name as string);
@@ -122,14 +122,14 @@ async function main() {
     const crossId = (await q(`INSERT INTO check_print_audit_logs (payroll_run_id, company_id) VALUES ($1,$2) RETURNING id`, [D1.payrollRunId, D2.companyId])).rows[0].id;
     const beforeRefusal = await counts();
     let refused: unknown;
-    try { await db.transaction((tx) => purgeExpiredDemoCompany(tx, D1.companyId)); } catch (e) { refused = e; }
+    try { await purgeExpiredDemoCompanyInTransaction(db, D1.companyId); } catch (e) { refused = e; }
     check("purge(D1) throws DemoPurgeRefusedError naming the table", refused instanceof DemoPurgeRefusedError && /check_print_audit_logs/.test((refused as Error).message), String(refused));
     check("…and rolls back completely (every table's row count unchanged)", Object.keys(diff(beforeRefusal, await counts())).length === 0, JSON.stringify(diff(beforeRefusal, await counts())));
     await q(`DELETE FROM check_print_audit_logs WHERE id = $1`, [crossId]);
     const crossUser = (await q(`INSERT INTO check_print_audit_logs (initiated_by_user_id, company_id) VALUES ($1,$2) RETURNING id`, [D1.adminUserId, D2.companyId])).rows[0].id;
     const beforeRefusal2 = await counts();
     let refused2: unknown;
-    try { await db.transaction((tx) => purgeExpiredDemoCompany(tx, D1.companyId)); } catch (e) { refused2 = e; }
+    try { await purgeExpiredDemoCompanyInTransaction(db, D1.companyId); } catch (e) { refused2 = e; }
     check("another company's row referencing a demo USER → refused too", refused2 instanceof DemoPurgeRefusedError, String(refused2));
     check("…rolled back completely", Object.keys(diff(beforeRefusal2, await counts())).length === 0);
     await q(`DELETE FROM check_print_audit_logs WHERE id = $1`, [crossUser]);
@@ -147,7 +147,7 @@ async function main() {
         WHERE is_demo = TRUE AND trial_end IS NOT NULL AND trial_end < NOW() - INTERVAL '2 hours'
           AND name NOT IN ('Demo Corp', '__demo_provision__')`)).rows,
       deleteCompany: async (id) => {
-        const r = await db.transaction((tx) => purgeExpiredDemoCompany(tx, id));
+        const r = await purgeExpiredDemoCompanyInTransaction(db, id);
         for (const [t, n] of Object.entries(r.byTable)) byTable[t] = (byTable[t] ?? 0) + n;
         return r.companiesRemoved;
       },
@@ -182,16 +182,62 @@ async function main() {
     const survivorRows = await Promise.all(survivors.map((id) => rowsOwnedBy(id)));
     check("surviving demos keep their full data (accrual + payroll + tenant core)", survivorRows.every((r) => r.accrual_accounts > 0 && r.payroll_runs > 0 && r.company_user_access === 1 && r.tenant_licenses === 1));
 
+    // ── 6b. never a paying / trial / converted tenant ─────────────────────
+    console.log("\n6b. non-demo, billing, trial-tenant and licensed companies are preserved");
+    const NP = await provision("p");                       // converted to a real company (is_demo = FALSE)
+    const NB = await provision("q");                       // billing configured
+    const NT = await provision("r");                       // linked to a trial tenant
+    const NL = await provision("s");                       // holds a trial-signup license
+    const NU = await provision("u");                       // has a platform account
+    for (const x of [NP, NB, NT, NL, NU]) await expire(x.companyId);
+    await q(`UPDATE companies SET is_demo = FALSE WHERE id = $1`, [NP.companyId]);
+    await q(`UPDATE companies SET billing_active = TRUE WHERE id = $1`, [NB.companyId]);
+    await q(`UPDATE tenants SET status = 'trial' WHERE id = $1`, [await tenantOf(NT.companyId)]);
+    await q(`UPDATE tenant_licenses SET source = 'trial_signup', status = 'trialing' WHERE company_id = $1`, [NL.companyId]);
+    await q(`UPDATE users SET role = 'platform_admin' WHERE id = $1`, [NU.adminUserId]);
+    const ownedBefore = await Promise.all([NP, NB, NT, NL, NU].map((x) => rowsOwnedBy(x.companyId)));
+    const beforeNeg = await counts();
+    const np = await purgeExpiredDemoCompanyInTransaction(db, NP.companyId);
+    check("non-demo company (expired trial_end): purge is a no-op", np.companiesRemoved === 0 && np.rowsRemoved === 0);
+    for (const [label, x, re] of [
+      ["billing_active", NB, /billing/],
+      ["trial tenant", NT, /'trial' tenant/],
+      ["trial-signup license", NL, /non-demo license/],
+      ["platform account", NU, /platform account/],
+    ] as const) {
+      let err: unknown;
+      try { await purgeExpiredDemoCompanyInTransaction(db, x.companyId); } catch (e) { err = e; }
+      check(`${label}: refused`, err instanceof DemoPurgeRefusedError && re.test((err as Error).message), String(err));
+    }
+    let rcErr: unknown;
+    try { await db.transaction((tx) => purgeExpiredDemoCompany(tx, NB.companyId)); } catch (e) { rcErr = e; }
+    check("READ COMMITTED caller: refused before touching anything", rcErr instanceof DemoPurgeRefusedError && /REPEATABLE READ/.test((rcErr as Error).message), String(rcErr));
+    const negWarnings: string[] = [];
+    const negRun = await runDemoCleanup({
+      selectCandidates: async () => (await q(`
+        SELECT id, name, gate_override_reason FROM companies
+        WHERE is_demo = TRUE AND trial_end IS NOT NULL AND trial_end < NOW() - INTERVAL '2 hours'
+          AND name NOT IN ('Demo Corp', '__demo_provision__') AND id = ANY($1)`, [[NP, NB, NT, NL, NU].map((x) => x.companyId)])).rows,
+      deleteCompany: async (id) => (await purgeExpiredDemoCompanyInTransaction(db, id)).companiesRemoved,
+      log: () => {},
+      warn: (m) => negWarnings.push(m),
+      throttle: { lastProtectedSignature: null },
+    });
+    check("DemoCleanup: non-demo never selected, the 4 guarded demos refused, none removed", negRun.removed === 0 && negRun.failed === 4, JSON.stringify(negRun));
+    check("every table's row count unchanged", Object.keys(diff(beforeNeg, await counts())).length === 0, JSON.stringify(diff(beforeNeg, await counts())));
+    const ownedAfter = await Promise.all([NP, NB, NT, NL, NU].map((x) => rowsOwnedBy(x.companyId)));
+    check("all five companies keep every owned row", JSON.stringify(ownedAfter) === JSON.stringify(ownedBefore));
+
     // ── 7. concurrency ────────────────────────────────────────────────────
     console.log("\n7. concurrent purges of one company");
     const D5 = await provision("g");
     await expire(D5.companyId);
-    const race = await Promise.allSettled([1, 2, 3].map(() => db.transaction((tx) => purgeExpiredDemoCompany(tx, D5.companyId))));
+    const race = await Promise.allSettled([1, 2, 3].map(() => purgeExpiredDemoCompanyInTransaction(db, D5.companyId)));
     const removedCounts = race.map((r) => (r.status === "fulfilled" ? r.value.companiesRemoved : -1));
     check("exactly one purge removes it, the others see nothing to do, no errors", removedCounts.filter((n) => n === 1).length === 1 && removedCounts.filter((n) => n === 0).length === 2, JSON.stringify(race.map((r) => r.status === "fulfilled" ? r.value.companiesRemoved : String((r as any).reason))));
-    const again = await db.transaction((tx) => purgeExpiredDemoCompany(tx, D5.companyId));
+    const again = await purgeExpiredDemoCompanyInTransaction(db, D5.companyId);
     check("purging an already-removed company is a no-op", again.companiesRemoved === 0 && again.rowsRemoved === 0);
-    const live = await db.transaction((tx) => purgeExpiredDemoCompany(tx, D3.companyId));
+    const live = await purgeExpiredDemoCompanyInTransaction(db, D3.companyId);
     check("purging a non-expired demo directly is a no-op", live.companiesRemoved === 0 && (await companyExists(D3.companyId)));
   } finally {
     await pool.end();

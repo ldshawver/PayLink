@@ -17,7 +17,7 @@ import {
   type DemoCleanupCandidate,
   type DemoCleanupThrottleState,
 } from "./demo-cleanup";
-import { purgeExpiredDemoCompany } from "./demo-tenant-purge";
+import { purgeExpiredDemoCompanyInTransaction } from "./demo-tenant-purge";
 import { mapSubscriptionStatusToTenantStatus } from "../tenant-context";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
@@ -127,7 +127,7 @@ async function jobDemoCleanup(): Promise<void> {
     // One transaction per company: the demo and every row that depends on it
     // are removed together, or nothing is (see server/workers/demo-tenant-purge.ts).
     deleteCompany: async (id: string) => {
-      const result = await db.transaction((tx) => purgeExpiredDemoCompany(tx, id));
+      const result = await purgeExpiredDemoCompanyInTransaction(db, id);
       if (result.companiesRemoved > 0) {
         console.log(`[Orchestrator][DemoCleanup] Purged expired demo company ${id} (${result.rowsRemoved} rows).`);
       }

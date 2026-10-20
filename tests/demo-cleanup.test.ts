@@ -219,7 +219,7 @@ ok("marker is the documented 'integrity-repair' prefix", INTEGRITY_REPAIR_MARKER
   );
   ok(
     "purge re-asserts the full demo-expiry predicate on the company row FOR UPDATE",
-    /SELECT id FROM companies[\s\S]*?is_demo\s+=\s+TRUE[\s\S]*?trial_end\s+IS NOT NULL[\s\S]*?INTERVAL '2 hours'[\s\S]*?name NOT IN \('Demo Corp', '__demo_provision__'\)[\s\S]*?FOR UPDATE/.test(
+    /SELECT id, billing_active, payment_method_on_file, stripe_financial_account_id FROM companies[\s\S]*?is_demo\s+=\s+TRUE[\s\S]*?trial_end\s+IS NOT NULL[\s\S]*?INTERVAL '2 hours'[\s\S]*?name NOT IN \('Demo Corp', '__demo_provision__'\)[\s\S]*?FOR UPDATE/.test(
       purge,
     ),
   );
@@ -229,7 +229,7 @@ ok("marker is the documented 'integrity-repair' prefix", INTEGRITY_REPAIR_MARKER
   );
   ok(
     "candidates are processed one id at a time, each in its own transaction",
-    /deleteCompany:\s*async \(id: string\)/.test(orch) && /db\.transaction\(\(tx\) => purgeExpiredDemoCompany\(tx, id\)\)/.test(orch),
+    /deleteCompany:\s*async \(id: string\)/.test(orch) && /purgeExpiredDemoCompanyInTransaction\(db, id\)/.test(orch),
   );
   ok(
     "purge walks foreign keys parent → child only and refuses rows of another company",

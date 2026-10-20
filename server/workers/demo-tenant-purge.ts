@@ -7,9 +7,12 @@
  * payment), so deleting just the company row is rejected for every provisioned
  * demo and expired demos accumulate (and stay loginable).
  *
- * How (all inside the caller's transaction — any refusal or error rolls back
- * everything, so a demo is either fully removed or left exactly as it was):
- *   1. Re-assert the demo-expiry predicate on the company row FOR UPDATE.
+ * How (all inside the caller's REPEATABLE READ transaction — any refusal or
+ * error rolls back everything, so a demo is either fully removed or left
+ * exactly as it was):
+ *   1. Re-assert the demo-expiry predicate on the company row FOR UPDATE, and
+ *      refuse billing flags, a non-demo or shared tenant, a non-demo license
+ *      or a platform account.
  *   2. Collect the exact rows that depend on it — starting from the company row
  *      and the demo's own users (users.company_id has no foreign key) — by
  *      walking foreign keys from parent to CHILD only (NO ACTION / RESTRICT / CASCADE edges, read from
@@ -60,14 +63,42 @@ interface FkEdge {
   parent_cols: string[];
 }
 
+type Db = { transaction: <T>(fn: (tx: any) => Promise<T>, config?: { isolationLevel?: "repeatable read" }) => Promise<T> };
+
+const pgCode = (e: any): string | undefined => e?.code ?? e?.cause?.code;
+
+/**
+ * Purge one expired demo in its own REPEATABLE READ transaction. A purge that
+ * loses a race with a concurrent purge (or any concurrent write to its rows)
+ * gets a serialization failure; it is retried once on a fresh snapshot, where
+ * an already-removed demo is simply a no-op.
+ */
+export async function purgeExpiredDemoCompanyInTransaction(db: Db, companyId: string): Promise<DemoPurgeResult> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await db.transaction((tx) => purgeExpiredDemoCompany(tx, companyId), { isolationLevel: "repeatable read" });
+    } catch (e) {
+      if (attempt === 0 && pgCode(e) === "40001") continue;
+      throw e;
+    }
+  }
+}
+
 export async function purgeExpiredDemoCompany(tx: Tx, companyId: string): Promise<DemoPurgeResult> {
   const none: DemoPurgeResult = { companiesRemoved: 0, rowsRemoved: 0, byTable: {} };
+  // Rows are tracked by ctid across statements, which is only sound while one
+  // snapshot holds them (no concurrent update can move a row, and VACUUM cannot
+  // recycle a slot still visible to us).
+  const iso = (await tx.execute(sql`SELECT current_setting('transaction_isolation') AS l`)).rows[0]?.l;
+  if (iso !== "repeatable read" && iso !== "serializable") {
+    throw new DemoPurgeRefusedError(`demo purge requires a REPEATABLE READ transaction (got ${iso})`);
+  }
   await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
   await tx.execute(sql`SET LOCAL statement_timeout = '300s'`);
 
   // 1. Same predicate the DemoCleanup candidate query uses, re-checked under lock.
   const target = await tx.execute(sql`
-    SELECT id FROM companies
+    SELECT id, billing_active, payment_method_on_file, stripe_financial_account_id FROM companies
     WHERE  id         = ${companyId}
       AND  is_demo    = TRUE
       AND  trial_end  IS NOT NULL
@@ -77,6 +108,29 @@ export async function purgeExpiredDemoCompany(tx: Tx, companyId: string): Promis
     FOR UPDATE
   `);
   if (target.rows.length === 0) return none;
+
+  // Never a paying, converted or shared tenant, whatever is_demo says
+  // (companies.subscription_status is no signal: demos keep its 'active_paid' default).
+  const co = target.rows[0];
+  if (co.billing_active || co.payment_method_on_file || co.stripe_financial_account_id) {
+    throw new DemoPurgeRefusedError("company has billing configured");
+  }
+  const links = (await tx.execute(sql`
+    SELECT t.status, t.slug,
+      (SELECT count(*)::int FROM tenant_companies o WHERE o.tenant_id = tc.tenant_id AND o.company_id <> ${companyId}) AS others
+    FROM tenant_companies tc LEFT JOIN tenants t ON t.id = tc.tenant_id
+    WHERE tc.company_id = ${companyId}
+  `)).rows as any[];
+  for (const l of links) {
+    if (l.status != null && l.status !== "demo") throw new DemoPurgeRefusedError(`company belongs to a '${l.status}' tenant`);
+    if (l.others > 0 && !PROTECTED_TENANT_SLUGS.includes(l.slug)) throw new DemoPurgeRefusedError("company's tenant is shared with another company");
+  }
+  const license = await tx.execute(sql`
+    SELECT 1 FROM tenant_licenses WHERE company_id = ${companyId} AND source IS DISTINCT FROM 'demo_provision' LIMIT 1
+  `);
+  if (license.rows.length) throw new DemoPurgeRefusedError("company holds a non-demo license");
+  const platformUser = await tx.execute(sql`SELECT 1 FROM users WHERE company_id = ${companyId} AND role LIKE 'platform%' LIMIT 1`);
+  if (platformUser.rows.length) throw new DemoPurgeRefusedError("company has a platform account");
 
   const edges = (await tx.execute(sql`
     SELECT ch.relname AS child, pa.relname AS parent, c.confdeltype AS act,

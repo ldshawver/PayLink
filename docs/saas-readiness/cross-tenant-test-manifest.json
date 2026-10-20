@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-06",
+  "generatedAt": "2026-10-20",
   "version": 1,
   "sourceStorageScopeTraceManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "routesTested": 5,
@@ -88,12 +88,12 @@
         {
           "case": "Omitting companyId preserves the worker's existing company",
           "disposition": "PASS",
-          "detail": "status=200 companyId=8e622d53-4e0f-4f9c-8b48-5ba9a03fcc80 lastNameUpdated=true"
+          "detail": "status=200 companyId=9673a921-18d9-4fcd-b0be-f60193e1365d lastNameUpdated=true"
         },
         {
           "case": "Submitting the same (current) companyId succeeds and does not change tenancy",
           "disposition": "PASS",
-          "detail": "status=200 companyId=8e622d53-4e0f-4f9c-8b48-5ba9a03fcc80"
+          "detail": "status=200 companyId=9673a921-18d9-4fcd-b0be-f60193e1365d"
         },
         {
           "case": "2. Tenant A admin accesses a Tenant B worker by ID",

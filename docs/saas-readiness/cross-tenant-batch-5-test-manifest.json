@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-06",
+  "generatedAt": "2026-10-20",
   "sourceRouteManifest": "docs/saas-readiness/storage-scope-trace-manifest.json",
   "summary": {
     "PASS": 60,
@@ -114,7 +114,7 @@
         {
           "case": "1. Platform super admin reads Tenant A's provisioning status",
           "disposition": "PASS",
-          "detail": "status=200 gate.companyId=b82a56e8-42d8-47ad-a905-30b9f56e6451"
+          "detail": "status=200 gate.companyId=8d84ae07-11f4-48f5-a130-45886b58f273"
         },
         {
           "case": "2. Same session reads Tenant B's provisioning status via a different companyId — correctly returns B's own (null, no gate row yet) state rather than A's",
@@ -207,7 +207,7 @@
         {
           "case": "2. REGRESSION (batch-5 audit finding 2, was FAIL): client-supplied companyId reassignment via the update branch — PATCH targets Tenant A's gate row via the URL, request body also carries companyId=Tenant B; storage.upsertTenantCommercialGate now forces `{ ...data, companyId, updatedAt }` (companyId always last/wins, server/storage.ts) so the body's companyId can no longer override the URL's tenant scoping, while every other field in the body (notes) still applies",
           "disposition": "PASS",
-          "detail": "status=200, company_id unchanged (b82a56e8-42d8-47ad-a905-30b9f56e6451), notes applied (CT5 reassignment attempt)"
+          "detail": "status=200, company_id unchanged (8d84ae07-11f4-48f5-a130-45886b58f273), notes applied (CT5 reassignment attempt)"
         },
         {
           "case": "3. Hardening: PATCH .../gates now validates the target company exists (storage.getCompany) before calling upsertTenantCommercialGate — a nonexistent companyId 404s instead of silently creating (or, per finding 2, misdirecting) a gate row. This also closes the insert-branch companyId-override code path noted in the original audit (server/storage.ts's insert `values({ ...data, companyId })` uses the same companyId-always-wins ordering as the update branch fixed in case 2), since the insert branch can now only be reached for a companyId that has already been confirmed to exist.",
