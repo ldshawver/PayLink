@@ -153,8 +153,15 @@ ok("adminUpsertLicense validates admin status input STRICTLY (unknown → Licens
   && /throw new LicenseValidationError\(\s*`Invalid license status/.test(service));
 
 console.log("\ntrial onboarding + client wiring");
+// Moved to server/provisioning/tenant-core.ts (shared by trial signup + demo
+// provisioning); still inside the signup's own db.transaction via `tx`.
+const tenantCore = fs.readFileSync("server/provisioning/tenant-core.ts", "utf8");
+const trialSignup = routes.match(/app\.post\("\/api\/trial\/signup",[\s\S]*?\n {2}app\.\w/)?.[0] ?? "";
 ok("trial signup creates a tenant_licenses row inside its transaction (ensureTrialLicense)",
-  /INSERT INTO onboarding_progress[\s\S]{0,600}ensureTrialLicense\(/.test(routes));
+  /db\.transaction\(async \(tx\)[\s\S]*provisionTenantCore\(tx,/.test(trialSignup)
+  && !/sql`BEGIN`/.test(trialSignup)
+  && /INSERT INTO onboarding_progress/.test(tenantCore)
+  && /ensureTrialLicense\([\s\S]{0,600}\btx,\s*\);/.test(tenantCore));
 ok("ensureTrialLicense uses ON CONFLICT (company_id) DO NOTHING (idempotent, no access change)",
   /ON CONFLICT \(company_id\) DO NOTHING/.test(service));
 ok("/api/auth/me payload carries an advisory `license` field",

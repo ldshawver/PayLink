@@ -21,10 +21,10 @@ import {
   listCompanyLicenses,
   getLicenseEvents,
   adminUpsertLicense,
-  ensureTrialLicense,
   LicenseValidationError,
   CompanyNotFoundError,
 } from "./licensing/license-service";
+import { provisionTenantCore } from "./provisioning/tenant-core";
 import { requireLicenseNotBlocked } from "./licensing/license-gate";
 import {
   decideRevalidation,
@@ -27379,6 +27379,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Trial Signup (public, no auth) ─────────────────────────────────────
+  class DuplicateTrialSignupError extends Error {}
+
   app.post("/api/trial/signup", trialSignupRateLimit, async (req, res) => {
     try {
       const { companyName, firstName, lastName, email, phone, jobTitle, employeeCount, termsAccepted, password } = req.body;
@@ -27426,70 +27428,68 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const baseSlug = companyName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "trial";
       const tenantSlug = baseSlug + "-" + Date.now().toString(36);
 
-      await db.execute(sql`BEGIN`);
+      // One connection-scoped transaction (db.transaction): every statement below
+      // runs on `tx`, so a failure rolls back the whole signup. (The previous
+      // BEGIN/COMMIT via db.execute ran on whichever pooled connection was free.)
       try {
-        const companyResult = await db.execute(sql`
-          INSERT INTO companies (name, subscription_status, plan_name, trial_start, trial_end, trial_used, billing_active, is_demo)
-          VALUES (${companyName}, 'trial_active', 'starter', ${now}, ${trialEnd}, FALSE, FALSE, FALSE)
-          RETURNING id
-        `);
-        companyId = companyResult.rows[0].id as string;
+        ({ companyId, userId } = await db.transaction(async (tx) => {
+          // Serialize signups for the same email and re-check inside the
+          // transaction — trial_signups.email has no unique constraint.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('trial_signup'), hashtext(${email}))`);
+          const dup = await tx.execute(sql`SELECT id FROM trial_signups WHERE email = ${email} LIMIT 1`);
+          if (dup.rows.length > 0) throw new DuplicateTrialSignupError();
 
-        const userResult = await db.execute(sql`
-          INSERT INTO users (username, password, role, company_id, email, email_verification_required)
-          VALUES (${username}, ${hashedPassword}, 'admin', ${companyId}, ${email}, TRUE)
-          RETURNING id
-        `);
-        userId = userResult.rows[0].id as string;
+          const companyResult = await tx.execute(sql`
+            INSERT INTO companies (name, subscription_status, plan_name, trial_start, trial_end, trial_used, billing_active, is_demo)
+            VALUES (${companyName}, 'trial_active', 'starter', ${now}, ${trialEnd}, FALSE, FALSE, FALSE)
+            RETURNING id
+          `);
+          const newCompanyId = companyResult.rows[0].id as string;
 
-        // Create tenant record and link company
-        const tenantResult = await db.execute(sql`
-          INSERT INTO tenants (name, slug, status, billing_contact_name, billing_contact_email, primary_admin_user_id)
-          VALUES (${companyName}, ${tenantSlug}, 'trial', ${`${firstName} ${lastName}`}, ${email}, ${userId})
-          RETURNING id
-        `);
-        const tenantId = tenantResult.rows[0].id as string;
+          const userResult = await tx.execute(sql`
+            INSERT INTO users (username, password, role, company_id, email, email_verification_required)
+            VALUES (${username}, ${hashedPassword}, 'admin', ${newCompanyId}, ${email}, TRUE)
+            RETURNING id
+          `);
+          const newUserId = userResult.rows[0].id as string;
 
-        await db.execute(sql`
-          INSERT INTO tenant_companies (tenant_id, company_id, is_primary)
-          VALUES (${tenantId}, ${companyId}, TRUE)
-        `);
+          // Tenant, primary tenant link, 'trialing' license (PR 4), onboarding
+          // progress and the admin's company_user_access grant.
+          await provisionTenantCore(tx, newCompanyId, newUserId, {
+            tenant: {
+              name: companyName,
+              slug: tenantSlug,
+              status: "trial",
+              billingContactName: `${firstName} ${lastName}`,
+              billingContactEmail: email,
+            },
+            license: {
+              status: "trialing",
+              planType: "starter",
+              trialStart: now,
+              trialEnd,
+              source: "trial_signup",
+              reason: "trial signup",
+            },
+            actor: { userId: newUserId, role: "admin" },
+          });
 
-        await db.execute(sql`
-          INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, terms_version, privacy_version, signup_ip)
-          VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${companyId}, ${userId}, ${now}, ${trialEnd}, 'trial_active', ${now}, '1.0', '1.0', ${req.ip || null})
-        `);
+          await tx.execute(sql`
+            INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, terms_version, privacy_version, signup_ip)
+            VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${newCompanyId}, ${newUserId}, ${now}, ${trialEnd}, 'trial_active', ${now}, '1.0', '1.0', ${req.ip || null})
+          `);
 
-        await db.execute(sql`
-          INSERT INTO onboarding_progress (company_id, user_id)
-          VALUES (${companyId}, ${userId})
-        `);
+          await tx.execute(sql`
+            INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
+            VALUES ('signup_completed', ${newUserId}, ${newCompanyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
+          `);
 
-        // PR 4 — give the new trial company a structured tenant_licenses record
-        // (status 'trialing'). Additive: it mirrors the trial window we just
-        // wrote to `companies`; it does not change access. ON CONFLICT DO
-        // NOTHING keeps this idempotent if the row somehow already exists.
-        await ensureTrialLicense(
-          companyId,
-          {
-            tenantId,
-            planType: "starter",
-            trialStart: now,
-            trialEnd,
-            source: "trial_signup",
-            actor: { userId, role: "admin" },
-          },
-          db,
-        );
-
-        await db.execute(sql`
-          INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
-          VALUES ('signup_completed', ${userId}, ${companyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
-        `);
-
-        await db.execute(sql`COMMIT`);
+          return { companyId: newCompanyId, userId: newUserId };
+        }));
       } catch (txErr) {
-        await db.execute(sql`ROLLBACK`);
+        if (txErr instanceof DuplicateTrialSignupError) {
+          return res.status(409).json({ message: "An account with this email already exists. Please log in instead." });
+        }
         throw txErr;
       }
 
