@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-20",
+  "generatedAt": "2026-10-06",
   "sourceReport": "docs/saas-readiness/phase-0.5-security-convergence-report.md",
   "rootCause": "expandRoleForGuard() aliased platform_support/platform_implementation to [\"admin\",\"manager\",role], contradicting GET /api/platform/audit/roles' documented aliases:[] for both.",
   "fix": "server/routes.ts expandRoleForGuard(): removed the platform_support/platform_implementation special case; both now fall through to the default return [role].",
