@@ -9,6 +9,7 @@
 import { sql } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import { provisionTenantCore } from "./provisioning/tenant-core";
 import type { PostgresJsTransaction } from "drizzle-orm/postgres-js";
 
 /** Unwrap the RETURNING id from a db.execute result */
@@ -328,6 +329,25 @@ export async function provisionDemoTenant(
   `);
   const adminUserId   = rowId(adminUserRes);
   const adminUsername = (adminUserRes.rows[0] as any).username as string;
+
+  // Tenant core, same structure as trial signup: a tenant of this demo's own
+  // (status 'demo', never the shared seeded 'demo-tenant'), primary link,
+  // onboarding progress, admin company_user_access grant, and an 'active'
+  // license with no trial window of its own — so it resolves exactly as the
+  // legacy companies.is_demo gate did (active, never blocked by the license
+  // gate). Expiry stays DemoCleanup's job via companies.trial_end.
+  await provisionTenantCore(tx, companyId, adminUserId, {
+    tenant: { name, slug: `demo-${suffix}`, status: "demo" },
+    license: {
+      status: "active",
+      planType: "professional",
+      trialStart: null,
+      trialEnd: null,
+      source: "demo_provision",
+      reason: "demo provision",
+    },
+    actor: { userId: adminUserId, role: "admin" },
+  });
 
   for (let i = 0; i < workerSpecs.length; i++) {
     const uname = `demo_${workerSpecs[i].first.toLowerCase()}_${suffix}`;

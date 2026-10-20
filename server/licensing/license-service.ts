@@ -269,8 +269,11 @@ async function recordEvent(
  * already present. Safe to call inside another transaction — pass that
  * transaction's executor as `exec`.
  *
- * Used by POST /api/trial/signup so a brand-new trial company gets a structured
- * license record atomically with the rest of its provisioning.
+ * Used by provisionTenantCore (server/provisioning/tenant-core.ts) so a new
+ * trial or demo company gets a structured license record atomically with the
+ * rest of its provisioning. `status` defaults to 'trialing' (trial signup);
+ * demo provisioning passes 'active' so the record resolves exactly as the
+ * legacy `companies.is_demo` gate did (active, never blocked).
  */
 export async function ensureTrialLicense(
   companyId: string,
@@ -280,6 +283,8 @@ export async function ensureTrialLicense(
     trialStart?: Date | string | null;
     trialEnd?: Date | string | null;
     source?: string;
+    status?: "trialing" | "active";
+    reason?: string;
     actor?: ActorInfo;
   },
   exec: Exec = db,
@@ -288,6 +293,8 @@ export async function ensureTrialLicense(
   const actor = opts.actor ?? { userId: "system", role: null };
   const planType = opts.planType ?? "starter";
   const source = opts.source ?? "trial_signup";
+  const status = opts.status ?? "trialing";
+  const reason = opts.reason ?? "trial signup";
 
   const res = await exec.execute(sql`
     INSERT INTO tenant_licenses
@@ -295,10 +302,10 @@ export async function ensureTrialLicense(
        created_by_user_id, updated_by_user_id, status_changed_at, status_changed_by_user_id,
        status_reason)
     VALUES
-      (${companyId}, ${opts.tenantId ?? null}, ${planType}, 'trialing',
+      (${companyId}, ${opts.tenantId ?? null}, ${planType}, ${status},
        ${opts.trialStart ?? null}, ${opts.trialEnd ?? null}, ${source},
        ${actor.userId ?? "system"}, ${actor.userId ?? "system"}, NOW(),
-       ${actor.userId ?? "system"}, 'trial signup')
+       ${actor.userId ?? "system"}, ${reason})
     ON CONFLICT (company_id) DO NOTHING
     RETURNING *
   `);
@@ -308,9 +315,9 @@ export async function ensureTrialLicense(
       licenseId: row.id,
       companyId,
       eventType: "created",
-      toStatus: "trialing",
+      toStatus: status,
       toPlan: planType,
-      reason: "trial signup",
+      reason,
       actor,
       metadata: { source },
     });

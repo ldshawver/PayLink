@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-09",
+  "generatedAt": "2026-10-20",
   "version": 1,
   "routeCount": 1084,
   "entries": [
@@ -29012,7 +29012,7 @@
       "id": "POST /api/trial/signup",
       "method": "POST",
       "path": "/api/trial/signup",
-      "source": "server/routes.ts:27382",
+      "source": "server/routes.ts:27384",
       "category": "public anonymous",
       "justification": "no session auth required (matches global auth-gate allowlist entry @ server/routes.ts:2571)",
       "auth": {
