@@ -12,9 +12,11 @@
  *     deactivated, relabelled, or otherwise mutated, and none of their dependent
  *     child records are touched. This keeps the NO ACTION foreign keys and the
  *     historical rows they protect intact.
- *   - Each ordinary candidate is deleted in its own statement so that one
- *     FK-blocked company cannot abort the cleanup of the others. Foreign keys
- *     are left exactly as they are — no cascade, no constraint changes.
+ *   - Each ordinary candidate is purged in its own transaction (the orchestrator's
+ *     deleteCompany → server/workers/demo-tenant-purge.ts): the demo and every row
+ *     that depends on it go together, or nothing does, and one refused company
+ *     cannot abort the cleanup of the others. Foreign keys are left exactly as
+ *     they are — no cascade, no constraint or trigger changes.
  *   - Unexpected failures (including FK violations on non-protected companies)
  *     are surfaced as warnings.
  *   - The informational summary for skipped integrity-protected companies is
