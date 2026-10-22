@@ -73,6 +73,7 @@
         "tests/diagnostics-safety-static.test.ts",
         "tests/documenso-incident-static.test.ts",
         "tests/documenso-log-redaction.test.ts",
+        "tests/request-logger-no-body.test.ts",
         "tests/documenso-recipient-canonical.test.ts",
         "tests/documenso-resend-behavior.test.ts",
         "tests/documenso-resend-static.test.ts",

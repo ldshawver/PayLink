@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { redactDiagnosticText, redactContractorDocumentLogBody } from "./diagnostics-safety";
+import { redactDiagnosticText } from "./diagnostics-safety";
+import { createRequestLogger } from "./request-logger";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import session from "express-session";
@@ -331,40 +332,7 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${redactDiagnosticText(message)}`);
 }
 
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = redactDiagnosticText(req.originalUrl || req.path);
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      // Scoped pre-pass: a contractor W-9 / compliance document's fileName can
-      // carry a real person's name and its fileUrl is an internal storage path;
-      // strip just those two fields for that route group before the response
-      // body is logged. The response itself was already sent above.
-      if (capturedJsonResponse && path.startsWith("/api/contractor-documents")) {
-        capturedJsonResponse = redactContractorDocumentLogBody(capturedJsonResponse) as Record<string, any>;
-      }
-      if (capturedJsonResponse) {
-        // Truncate large response bodies (e.g. bulk worker/payroll list endpoints)
-        // to prevent multi-megabyte log lines that spike memory on every request.
-        const bodyStr = redactDiagnosticText(JSON.stringify(capturedJsonResponse));
-        logLine += ` :: ${bodyStr.length > 500 ? bodyStr.slice(0, 500) + "…" : bodyStr}`;
-      }
-      log(logLine);
-    }
-  });
-
-  next();
-});
+app.use(createRequestLogger(log));
 
 (async () => {
   // Auto-apply safe column additions so VPS stays in sync without manual migrations
