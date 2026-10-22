@@ -5,6 +5,7 @@ import os from "os";
 import crypto from "crypto";
 import { execFileSync } from "child_process";
 import AdmZip from "adm-zip";
+import { sanitizeLogPath } from "./request-logger";
 
 export const DIAGNOSTIC_ROLES = new Set(["platform_owner", "super_admin", "system_admin"]);
 export const LOG_TYPES = ["app", "error", "appdr", "github", "payroll", "pdf", "database", "security"] as const;
@@ -142,11 +143,11 @@ export function requestDiagnostics(req: Request, res: Response, next: NextFuncti
   (req as any).requestId = requestId; (req as any).correlationId = correlationId;
   res.setHeader("X-Request-Id", requestId); res.setHeader("X-Correlation-Id", correlationId);
   const started = Date.now();
-  res.on("finish", () => writeDiagnosticLog(res.statusCode >= 500 ? "error" : "app", {
-    level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info", service: "app", message: `${req.method} ${req.path}`,
+  res.on("finish", () => { const safePath = sanitizeLogPath(req.path); writeDiagnosticLog(res.statusCode >= 500 ? "error" : "app", {
+    level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info", service: "app", message: `${req.method} ${safePath}`,
     requestId, correlationId, tenantId: (req as any).tenantId, companyId: (req as any).resolvedCompanyId || (req as any).session?.companyId,
-    userId: (req as any).session?.userId, method: req.method, path: req.path, statusCode: res.statusCode, durationMs: Date.now() - started,
-  }));
+    userId: (req as any).session?.userId, method: req.method, path: safePath, statusCode: res.statusCode, durationMs: Date.now() - started,
+  }); });
   next();
 }
 

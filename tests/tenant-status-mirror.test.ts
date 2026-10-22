@@ -29,7 +29,9 @@ ok("past_due -> suspended", mapSubscriptionStatusToTenantStatus("past_due") === 
 ok("suspended -> suspended", mapSubscriptionStatusToTenantStatus("suspended") === "suspended");
 ok("cancelled -> cancelled", mapSubscriptionStatusToTenantStatus("cancelled") === "cancelled");
 ok("canceled (single-l) -> cancelled", mapSubscriptionStatusToTenantStatus("canceled") === "cancelled");
-ok("is_demo=true always wins -> demo", mapSubscriptionStatusToTenantStatus("active_paid", true) === "demo");
+ok("is_demo=true wins over a non-enforcement status -> demo", mapSubscriptionStatusToTenantStatus("active_paid", true) === "demo");
+ok("enforcement wins over is_demo: suspended demo -> suspended", mapSubscriptionStatusToTenantStatus("suspended", true) === "suspended");
+ok("enforcement wins over is_demo: cancelled demo -> cancelled", mapSubscriptionStatusToTenantStatus("cancelled", true) === "cancelled");
 ok("unknown/legacy status falls back to active, never locks a tenant out via the mirror", mapSubscriptionStatusToTenantStatus("some_future_status") === "active");
 ok("null/undefined status falls back to active", mapSubscriptionStatusToTenantStatus(null) === "active" && mapSubscriptionStatusToTenantStatus(undefined) === "active");
 
@@ -45,11 +47,14 @@ console.log("\nWiring — every raw `SET subscription_status` write site also mi
     { label: "subscription-gate: trial expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n        return res.status(403)" },
     { label: "trial/status auto-transition to trial_expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n      }" },
     { label: "billing/activate -> active_paid", marker: "await mirrorTenantStatusFromCompany(companyId, \"active_paid\");" },
-    { label: "platform gate-override -> dynamic status", marker: "await mirrorTenantStatusFromCompany(companyId, subscriptionStatus);" },
   ];
   for (const site of routesWriteSites) {
     ok(`routes.ts: ${site.label}`, routes.includes(site.marker));
   }
+  // PR-C1: the platform gate-override re-derives the mirror inside its own
+  // transaction (server/tenant-gate-override.ts), primary company only.
+  const gateOverride = fs.readFileSync("server/tenant-gate-override.ts", "utf8");
+  ok("tenant-gate-override.ts: gate-override -> mirror in-transaction", gateOverride.includes("UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(after, isDemo, company.trial_end), tenantId]"));
 
   ok("routes.ts imports mirrorTenantStatusFromCompany from tenant-context", /import\s*\{[^}]*mirrorTenantStatusFromCompany[^}]*\}\s*from\s*"\.\/tenant-context"/.test(routes));
 
@@ -74,7 +79,7 @@ console.log("\nOrchestrator — self-healing reconcile job registered");
   const orchestrator = fs.readFileSync("server/workers/orchestrator.ts", "utf8");
   ok("jobTenantStatusMirrorReconcile is defined", /async function jobTenantStatusMirrorReconcile/.test(orchestrator));
   ok("jobTenantStatusMirrorReconcile is scheduled in startWorkerOrchestrator", /scheduleJob\("TenantStatusMirrorReconcile",\s*jobTenantStatusMirrorReconcile/.test(orchestrator));
-  ok("reconcile job compares against companies.subscription_status via the shared mapping function", orchestrator.includes("mapSubscriptionStatusToTenantStatus(row.subscription_status, row.is_demo)"));
+  ok("reconcile job compares against companies.subscription_status via the shared mapping function", orchestrator.includes("mapSubscriptionStatusToTenantStatus(row.subscription_status, row.is_demo, row.trial_end)"));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

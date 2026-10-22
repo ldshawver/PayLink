@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 110,
+      "fileCount": 114,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -60,6 +60,8 @@
         "tests/demo-login-retirement-static.test.ts",
         "tests/tenant-status-mirror.test.ts",
         "tests/tenant-detail-status-mirror-static.test.ts",
+        "tests/tenant-status-admin.test.ts",
+        "tests/tenant-gate-override.test.ts",
         "tests/cancelled-status-enforcement.test.ts",
         "tests/csrf-ratelimit-wiring-static.test.ts",
         "tests/billing-activate-platform-gate-static.test.ts",
@@ -74,6 +76,7 @@
         "tests/diagnostics-safety-static.test.ts",
         "tests/documenso-incident-static.test.ts",
         "tests/documenso-log-redaction.test.ts",
+        "tests/request-logger-no-body.test.ts",
         "tests/documenso-recipient-canonical.test.ts",
         "tests/documenso-resend-behavior.test.ts",
         "tests/documenso-resend-static.test.ts",
@@ -116,7 +119,8 @@
         "tests/saas-pr1-company-authz-static.test.ts",
         "server/__tests__/stored-resource-guard.test.ts",
         "tests/saas-pr2-stored-ownership-static.test.ts",
-        "tests/saas-pr2b-remaining-ownership-static.test.ts"
+        "tests/saas-pr2b-remaining-ownership-static.test.ts",
+        "tests/backup-db-static.test.ts"
       ]
     },
     "db": {
@@ -125,7 +129,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 37,
+      "fileCount": 39,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
@@ -145,6 +149,8 @@
         "tests/cross-tenant-batch-5-routes-db.test.ts",
         "tests/platform-role-boundary-negative-db.test.ts",
         "tests/tenant-companies-fk-preflight-db.test.ts",
+        "tests/tenant-status-admin-db.test.ts",
+        "tests/tenant-gate-override-db.test.ts",
         "tests/cancelled-status-enforcement-db.test.ts",
         "tests/tenant-company-membership-guard-db.test.ts",
         "tests/contractor-w9-document-routing-db.test.ts",

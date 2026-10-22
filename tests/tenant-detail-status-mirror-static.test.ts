@@ -28,6 +28,8 @@ function ok(name: string, cond: boolean, detail?: string) {
 }
 
 const routes = fs.readFileSync("server/routes.ts", "utf8");
+// PR-C1 moved the PATCH body into a transactional helper.
+const tenantAdmin = fs.readFileSync("server/tenant-status-admin.ts", "utf8");
 const platformTenants = fs.readFileSync("client/src/pages/platform-tenants.tsx", "utf8");
 
 const getMatch = routes.match(/app\.get\("\/api\/tenants\/:id",[\s\S]*?\n {2}\}\);/);
@@ -59,32 +61,32 @@ ok(
 console.log("\nPATCH /api/tenants/:id — mirror-only invariant");
 ok("PATCH /api/tenants/:id handler exists", !!patchMatch);
 ok(
-  "PATCH /api/tenants/:id stays platform-role gated (ordinary tenant admin cannot change tenant status)",
-  /app\.patch\("\/api\/tenants\/:id",\s*requireAuth,\s*requirePlatformRole\(\)/.test(routes)
+  "PATCH /api/tenants/:id is platform-ADMIN gated (PR-C1: read-only platform roles and tenant admins cannot change tenant status)",
+  /app\.patch\("\/api\/tenants\/:id",\s*requireAuth,\s*requirePlatformAdminRole\(\)/.test(routes)
 );
 ok(
   "the raw `UPDATE tenants` no longer writes `status` from client input (platform admin cannot directly write the mirror-only tenants.status column)",
-  !!patchMatch && !/UPDATE tenants[\s\S]*?status\s*=\s*COALESCE\(\$\d+,\s*status\)/.test(patchMatch[0])
+  !!patchMatch && !/UPDATE tenants[\s\S]*?status\s*=\s*COALESCE\(\$\d+,\s*status\)/.test(patchMatch[0] + tenantAdmin)
 );
 ok(
   "a legitimate status change instead resolves the tenant's primary company scoped by tenant_id (cross-tenant authorization preserved — a caller can't reach another tenant's company)",
-  !!patchMatch && /SELECT company_id FROM tenant_companies WHERE tenant_id = \$1/.test(patchMatch[0])
+  /SELECT company_id FROM tenant_companies WHERE tenant_id = \$1/.test(tenantAdmin)
 );
 ok(
-  "a legitimate status change updates companies.subscription_status (the canonical field), not tenants.status",
-  !!patchMatch && /UPDATE companies SET subscription_status = COALESCE\(\$1, subscription_status\), is_demo = \$2/.test(patchMatch[0])
+  "a legitimate status change updates companies.subscription_status (the canonical field) and never sets is_demo",
+  /UPDATE companies SET subscription_status = \$1 WHERE id = \$2/.test(tenantAdmin) && !/SET[^`]*is_demo/.test(tenantAdmin)
 );
 ok(
-  "a legitimate status change re-derives the mirror via mirrorTenantStatusFromCompany() — the only sanctioned writer of tenants.status",
-  !!patchMatch && /await mirrorTenantStatusFromCompany\(primaryCompanyId, subscriptionStatus, isDemo\)/.test(patchMatch[0])
+  "a legitimate status change re-derives the mirror from subscription_status via mapSubscriptionStatusToTenantStatus() (real is_demo / trial_end) in the same transaction",
+  /mapSubscriptionStatusToTenantStatus\(subscriptionStatus, isDemo, company\.trial_end\)/.test(tenantAdmin) && /BEGIN/.test(tenantAdmin) && /COMMIT/.test(tenantAdmin)
 );
 ok(
   "setting status with no assigned company is rejected rather than silently mutating nothing",
-  !!patchMatch && /Cannot set status: tenant has no assigned company/.test(patchMatch[0])
+  /Cannot set status: tenant has no assigned company/.test(tenantAdmin)
 );
 ok(
   "the tenant/company status vocabulary map lives outside the handler as the single source for this translation",
-  /const TENANT_STATUS_TO_SUBSCRIPTION_STATUS: Record<string, string \| null> = \{/.test(routes)
+  /export const TENANT_STATUS_TO_SUBSCRIPTION_STATUS: Record<string, string> = \{/.test(tenantAdmin)
 );
 
 console.log("\nPlatform tenant-detail UI contract");

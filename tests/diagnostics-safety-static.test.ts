@@ -11,7 +11,9 @@ assert(routes.includes("(req.user as any) || await storage.getUser") && routes.i
 assert(routes.includes('return res.status(403).json({ message: "Global diagnostics require a platform admin role" })'), "tenant-scoped admins without company context cannot export global diagnostics");
 assert(safety.includes("readBoundedLogTail") && safety.includes("fs.readSync") && !safety.includes("readFileSync(full"), "diagnostics bounded log tail avoids full large log reads");
 assert(safety.includes("DIAGNOSTIC_FILE_MODE = 0o600") && safety.includes("DIAGNOSTIC_DIR_MODE = 0o700"), "diagnostics logs are owner-only");
-assert(index.includes("redactDiagnosticText(req.originalUrl || req.path)") && index.includes("redactDiagnosticText(JSON.stringify(capturedJsonResponse))"), "request logging redacts paths and response text before writing");
+const requestLogger = fs.readFileSync("server/request-logger.ts", "utf8");
+assert(index.includes("app.use(createRequestLogger(log))") && !index.includes("capturedJsonResponse") && !index.includes("res.json = function"), "request logging is metadata-only (PR-E1): no response body capture in server/index.ts");
+assert(requestLogger.includes("sanitizeLogPath(req.originalUrl || req.path)") && requestLogger.includes("redactDiagnosticText(p)"), "request logging redacts paths before writing");
 for (const tokenRoute of ["/sign/contracts/", "/api/signing/contracts/", "/api/onboarding/portal/", "/portal/validate"]) {
   assert(safety.includes(tokenRoute), `redaction covers ${tokenRoute}`);
 }
