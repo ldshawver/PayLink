@@ -43,33 +43,37 @@ console.log("\nWiring — every raw `SET subscription_status` write site also mi
   // Each known write site in routes.ts is followed (within a short window) by
   // a mirrorTenantStatusFromCompany call.
   const routesWriteSites = [
-    { label: "subscription-gate: grace period expired -> suspended", marker: "SET subscription_status = 'suspended', billing_active = FALSE WHERE id = ${user.companyId}" },
+    { label: "subscription-gate: grace period expired -> suspended (audited helper, then mirror)", marker: "if (await suspendExpiredGracePeriod(user.companyId)) {\n          await mirrorTenantStatusFromCompany(user.companyId, \"suspended\");" },
     { label: "subscription-gate: trial expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n        return res.status(403)" },
     { label: "trial/status auto-transition to trial_expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n      }" },
-    { label: "billing/activate -> active_paid", marker: "await mirrorTenantStatusFromCompany(companyId, \"active_paid\");" },
   ];
   for (const site of routesWriteSites) {
     ok(`routes.ts: ${site.label}`, routes.includes(site.marker));
   }
-  // PR-C1: the platform gate-override re-derives the mirror inside its own
-  // transaction (server/tenant-gate-override.ts), primary company only.
+  // PR-C1 / P0-E: the gate override and billing activation re-derive the
+  // mirror inside their own transaction via syncPrimaryTenantMirror()
+  // (server/tenant-gate-override.ts), primary company only.
   const gateOverride = fs.readFileSync("server/tenant-gate-override.ts", "utf8");
-  ok("tenant-gate-override.ts: gate-override -> mirror in-transaction", gateOverride.includes("UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(after, isDemo, company.trial_end), tenantId]"));
+  const billingActivation = fs.readFileSync("server/tenant-billing-activation.ts", "utf8");
+  ok("syncPrimaryTenantMirror re-derives the mirror with the shared mapping, primary company only", gateOverride.includes("if (statusChanged && tenantId && rows[0].primary_company_id === companyId) {\n    await client.query(`UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(status, isDemo, trialEnd), tenantId]);"));
+  ok("tenant-gate-override.ts: gate-override -> mirror in-transaction", gateOverride.includes("await syncPrimaryTenantMirror(client, companyId, after, isDemo, company.trial_end, statusChanged);"));
+  ok("tenant-billing-activation.ts: billing/activate -> active_paid mirror in-transaction", billingActivation.includes('await syncPrimaryTenantMirror(client, companyId, "active_paid", isDemo, company.trial_end, statusChanged);'));
 
   ok("routes.ts imports mirrorTenantStatusFromCompany from tenant-context", /import\s*\{[^}]*mirrorTenantStatusFromCompany[^}]*\}\s*from\s*"\.\/tenant-context"/.test(routes));
 
   const billingSites = [
     'await mirrorTenantStatusFromCompany(company.id, "grace_period");',
-    'await mirrorTenantStatusFromCompany(company.id, "active_paid");',
-    'await mirrorTenantStatusFromCompany(company.id, "suspended");',
+    'await mirrorTenantStatusFromCompany(companyId, "active_paid", outcome.isDemo);',
+    'await mirrorTenantStatusFromCompany(company.id, "suspended", suspended.isDemo);',
     'await mirrorTenantStatusFromCompany(row.id, "suspended");',
   ];
   for (const marker of billingSites) {
     ok(`billingLifecycle.ts: ${marker}`, billingLifecycle.includes(marker));
   }
-  // active_paid appears twice (payment_succeeded + subscription.updated) — confirm both.
-  const activePaidCount = (billingLifecycle.match(/mirrorTenantStatusFromCompany\(company\.id, "active_paid"\)/g) || []).length;
-  ok("billingLifecycle.ts: active_paid reactivation mirrored on both payment_succeeded and subscription.updated", activePaidCount === 2, `found ${activePaidCount}`);
+  // payment_succeeded and subscription.updated both reactivate through the one
+  // mirrored reactivateFromBilling() path (P0-E).
+  const reactivateCalls = (billingLifecycle.match(/await reactivateFromBilling\(company\.id, /g) || []).length;
+  ok("billingLifecycle.ts: payment_succeeded and subscription.updated both use reactivateFromBilling()", reactivateCalls === 2, `found ${reactivateCalls}`);
 
   ok("billingLifecycle.ts imports mirrorTenantStatusFromCompany from tenant-context", /import\s*\{\s*mirrorTenantStatusFromCompany\s*\}\s*from\s*"\.\/tenant-context"/.test(billingLifecycle));
 }
