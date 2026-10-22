@@ -16,6 +16,7 @@ import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { createRateLimiter, requireCsrfToken } from "./security-middleware";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany } from "./tenant-context";
+import { applyTenantPatch } from "./tenant-status-admin";
 import {
   resolveCompanyLicense,
   listCompanyLicenses,
@@ -35565,75 +35566,26 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  // tenants.status is a read-only mirror of companies.subscription_status
-  // (mirrorTenantStatusFromCompany() in server/tenant-context.ts) — see that
-  // file's "Tenant status mirror" comment. A platform-admin status change here
-  // must not write the mirror directly; it changes the tenant's primary
-  // company's canonical subscription state and re-derives the mirror the same
-  // way every other write site does. "demo" is driven by companies.is_demo,
-  // not subscription_status, so it's left out of this map (null = unchanged).
-  const TENANT_STATUS_TO_SUBSCRIPTION_STATUS: Record<string, string | null> = {
-    active: "active_paid",
-    trial: "trial_active",
-    demo: null,
-    suspended: "suspended",
-    cancelled: "cancelled",
-  };
-
-  // Update tenant — platform_admin can edit status/billing; super_admin can do anything
-  app.patch("/api/tenants/:id", requireAuth, requirePlatformRole(), async (req, res) => {
+  // tenants.status mirrors companies.subscription_status (see
+  // mirrorTenantStatusFromCompany() in server/tenant-context.ts). A
+  // platform-admin status change writes the primary company's canonical
+  // subscription_status and the mirror together inside applyTenantPatch()'s
+  // transaction, so status, mirror and audit row commit or roll back as one.
+  // Update tenant — platform_super_admin / platform_admin only (PR-C1). The
+  // broader requirePlatformRole() set (auditor/sales/support/billing/
+  // implementation) is read-only for tenant records. Status transitions are
+  // validated and each change writes an authorization_audit_log row in the
+  // same transaction (server/tenant-status-admin.ts).
+  app.patch("/api/tenants/:id", requireAuth, requirePlatformAdminRole(), async (req, res) => {
     try {
-      const allowed = ["active", "trial", "demo", "suspended", "cancelled"];
-      const { name, status, billingContactName, billingContactEmail, defaultTimezone, notes, stripeCustomerId } = req.body;
-      if (status && !allowed.includes(status)) return res.status(400).json({ message: "Invalid status" });
-
-      if (status) {
-        const { rows: primaryRows } = await db.$client.query<{ company_id: string }>(
-          `SELECT company_id FROM tenant_companies WHERE tenant_id = $1 ORDER BY is_primary DESC, created_at ASC LIMIT 1`,
-          [req.params.id]
-        );
-        const primaryCompanyId = primaryRows[0]?.company_id;
-        if (!primaryCompanyId) {
-          return res.status(400).json({ message: "Cannot set status: tenant has no assigned company" });
-        }
-        const isDemo = status === "demo";
-        const subscriptionStatus = TENANT_STATUS_TO_SUBSCRIPTION_STATUS[status];
-        await db.$client.query(
-          `UPDATE companies SET subscription_status = COALESCE($1, subscription_status), is_demo = $2 WHERE id = $3`,
-          [subscriptionStatus, isDemo, primaryCompanyId]
-        );
-        await mirrorTenantStatusFromCompany(primaryCompanyId, subscriptionStatus, isDemo);
-      }
-
-      const { rows } = await db.$client.query(`
-        UPDATE tenants
-        SET name                 = COALESCE($1, name),
-            billing_contact_name = COALESCE($2, billing_contact_name),
-            billing_contact_email= COALESCE($3, billing_contact_email),
-            default_timezone     = COALESCE($4, default_timezone),
-            notes                = COALESCE($5, notes),
-            stripe_customer_id   = COALESCE($6, stripe_customer_id),
-            updated_at           = NOW()
-        WHERE id = $7
-        RETURNING *
-      `, [name || null, billingContactName ?? null, billingContactEmail ?? null,
-          defaultTimezone || null, notes ?? null, stripeCustomerId || null, req.params.id]);
-      if (!rows.length) return res.status(404).json({ message: "Tenant not found" });
-      const t = rows[0];
+      const actor = await storage.getUser(req.session.userId!);
+      const result = await applyTenantPatch(db.$client, req.params.id, req.body || {}, { userId: req.session.userId!, role: actor?.role });
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      const t = result.tenant;
       // Invalidate tenant-context cache for all companies in this tenant so that
       // status changes (e.g., suspended → active, active → cancelled) take effect
       // immediately rather than waiting for the 30-second TTL to expire.
-      try {
-        const companyRows = await db.$client.query<{ company_id: string }>(
-          `SELECT company_id FROM tenant_companies WHERE tenant_id = $1`,
-          [req.params.id]
-        );
-        for (const { company_id } of companyRows.rows) {
-          invalidateTenantCache(company_id);
-        }
-      } catch (cacheErr) {
-        console.error("[TenantCache] Failed to invalidate after tenant status update:", cacheErr);
-      }
+      for (const companyId of result.companyIds) invalidateTenantCache(companyId);
       res.json({
         id: t.id, name: t.name, slug: t.slug, status: t.status,
         billingContactName: t.billing_contact_name, billingContactEmail: t.billing_contact_email,
