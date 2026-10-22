@@ -19,12 +19,16 @@ import { createRateLimiter, requireCsrfToken } from "./security-middleware";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany, mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 import { applyTenantPatch } from "./tenant-status-admin";
 import { applyGateOverride } from "./tenant-gate-override";
+import { applyBillingActivation } from "./tenant-billing-activation";
+import { suspendExpiredGracePeriod } from "./billingLifecycle";
 import {
   resolveCompanyLicense,
   listCompanyLicenses,
   getLicenseEvents,
   adminUpsertLicense,
   LicenseValidationError,
+  LicenseConflictError,
+  LicenseForbiddenError,
   CompanyNotFoundError,
 } from "./licensing/license-service";
 import { provisionTenantCore } from "./provisioning/tenant-core";
@@ -1217,8 +1221,11 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
     if (status === "grace_period") {
       const gracePeriodEnd = company.grace_period_end ? new Date(company.grace_period_end) : null;
       if (gracePeriodEnd && new Date() > gracePeriodEnd) {
-        await db.execute(sql`UPDATE companies SET subscription_status = 'suspended', billing_active = FALSE WHERE id = ${user.companyId}`);
-        await mirrorTenantStatusFromCompany(user.companyId, "suspended");
+        // Same audited transition as the scheduled sweep, so a later Stripe
+        // payment can recognise this as a billing suspension (P0-E).
+        if (await suspendExpiredGracePeriod(user.companyId)) {
+          await mirrorTenantStatusFromCompany(user.companyId, "suspended");
+        }
         return res.status(403).json({
           message: "Your grace period has expired. Account is now suspended. Please resolve billing to restore access.",
           reason: "tenant_suspended",
@@ -28378,6 +28385,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // confirmed out-of-band, matching the Concierge Launch model (no self-serve
   // Stripe checkout exists or is in scope here). The caller is platform
   // staff, not the tenant, so the target company comes from the request body.
+  // Platform-staff billing activation. Never a reinstatement: a cancelled,
+  // demo or integrity-repair company is refused, status + mirror + audit commit
+  // together (server/tenant-billing-activation.ts, P0-E).
   app.post("/api/billing/activate", requireAuth, requirePlatformAdminRole(), billingActivateRateLimit, requireCsrfToken, async (req, res) => {
     try {
       const actor = await storage.getUser(req.session.userId!);
@@ -28388,39 +28398,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "companyId is required" });
       }
 
-      const companyRows = await db.execute(sql`SELECT id, subscription_status FROM companies WHERE id = ${companyId} LIMIT 1`);
-      const company = companyRows.rows[0] as { id: string; subscription_status: string } | undefined;
-      if (!company) return res.status(404).json({ message: "Company not found" });
+      const result = await applyBillingActivation(db.$client as any, companyId, { note }, { userId: actor.id, role: actor.role });
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      invalidateTenantCache(companyId);
 
-      await db.execute(sql`
-        UPDATE companies
-        SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
-        WHERE id = ${companyId}
-      `);
-
-      await db.execute(sql`
-        UPDATE trial_signups SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
-        WHERE company_id = ${companyId}
-      `);
-
-      await mirrorTenantStatusFromCompany(companyId, "active_paid");
-
+      // Analytics is non-critical and stays outside the activation transaction.
       await db.execute(sql`
         INSERT INTO analytics_events (event_name, user_id, company_id, page_source)
         VALUES ('subscription_activated', ${actor.id}, ${companyId}, 'billing')
-      `);
+      `).catch((e) => console.error("[billing/activate] analytics event failed:", safeErrorMessage(e, "insert failed")));
 
-      await writeAuditLog({
-        actorUserId: actor.id,
-        targetResource: "companies.subscription_status",
-        changeType: "billing_activated",
-        beforeValue: company.subscription_status,
-        afterValue: "active_paid",
-        note: note || null,
-        companyId,
-      });
-
-      res.json({ message: "Subscription activated", subscriptionStatus: "active_paid" });
+      res.json({ message: "Subscription activated", subscriptionStatus: "active_paid", statusChanged: result.statusChanged });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to activate billing") });
     }
@@ -35419,7 +35407,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       });
     } catch (e: any) {
       if (e instanceof LicenseValidationError) return res.status(400).json({ message: e.message });
+      if (e instanceof LicenseForbiddenError) return res.status(403).json({ message: e.message });
       if (e instanceof CompanyNotFoundError) return res.status(404).json({ message: e.message });
+      if (e instanceof LicenseConflictError) return res.status(409).json({ message: e.message });
       console.error("[PUT /api/platform/companies/:companyId/license] failed:", e);
       res.status(500).json({ message: "Failed to update license" });
     }
