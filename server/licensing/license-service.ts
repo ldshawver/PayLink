@@ -20,6 +20,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import { checkTenantGate, type TenantGateResult } from "../tenant-enforcement";
+import { checkSubscriptionTransition, isIntegrityRepairReason } from "../tenant-gate-override";
 import {
   resolveLicense,
   normalizeLicenseStatus,
@@ -340,6 +341,14 @@ export class LicenseValidationError extends Error {
 export class CompanyNotFoundError extends Error {
   status = 404;
 }
+export class LicenseConflictError extends Error {
+  status = 409;
+}
+export class LicenseForbiddenError extends Error {
+  status = 403;
+}
+
+export const LICENSE_ADMIN_ROLES = ["platform_super_admin", "platform_admin"] as const;
 
 /**
  * Platform-admin license mutation. Runs in ONE transaction and keeps the
@@ -385,15 +394,27 @@ export async function adminUpsertLicense(
   if (patch.planType != null && !`${patch.planType}`.trim()) {
     throw new LicenseValidationError("planType cannot be blank");
   }
+  // P0-E: authorization re-checked here (route: requirePlatformAdminRole()).
+  if (!LICENSE_ADMIN_ROLES.includes((actor.role || "") as any) || !actor.userId) {
+    throw new LicenseForbiddenError("Platform administrator access required");
+  }
+  if (isIntegrityRepairReason(patch.reason)) {
+    throw new LicenseValidationError('reason may not start with "integrity-repair" (reserved marker)');
+  }
 
   return db.transaction(async (tx) => {
     const exec = tx as unknown as Exec;
 
     const compRes = await exec.execute(sql`
-      SELECT id, subscription_status, plan_name, trial_end FROM companies WHERE id = ${companyId} LIMIT 1
+      SELECT id, subscription_status, plan_name, trial_end, is_demo, gate_override_reason
+      FROM companies WHERE id = ${companyId} LIMIT 1 FOR UPDATE
     `);
     const company = firstRow<any>(compRes);
     if (!company) throw new CompanyNotFoundError("Company not found");
+    const reasonText = (patch.reason ?? "").trim();
+    if (isIntegrityRepairReason(company.gate_override_reason) && (wantStatus || reasonText)) {
+      throw new LicenseConflictError("Company is an inert integrity-repair record; its status and gate marker cannot be changed");
+    }
 
     const existing = await getTenantLicenseRow(companyId, exec);
     const fromStatus = existing ? normalizeLicenseStatus(existing.status) : null;
@@ -407,7 +428,14 @@ export async function adminUpsertLicense(
     let companyStatus: string | null = company.subscription_status ?? null;
     if (wantStatus) {
       const mapped = STATUS_TO_COMPANY[wantStatus];
-      if (mapped && mapped !== company.subscription_status) {
+      // Same transition policy as the gate override / billing activation; a
+      // license update is never a reinstatement out of cancelled and never
+      // promotes a demo (P0-E).
+      const check = mapped ? checkSubscriptionTransition(company.subscription_status, mapped, company.is_demo === true, { allowReinstatement: false }) : null;
+      if (check && !check.ok) {
+        throw check.status === 400 ? new LicenseValidationError(check.message) : new LicenseConflictError(check.message);
+      }
+      if (mapped && check && !check.noop) {
         await exec.execute(sql`
           UPDATE companies
           SET subscription_status = ${mapped},
@@ -469,22 +497,19 @@ export async function adminUpsertLicense(
     });
 
     // ── 5. authorization_audit_log (existing billing/lifecycle convention) ───
+    // Mandatory (P0-E): a failed insert aborts the transaction, so it must
+    // propagate and roll back the status change instead of being swallowed
+    // (catching it here used to end in a silent rollback reported as success).
     if (companyStatusChanged) {
-      try {
-        await exec.execute(sql`
-          INSERT INTO authorization_audit_log
-            (actor_user_id, change_type, before_value, after_value, note, company_id, created_at)
-          VALUES
-            (${actor.userId ?? "system"}, 'license_admin_update',
-             ${company.subscription_status ?? "unknown"}, ${companyStatus},
-             ${`Platform license update: ${fromStatus ?? "none"} → ${toStatus}${reason ? ` (${reason})` : ""}`},
-             ${companyId}, NOW())
-        `);
-      } catch (e) {
-        // authorization_audit_log is best-effort here — the tenant_license_events
-        // row above is the primary audit record. Never fail the mutation on it.
-        console.error("[license-service] authorization_audit_log write failed:", e);
-      }
+      await exec.execute(sql`
+        INSERT INTO authorization_audit_log
+          (actor_user_id, change_type, before_value, after_value, note, company_id, created_at)
+        VALUES
+          (${actor.userId ?? "system"}, 'license_admin_update',
+           ${company.subscription_status ?? "unknown"}, ${companyStatus},
+           ${`Platform license update: ${fromStatus ?? "none"} → ${toStatus}${reason ? ` (${reason})` : ""}`},
+           ${companyId}, NOW())
+      `);
     }
 
     return { record, companyStatusChanged, companyStatus };

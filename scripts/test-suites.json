@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 112,
+      "fileCount": 113,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -63,6 +63,7 @@
         "tests/tenant-status-admin.test.ts",
         "tests/tenant-gate-override.test.ts",
         "tests/cancelled-status-enforcement.test.ts",
+        "tests/tenant-reactivation-paths.test.ts",
         "tests/csrf-ratelimit-wiring-static.test.ts",
         "tests/billing-activate-platform-gate-static.test.ts",
         "tests/trial-signup-email-verification-static.test.ts",
@@ -127,7 +128,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 39,
+      "fileCount": 40,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
@@ -150,6 +151,7 @@
         "tests/tenant-status-admin-db.test.ts",
         "tests/tenant-gate-override-db.test.ts",
         "tests/cancelled-status-enforcement-db.test.ts",
+        "tests/tenant-reactivation-paths-db.test.ts",
         "tests/tenant-company-membership-guard-db.test.ts",
         "tests/contractor-w9-document-routing-db.test.ts",
         "tests/contractor-w9-upload-lifecycle-db.test.ts",

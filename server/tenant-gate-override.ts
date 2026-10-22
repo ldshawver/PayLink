@@ -1,5 +1,6 @@
 import { mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 import { INTEGRITY_REPAIR_MARKER } from "./workers/demo-cleanup";
+import { normalizeSubscriptionStatus } from "./subscription-status";
 
 // PR-C1: platform_super_admin break-glass gate override
 // (POST /api/platform/audit/licensing/:companyId/gate-override).
@@ -44,32 +45,97 @@ export function classifySubscriptionStatus(stored: string | null | undefined): S
 // TENANT_STATUS_TRANSITIONS); an unrecognized stored value may only be made
 // more restrictive.
 export const GATE_OVERRIDE_TRANSITIONS: Record<GateOverrideStatus, readonly StatusClass[]> = {
-  active_paid: ["trial", "trial_expired", "grace", "past_due", "suspended", "cancelled"],
-  trial_active: ["suspended"],
+  // "active" / "trial" sources only matter for legacy spellings (active,
+  // trialing): an exact match is already a no-op.
+  active_paid: ["active", "trial", "trial_expired", "grace", "past_due", "suspended", "cancelled"],
+  trial_active: ["trial", "suspended"],
   grace: ["active", "past_due"],
   past_due: ["active", "trial", "grace"],
   suspended: ["active", "trial", "trial_expired", "grace", "past_due", "unknown"],
   cancelled: ["active", "trial", "trial_expired", "grace", "past_due", "suspended", "unknown"],
 };
 
-const MAX_REASON_LENGTH = 500;
-const COMPANY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// The single companies.subscription_status transition policy (P0-E). The gate
+// override accepts only GATE_OVERRIDE_STATUSES as input; the license service
+// may additionally expire a trial. trial_expired is never reachable from
+// past_due/suspended/cancelled (checkTenantGate does not block trial_expired,
+// so that would soften an enforcement state at the gate).
+export const SUBSCRIPTION_TRANSITIONS: Record<string, readonly StatusClass[]> = {
+  ...GATE_OVERRIDE_TRANSITIONS,
+  trial_expired: ["trial", "active", "grace"],
+};
+
+export const MAX_REASON_LENGTH = 500;
+export const COMPANY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export type GateOverrideCheck = { ok: true; noop: boolean } | { ok: false; status: number; message: string };
+
+export function isIntegrityRepairReason(reason: string | null | undefined): boolean {
+  return (reason ?? "").trim().toLowerCase().startsWith(INTEGRITY_REPAIR_MARKER);
+}
+
+/**
+ * Shared transition check for every path that writes
+ * companies.subscription_status on purpose (gate override, billing
+ * activation, license admin, Stripe reactivation). Moving a company OUT of
+ * cancelled is a reinstatement and is reserved for the explicit, audited
+ * reinstatement operations (PATCH /api/tenants/:id and the gate override);
+ * every other caller passes allowReinstatement: false.
+ */
+export function checkSubscriptionTransition(
+  stored: string | null | undefined,
+  to: string,
+  isDemo: boolean,
+  opts: { allowReinstatement: boolean },
+): GateOverrideCheck {
+  if (!(to in SUBSCRIPTION_TRANSITIONS)) return { ok: false, status: 400, message: `Unsupported subscription status: ${to}` };
+  if (normalizeSubscriptionStatus(stored) === to) return { ok: true, noop: true };
+  if (isDemo && to !== "suspended" && to !== "cancelled") {
+    return { ok: false, status: 409, message: "A demo company can only be suspended or cancelled" };
+  }
+  const from = classifySubscriptionStatus(stored);
+  if (from === "cancelled" && !opts.allowReinstatement) {
+    return { ok: false, status: 409, message: "A cancelled company can only be reinstated by a platform administrator through tenant status administration or the gate override" };
+  }
+  if (!SUBSCRIPTION_TRANSITIONS[to].includes(from)) {
+    return { ok: false, status: 409, message: `Status change ${stored || "(none)"} → ${to} is not allowed` };
+  }
+  return { ok: true, noop: false };
+}
 
 export function checkGateOverrideTransition(stored: string | null | undefined, to: unknown, isDemo: boolean): GateOverrideCheck {
   if (typeof to !== "string" || !(GATE_OVERRIDE_STATUSES as readonly string[]).includes(to)) {
     return { ok: false, status: 400, message: `Invalid subscriptionStatus. Expected one of: ${GATE_OVERRIDE_STATUSES.join(", ")}` };
   }
-  if ((stored || "").trim().toLowerCase() === to) return { ok: true, noop: true };
-  if (isDemo && to !== "suspended" && to !== "cancelled") {
-    return { ok: false, status: 409, message: "A demo company can only be suspended or cancelled" };
+  return checkSubscriptionTransition(stored, to, isDemo, { allowReinstatement: true });
+}
+
+/**
+ * Re-derives the tenants.status mirror for a company on the caller's
+ * transaction client. Only the tenant's PRIMARY company drives the mirror
+ * (same resolution as applyTenantPatch / the reconcile job). Returns the
+ * company's tenant id (null when unassigned).
+ */
+export async function syncPrimaryTenantMirror(
+  client: { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+  companyId: string,
+  status: string | null,
+  isDemo: boolean,
+  trialEnd: Date | string | null | undefined,
+  statusChanged: boolean,
+): Promise<string | null> {
+  const { rows } = await client.query(
+    `SELECT tc.tenant_id,
+            (SELECT p.company_id FROM tenant_companies p WHERE p.tenant_id = tc.tenant_id
+              ORDER BY p.is_primary DESC, p.created_at ASC LIMIT 1) AS primary_company_id
+     FROM tenant_companies tc WHERE tc.company_id = $1 LIMIT 1`,
+    [companyId],
+  );
+  const tenantId: string | null = rows[0]?.tenant_id ?? null;
+  if (statusChanged && tenantId && rows[0].primary_company_id === companyId) {
+    await client.query(`UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(status, isDemo, trialEnd), tenantId]);
   }
-  const from = classifySubscriptionStatus(stored);
-  if (!GATE_OVERRIDE_TRANSITIONS[to as GateOverrideStatus].includes(from)) {
-    return { ok: false, status: 409, message: `Gate override ${stored || "(none)"} → ${to} is not allowed` };
-  }
-  return { ok: true, noop: false };
+  return tenantId;
 }
 
 export interface GateOverrideInput { subscriptionStatus?: unknown; reason?: unknown }
@@ -99,7 +165,7 @@ export async function applyGateOverride(pool: PgPool, companyId: string, input: 
   const reason = typeof input.reason === "string" ? input.reason.trim() || null : null;
   if (hasStatus && !reason) return { ok: false, status: 400, message: "A reason is required for a gate override" };
   if (reason && reason.length > MAX_REASON_LENGTH) return { ok: false, status: 400, message: `reason must be at most ${MAX_REASON_LENGTH} characters` };
-  if (reason && reason.toLowerCase().startsWith(INTEGRITY_REPAIR_MARKER)) {
+  if (reason && isIntegrityRepairReason(reason)) {
     return { ok: false, status: 400, message: `reason may not start with "${INTEGRITY_REPAIR_MARKER}" (reserved marker)` };
   }
 
@@ -112,7 +178,7 @@ export async function applyGateOverride(pool: PgPool, companyId: string, input: 
     );
     const company = companyRows[0];
     if (!company) { await client.query("ROLLBACK"); return { ok: false, status: 404, message: "Company not found" }; }
-    if ((company.gate_override_reason ?? "").startsWith(INTEGRITY_REPAIR_MARKER)) {
+    if (isIntegrityRepairReason(company.gate_override_reason)) {
       await client.query("ROLLBACK");
       return { ok: false, status: 409, message: "Company is an inert integrity-repair record; gate override is not permitted" };
     }
@@ -133,20 +199,8 @@ export async function applyGateOverride(pool: PgPool, companyId: string, input: 
       await client.query(`UPDATE companies SET gate_override_reason = $1 WHERE id = $2`, [reason, companyId]);
     }
 
-    // The tenants.status mirror follows the tenant's PRIMARY company only (same
-    // resolution as applyTenantPatch / the reconcile job); overriding a
-    // secondary company never rewrites its tenant's displayed status.
-    const { rows: tenantRows } = await client.query(
-      `SELECT tc.tenant_id,
-              (SELECT p.company_id FROM tenant_companies p WHERE p.tenant_id = tc.tenant_id
-                ORDER BY p.is_primary DESC, p.created_at ASC LIMIT 1) AS primary_company_id
-       FROM tenant_companies tc WHERE tc.company_id = $1 LIMIT 1`,
-      [companyId],
-    );
-    const tenantId: string | null = tenantRows[0]?.tenant_id ?? null;
-    if (statusChanged && tenantId && tenantRows[0].primary_company_id === companyId) {
-      await client.query(`UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(after, isDemo, company.trial_end), tenantId]);
-    }
+    // Overriding a secondary company never rewrites its tenant's displayed status.
+    const tenantId = await syncPrimaryTenantMirror(client, companyId, after, isDemo, company.trial_end, statusChanged);
 
     await client.query(
       `INSERT INTO authorization_audit_log (actor_user_id, target_resource, change_type, before_value, after_value, note, company_id, tenant_id, created_at)

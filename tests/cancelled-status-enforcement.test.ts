@@ -45,8 +45,8 @@ ok("blocks cancelled with code cancelled", /if \(status === "cancelled"\) \{[\s\
 console.log("\nBilling lifecycle (server/billingLifecycle.ts)");
 const billing = fs.readFileSync("server/billingLifecycle.ts", "utf8");
 ok("payment_failed never moves suspended / either cancelled spelling into grace_period", /AND subscription_status NOT IN \('suspended', 'cancelled', 'canceled'\)/.test(billing));
-ok("no-op guard stops before mirror / audit / email", /if \(!\(graceResult as any\)\.rowCount\) \{[\s\S]{0,160}return;\n\s*\}\n\s*await mirrorTenantStatusFromCompany\(company\.id, "grace_period"\)/.test(billing));
-ok("reactivation paths unchanged: cancelled is not auto-reactivated", (billing.match(/\["grace_period", "suspended"\]\.includes\(company\.subscriptionStatus\)/g) || []).length === 2);
+ok("no-op guard stops before mirror / audit / email", /if \(!graceResult\.rowCount\) return false;[\s\S]{0,400}if \(!moved\) \{[\s\S]{0,160}return;\n\s*\}\n\s*await mirrorTenantStatusFromCompany\(company\.id, "grace_period"\)/.test(billing));
+ok("cancelled is never auto-reactivated by a Stripe payment", /if \(status === "cancelled"\) refused = /.test(billing));
 
 console.log("\nClient restriction flag (client/src/hooks/use-trial.ts)");
 const trial = fs.readFileSync("client/src/hooks/use-trial.ts", "utf8");
