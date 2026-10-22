@@ -54,6 +54,29 @@ jobs:
       - name: Run required test suite
         run: npm run test:required
 
+  backup-pipeline:
+    name: backup-pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install backup tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone gnupg
+          ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql
+          ls /usr/lib/postgresql/*/bin/initdb
+
+      - name: Backup pipeline end-to-end (throwaway cluster, temp keys, local remote)
+        run: npx --yes tsx@4.19.2 tests/backup-db-pipeline.test.ts
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
