@@ -5,6 +5,8 @@ import {
   getCompanyOwnerInfo,
 } from "./notifications/TenantNotificationService";
 import { mirrorTenantStatusFromCompany } from "./tenant-context";
+import { normalizeSubscriptionStatus } from "./subscription-status";
+import { checkSubscriptionTransition } from "./tenant-gate-override";
 
 const DEFAULT_GRACE_PERIOD_DAYS = 14;
 
@@ -46,23 +48,102 @@ async function findCompanyByStripeSubscriptionId(
   };
 }
 
-async function logBillingAuditEvent(
+type Tx = { execute: (q: any) => Promise<{ rows: any[]; rowCount?: number | null }> };
+
+// Lifecycle audit rows are written on the same transaction as the status
+// change they describe (P0-E): if the insert fails, the change rolls back.
+async function insertLifecycleAudit(
+  tx: Tx,
   companyId: string,
-  changeType: string,
+  changeType: "lifecycle_transition" | "lifecycle_reactivation_refused",
   beforeValue: string,
   afterValue: string,
-  note: string
+  note: string,
 ): Promise<void> {
-  try {
-    await db.execute(sql`
-      INSERT INTO authorization_audit_log
-        (actor_user_id, change_type, before_value, after_value, note, company_id, created_at)
-      VALUES
-        ('system', ${changeType}, ${beforeValue}, ${afterValue}, ${note}, ${companyId}, NOW())
+  await tx.execute(sql`
+    INSERT INTO authorization_audit_log
+      (actor_user_id, change_type, before_value, after_value, note, company_id, created_at)
+    VALUES
+      ('system', ${changeType}, ${beforeValue}, ${afterValue}, ${note}, ${companyId}, NOW())
+  `);
+}
+
+async function lockCompany(tx: Tx, companyId: string): Promise<{ subscription_status: string | null; is_demo: boolean | null } | null> {
+  const r = await tx.execute(sql`SELECT subscription_status, is_demo FROM companies WHERE id = ${companyId} FOR UPDATE`);
+  return (r.rows[0] as any) ?? null;
+}
+
+/**
+ * True only when the company's CURRENT suspension was applied by the billing
+ * lifecycle itself (grace-period expiry / Stripe subscription deletion). The
+ * latest status-change audit row that set "suspended" decides; a suspension by
+ * a platform administrator (tenant status admin, gate override, license
+ * admin) — or one with no audit trail at all — is never lifted by a Stripe
+ * payment (P0-E).
+ */
+export async function wasSuspendedByBilling(tx: Tx, companyId: string): Promise<boolean> {
+  const r = await tx.execute(sql`
+    SELECT actor_user_id, change_type FROM authorization_audit_log
+    WHERE company_id = ${companyId}
+      AND after_value = 'suspended'
+      AND change_type IN ('lifecycle_transition', 'tenant_status_change', 'gate_override', 'license_admin_update')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `);
+  const row = r.rows[0] as any;
+  return !!row && row.actor_user_id === "system" && row.change_type === "lifecycle_transition";
+}
+
+/**
+ * Stripe payment / subscription-active → restore access. Only a grace_period
+ * company or a company suspended BY BILLING is restored; cancelled, demo and
+ * administratively suspended companies are left unchanged and a
+ * lifecycle_reactivation_refused audit row records the payment.
+ */
+async function reactivateFromBilling(companyId: string, note: string): Promise<boolean> {
+  const outcome = await db.transaction(async (txRaw) => {
+    const tx = txRaw as unknown as Tx;
+    const c = await lockCompany(tx, companyId);
+    if (!c) return null;
+    const status = normalizeSubscriptionStatus(c.subscription_status);
+    let refused: string | null = null;
+    if (status === "cancelled") refused = "tenant is cancelled; reinstatement requires a platform administrator";
+    else if (status === "suspended") {
+      if (!(await wasSuspendedByBilling(tx, companyId))) refused = "tenant was suspended by a platform administrator";
+    } else if (status !== "grace_period") return null;
+    if (!refused) {
+      const check = checkSubscriptionTransition(c.subscription_status, "active_paid", c.is_demo === true, { allowReinstatement: false });
+      if (!check.ok) refused = check.message;
+    }
+    if (refused) {
+      await insertLifecycleAudit(tx, companyId, "lifecycle_reactivation_refused", status, status, `${note} Not reactivated: ${refused}.`);
+      return { reactivated: false as const, refused };
+    }
+    await tx.execute(sql`
+      UPDATE companies
+      SET subscription_status = 'active_paid',
+          billing_active = TRUE,
+          grace_period_end = NULL
+      WHERE id = ${companyId}
     `);
-  } catch (e) {
-    console.error("[BillingLifecycle] Failed to write audit log:", e);
+    await insertLifecycleAudit(tx, companyId, "lifecycle_transition", c.subscription_status ?? "", "active_paid", `${note} Tenant reactivated.`);
+    return { reactivated: true as const, isDemo: c.is_demo === true };
+  });
+  if (!outcome) return false;
+  if (!outcome.reactivated) {
+    console.log(`[BillingLifecycle] payment received but company ${companyId} NOT reactivated: ${outcome.refused}`);
+    return false;
   }
+  await mirrorTenantStatusFromCompany(companyId, "active_paid", outcome.isDemo);
+  const ownerInfo = await getCompanyOwnerInfo(companyId);
+  await sendTenantLifecycleNotification({
+    companyId,
+    companyName: ownerInfo.companyName,
+    ownerEmail: ownerInfo.ownerEmail,
+    ownerName: ownerInfo.ownerName,
+    event: "tenant_reactivated",
+  });
+  return true;
 }
 
 export async function handleTenantBillingEvent(
@@ -91,27 +172,26 @@ export async function handleTenantBillingEvent(
     // spelling — see CANCELLED_SUBSCRIPTION_STATUS_SPELLINGS) must never be
     // moved into it by a payment failure. When the guard matches nothing,
     // stop: no mirror write, audit row or "grace period started" email.
-    const graceResult = await db.execute(sql`
-      UPDATE companies
-      SET subscription_status = 'grace_period',
-          grace_period_end = ${gracePeriodEnd.toISOString()},
-          billing_active = FALSE
-      WHERE id = ${company.id}
-        AND subscription_status NOT IN ('suspended', 'cancelled', 'canceled')
-    `);
-    if (!(graceResult as any).rowCount) {
+    const moved = await db.transaction(async (txRaw) => {
+      const tx = txRaw as unknown as Tx;
+      const graceResult = await tx.execute(sql`
+        UPDATE companies
+        SET subscription_status = 'grace_period',
+            grace_period_end = ${gracePeriodEnd.toISOString()},
+            billing_active = FALSE
+        WHERE id = ${company!.id}
+          AND subscription_status NOT IN ('suspended', 'cancelled', 'canceled')
+      `);
+      if (!graceResult.rowCount) return false;
+      await insertLifecycleAudit(tx, company!.id, "lifecycle_transition", prevStatus, "grace_period",
+        `Stripe invoice payment failed. Grace period until ${gracePeriodEnd.toISOString()}.`);
+      return true;
+    });
+    if (!moved) {
       console.log(`[BillingLifecycle] payment_failed ignored for company ${company.id} (status ${prevStatus})`);
       return;
     }
     await mirrorTenantStatusFromCompany(company.id, "grace_period");
-
-    await logBillingAuditEvent(
-      company.id,
-      "lifecycle_transition",
-      prevStatus,
-      "grace_period",
-      `Stripe invoice payment failed. Grace period until ${gracePeriodEnd.toISOString()}.`
-    );
 
     const ownerInfo = await getCompanyOwnerInfo(company.id);
     await sendTenantLifecycleNotification({
@@ -134,42 +214,13 @@ export async function handleTenantBillingEvent(
     const company = await findCompanyByStripeCustomerId(stripeCustomerId);
     if (!company) return;
 
-    const wasSuspendedOrGrace = ["grace_period", "suspended"].includes(company.subscriptionStatus);
-
     if (subscriptionId) {
       await db.execute(sql`
         UPDATE companies SET stripe_subscription_id = ${subscriptionId} WHERE id = ${company.id} AND stripe_subscription_id IS NULL
       `);
     }
 
-    if (wasSuspendedOrGrace) {
-      const prevStatus = company.subscriptionStatus;
-      await db.execute(sql`
-        UPDATE companies
-        SET subscription_status = 'active_paid',
-            billing_active = TRUE,
-            grace_period_end = NULL
-        WHERE id = ${company.id}
-      `);
-      await mirrorTenantStatusFromCompany(company.id, "active_paid");
-
-      await logBillingAuditEvent(
-        company.id,
-        "lifecycle_transition",
-        prevStatus,
-        "active_paid",
-        "Payment succeeded. Tenant reactivated."
-      );
-
-      const ownerInfo = await getCompanyOwnerInfo(company.id);
-      await sendTenantLifecycleNotification({
-        companyId: company.id,
-        companyName: ownerInfo.companyName,
-        ownerEmail: ownerInfo.ownerEmail,
-        ownerName: ownerInfo.ownerName,
-        event: "tenant_reactivated",
-      });
-
+    if (await reactivateFromBilling(company.id, "Payment succeeded.")) {
       console.log(`[BillingLifecycle] payment_succeeded → reactivated company ${company.id}`);
     }
   }
@@ -185,23 +236,31 @@ export async function handleTenantBillingEvent(
     }
     if (!company) return;
 
-    const prevStatus = company.subscriptionStatus;
-    await db.execute(sql`
-      UPDATE companies
-      SET subscription_status = 'suspended',
-          billing_active = FALSE,
-          grace_period_end = NULL
-      WHERE id = ${company.id}
-    `);
-    await mirrorTenantStatusFromCompany(company.id, "suspended");
-
-    await logBillingAuditEvent(
-      company.id,
-      "lifecycle_transition",
-      prevStatus,
-      "suspended",
-      "Stripe subscription deleted. Tenant suspended."
-    );
+    // A cancelled company stays cancelled (suspended is reactivatable by a
+    // later payment), and an already-suspended company is left alone so an
+    // administrative suspension is never relabelled as a billing one (P0-E).
+    const target = company;
+    const suspended = await db.transaction(async (txRaw) => {
+      const tx = txRaw as unknown as Tx;
+      const c = await lockCompany(tx, target.id);
+      if (!c) return null;
+      const status = normalizeSubscriptionStatus(c.subscription_status);
+      if (status === "cancelled" || status === "suspended") return null;
+      await tx.execute(sql`
+        UPDATE companies
+        SET subscription_status = 'suspended',
+            billing_active = FALSE,
+            grace_period_end = NULL
+        WHERE id = ${target.id}
+      `);
+      await insertLifecycleAudit(tx, target.id, "lifecycle_transition", c.subscription_status ?? "", "suspended", "Stripe subscription deleted. Tenant suspended.");
+      return { isDemo: c.is_demo === true };
+    });
+    if (!suspended) {
+      console.log(`[BillingLifecycle] subscription.deleted ignored for company ${company.id} (already suspended/cancelled)`);
+      return;
+    }
+    await mirrorTenantStatusFromCompany(company.id, "suspended", suspended.isDemo);
 
     const ownerInfo = await getCompanyOwnerInfo(company.id);
     await sendTenantLifecycleNotification({
@@ -232,33 +291,8 @@ export async function handleTenantBillingEvent(
       `);
     }
 
-    if (status === "active" && ["grace_period", "suspended"].includes(company.subscriptionStatus)) {
-      const prevStatus = company.subscriptionStatus;
-      await db.execute(sql`
-        UPDATE companies
-        SET subscription_status = 'active_paid',
-            billing_active = TRUE,
-            grace_period_end = NULL
-        WHERE id = ${company.id}
-      `);
-      await mirrorTenantStatusFromCompany(company.id, "active_paid");
-
-      await logBillingAuditEvent(
-        company.id,
-        "lifecycle_transition",
-        prevStatus,
-        "active_paid",
-        "Stripe subscription updated to active. Tenant reactivated."
-      );
-
-      const ownerInfo = await getCompanyOwnerInfo(company.id);
-      await sendTenantLifecycleNotification({
-        companyId: company.id,
-        companyName: ownerInfo.companyName,
-        ownerEmail: ownerInfo.ownerEmail,
-        ownerName: ownerInfo.ownerName,
-        event: "tenant_reactivated",
-      });
+    if (status === "active") {
+      await reactivateFromBilling(company.id, "Stripe subscription updated to active.");
     }
   }
 }
@@ -273,21 +307,9 @@ export async function checkAndSuspendExpiredGracePeriods(): Promise<number> {
 
   let count = 0;
   for (const row of expired.rows as any[]) {
-    await db.execute(sql`
-      UPDATE companies
-      SET subscription_status = 'suspended',
-          billing_active = FALSE
-      WHERE id = ${row.id}
-    `);
+    const moved = await suspendExpiredGracePeriod(row.id);
+    if (!moved) continue;
     await mirrorTenantStatusFromCompany(row.id, "suspended");
-
-    await db.execute(sql`
-      INSERT INTO authorization_audit_log
-        (actor_user_id, change_type, before_value, after_value, note, company_id, created_at)
-      VALUES
-        ('system', 'lifecycle_transition', 'grace_period', 'suspended',
-         'Grace period expired. Tenant automatically suspended.', ${row.id}, NOW())
-    `);
 
     const ownerInfo = await getCompanyOwnerInfo(row.id);
     await sendTenantLifecycleNotification({
@@ -303,4 +325,29 @@ export async function checkAndSuspendExpiredGracePeriods(): Promise<number> {
   }
 
   return count;
+}
+
+/**
+ * grace_period → suspended for one company whose grace period has ended,
+ * with its lifecycle audit row on the same transaction. Shared by the
+ * scheduled sweep and requireActiveSubscription so every billing suspension
+ * is recognisable to wasSuspendedByBilling(). Returns false when the company
+ * is no longer in an expired grace period.
+ */
+export async function suspendExpiredGracePeriod(companyId: string): Promise<boolean> {
+  return db.transaction(async (txRaw) => {
+    const tx = txRaw as unknown as Tx;
+    const r = await tx.execute(sql`
+      UPDATE companies
+      SET subscription_status = 'suspended',
+          billing_active = FALSE
+      WHERE id = ${companyId}
+        AND subscription_status = 'grace_period'
+        AND grace_period_end IS NOT NULL
+        AND grace_period_end < NOW()
+    `);
+    if (!r.rowCount) return false;
+    await insertLifecycleAudit(tx, companyId, "lifecycle_transition", "grace_period", "suspended", "Grace period expired. Tenant automatically suspended.");
+    return true;
+  });
 }
