@@ -1,0 +1,13 @@
+# Nightly at 03:40 UTC — after CloudPanel's own 03:15/04:15 jobs are clear of the
+# app's busiest hours. Persistent=true runs a missed backup at next boot.
+[Unit]
+Description=Nightly PayLink production PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 03:40:00 UTC
+RandomizedDelaySec=10m
+Persistent=true
+Unit=paylink-db-backup.service
+
+[Install]
+WantedBy=timers.target
