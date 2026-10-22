@@ -17,6 +17,7 @@ import { checkTenantGate } from "./tenant-enforcement";
 import { createRateLimiter, requireCsrfToken } from "./security-middleware";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany, mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 import { applyTenantPatch } from "./tenant-status-admin";
+import { applyGateOverride } from "./tenant-gate-override";
 import {
   resolveCompanyLicense,
   listCompanyLicenses,
@@ -37747,33 +37748,20 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  // ─── Platform audit — clear gate override ─────────────────────────────────
+  // ─── Platform audit — gate override (break-glass) ─────────────────────────
+  // platform_super_admin only (route + service). Allowlisted values, explicit
+  // transitions, and status + mirror + mandatory audit row in one transaction:
+  // see server/tenant-gate-override.ts (PR-C1).
   app.post("/api/platform/audit/licensing/:companyId/gate-override", requirePlatformAudit, async (req, res) => {
     const { companyId } = req.params;
-    const { reason, subscriptionStatus } = req.body;
     try {
-      let result;
-      if (subscriptionStatus) {
-        result = await db.execute(sql`
-          UPDATE companies
-          SET subscription_status = ${subscriptionStatus},
-              gate_override_reason = ${reason || null}
-          WHERE id = ${companyId}
-        `);
-        await mirrorTenantStatusFromCompany(companyId, subscriptionStatus);
-      } else {
-        result = await db.execute(sql`
-          UPDATE companies SET gate_override_reason = ${reason || null} WHERE id = ${companyId}
-        `);
-      }
-      // Same truthful-response fix as POST .../contracts/:companyId/sign
-      // above (batch 5 audit, verified defect 8).
-      if (!(result as any).rowCount) {
-        return res.status(404).json({ message: "Company not found" });
-      }
-      res.json({ success: true });
+      const result = await applyGateOverride(db.$client as any, companyId, { subscriptionStatus: req.body?.subscriptionStatus, reason: req.body?.reason }, { userId: (req as any).user?.id, role: (req as any).user?.role });
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      invalidateTenantCache(companyId);
+      res.json({ success: true, subscriptionStatus: result.subscriptionStatus, statusChanged: result.statusChanged });
     } catch (e: any) {
-      res.status(500).json({ message: e?.message || "Failed to set gate override" });
+      console.error("[GateOverride] failed:", e?.message);
+      res.status(500).json({ message: "Failed to set gate override" });
     }
   });
 

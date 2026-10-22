@@ -47,11 +47,14 @@ console.log("\nWiring — every raw `SET subscription_status` write site also mi
     { label: "subscription-gate: trial expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n        return res.status(403)" },
     { label: "trial/status auto-transition to trial_expired", marker: "SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);\n        await mirrorTenantStatusFromCompany(user.companyId, \"trial_expired\");\n      }" },
     { label: "billing/activate -> active_paid", marker: "await mirrorTenantStatusFromCompany(companyId, \"active_paid\");" },
-    { label: "platform gate-override -> dynamic status", marker: "await mirrorTenantStatusFromCompany(companyId, subscriptionStatus);" },
   ];
   for (const site of routesWriteSites) {
     ok(`routes.ts: ${site.label}`, routes.includes(site.marker));
   }
+  // PR-C1: the platform gate-override re-derives the mirror inside its own
+  // transaction (server/tenant-gate-override.ts), primary company only.
+  const gateOverride = fs.readFileSync("server/tenant-gate-override.ts", "utf8");
+  ok("tenant-gate-override.ts: gate-override -> mirror in-transaction", gateOverride.includes("UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(after, isDemo, company.trial_end), tenantId]"));
 
   ok("routes.ts imports mirrorTenantStatusFromCompany from tenant-context", /import\s*\{[^}]*mirrorTenantStatusFromCompany[^}]*\}\s*from\s*"\.\/tenant-context"/.test(routes));
 
