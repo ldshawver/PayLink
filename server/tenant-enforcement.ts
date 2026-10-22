@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { sql } from "drizzle-orm";
+import { normalizeSubscriptionStatus } from "./subscription-status";
 
 export type GateCode =
   | "trial_expired"
@@ -33,7 +34,7 @@ export async function checkTenantGate(companyId: string): Promise<TenantGateResu
 
     if (c.is_demo) return { allowed: true };
 
-    const status = (c.subscription_status || "").toLowerCase();
+    const status = normalizeSubscriptionStatus(c.subscription_status);
     const now = new Date();
 
     if (status === "trial_active" || status === "trialing") {

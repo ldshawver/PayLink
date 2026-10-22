@@ -87,14 +87,22 @@ export async function handleTenantBillingEvent(
 
     const prevStatus = company.subscriptionStatus;
 
-    await db.execute(sql`
+    // grace_period grants access, so a suspended or cancelled tenant (either
+    // spelling — see CANCELLED_SUBSCRIPTION_STATUS_SPELLINGS) must never be
+    // moved into it by a payment failure. When the guard matches nothing,
+    // stop: no mirror write, audit row or "grace period started" email.
+    const graceResult = await db.execute(sql`
       UPDATE companies
       SET subscription_status = 'grace_period',
           grace_period_end = ${gracePeriodEnd.toISOString()},
           billing_active = FALSE
       WHERE id = ${company.id}
-        AND subscription_status NOT IN ('suspended', 'canceled')
+        AND subscription_status NOT IN ('suspended', 'cancelled', 'canceled')
     `);
+    if (!(graceResult as any).rowCount) {
+      console.log(`[BillingLifecycle] payment_failed ignored for company ${company.id} (status ${prevStatus})`);
+      return;
+    }
     await mirrorTenantStatusFromCompany(company.id, "grace_period");
 
     await logBillingAuditEvent(

@@ -14,6 +14,7 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
+import { normalizeSubscriptionStatus } from "./subscription-status";
 import { createRateLimiter, requireCsrfToken } from "./security-middleware";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany } from "./tenant-context";
 import {
@@ -1190,11 +1191,21 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
     const rows = await db.execute(sql`SELECT subscription_status, trial_end, grace_period_end FROM companies WHERE id = ${user.companyId}`);
     if (rows.rows.length === 0) return next();
     const company = rows.rows[0] as any;
-    const status = company.subscription_status;
-    if (status === "suspended" || status === "canceled") {
+    // Both "cancelled" and "canceled" are stored; normalize before comparing
+    // (P0-D: "cancelled" used to pass this gate). /auth/ and /billing/activate
+    // stay reachable via publicWritePaths.
+    const status = normalizeSubscriptionStatus(company.subscription_status);
+    if (status === "suspended") {
       return res.status(403).json({
         message: "Account suspended. Please resolve your billing to restore access.",
         reason: "tenant_suspended",
+        subscriptionStatus: status,
+      });
+    }
+    if (status === "cancelled") {
+      return res.status(403).json({
+        message: "Subscription cancelled. Please resubscribe to restore access.",
+        reason: "tenant_cancelled",
         subscriptionStatus: status,
       });
     }
