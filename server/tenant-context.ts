@@ -207,13 +207,31 @@ export type MirroredTenantStatus = "active" | "trial" | "demo" | "suspended" | "
  * fall back to "active" rather than risk locking a tenant out of a UI that
  * merely displays tenants.status — companies.subscription_status remains the
  * thing that actually gates access regardless of what this mirror says.
+ *
+ * Enforcement states (suspended / cancelled) always win over demo
+ * classification: a suspended demo is "suspended", not "demo". A demo whose
+ * trial_end has passed is not active either — it reads "suspended" until
+ * DemoCleanup purges it.
  */
 export function mapSubscriptionStatusToTenantStatus(
   subscriptionStatus: string | null | undefined,
-  isDemo?: boolean
+  isDemo?: boolean,
+  trialEnd?: Date | string | null
 ): MirroredTenantStatus {
-  if (isDemo) return "demo";
-  switch ((subscriptionStatus || "").toLowerCase()) {
+  const status = (subscriptionStatus || "").toLowerCase();
+  switch (status) {
+    case "trial_expired":
+    case "past_due":
+    case "suspended":
+      return "suspended";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+  }
+  if (isDemo) {
+    return trialEnd && new Date(trialEnd).getTime() < Date.now() ? "suspended" : "demo";
+  }
+  switch (status) {
     case "trial_active":
     case "trialing":
       return "trial";
@@ -222,13 +240,6 @@ export function mapSubscriptionStatusToTenantStatus(
     case "grace_period":
     case "grace":
       return "active";
-    case "trial_expired":
-    case "past_due":
-    case "suspended":
-      return "suspended";
-    case "cancelled":
-    case "canceled":
-      return "cancelled";
     default:
       return "active";
   }
