@@ -75,6 +75,7 @@
         "tests/diagnostics-safety-static.test.ts",
         "tests/documenso-incident-static.test.ts",
         "tests/documenso-log-redaction.test.ts",
+        "tests/request-logger-no-body.test.ts",
         "tests/documenso-recipient-canonical.test.ts",
         "tests/documenso-resend-behavior.test.ts",
         "tests/documenso-resend-static.test.ts",
@@ -117,7 +118,8 @@
         "tests/saas-pr1-company-authz-static.test.ts",
         "server/__tests__/stored-resource-guard.test.ts",
         "tests/saas-pr2-stored-ownership-static.test.ts",
-        "tests/saas-pr2b-remaining-ownership-static.test.ts"
+        "tests/saas-pr2b-remaining-ownership-static.test.ts",
+        "tests/backup-db-static.test.ts"
       ]
     },
     "db": {

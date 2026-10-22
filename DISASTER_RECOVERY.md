@@ -1,7 +1,7 @@
 # PayLink Disaster Recovery Runbook
 
 **Classification:** Internal — Restricted  
-**Last Updated:** 2026-06-11  
+**Last Updated:** 2026-10-21  
 **Owner:** PayLink Platform Engineering  
 **Review Cycle:** Quarterly
 
@@ -25,147 +25,49 @@
 | Application | Node.js / Express, managed by PM2 | VPS (`APP_VPS_HOST`) |
 | Database | PostgreSQL | VPS (same host, local socket) |
 | Static assets | Served by Express from `dist/public/` | VPS |
-| Backups | `pg_dump` via cron, stored in `/var/backups/paylink/` | VPS |
+| Backups | Nightly encrypted `pg_dump` (systemd timer) → local `/var/backups/paylink/nightly/` + off-server rclone remote; see §3 | VPS + off-server |
 | CI/CD | GitHub Actions → SSH deploy (`appleboy/ssh-action`, secrets: `APP_VPS_HOST`, `APP_VPS_SSH_KEY`) | `.github/workflows/deploy-app.yml` |
 
 ---
 
 ## 3. Automated Nightly Backup
 
-### 3.1 Backup script
+> **Correction (2026-10-21, PB-1):** earlier revisions of this section said a nightly
+> `scripts/backup-db.sh` cron was installed. It never was. The 2026-10-21 audit found no
+> cron or timer entry and no log file, and the only output was two manual runs from
+> 2026-06-12. CloudPanel's own backup jobs cover MySQL and CloudPanel's SQLite only, not
+> PayLink's PostgreSQL.
 
-The canonical backup script is **`scripts/backup-db.sh`** in the repository root.
+The current mechanism, install steps, alerting and drill schedule are in
+**[`docs/deployment/production-db-backup.md`](docs/deployment/production-db-backup.md)**.
 
 | Property | Value |
 |----------|-------|
-| Script path (VPS) | `/home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh` |
-| Backup directory | `/var/backups/paylink/` |
-| File naming convention | `paylink_YYYY-MM-DD.sql.gz` (e.g. `paylink_2026-06-12.sql.gz`) |
-| Format | Plain-SQL, `gzip -9` compressed |
-| Retention | 30 days (older files pruned automatically by the script) |
-| Log file (default) | `~/paylink-backup.log` (user-writable; see §3.2 for `/var/log` option) |
-
-The script is idempotent and safe to run manually at any time:
-```bash
-bash /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh
-```
-
-### 3.2 Cron setup (first-time installation on the VPS)
-
-Run as the `paylinkssh` user (the same user that runs PM2).
-
-#### Step 1 — Create the backup directory
-
-```bash
-sudo mkdir -p /var/backups/paylink
-sudo chown paylinkssh:paylinkssh /var/backups/paylink
-```
-
-#### Step 2 — Add the crontab entry
-
-The log file must be writable by `paylinkssh`. Use the home-directory path (no extra setup needed):
-
-```bash
-crontab -e
-```
-
-Add this line — runs at 02:00 every night, logs to the user's home directory:
-
-```
-0 2 * * * /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh >> /home/paylinkssh/paylink-backup.log 2>&1
-```
-
-**Optional:** to log to `/var/log/paylink-backup.log` instead, a one-time root step is required first:
-
-```bash
-# As root
-sudo touch /var/log/paylink-backup.log
-sudo chown paylinkssh:paylinkssh /var/log/paylink-backup.log
-```
-
-Then the crontab line becomes:
-
-```
-0 2 * * * /home/paylinkssh/paylink-app/PayLink/scripts/backup-db.sh >> /var/log/paylink-backup.log 2>&1
-```
-
-#### Step 3 — Verify the entry was saved
-
-```bash
-crontab -l | grep backup
-```
-
-### 3.3 Backup Verification (Run Monthly)
-
-```bash
-# 1. List available backups
-ls -lh /var/backups/paylink/
-
-# 2. Verify the most recent backup is readable and non-corrupt
-BACKUP_FILE=$(ls -t /var/backups/paylink/paylink_*.sql.gz | head -1)
-gunzip -t "$BACKUP_FILE" && echo "Backup integrity OK" || echo "BACKUP CORRUPTED"
-
-# 3. Check last backup log entry
-tail -5 /var/log/paylink-backup.log
-
-# 4. Restore to a test database to verify data integrity
-createdb paylink_verify
-gunzip -c "$BACKUP_FILE" | psql paylink_verify
-psql paylink_verify -c "SELECT COUNT(*) FROM companies; SELECT COUNT(*) FROM workers; SELECT COUNT(*) FROM payroll_items;"
-dropdb paylink_verify
-```
+| Schedule | `paylink-db-backup.timer`, nightly 03:40 UTC (`Persistent=true`), runs as `paylinkssh` |
+| Scripts | `scripts/backup-db.sh` + `scripts/backup-restore-verify.sh`, installed root-owned to `/usr/local/lib/paylink-backup/` |
+| Format | `pg_dump --format=custom`, GPG-encrypted to an offline-held key (`*.dump.gpg` + `.sha256` + `.manifest.txt`) |
+| Verification | Every backup is restored into a throwaway socket-only cluster before it is accepted. The off-server copy is read back and hash-checked |
+| Local copy | `/var/backups/paylink/nightly/`, 14 days (encrypted only) |
+| Off-server | rclone remote `paylink-offsite:<bucket>/prod/YYYY/MM/`, retention via bucket lifecycle |
+| Alerting | Dead-man healthcheck (start / success / `fail`) + failure email |
+| Second source | Pre-deploy dumps in `/home/paylinkssh/paylink-predeploy-backups/` (taken on every production deploy) |
 
 ---
 
 ## 4. Database Restore Procedure
 
-### Step 1 — Stop Application
-```bash
-ssh paylinkssh@$APP_VPS_HOST
-pm2 stop paylink
-pm2 list  # confirm stopped
-```
+Follow **§5 of [`docs/deployment/production-db-backup.md`](docs/deployment/production-db-backup.md)**.
+In summary:
 
-### Step 2 — Backup Current Database (Safety Net)
-```bash
-pg_dump -Fc paylink_production > /var/backups/paylink/pre_restore_$(date +%Y%m%d_%H%M%S).dump
-echo "Pre-restore dump complete"
-```
+1. On the admin machine, fetch the backup and verify its sha256. Decrypt it with the offline key.
+2. Stop the app (`pm2 stop paylink`).
+3. Restore into a **new** database, `paylink_restore_<TS>`, with `pg_restore --exit-on-error --no-owner`.
+4. Compare row counts against the backup's manifest.
+5. Point `DATABASE_URL` at the new database (or rename the databases). Restart and verify `/api/version`.
+6. Keep the old database until the restored one has been accepted.
 
-### Step 3 — Drop and Recreate Database
-```bash
-psql postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='paylink_production' AND pid <> pg_backend_pid();"
-dropdb paylink_production
-createdb paylink_production
-```
-
-### Step 4 — Restore from Backup
-```bash
-# If compressed SQL dump:
-gunzip -c /var/backups/paylink/paylink_TARGET_DATE.sql.gz | psql paylink_production
-
-# If custom-format dump:
-pg_restore -d paylink_production /var/backups/paylink/paylink_TARGET_DATE.dump
-```
-
-### Step 5 — Verify Restore
-```bash
-psql paylink_production -c "
-  SELECT 'companies' AS tbl, COUNT(*) FROM companies
-  UNION ALL SELECT 'workers', COUNT(*) FROM workers
-  UNION ALL SELECT 'payroll_runs', COUNT(*) FROM payroll_runs
-  UNION ALL SELECT 'payroll_items', COUNT(*) FROM payroll_items;
-"
-```
-
-### Step 6 — Restart Application
-```bash
-pm2 restart paylink
-sleep 15
-curl http://127.0.0.1:8000/health   # expect 200
-curl https://mypaylink.app/health   # expect 200 (nginx routing)
-pm2 logs paylink --lines 50 --nostream
-```
+Never `dropdb` the live database before a verified replacement exists. The previous revision
+of this procedure did that.
 
 ---
 
@@ -241,8 +143,9 @@ Run this checklist each quarter. Record date and initials of engineer performing
 
 | # | Step | Date Verified | Engineer |
 |---|------|---------------|----------|
-| 1 | Verify latest backup is readable (`gunzip -t`) | | |
-| 2 | Restore backup to test database and row-count check | | |
+| 1 | Confirm `last-success` < 26h old and the healthcheck shows no missed runs | | |
+| 2 | Off-site restore drill with the offline key (`production-db-backup.md` §6); row counts match manifest | | |
+| 2a | Confirm both offline copies of the backup private key are present and readable | | |
 | 3 | Confirm application health endpoints respond after restart | | |
 | 4 | Test rollback procedure on staging environment | | |
 | 5 | Verify escalation contacts are up to date | | |

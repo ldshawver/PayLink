@@ -1,0 +1,31 @@
+# PayLink production PostgreSQL backup — see docs/deployment/production-db-backup.md
+# Install to /etc/systemd/system/ (root-owned). The scripts it runs are installed
+# root-owned to /usr/local/lib/paylink-backup/ so app deploys cannot change or
+# break the backup job.
+[Unit]
+Description=PayLink production PostgreSQL backup (encrypted, off-server, restore-verified)
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=paylinkssh
+Group=mypaylink-app
+UMask=0077
+Environment=PAYLINK_ENV_FILE=/etc/paylink/.env
+Environment=PAYLINK_BACKUP_ENV_FILE=/etc/paylink/backup.env
+Environment=RCLONE_CACHE_DIR=/tmp/rclone-cache
+ExecStart=/usr/local/lib/paylink-backup/backup-db.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/backups/paylink/nightly /home/paylinkssh/.paylink-backup-gnupg
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

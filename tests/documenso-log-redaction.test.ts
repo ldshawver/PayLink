@@ -83,8 +83,8 @@ const MYPAYLINK_URL = `https://staging.mypaylink.app/sign/contracts/${MYPAYLINK_
 // ── Static: tie back to the real middleware and its call site ──
 const indexTs = fs.readFileSync("server/index.ts", "utf8");
 ok(
-  "server/index.ts: the access-log middleware redacts the response body before logging",
-  indexTs.includes("const bodyStr = redactDiagnosticText(JSON.stringify(capturedJsonResponse));"),
+  "server/index.ts: the access-log middleware never logs response bodies (PR-E1)",
+  indexTs.includes("app.use(createRequestLogger(log))") && !indexTs.includes("capturedJsonResponse"),
 );
 const diagSafety = fs.readFileSync("server/diagnostics-safety.ts", "utf8");
 ok(
