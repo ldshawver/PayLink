@@ -450,7 +450,7 @@ function LicensingTab() {
       setOverrideCompany(null);
       toast({ title: "Subscription status updated" });
     },
-    onError: () => toast({ title: "Failed to update status", variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Failed to update status", description: e?.message, variant: "destructive" }),
   });
   if (isLoading) return <LoadingState />;
   if (!data) return <ErrorState />;
