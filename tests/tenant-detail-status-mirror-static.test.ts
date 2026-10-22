@@ -77,8 +77,8 @@ ok(
   /UPDATE companies SET subscription_status = \$1 WHERE id = \$2/.test(tenantAdmin) && !/SET[^`]*is_demo/.test(tenantAdmin)
 );
 ok(
-  "a legitimate status change re-derives the mirror from subscription_status via mapSubscriptionStatusToTenantStatus() in the same transaction",
-  /mapSubscriptionStatusToTenantStatus\(subscriptionStatus, false\)/.test(tenantAdmin) && /BEGIN/.test(tenantAdmin) && /COMMIT/.test(tenantAdmin)
+  "a legitimate status change re-derives the mirror from subscription_status via mapSubscriptionStatusToTenantStatus() (real is_demo / trial_end) in the same transaction",
+  /mapSubscriptionStatusToTenantStatus\(subscriptionStatus, isDemo, company\.trial_end\)/.test(tenantAdmin) && /BEGIN/.test(tenantAdmin) && /COMMIT/.test(tenantAdmin)
 );
 ok(
   "setting status with no assigned company is rejected rather than silently mutating nothing",

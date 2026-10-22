@@ -13,7 +13,6 @@
  */
 import { Pool } from "pg";
 import assert from "node:assert/strict";
-import { applyTenantPatch } from "../server/tenant-status-admin";
 
 const FORBIDDEN = [/staging/i, /production/i, /^prod$/i, /apppaylinkstaging/i, /apppaylinkmain/i];
 
@@ -30,6 +29,18 @@ async function main() {
   }
   if (process.env.DATABASE_URL && process.env.DATABASE_URL === url) throw new Error("TEST_DATABASE_URL equals this process's DATABASE_URL.");
 
+  // server/db.ts (used by checkTenantGate) reads DATABASE_URL at import time,
+  // and every server module below imports it transitively — so all server
+  // imports are dynamic and happen only after the checks above.
+  process.env.DATABASE_URL = url;
+  const { applyTenantPatch } = await import("../server/tenant-status-admin");
+  const { checkTenantGate } = await import("../server/tenant-enforcement");
+  // checkTenantGate fails OPEN (allowed: true) on any query error, so an
+  // "allowed" result only counts if its error path never fired.
+  let gateErrors = 0;
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { if (String(args[0]).includes("[TenantGate] check failed")) gateErrors++; origError(...args); };
+  const { mapSubscriptionStatusToTenantStatus } = await import("../server/tenant-context");
   const pool = new Pool({ connectionString: url, max: 4 });
   const cur = (await pool.query("SELECT current_database() d")).rows[0].d;
   assert.equal(cur, dbName, "current_database() must match TEST_DATABASE_URL");
@@ -38,6 +49,20 @@ async function main() {
   const ok = (n: string, c: boolean) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.error(`  ✗ ${n}`); } };
   const tag = `prc1-${Date.now()}`;
   let tenantId = "", companyId = "";
+  const extraTenants: string[] = [], extraCompanies: string[] = [];
+  const fixture = async (label: string, status: string, sub: string, isDemo: boolean, trialEnd: Date | null) => {
+    const c = (await pool.query(`INSERT INTO companies (name, subscription_status, is_demo, trial_end) VALUES ($1, $2, $3, $4) RETURNING id`, [`${tag} ${label} co`, sub, isDemo, trialEnd])).rows[0].id;
+    const t = (await pool.query(`INSERT INTO tenants (name, slug, status) VALUES ($1, $1, $2) RETURNING id`, [`${tag}-${label}`, status])).rows[0].id;
+    await pool.query(`INSERT INTO tenant_companies (tenant_id, company_id, is_primary) VALUES ($1, $2, true)`, [t, c]);
+    extraTenants.push(t); extraCompanies.push(c);
+    return { t, c };
+  };
+  // Same SELECT + mapping the TenantStatusMirrorReconcile job runs.
+  const reconcileExpected = async (t: string) => {
+    const row = (await pool.query(`SELECT c.subscription_status, c.is_demo, c.trial_end FROM tenants t JOIN tenant_companies tc ON tc.tenant_id = t.id AND tc.is_primary = TRUE JOIN companies c ON c.id = tc.company_id WHERE t.id = $1`, [t])).rows[0];
+    return mapSubscriptionStatusToTenantStatus(row.subscription_status, row.is_demo, row.trial_end);
+  };
+  const tenantStatus = async (t: string) => (await pool.query(`SELECT status FROM tenants WHERE id = $1`, [t])).rows[0].status;
 
   try {
     companyId = (await pool.query(`INSERT INTO companies (name, subscription_status, is_demo) VALUES ($1, 'active_paid', false) RETURNING id`, [`${tag} co`])).rows[0].id;
@@ -85,7 +110,53 @@ async function main() {
     ok("→ demo rejected", !r.ok);
     const isDemo = (await pool.query(`SELECT is_demo FROM companies WHERE id = $1`, [companyId])).rows[0].is_demo;
     ok("companies.is_demo never set by this route", isDemo === false);
+
+    console.log("\nInvalid statuses");
+    r = await applyTenantPatch(pool, tenantId, { status: "canceled" }, { userId: `${tag}-admin`, role: "platform_admin" });
+    ok("misspelled 'canceled' rejected 400", !r.ok && r.status === 400);
+    r = await applyTenantPatch(pool, tenantId, { status: "bogus" }, { userId: `${tag}-admin`, role: "platform_admin" });
+    ok("unknown status rejected 400", !r.ok && r.status === 400);
+
+    console.log("\nDemo tenants — enforcement wins over demo classification");
+    const future = new Date(Date.now() + 86_400_000), past = new Date(Date.now() - 86_400_000);
+    const demo = await fixture("demo", "demo", "active_paid", true, future);
+    const other = await fixture("other", "active", "active_paid", false, null);
+    ok("active demo: gate allows", (await checkTenantGate(demo.c)).allowed === true);
+    ok("active demo: effective status is demo", (await reconcileExpected(demo.t)) === "demo");
+    r = await applyTenantPatch(pool, demo.t, { status: "suspended" }, { userId: `${tag}-admin`, role: "platform_admin" });
+    let g = await checkTenantGate(demo.c);
+    ok("suspend demo commits; is_demo preserved", r.ok && (await pool.query(`SELECT is_demo FROM companies WHERE id = $1`, [demo.c])).rows[0].is_demo === true);
+    ok("suspended demo: mirror = suspended", (await tenantStatus(demo.t)) === "suspended");
+    ok("suspended demo: reconcile computes the same value (no flip back to demo)", (await reconcileExpected(demo.t)) === "suspended");
+    ok("suspended demo: gate BLOCKS (code suspended)", g.allowed === false && g.code === "suspended");
+    r = await applyTenantPatch(pool, demo.t, { status: "active" }, { userId: `${tag}-admin`, role: "platform_super_admin" });
+    ok("suspended demo cannot be reactivated (409)", !r.ok && r.status === 409);
+    r = await applyTenantPatch(pool, demo.t, { status: "cancelled" }, { userId: `${tag}-admin`, role: "platform_admin" });
+    g = await checkTenantGate(demo.c);
+    ok("cancelled demo: mirror and reconcile = cancelled, gate BLOCKS (code cancelled)", r.ok && (await tenantStatus(demo.t)) === "cancelled" && (await reconcileExpected(demo.t)) === "cancelled" && g.allowed === false && g.code === "cancelled");
+    const demoAudit = (await pool.query(`SELECT before_value, after_value FROM authorization_audit_log WHERE tenant_id = $1 AND change_type = 'tenant_status_change' ORDER BY created_at`, [demo.t])).rows;
+    ok("demo audit trail: demo → suspended → cancelled", demoAudit.length === 2 && demoAudit[0].before_value === "demo" && demoAudit[0].after_value === "suspended" && demoAudit[1].after_value === "cancelled");
+
+    const expired = await fixture("expired", "demo", "active_paid", true, past);
+    g = await checkTenantGate(expired.c);
+    ok("expired demo: gate BLOCKS (code trial_expired)", g.allowed === false && g.code === "trial_expired");
+    ok("expired demo: effective status suspended, not demo/active", (await reconcileExpected(expired.t)) === "suspended");
+    r = await applyTenantPatch(pool, expired.t, { status: "active" }, { userId: `${tag}-admin`, role: "platform_super_admin" });
+    ok("expired demo cannot be reactivated (409)", !r.ok && r.status === 409);
+
+    console.log("\nCross-tenant isolation");
+    const otherSub = (await pool.query(`SELECT subscription_status FROM companies WHERE id = $1`, [other.c])).rows[0].subscription_status;
+    const otherAudit = Number((await pool.query(`SELECT count(*) FROM authorization_audit_log WHERE tenant_id = $1`, [other.t])).rows[0].count);
+    ok("other tenant untouched by all of the above (status, company, audit)", (await tenantStatus(other.t)) === "active" && otherSub === "active_paid" && otherAudit === 0);
+    ok("non-demo active tenant: gate still allows", (await checkTenantGate(other.c)).allowed === true);
+    ok("checkTenantGate never hit its fail-open error path (allowed results are genuine)", gateErrors === 0);
   } finally {
+    for (const t of extraTenants) {
+      await pool.query(`DELETE FROM authorization_audit_log WHERE tenant_id = $1`, [t]);
+      await pool.query(`DELETE FROM tenant_companies WHERE tenant_id = $1`, [t]);
+      await pool.query(`DELETE FROM tenants WHERE id = $1`, [t]);
+    }
+    for (const c of extraCompanies) await pool.query(`DELETE FROM companies WHERE id = $1`, [c]);
     await pool.query(`ALTER TABLE authorization_audit_log DROP CONSTRAINT IF EXISTS prc1_block_audit`).catch(() => {});
     if (tenantId) {
       await pool.query(`DELETE FROM authorization_audit_log WHERE tenant_id = $1`, [tenantId]);
@@ -94,6 +165,8 @@ async function main() {
     }
     if (companyId) await pool.query(`DELETE FROM companies WHERE id = $1`, [companyId]);
     await pool.end();
+    const { db } = await import("../server/db");
+    await (db as any).$client.end().catch(() => {});
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

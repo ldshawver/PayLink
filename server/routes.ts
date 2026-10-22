@@ -15,7 +15,7 @@ import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { createRateLimiter, requireCsrfToken } from "./security-middleware";
-import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany } from "./tenant-context";
+import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany, mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 import { applyTenantPatch } from "./tenant-status-admin";
 import {
   resolveCompanyLicense,
@@ -35480,19 +35480,36 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const { rows } = await db.$client.query(`
         SELECT t.*,
-               COUNT(tc.company_id)::int AS company_count
+               COUNT(tc.company_id)::int AS company_count,
+               pc.subscription_status AS primary_subscription_status,
+               pc.is_demo AS primary_is_demo,
+               pc.trial_end AS primary_trial_end,
+               pc.id AS primary_company_id
         FROM tenants t
         LEFT JOIN tenant_companies tc ON tc.tenant_id = t.id
-        GROUP BY t.id
-        ORDER BY
-          CASE t.status WHEN 'active' THEN 0 WHEN 'trial' THEN 1 WHEN 'demo' THEN 2 WHEN 'suspended' THEN 3 ELSE 4 END,
-          t.name ASC
+        LEFT JOIN LATERAL (
+          SELECT c.id, c.subscription_status, c.is_demo, c.trial_end
+          FROM tenant_companies ptc JOIN companies c ON c.id = ptc.company_id
+          WHERE ptc.tenant_id = t.id
+          ORDER BY ptc.is_primary DESC, ptc.created_at ASC
+          LIMIT 1
+        ) pc ON TRUE
+        GROUP BY t.id, pc.id, pc.subscription_status, pc.is_demo, pc.trial_end
       `);
-      res.json(rows.map((r: any) => ({
+      // Effective status is derived from the primary company's canonical row
+      // (same resolution as applyTenantPatch), so a suspended/cancelled/expired
+      // demo never displays as "demo" while the tenants.status mirror lags.
+      const STATUS_ORDER: Record<string, number> = { active: 0, trial: 1, demo: 2, suspended: 3 };
+      const withStatus = rows.map((r: any) => ({
+        r,
+        status: r.primary_company_id ? mapSubscriptionStatusToTenantStatus(r.primary_subscription_status, r.primary_is_demo === true, r.primary_trial_end) : r.status,
+      }));
+      withStatus.sort((a, b) => (STATUS_ORDER[a.status] ?? 4) - (STATUS_ORDER[b.status] ?? 4) || String(a.r.name).localeCompare(String(b.r.name)));
+      res.json(withStatus.map(({ r, status }) => ({
         id: r.id,
         name: r.name,
         slug: r.slug,
-        status: r.status,
+        status,
         primaryAdminUserId: r.primary_admin_user_id,
         billingContactName: r.billing_contact_name,
         billingContactEmail: r.billing_contact_email,
@@ -35544,14 +35561,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       // single authoritative source (server/tenant-context.ts); expose that,
       // not a nonexistent column.
       const { rows: companyRows } = await db.$client.query(`
-        SELECT c.id, c.name, c.subscription_status, tc.is_primary, tc.created_at AS assigned_at
+        SELECT c.id, c.name, c.subscription_status, c.is_demo, c.trial_end, tc.is_primary, tc.created_at AS assigned_at
         FROM tenant_companies tc
         JOIN companies c ON c.id = tc.company_id
         WHERE tc.tenant_id = $1
         ORDER BY tc.is_primary DESC, c.name ASC
       `, [req.params.id]);
+      // Effective status from the primary company (is_primary, else earliest
+      // assigned — same resolution as applyTenantPatch); mirror only as fallback.
+      const primary = companyRows.find((c: any) => c.is_primary)
+        ?? [...companyRows].sort((a: any, b: any) => new Date(a.assigned_at).getTime() - new Date(b.assigned_at).getTime())[0];
+      const effectiveStatus = primary ? mapSubscriptionStatusToTenantStatus(primary.subscription_status, primary.is_demo === true, primary.trial_end) : t.status;
       res.json({
-        id: t.id, name: t.name, slug: t.slug, status: t.status,
+        id: t.id, name: t.name, slug: t.slug, status: effectiveStatus,
         primaryAdminUserId: t.primary_admin_user_id,
         billingContactName: t.billing_contact_name, billingContactEmail: t.billing_contact_email,
         stripeCustomerId: t.stripe_customer_id, defaultTimezone: t.default_timezone,

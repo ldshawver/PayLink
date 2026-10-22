@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { sql } from "drizzle-orm";
+import { mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 
 export type GateCode =
   | "trial_expired"
@@ -31,10 +32,28 @@ export async function checkTenantGate(companyId: string): Promise<TenantGateResu
     const c = compRow.rows[0] as any;
     if (!c) return { allowed: false, reason: "Company not found", code: "tenant_inactive" };
 
-    if (c.is_demo) return { allowed: true };
-
     const status = (c.subscription_status || "").toLowerCase();
     const now = new Date();
+
+    // Demo classification never overrides an enforcement state (PR-C1): only
+    // an unexpired, non-suspended/cancelled demo bypasses the checks below.
+    if (c.is_demo) {
+      const demoStatus = mapSubscriptionStatusToTenantStatus(c.subscription_status, true, c.trial_end);
+      if (demoStatus === "demo") return { allowed: true };
+      if (demoStatus === "cancelled") {
+        return { allowed: false, reason: "This demo has been cancelled.", code: "cancelled", details: { subscriptionStatus: status, isDemo: true } };
+      }
+      if (status === "suspended" || status === "past_due") {
+        return { allowed: false, reason: "This demo has been suspended.", code: status, details: { subscriptionStatus: status, isDemo: true } };
+      }
+      return {
+        allowed: false,
+        reason: "This demo has expired.",
+        code: "trial_expired",
+        policyDetail: "Start a new demo or subscribe to a plan to continue.",
+        details: { trialEnd: c.trial_end, subscriptionStatus: status, isDemo: true },
+      };
+    }
 
     if (status === "trial_active" || status === "trialing") {
       if (c.trial_end && new Date(c.trial_end) < now) {

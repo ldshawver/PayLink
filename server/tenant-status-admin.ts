@@ -93,28 +93,34 @@ export async function applyTenantPatch(pool: PgPool, tenantId: string, input: Te
 
     let statusChanged = false;
     let primaryCompanyId: string | undefined;
+    let beforeStatus: string = before.status;
     if (status) {
-      const check = checkTenantStatusTransition(before.status, status);
-      if (!check.ok) { await client.query("ROLLBACK"); return { ok: false, status: 409, message: check.message }; }
-      statusChanged = !check.noop;
       const { rows: primaryRows } = await client.query(
         `SELECT company_id FROM tenant_companies WHERE tenant_id = $1 ORDER BY is_primary DESC, created_at ASC LIMIT 1`,
         [tenantId],
       );
       primaryCompanyId = primaryRows[0]?.company_id;
       if (!primaryCompanyId) { await client.query("ROLLBACK"); return { ok: false, status: 400, message: "Cannot set status: tenant has no assigned company" }; }
-      const { rows: companyRows } = await client.query(`SELECT is_demo FROM companies WHERE id = $1 FOR UPDATE`, [primaryCompanyId]);
-      if (companyRows[0]?.is_demo === true && statusChanged && status !== "suspended" && status !== "cancelled") {
+      const { rows: companyRows } = await client.query(`SELECT subscription_status, is_demo, trial_end FROM companies WHERE id = $1 FOR UPDATE`, [primaryCompanyId]);
+      const company = companyRows[0] ?? {};
+      const isDemo = company.is_demo === true;
+      // Validate against the effective status the Platform Console displays
+      // (derived from the canonical company row), not the possibly-stale mirror.
+      beforeStatus = mapSubscriptionStatusToTenantStatus(company.subscription_status, isDemo, company.trial_end);
+      const check = checkTenantStatusTransition(beforeStatus, status);
+      if (!check.ok) { await client.query("ROLLBACK"); return { ok: false, status: 409, message: check.message }; }
+      statusChanged = !check.noop;
+      if (isDemo && statusChanged && status !== "suspended" && status !== "cancelled") {
         await client.query("ROLLBACK");
         return { ok: false, status: 409, message: "A demo tenant can only be suspended or cancelled" };
       }
       if (statusChanged) {
         // is_demo is preserved: suspending/cancelling a demo keeps it a demo.
-        await client.query(`UPDATE companies SET subscription_status = $1 WHERE id = $2`, [TENANT_STATUS_TO_SUBSCRIPTION_STATUS[status], primaryCompanyId]);
-        // Mirror re-derived from the canonical subscription_status exactly as
-        // mirrorTenantStatusFromCompany() does, but on this transaction's client.
         const subscriptionStatus = TENANT_STATUS_TO_SUBSCRIPTION_STATUS[status];
-        await client.query(`UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(subscriptionStatus, false), tenantId]);
+        await client.query(`UPDATE companies SET subscription_status = $1 WHERE id = $2`, [subscriptionStatus, primaryCompanyId]);
+        // Mirror re-derived from the canonical row exactly as the reconcile job
+        // does (same is_demo / trial_end inputs), on this transaction's client.
+        await client.query(`UPDATE tenants SET status = $1, updated_at = NOW() WHERE id = $2`, [mapSubscriptionStatusToTenantStatus(subscriptionStatus, isDemo, company.trial_end), tenantId]);
       }
     }
 
@@ -138,7 +144,7 @@ export async function applyTenantPatch(pool: PgPool, tenantId: string, input: Te
       await client.query(
         `INSERT INTO authorization_audit_log (actor_user_id, target_resource, change_type, before_value, after_value, note, company_id, tenant_id)
          VALUES ($1, $2, 'tenant_status_change', $3, $4, $5, $6, $7)`,
-        [actor.userId, `tenant:${tenantId}`, String(before.status ?? ""), String(after.status ?? ""), `role=${actor.role}`, primaryCompanyId ?? null, tenantId],
+        [actor.userId, `tenant:${tenantId}`, String(beforeStatus ?? ""), String(after.status ?? ""), `role=${actor.role}`, primaryCompanyId ?? null, tenantId],
       );
     }
     if (changedFields.length) {

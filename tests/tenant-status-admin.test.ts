@@ -9,6 +9,7 @@
  */
 import fs from "node:fs";
 import { applyTenantPatch, checkTenantStatusTransition, TENANT_STATUS_TRANSITIONS } from "../server/tenant-status-admin";
+import { mapSubscriptionStatusToTenantStatus } from "../server/tenant-context";
 
 let pass = 0, fail = 0;
 function ok(name: string, cond: boolean, detail?: string) {
@@ -31,7 +32,7 @@ function fakePool(initial: State, opts: { failAudit?: boolean } = {}) {
       if (t === "ROLLBACK") { working = JSON.parse(JSON.stringify(committed)); return { rows: [] }; }
       if (t.startsWith("SELECT * FROM tenants")) return { rows: params[0] === working.tenant.id ? [{ ...working.tenant }] : [] };
       if (t.startsWith("SELECT company_id FROM tenant_companies")) return { rows: working.company ? [{ company_id: working.company.id }] : [] };
-      if (t.startsWith("SELECT is_demo FROM companies")) return { rows: [{ is_demo: working.company.is_demo }] };
+      if (t.startsWith("SELECT subscription_status, is_demo, trial_end FROM companies")) return { rows: [{ subscription_status: working.company.subscription_status, is_demo: working.company.is_demo, trial_end: working.company.trial_end ?? null }] };
       if (t.startsWith("UPDATE companies SET subscription_status")) { working.company.subscription_status = params[0]; return { rows: [] }; }
       if (t.startsWith("UPDATE tenants SET status")) { working.tenant.status = params[0]; return { rows: [] }; }
       if (t.startsWith("UPDATE tenants SET name")) {
@@ -146,10 +147,68 @@ async function main() {
     ok("editing a demo tenant's name while re-sending status=demo succeeds as a status no-op", r.ok && f.committed.tenant.status === "demo" && f.committed.tenant.name === "Renamed demo" && f.committed.company.subscription_status === "trial_active");
   }
 
+  console.log("\nDemo status — enforcement always wins over demo classification");
+  const past = new Date(Date.now() - 3600_000).toISOString();
+  const future = new Date(Date.now() + 3600_000).toISOString();
+  const mapCases: Array<[string | null, boolean, string | null, string]> = [
+    ["active_paid", true, null, "demo"], ["active_paid", true, future, "demo"], ["trial_active", true, future, "demo"],
+    ["suspended", true, future, "suspended"], ["past_due", true, future, "suspended"], ["trial_expired", true, null, "suspended"],
+    ["cancelled", true, future, "cancelled"], ["canceled", true, null, "cancelled"],
+    ["active_paid", true, past, "suspended"], [null, true, past, "suspended"],
+    ["active_paid", false, past, "active"], ["trial_active", false, null, "trial"], ["suspended", false, null, "suspended"], ["cancelled", false, null, "cancelled"],
+  ];
+  for (const [sub, demo, end, expected] of mapCases) {
+    const got = mapSubscriptionStatusToTenantStatus(sub, demo, end);
+    ok(`${demo ? "demo" : "non-demo"} ${sub ?? "(null)"}${end ? (end === past ? " expired" : " unexpired") : ""} → ${expected}`, got === expected, `got ${got}`);
+  }
+  {
+    const s = base(); s.tenant.status = "demo"; s.company.is_demo = true; s.company.trial_end = future;
+    const f = fakePool(s);
+    const r = await applyTenantPatch(f.pool, "t1", { status: "suspended" }, { userId: "u-admin", role: "platform_admin" });
+    const row = ((f.committed as any).audit || []).find((a: any) => a.changeType === "tenant_status_change");
+    ok("suspending an active demo: company suspended, is_demo kept, mirror reads suspended (not demo)", r.ok && f.committed.company.subscription_status === "suspended" && f.committed.company.is_demo === true && f.committed.tenant.status === "suspended");
+    ok("demo suspend audit row records demo → suspended", row && row.params[2] === "demo" && row.params[3] === "suspended");
+  }
+  {
+    const s = base(); s.tenant.status = "demo"; s.company.is_demo = true;
+    const f = fakePool(s);
+    const r = await applyTenantPatch(f.pool, "t1", { status: "cancelled" }, { userId: "u-admin", role: "platform_super_admin" });
+    ok("cancelling a demo: mirror reads cancelled", r.ok && f.committed.tenant.status === "cancelled" && f.committed.company.subscription_status === "cancelled");
+  }
+  {
+    // Stale mirror from before this fix: tenants.status still "demo" while the
+    // company is suspended. The console now shows "suspended", and its edit
+    // dialog re-sends that — it must be a status no-op, not a new change.
+    const s = base(); s.tenant.status = "demo"; s.company.is_demo = true; s.company.subscription_status = "suspended";
+    const f = fakePool(s);
+    const r = await applyTenantPatch(f.pool, "t1", { status: "suspended", notes: "note" }, { userId: "u-admin", role: "platform_admin" });
+    ok("stale-mirror suspended demo: re-sending suspended is a no-op (validated against effective status)", r.ok && !((f.committed as any).audit || []).some((a: any) => a.changeType === "tenant_status_change"));
+    const r2 = await applyTenantPatch(f.pool, "t1", { status: "active" }, { userId: "u-admin", role: "platform_admin" });
+    ok("stale-mirror suspended demo still cannot be promoted to active", !r2.ok && r2.status === 409 && f.committed.company.subscription_status === "suspended");
+  }
+  {
+    const s = base(); s.tenant.status = "demo"; s.company.is_demo = true; s.company.trial_end = past;
+    const f = fakePool(s);
+    const r = await applyTenantPatch(f.pool, "t1", { status: "suspended", name: "Old demo" }, { userId: "u-admin", role: "platform_admin" });
+    ok("expired demo is effectively suspended: name edit re-sending suspended is a status no-op", r.ok && f.committed.company.subscription_status === "active_paid" && f.committed.tenant.name === "Old demo" && !((f.committed as any).audit || []).some((a: any) => a.changeType === "tenant_status_change"));
+    const r2 = await applyTenantPatch(f.pool, "t1", { status: "active" }, { userId: "u-admin", role: "platform_admin" });
+    ok("expired demo cannot be reactivated through this route", !r2.ok && r2.status === 409);
+  }
+
   console.log("\nRoute wiring (static)");
   const routes = fs.readFileSync("server/routes.ts", "utf8");
   ok("PATCH /api/tenants/:id uses requirePlatformAdminRole()", /app\.patch\("\/api\/tenants\/:id",\s*requireAuth,\s*requirePlatformAdminRole\(\)/.test(routes));
   ok("PATCH /api/tenants/:id delegates to applyTenantPatch", /app\.patch\("\/api\/tenants\/:id"[\s\S]{0,400}applyTenantPatch\(db\.\$client/.test(routes));
+
+  const enforcement = fs.readFileSync("server/tenant-enforcement.ts", "utf8");
+  ok("checkTenantGate no longer short-circuits every demo to allowed", !/if \(c\.is_demo\) return \{ allowed: true \}/.test(enforcement));
+  ok("checkTenantGate allows a demo only when its effective status is demo", /mapSubscriptionStatusToTenantStatus\(c\.subscription_status, true, c\.trial_end\)[\s\S]{0,80}if \(demoStatus === "demo"\) return \{ allowed: true \}/.test(enforcement));
+  const orchestrator = fs.readFileSync("server/workers/orchestrator.ts", "utf8");
+  ok("mirror reconcile passes trial_end so it agrees with the write path", /mapSubscriptionStatusToTenantStatus\(row\.subscription_status, row\.is_demo, row\.trial_end\)/.test(orchestrator));
+  const listMatch = routes.match(/app\.get\("\/api\/tenants",[\s\S]*?\n {2}\}\);/);
+  const detailMatch = routes.match(/app\.get\("\/api\/tenants\/:id",[\s\S]*?\n {2}\}\);/);
+  ok("GET /api/tenants returns the effective status from the primary company", !!listMatch && /mapSubscriptionStatusToTenantStatus\(r\.primary_subscription_status, r\.primary_is_demo === true, r\.primary_trial_end\)/.test(listMatch[0]) && !/status: r\.status,/.test(listMatch[0]));
+  ok("GET /api/tenants/:id returns the effective status from the primary company", !!detailMatch && /status: effectiveStatus/.test(detailMatch[0]) && /c\.is_demo, c\.trial_end/.test(detailMatch[0]));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

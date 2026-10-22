@@ -154,7 +154,7 @@ async function jobDemoCleanup(): Promise<void> {
 async function jobTenantStatusMirrorReconcile(): Promise<void> {
   const rows = await db.execute(sql`
     SELECT t.id AS tenant_id, t.status AS tenant_status,
-           c.subscription_status, c.is_demo
+           c.subscription_status, c.is_demo, c.trial_end
     FROM tenants t
     JOIN tenant_companies tc ON tc.tenant_id = t.id AND tc.is_primary = TRUE
     JOIN companies c ON c.id = tc.company_id
@@ -162,7 +162,7 @@ async function jobTenantStatusMirrorReconcile(): Promise<void> {
 
   let reconciled = 0;
   for (const row of (rows as any).rows as any[]) {
-    const expected = mapSubscriptionStatusToTenantStatus(row.subscription_status, row.is_demo);
+    const expected = mapSubscriptionStatusToTenantStatus(row.subscription_status, row.is_demo, row.trial_end);
     if (row.tenant_status !== expected) {
       await db.execute(sql`UPDATE tenants SET status = ${expected}, updated_at = NOW() WHERE id = ${row.tenant_id}`);
       reconciled++;

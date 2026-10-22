@@ -123,7 +123,7 @@
       "id": "DELETE /api/agreement-templates/:id",
       "method": "DELETE",
       "path": "/api/agreement-templates/:id",
-      "source": "server/routes.ts:35897",
+      "source": "server/routes.ts:35919",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -177,7 +177,7 @@
       "id": "DELETE /api/biz-document-attachments/:id",
       "method": "DELETE",
       "path": "/api/biz-document-attachments/:id",
-      "source": "server/routes.ts:36716",
+      "source": "server/routes.ts:36738",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -204,7 +204,7 @@
       "id": "DELETE /api/biz-document-items/:id",
       "method": "DELETE",
       "path": "/api/biz-document-items/:id",
-      "source": "server/routes.ts:36678",
+      "source": "server/routes.ts:36700",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -231,7 +231,7 @@
       "id": "DELETE /api/biz-documents/:id",
       "method": "DELETE",
       "path": "/api/biz-documents/:id",
-      "source": "server/routes.ts:36480",
+      "source": "server/routes.ts:36502",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -1242,7 +1242,7 @@
       "id": "DELETE /api/inventory/:id",
       "method": "DELETE",
       "path": "/api/inventory/:id",
-      "source": "server/routes.ts:38765",
+      "source": "server/routes.ts:38787",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -1415,7 +1415,7 @@
       "id": "DELETE /api/kpi/labor-goals/:id",
       "method": "DELETE",
       "path": "/api/kpi/labor-goals/:id",
-      "source": "server/routes.ts:39613",
+      "source": "server/routes.ts:39635",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -1444,7 +1444,7 @@
       "id": "DELETE /api/kpi/revenue-goals/:id",
       "method": "DELETE",
       "path": "/api/kpi/revenue-goals/:id",
-      "source": "server/routes.ts:39708",
+      "source": "server/routes.ts:39730",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -2904,7 +2904,7 @@
       "id": "DELETE /api/tenants/:id/companies/:companyId",
       "method": "DELETE",
       "path": "/api/tenants/:id/companies/:companyId",
-      "source": "server/routes.ts:35752",
+      "source": "server/routes.ts:35774",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -3218,7 +3218,7 @@
       "id": "DELETE /api/worker-agreements/:id",
       "method": "DELETE",
       "path": "/api/worker-agreements/:id",
-      "source": "server/routes.ts:35945",
+      "source": "server/routes.ts:35967",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -3330,7 +3330,7 @@
       "id": "DELETE /api/worker-onboarding/:id",
       "method": "DELETE",
       "path": "/api/worker-onboarding/:id",
-      "source": "server/routes.ts:36051",
+      "source": "server/routes.ts:36073",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -3801,7 +3801,7 @@
       "id": "GET /api/agreement-templates",
       "method": "GET",
       "path": "/api/agreement-templates",
-      "source": "server/routes.ts:35863",
+      "source": "server/routes.ts:35885",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -3829,7 +3829,7 @@
       "id": "GET /api/agreement-templates/:id",
       "method": "GET",
       "path": "/api/agreement-templates/:id",
-      "source": "server/routes.ts:35873",
+      "source": "server/routes.ts:35895",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -4095,7 +4095,7 @@
       "id": "GET /api/auth/mfa/enforce-status",
       "method": "GET",
       "path": "/api/auth/mfa/enforce-status",
-      "source": "server/routes.ts:40669",
+      "source": "server/routes.ts:40691",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4128,7 +4128,7 @@
       "id": "GET /api/auth/mfa/status",
       "method": "GET",
       "path": "/api/auth/mfa/status",
-      "source": "server/routes.ts:40606",
+      "source": "server/routes.ts:40628",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -4213,7 +4213,7 @@
       "id": "GET /api/biz-document-templates",
       "method": "GET",
       "path": "/api/biz-document-templates",
-      "source": "server/routes.ts:36347",
+      "source": "server/routes.ts:36369",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4240,7 +4240,7 @@
       "id": "GET /api/biz-documents",
       "method": "GET",
       "path": "/api/biz-documents",
-      "source": "server/routes.ts:36380",
+      "source": "server/routes.ts:36402",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4267,7 +4267,7 @@
       "id": "GET /api/biz-documents/:id",
       "method": "GET",
       "path": "/api/biz-documents/:id",
-      "source": "server/routes.ts:36440",
+      "source": "server/routes.ts:36462",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4294,7 +4294,7 @@
       "id": "GET /api/biz-documents/:id/attachments",
       "method": "GET",
       "path": "/api/biz-documents/:id/attachments",
-      "source": "server/routes.ts:36688",
+      "source": "server/routes.ts:36710",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4321,7 +4321,7 @@
       "id": "GET /api/biz-documents/:id/history",
       "method": "GET",
       "path": "/api/biz-documents/:id/history",
-      "source": "server/routes.ts:36726",
+      "source": "server/routes.ts:36748",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4348,7 +4348,7 @@
       "id": "GET /api/biz-documents/:id/items",
       "method": "GET",
       "path": "/api/biz-documents/:id/items",
-      "source": "server/routes.ts:36617",
+      "source": "server/routes.ts:36639",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4375,7 +4375,7 @@
       "id": "GET /api/biz-documents/:id/pdf",
       "method": "GET",
       "path": "/api/biz-documents/:id/pdf",
-      "source": "server/routes.ts:36858",
+      "source": "server/routes.ts:36880",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4402,7 +4402,7 @@
       "id": "GET /api/biz-documents/:id/print",
       "method": "GET",
       "path": "/api/biz-documents/:id/print",
-      "source": "server/routes.ts:36737",
+      "source": "server/routes.ts:36759",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4454,7 +4454,7 @@
       "id": "GET /api/breach-incidents",
       "method": "GET",
       "path": "/api/breach-incidents",
-      "source": "server/routes.ts:40962",
+      "source": "server/routes.ts:40984",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requireRole(\"platform_super_admin\", \"platform_admin\"))",
       "auth": {
@@ -4908,7 +4908,7 @@
       "id": "GET /api/company-branding",
       "method": "GET",
       "path": "/api/company-branding",
-      "source": "server/routes.ts:36313",
+      "source": "server/routes.ts:36335",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4935,7 +4935,7 @@
       "id": "GET /api/compliance/company/:companyId",
       "method": "GET",
       "path": "/api/compliance/company/:companyId",
-      "source": "server/routes.ts:41214",
+      "source": "server/routes.ts:41236",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -4962,7 +4962,7 @@
       "id": "GET /api/compliance/jurisdictions",
       "method": "GET",
       "path": "/api/compliance/jurisdictions",
-      "source": "server/routes.ts:41181",
+      "source": "server/routes.ts:41203",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -4987,7 +4987,7 @@
       "id": "GET /api/compliance/wage-orders",
       "method": "GET",
       "path": "/api/compliance/wage-orders",
-      "source": "server/routes.ts:41191",
+      "source": "server/routes.ts:41213",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -5012,7 +5012,7 @@
       "id": "GET /api/compliance/worker/:workerId",
       "method": "GET",
       "path": "/api/compliance/worker/:workerId",
-      "source": "server/routes.ts:41242",
+      "source": "server/routes.ts:41264",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -6489,7 +6489,7 @@
       "id": "GET /api/dashboard/clock-status",
       "method": "GET",
       "path": "/api/dashboard/clock-status",
-      "source": "server/routes.ts:39430",
+      "source": "server/routes.ts:39452",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -6516,7 +6516,7 @@
       "id": "GET /api/dashboard/exceptions",
       "method": "GET",
       "path": "/api/dashboard/exceptions",
-      "source": "server/routes.ts:38783",
+      "source": "server/routes.ts:38805",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -6543,7 +6543,7 @@
       "id": "GET /api/dashboard/my-requests",
       "method": "GET",
       "path": "/api/dashboard/my-requests",
-      "source": "server/routes.ts:39160",
+      "source": "server/routes.ts:39182",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -6570,7 +6570,7 @@
       "id": "GET /api/dashboard/pending-approvals",
       "method": "GET",
       "path": "/api/dashboard/pending-approvals",
-      "source": "server/routes.ts:39292",
+      "source": "server/routes.ts:39314",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -7716,7 +7716,7 @@
       "id": "GET /api/feature-flags",
       "method": "GET",
       "path": "/api/feature-flags",
-      "source": "server/routes.ts:40184",
+      "source": "server/routes.ts:40206",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -7743,7 +7743,7 @@
       "id": "GET /api/feature-registry",
       "method": "GET",
       "path": "/api/feature-registry",
-      "source": "server/routes.ts:40121",
+      "source": "server/routes.ts:40143",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -7768,7 +7768,7 @@
       "id": "GET /api/feature-registry/log",
       "method": "GET",
       "path": "/api/feature-registry/log",
-      "source": "server/routes.ts:40215",
+      "source": "server/routes.ts:40237",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -7795,7 +7795,7 @@
       "id": "GET /api/feature-registry/my-features",
       "method": "GET",
       "path": "/api/feature-registry/my-features",
-      "source": "server/routes.ts:40345",
+      "source": "server/routes.ts:40367",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -7822,7 +7822,7 @@
       "id": "GET /api/feature-registry/tenant/:companyId",
       "method": "GET",
       "path": "/api/feature-registry/tenant/:companyId",
-      "source": "server/routes.ts:40147",
+      "source": "server/routes.ts:40169",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -8088,7 +8088,7 @@
       "id": "GET /api/inventory",
       "method": "GET",
       "path": "/api/inventory",
-      "source": "server/routes.ts:38716",
+      "source": "server/routes.ts:38738",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -8352,7 +8352,7 @@
       "id": "GET /api/kpi/financial-summary",
       "method": "GET",
       "path": "/api/kpi/financial-summary",
-      "source": "server/routes.ts:39909",
+      "source": "server/routes.ts:39931",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -8383,7 +8383,7 @@
       "id": "GET /api/kpi/labor-cost-summary",
       "method": "GET",
       "path": "/api/kpi/labor-cost-summary",
-      "source": "server/routes.ts:39724",
+      "source": "server/routes.ts:39746",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -8414,7 +8414,7 @@
       "id": "GET /api/kpi/labor-goals",
       "method": "GET",
       "path": "/api/kpi/labor-goals",
-      "source": "server/routes.ts:39534",
+      "source": "server/routes.ts:39556",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -8443,7 +8443,7 @@
       "id": "GET /api/kpi/revenue-goals",
       "method": "GET",
       "path": "/api/kpi/revenue-goals",
-      "source": "server/routes.ts:39629",
+      "source": "server/routes.ts:39651",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -9354,7 +9354,7 @@
       "id": "GET /api/onboarding/portal/:token",
       "method": "GET",
       "path": "/api/onboarding/portal/:token",
-      "source": "server/routes.ts:36208",
+      "source": "server/routes.ts:36230",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10245,7 +10245,7 @@
       "id": "GET /api/payroll-runs/:id/compliance-events",
       "method": "GET",
       "path": "/api/payroll-runs/:id/compliance-events",
-      "source": "server/routes.ts:41278",
+      "source": "server/routes.ts:41300",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -10742,7 +10742,7 @@
       "id": "GET /api/platform/audit/billing",
       "method": "GET",
       "path": "/api/platform/audit/billing",
-      "source": "server/routes.ts:37565",
+      "source": "server/routes.ts:37587",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10767,7 +10767,7 @@
       "id": "GET /api/platform/audit/contracts",
       "method": "GET",
       "path": "/api/platform/audit/contracts",
-      "source": "server/routes.ts:37484",
+      "source": "server/routes.ts:37506",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10792,7 +10792,7 @@
       "id": "GET /api/platform/audit/deploy",
       "method": "GET",
       "path": "/api/platform/audit/deploy",
-      "source": "server/routes.ts:37401",
+      "source": "server/routes.ts:37423",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10817,7 +10817,7 @@
       "id": "GET /api/platform/audit/export",
       "method": "GET",
       "path": "/api/platform/audit/export",
-      "source": "server/routes.ts:37758",
+      "source": "server/routes.ts:37780",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10842,7 +10842,7 @@
       "id": "GET /api/platform/audit/features",
       "method": "GET",
       "path": "/api/platform/audit/features",
-      "source": "server/routes.ts:37442",
+      "source": "server/routes.ts:37464",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10867,7 +10867,7 @@
       "id": "GET /api/platform/audit/integrations",
       "method": "GET",
       "path": "/api/platform/audit/integrations",
-      "source": "server/routes.ts:37246",
+      "source": "server/routes.ts:37268",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10892,7 +10892,7 @@
       "id": "GET /api/platform/audit/licensing",
       "method": "GET",
       "path": "/api/platform/audit/licensing",
-      "source": "server/routes.ts:37520",
+      "source": "server/routes.ts:37542",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10917,7 +10917,7 @@
       "id": "GET /api/platform/audit/logs/app",
       "method": "GET",
       "path": "/api/platform/audit/logs/app",
-      "source": "server/routes.ts:37619",
+      "source": "server/routes.ts:37641",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10942,7 +10942,7 @@
       "id": "GET /api/platform/audit/logs/deploy",
       "method": "GET",
       "path": "/api/platform/audit/logs/deploy",
-      "source": "server/routes.ts:37672",
+      "source": "server/routes.ts:37694",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10967,7 +10967,7 @@
       "id": "GET /api/platform/audit/migrations",
       "method": "GET",
       "path": "/api/platform/audit/migrations",
-      "source": "server/routes.ts:37368",
+      "source": "server/routes.ts:37390",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -10992,7 +10992,7 @@
       "id": "GET /api/platform/audit/npm-audit",
       "method": "GET",
       "path": "/api/platform/audit/npm-audit",
-      "source": "server/routes.ts:37927",
+      "source": "server/routes.ts:37949",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11017,7 +11017,7 @@
       "id": "GET /api/platform/audit/permissions",
       "method": "GET",
       "path": "/api/platform/audit/permissions",
-      "source": "server/routes.ts:37386",
+      "source": "server/routes.ts:37408",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11042,7 +11042,7 @@
       "id": "GET /api/platform/audit/readiness",
       "method": "GET",
       "path": "/api/platform/audit/readiness",
-      "source": "server/routes.ts:38002",
+      "source": "server/routes.ts:38024",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11067,7 +11067,7 @@
       "id": "GET /api/platform/audit/roles",
       "method": "GET",
       "path": "/api/platform/audit/roles",
-      "source": "server/routes.ts:37303",
+      "source": "server/routes.ts:37325",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11092,7 +11092,7 @@
       "id": "GET /api/platform/audit/routes",
       "method": "GET",
       "path": "/api/platform/audit/routes",
-      "source": "server/routes.ts:37335",
+      "source": "server/routes.ts:37357",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11117,7 +11117,7 @@
       "id": "GET /api/platform/audit/security",
       "method": "GET",
       "path": "/api/platform/audit/security",
-      "source": "server/routes.ts:37972",
+      "source": "server/routes.ts:37994",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11142,7 +11142,7 @@
       "id": "GET /api/platform/audit/system",
       "method": "GET",
       "path": "/api/platform/audit/system",
-      "source": "server/routes.ts:37230",
+      "source": "server/routes.ts:37252",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11167,7 +11167,7 @@
       "id": "GET /api/platform/audit/tenants",
       "method": "GET",
       "path": "/api/platform/audit/tenants",
-      "source": "server/routes.ts:37354",
+      "source": "server/routes.ts:37376",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -11244,7 +11244,7 @@
       "id": "GET /api/platform/support-sessions",
       "method": "GET",
       "path": "/api/platform/support-sessions",
-      "source": "server/routes.ts:35607",
+      "source": "server/routes.ts:35629",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -11324,7 +11324,7 @@
       "id": "GET /api/portal/proposals/:id",
       "method": "GET",
       "path": "/api/portal/proposals/:id",
-      "source": "server/routes.ts:41695",
+      "source": "server/routes.ts:41717",
       "category": "public token-protected",
       "justification": "no session auth required; handler validates an opaque token/capability value from the request (matches global auth-gate allowlist entry @ server/routes.ts:2572)",
       "auth": {
@@ -11349,7 +11349,7 @@
       "id": "GET /api/portal/proposals/:id/attachments",
       "method": "GET",
       "path": "/api/portal/proposals/:id/attachments",
-      "source": "server/routes.ts:41829",
+      "source": "server/routes.ts:41851",
       "category": "public token-protected",
       "justification": "no session auth required; handler validates an opaque token/capability value from the request (matches global auth-gate allowlist entry @ server/routes.ts:2572)",
       "auth": {
@@ -11374,7 +11374,7 @@
       "id": "GET /api/portal/proposals/:id/attachments/:attId/download",
       "method": "GET",
       "path": "/api/portal/proposals/:id/attachments/:attId/download",
-      "source": "server/routes.ts:41918",
+      "source": "server/routes.ts:41940",
       "category": "public token-protected",
       "justification": "no session auth required; handler validates an opaque token/capability value from the request (matches global auth-gate allowlist entry @ server/routes.ts:2572)",
       "auth": {
@@ -11476,7 +11476,7 @@
       "id": "GET /api/privacy-audit-log",
       "method": "GET",
       "path": "/api/privacy-audit-log",
-      "source": "server/routes.ts:40849",
+      "source": "server/routes.ts:40871",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -11509,7 +11509,7 @@
       "id": "GET /api/privacy-audit-log/export-csv",
       "method": "GET",
       "path": "/api/privacy-audit-log/export-csv",
-      "source": "server/routes.ts:40910",
+      "source": "server/routes.ts:40932",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -11567,7 +11567,7 @@
       "id": "GET /api/provisioning/templates",
       "method": "GET",
       "path": "/api/provisioning/templates",
-      "source": "server/routes.ts:35779",
+      "source": "server/routes.ts:35801",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -11592,7 +11592,7 @@
       "id": "GET /api/provisioning/tenants",
       "method": "GET",
       "path": "/api/provisioning/tenants",
-      "source": "server/routes.ts:35783",
+      "source": "server/routes.ts:35805",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -11617,7 +11617,7 @@
       "id": "GET /api/provisioning/tenants/:companyId",
       "method": "GET",
       "path": "/api/provisioning/tenants/:companyId",
-      "source": "server/routes.ts:35790",
+      "source": "server/routes.ts:35812",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -11644,7 +11644,7 @@
       "id": "GET /api/provisioning/tenants/:companyId/audit",
       "method": "GET",
       "path": "/api/provisioning/tenants/:companyId/audit",
-      "source": "server/routes.ts:35797",
+      "source": "server/routes.ts:35819",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -12951,7 +12951,7 @@
       "id": "GET /api/tenant-retention-policy",
       "method": "GET",
       "path": "/api/tenant-retention-policy",
-      "source": "server/routes.ts:41554",
+      "source": "server/routes.ts:41576",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13006,7 +13006,7 @@
       "id": "GET /api/tenants/:id",
       "method": "GET",
       "path": "/api/tenants/:id",
-      "source": "server/routes.ts:35537",
+      "source": "server/routes.ts:35554",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -13732,7 +13732,7 @@
       "id": "GET /api/worker-agreements",
       "method": "GET",
       "path": "/api/worker-agreements",
-      "source": "server/routes.ts:35905",
+      "source": "server/routes.ts:35927",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13760,7 +13760,7 @@
       "id": "GET /api/worker-agreements/:id",
       "method": "GET",
       "path": "/api/worker-agreements/:id",
-      "source": "server/routes.ts:35917",
+      "source": "server/routes.ts:35939",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13870,7 +13870,7 @@
       "id": "GET /api/worker-onboarding",
       "method": "GET",
       "path": "/api/worker-onboarding",
-      "source": "server/routes.ts:35972",
+      "source": "server/routes.ts:35994",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13901,7 +13901,7 @@
       "id": "GET /api/worker-onboarding/:id",
       "method": "GET",
       "path": "/api/worker-onboarding/:id",
-      "source": "server/routes.ts:35985",
+      "source": "server/routes.ts:36007",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13931,7 +13931,7 @@
       "id": "GET /api/worker-onboarding/:id/audit-log",
       "method": "GET",
       "path": "/api/worker-onboarding/:id/audit-log",
-      "source": "server/routes.ts:36196",
+      "source": "server/routes.ts:36218",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13958,7 +13958,7 @@
       "id": "GET /api/worker-onboarding/:id/documents",
       "method": "GET",
       "path": "/api/worker-onboarding/:id/documents",
-      "source": "server/routes.ts:36185",
+      "source": "server/routes.ts:36207",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -13985,7 +13985,7 @@
       "id": "GET /api/worker-onboarding/:id/steps",
       "method": "GET",
       "path": "/api/worker-onboarding/:id/steps",
-      "source": "server/routes.ts:36157",
+      "source": "server/routes.ts:36179",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -14096,7 +14096,7 @@
       "id": "GET /api/workers/:id/data-export",
       "method": "GET",
       "path": "/api/workers/:id/data-export",
-      "source": "server/routes.ts:40694",
+      "source": "server/routes.ts:40716",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -14433,7 +14433,7 @@
       "id": "PATCH /api/agreement-templates/:id",
       "method": "PATCH",
       "path": "/api/agreement-templates/:id",
-      "source": "server/routes.ts:35889",
+      "source": "server/routes.ts:35911",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -14572,7 +14572,7 @@
       "id": "PATCH /api/biz-document-items/:id",
       "method": "PATCH",
       "path": "/api/biz-document-items/:id",
-      "source": "server/routes.ts:36669",
+      "source": "server/routes.ts:36691",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -14599,7 +14599,7 @@
       "id": "PATCH /api/biz-documents/:id",
       "method": "PATCH",
       "path": "/api/biz-documents/:id",
-      "source": "server/routes.ts:36459",
+      "source": "server/routes.ts:36481",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -14891,7 +14891,7 @@
       "id": "PATCH /api/compliance/company/:companyId/profile",
       "method": "PATCH",
       "path": "/api/compliance/company/:companyId/profile",
-      "source": "server/routes.ts:41231",
+      "source": "server/routes.ts:41253",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -14920,7 +14920,7 @@
       "id": "PATCH /api/compliance/worker/:workerId/profile",
       "method": "PATCH",
       "path": "/api/compliance/worker/:workerId/profile",
-      "source": "server/routes.ts:41265",
+      "source": "server/routes.ts:41287",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -15529,7 +15529,7 @@
       "id": "PATCH /api/document-retention-policies/:id/legal-basis",
       "method": "PATCH",
       "path": "/api/document-retention-policies/:id/legal-basis",
-      "source": "server/routes.ts:41075",
+      "source": "server/routes.ts:41097",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -15953,7 +15953,7 @@
       "id": "PATCH /api/inventory/:id",
       "method": "PATCH",
       "path": "/api/inventory/:id",
-      "source": "server/routes.ts:38746",
+      "source": "server/routes.ts:38768",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -16129,7 +16129,7 @@
       "id": "PATCH /api/kpi/labor-goals/:id",
       "method": "PATCH",
       "path": "/api/kpi/labor-goals/:id",
-      "source": "server/routes.ts:39577",
+      "source": "server/routes.ts:39599",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -16158,7 +16158,7 @@
       "id": "PATCH /api/kpi/revenue-goals/:id",
       "method": "PATCH",
       "path": "/api/kpi/revenue-goals/:id",
-      "source": "server/routes.ts:39672",
+      "source": "server/routes.ts:39694",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -17303,7 +17303,7 @@
       "id": "PATCH /api/provisioning/projects/:id",
       "method": "PATCH",
       "path": "/api/provisioning/projects/:id",
-      "source": "server/routes.ts:35854",
+      "source": "server/routes.ts:35876",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requirePlatformRole(), requirePlatformRole())",
       "auth": {
@@ -17328,7 +17328,7 @@
       "id": "PATCH /api/provisioning/tenants/:companyId/gates",
       "method": "PATCH",
       "path": "/api/provisioning/tenants/:companyId/gates",
-      "source": "server/routes.ts:35844",
+      "source": "server/routes.ts:35866",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -18015,7 +18015,7 @@
       "id": "PATCH /api/tenants/:id",
       "method": "PATCH",
       "path": "/api/tenants/:id",
-      "source": "server/routes.ts:35579",
+      "source": "server/routes.ts:35601",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -18362,7 +18362,7 @@
       "id": "PATCH /api/worker-agreements/:id",
       "method": "PATCH",
       "path": "/api/worker-agreements/:id",
-      "source": "server/routes.ts:35935",
+      "source": "server/routes.ts:35957",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -18450,7 +18450,7 @@
       "id": "PATCH /api/worker-onboarding/:id",
       "method": "PATCH",
       "path": "/api/worker-onboarding/:id",
-      "source": "server/routes.ts:36041",
+      "source": "server/routes.ts:36063",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -18480,7 +18480,7 @@
       "id": "PATCH /api/worker-onboarding/:id/steps/:stepId",
       "method": "PATCH",
       "path": "/api/worker-onboarding/:id/steps/:stepId",
-      "source": "server/routes.ts:36172",
+      "source": "server/routes.ts:36194",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -18978,7 +18978,7 @@
       "id": "POST /api/agreement-templates",
       "method": "POST",
       "path": "/api/agreement-templates",
-      "source": "server/routes.ts:35881",
+      "source": "server/routes.ts:35903",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -19313,7 +19313,7 @@
       "id": "POST /api/auth/mfa/confirm",
       "method": "POST",
       "path": "/api/auth/mfa/confirm",
-      "source": "server/routes.ts:40517",
+      "source": "server/routes.ts:40539",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19340,7 +19340,7 @@
       "id": "POST /api/auth/mfa/disable",
       "method": "POST",
       "path": "/api/auth/mfa/disable",
-      "source": "server/routes.ts:40558",
+      "source": "server/routes.ts:40580",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19367,7 +19367,7 @@
       "id": "POST /api/auth/mfa/enforce",
       "method": "POST",
       "path": "/api/auth/mfa/enforce",
-      "source": "server/routes.ts:40648",
+      "source": "server/routes.ts:40670",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19398,7 +19398,7 @@
       "id": "POST /api/auth/mfa/enroll",
       "method": "POST",
       "path": "/api/auth/mfa/enroll",
-      "source": "server/routes.ts:40483",
+      "source": "server/routes.ts:40505",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -19450,7 +19450,7 @@
       "id": "POST /api/auth/mfa/verify",
       "method": "POST",
       "path": "/api/auth/mfa/verify",
-      "source": "server/routes.ts:40623",
+      "source": "server/routes.ts:40645",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -19660,7 +19660,7 @@
       "id": "POST /api/biz-documents",
       "method": "POST",
       "path": "/api/biz-documents",
-      "source": "server/routes.ts:36399",
+      "source": "server/routes.ts:36421",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19687,7 +19687,7 @@
       "id": "POST /api/biz-documents/:id/approve",
       "method": "POST",
       "path": "/api/biz-documents/:id/approve",
-      "source": "server/routes.ts:36510",
+      "source": "server/routes.ts:36532",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19717,7 +19717,7 @@
       "id": "POST /api/biz-documents/:id/attachments",
       "method": "POST",
       "path": "/api/biz-documents/:id/attachments",
-      "source": "server/routes.ts:36698",
+      "source": "server/routes.ts:36720",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19744,7 +19744,7 @@
       "id": "POST /api/biz-documents/:id/convert-to-invoice",
       "method": "POST",
       "path": "/api/biz-documents/:id/convert-to-invoice",
-      "source": "server/routes.ts:36578",
+      "source": "server/routes.ts:36600",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19774,7 +19774,7 @@
       "id": "POST /api/biz-documents/:id/items",
       "method": "POST",
       "path": "/api/biz-documents/:id/items",
-      "source": "server/routes.ts:36659",
+      "source": "server/routes.ts:36681",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19801,7 +19801,7 @@
       "id": "POST /api/biz-documents/:id/items/replace",
       "method": "POST",
       "path": "/api/biz-documents/:id/items/replace",
-      "source": "server/routes.ts:36628",
+      "source": "server/routes.ts:36650",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19828,7 +19828,7 @@
       "id": "POST /api/biz-documents/:id/mark-paid",
       "method": "POST",
       "path": "/api/biz-documents/:id/mark-paid",
-      "source": "server/routes.ts:36551",
+      "source": "server/routes.ts:36573",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19858,7 +19858,7 @@
       "id": "POST /api/biz-documents/:id/reject",
       "method": "POST",
       "path": "/api/biz-documents/:id/reject",
-      "source": "server/routes.ts:36523",
+      "source": "server/routes.ts:36545",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19888,7 +19888,7 @@
       "id": "POST /api/biz-documents/:id/request-revision",
       "method": "POST",
       "path": "/api/biz-documents/:id/request-revision",
-      "source": "server/routes.ts:36537",
+      "source": "server/routes.ts:36559",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19918,7 +19918,7 @@
       "id": "POST /api/biz-documents/:id/send-email",
       "method": "POST",
       "path": "/api/biz-documents/:id/send-email",
-      "source": "server/routes.ts:37078",
+      "source": "server/routes.ts:37100",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19948,7 +19948,7 @@
       "id": "POST /api/biz-documents/:id/submit",
       "method": "POST",
       "path": "/api/biz-documents/:id/submit",
-      "source": "server/routes.ts:36495",
+      "source": "server/routes.ts:36517",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -19975,7 +19975,7 @@
       "id": "POST /api/biz-documents/:id/void",
       "method": "POST",
       "path": "/api/biz-documents/:id/void",
-      "source": "server/routes.ts:36565",
+      "source": "server/routes.ts:36587",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -20033,7 +20033,7 @@
       "id": "POST /api/breach-incidents",
       "method": "POST",
       "path": "/api/breach-incidents",
-      "source": "server/routes.ts:41005",
+      "source": "server/routes.ts:41027",
       "category": "platform-console only",
       "justification": "requires an explicit platform_* role (requireAuth, requireRole(\"platform_super_admin\", \"platform_admin\"))",
       "auth": {
@@ -20317,7 +20317,7 @@
       "id": "POST /api/company-branding/logo",
       "method": "POST",
       "path": "/api/company-branding/logo",
-      "source": "server/routes.ts:36334",
+      "source": "server/routes.ts:36356",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -23986,7 +23986,7 @@
       "id": "POST /api/feature-registry/activate",
       "method": "POST",
       "path": "/api/feature-registry/activate",
-      "source": "server/routes.ts:40248",
+      "source": "server/routes.ts:40270",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -24013,7 +24013,7 @@
       "id": "POST /api/feature-registry/bulk-activate",
       "method": "POST",
       "path": "/api/feature-registry/bulk-activate",
-      "source": "server/routes.ts:40303",
+      "source": "server/routes.ts:40325",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -24346,7 +24346,7 @@
       "id": "POST /api/inventory",
       "method": "POST",
       "path": "/api/inventory",
-      "source": "server/routes.ts:38727",
+      "source": "server/routes.ts:38749",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -24579,7 +24579,7 @@
       "id": "POST /api/kpi/labor-goals",
       "method": "POST",
       "path": "/api/kpi/labor-goals",
-      "source": "server/routes.ts:39547",
+      "source": "server/routes.ts:39569",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -24608,7 +24608,7 @@
       "id": "POST /api/kpi/revenue-goals",
       "method": "POST",
       "path": "/api/kpi/revenue-goals",
-      "source": "server/routes.ts:39642",
+      "source": "server/routes.ts:39664",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -25438,7 +25438,7 @@
       "id": "POST /api/onboarding/portal/:token/sign",
       "method": "POST",
       "path": "/api/onboarding/portal/:token/sign",
-      "source": "server/routes.ts:36277",
+      "source": "server/routes.ts:36299",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -25463,7 +25463,7 @@
       "id": "POST /api/onboarding/portal/:token/steps/:stepId/complete",
       "method": "POST",
       "path": "/api/onboarding/portal/:token/steps/:stepId/complete",
-      "source": "server/routes.ts:36238",
+      "source": "server/routes.ts:36260",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -26326,7 +26326,7 @@
       "id": "POST /api/payroll-runs/:id/preflight",
       "method": "POST",
       "path": "/api/payroll-runs/:id/preflight",
-      "source": "server/routes.ts:41292",
+      "source": "server/routes.ts:41314",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -26700,7 +26700,7 @@
       "id": "POST /api/platform/audit/contracts/:companyId/sign",
       "method": "POST",
       "path": "/api/platform/audit/contracts/:companyId/sign",
-      "source": "server/routes.ts:37705",
+      "source": "server/routes.ts:37727",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -26727,7 +26727,7 @@
       "id": "POST /api/platform/audit/licensing/:companyId/gate-override",
       "method": "POST",
       "path": "/api/platform/audit/licensing/:companyId/gate-override",
-      "source": "server/routes.ts:37729",
+      "source": "server/routes.ts:37751",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -26754,7 +26754,7 @@
       "id": "POST /api/platform/support-sessions",
       "method": "POST",
       "path": "/api/platform/support-sessions",
-      "source": "server/routes.ts:35647",
+      "source": "server/routes.ts:35669",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -26781,7 +26781,7 @@
       "id": "POST /api/platform/support-sessions/:id/end",
       "method": "POST",
       "path": "/api/platform/support-sessions/:id/end",
-      "source": "server/routes.ts:35683",
+      "source": "server/routes.ts:35705",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -26913,7 +26913,7 @@
       "id": "POST /api/portal/proposals/:id/approve",
       "method": "POST",
       "path": "/api/portal/proposals/:id/approve",
-      "source": "server/routes.ts:41822",
+      "source": "server/routes.ts:41844",
       "category": "public token-protected",
       "justification": "no session auth required; handler validates an opaque token/capability value from the request (matches global auth-gate allowlist entry @ server/routes.ts:2572)",
       "auth": {
@@ -26938,7 +26938,7 @@
       "id": "POST /api/portal/proposals/:id/message",
       "method": "POST",
       "path": "/api/portal/proposals/:id/message",
-      "source": "server/routes.ts:41845",
+      "source": "server/routes.ts:41867",
       "category": "public token-protected",
       "justification": "no session auth required; handler validates an opaque token/capability value from the request (matches global auth-gate allowlist entry @ server/routes.ts:2572)",
       "auth": {
@@ -27097,7 +27097,7 @@
       "id": "POST /api/provisioning/event",
       "method": "POST",
       "path": "/api/provisioning/event",
-      "source": "server/routes.ts:35811",
+      "source": "server/routes.ts:35833",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -27124,7 +27124,7 @@
       "id": "POST /api/provisioning/tenants/:companyId/retry",
       "method": "POST",
       "path": "/api/provisioning/tenants/:companyId/retry",
-      "source": "server/routes.ts:35827",
+      "source": "server/routes.ts:35849",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -28310,7 +28310,7 @@
       "id": "POST /api/tenant-retention-policy/run-cleanup",
       "method": "POST",
       "path": "/api/tenant-retention-policy/run-cleanup",
-      "source": "server/routes.ts:41620",
+      "source": "server/routes.ts:41642",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -28339,7 +28339,7 @@
       "id": "POST /api/tenants",
       "method": "POST",
       "path": "/api/tenants",
-      "source": "server/routes.ts:35512",
+      "source": "server/routes.ts:35529",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -28364,7 +28364,7 @@
       "id": "POST /api/tenants/:id/companies",
       "method": "POST",
       "path": "/api/tenants/:id/companies",
-      "source": "server/routes.ts:35720",
+      "source": "server/routes.ts:35742",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -29442,7 +29442,7 @@
       "id": "POST /api/worker-agreements",
       "method": "POST",
       "path": "/api/worker-agreements",
-      "source": "server/routes.ts:35927",
+      "source": "server/routes.ts:35949",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -29470,7 +29470,7 @@
       "id": "POST /api/worker-agreements/:id/sign",
       "method": "POST",
       "path": "/api/worker-agreements/:id/sign",
-      "source": "server/routes.ts:35955",
+      "source": "server/routes.ts:35977",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -29583,7 +29583,7 @@
       "id": "POST /api/worker-onboarding",
       "method": "POST",
       "path": "/api/worker-onboarding",
-      "source": "server/routes.ts:35998",
+      "source": "server/routes.ts:36020",
       "category": "authenticated global/self-service",
       "justification": null,
       "auth": {
@@ -29611,7 +29611,7 @@
       "id": "POST /api/worker-onboarding/:id/regenerate-token",
       "method": "POST",
       "path": "/api/worker-onboarding/:id/regenerate-token",
-      "source": "server/routes.ts:36061",
+      "source": "server/routes.ts:36083",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -29641,7 +29641,7 @@
       "id": "POST /api/worker-onboarding/:id/review",
       "method": "POST",
       "path": "/api/worker-onboarding/:id/review",
-      "source": "server/routes.ts:36075",
+      "source": "server/routes.ts:36097",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -29729,7 +29729,7 @@
       "id": "POST /api/workers/:id/anonymize",
       "method": "POST",
       "path": "/api/workers/:id/anonymize",
-      "source": "server/routes.ts:40768",
+      "source": "server/routes.ts:40790",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -29873,7 +29873,7 @@
       "id": "PUT /api/company-branding",
       "method": "PUT",
       "path": "/api/company-branding",
-      "source": "server/routes.ts:36323",
+      "source": "server/routes.ts:36345",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
@@ -30021,7 +30021,7 @@
       "id": "PUT /api/tenant-retention-policy",
       "method": "PUT",
       "path": "/api/tenant-retention-policy",
-      "source": "server/routes.ts:41576",
+      "source": "server/routes.ts:41598",
       "category": "authenticated tenant-scoped",
       "justification": null,
       "auth": {
