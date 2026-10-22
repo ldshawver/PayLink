@@ -28,6 +28,6 @@ export function useTrial() {
     isDemo: data?.isDemo || false,
     daysRemaining: data?.daysRemaining || 0,
     subscriptionStatus: data?.subscriptionStatus || "active_paid",
-    isRestricted: data?.isTrialExpired || data?.subscriptionStatus === "suspended" || data?.subscriptionStatus === "canceled",
+    isRestricted: data?.isTrialExpired || data?.subscriptionStatus === "suspended" || data?.subscriptionStatus === "canceled" || data?.subscriptionStatus === "cancelled",
   };
 }

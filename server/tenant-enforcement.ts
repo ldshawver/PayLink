@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { mapSubscriptionStatusToTenantStatus } from "./tenant-context";
+import { normalizeSubscriptionStatus } from "./subscription-status";
 
 export type GateCode =
   | "trial_expired"
@@ -32,7 +33,7 @@ export async function checkTenantGate(companyId: string): Promise<TenantGateResu
     const c = compRow.rows[0] as any;
     if (!c) return { allowed: false, reason: "Company not found", code: "tenant_inactive" };
 
-    const status = (c.subscription_status || "").toLowerCase();
+    const status = normalizeSubscriptionStatus(c.subscription_status);
     const now = new Date();
 
     // Demo classification never overrides an enforcement state (PR-C1): only
