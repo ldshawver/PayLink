@@ -305,7 +305,8 @@ export async function handleProvisioningEvent(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Provisioning] Error handling event ${event} for company ${companyId}:`, msg);
-    return { success: false, message: msg, allGatesPassed: false };
+    // Not a 200: e.g. tenant_commercial_gates missing on a schema that was never pushed.
+    return { success: false, status: 500, message: "Failed to handle provisioning event", allGatesPassed: false };
   }
 }
 

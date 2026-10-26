@@ -87,7 +87,14 @@ export const SUSPENSION_SOURCE_BY_CHANGE_TYPE = {
   license_admin_update: "admin", // PUT /api/platform/companies/:id/license
 } as const;
 
-export type SuspensionSource = "billing" | "admin" | "unknown";
+export type SuspensionSource = "billing" | "admin" | "unknown" | "unverifiable";
+
+/**
+ * Legacy provisioning suspensions are only recorded here. The table is in
+ * shared/schema.ts but production deploys do not run drizzle push, so it can
+ * be missing (it is on production as of v2.2.16).
+ */
+export const PROVISIONING_AUDIT_TABLE = "tenant_provisioning_audit_logs";
 
 /**
  * Who applied the company's CURRENT suspension: the latest audit row that set
@@ -99,11 +106,30 @@ export type SuspensionSource = "billing" | "admin" | "unknown";
  *     'tenant.suspended' row (provisioning suspensions
  *     written before they were audited here)            → "admin"
  *   - no trail at all                                   → "unknown"
- * Only "billing" may be lifted by a Stripe payment; "admin" and "unknown"
- * need an explicit, audited platform-administrator action.
+ * If tenant_provisioning_audit_logs does not exist, a provisioning suspension
+ * cannot be ruled out: an admin row still wins, anything else (including a
+ * billing row) is "unverifiable". Missing history is never proof that a
+ * payment may reinstate the tenant.
+ * Only "billing" may be lifted by a Stripe payment; "admin", "unknown" and
+ * "unverifiable" need an explicit, audited platform-administrator action.
  */
 export async function getSuspensionSource(tx: Tx, companyId: string): Promise<SuspensionSource> {
   const types = Object.keys(SUSPENSION_SOURCE_BY_CHANGE_TYPE);
+  const present = await tx.execute(sql`SELECT to_regclass(${`public.${PROVISIONING_AUDIT_TABLE}`}) IS NOT NULL AS present`);
+  if ((present.rows[0] as any)?.present !== true) {
+    const a = await tx.execute(sql`
+      SELECT actor_user_id, change_type FROM authorization_audit_log
+      WHERE company_id = ${companyId}
+        AND after_value = 'suspended'
+        AND change_type IN (${sql.join(types.map((t) => sql`${t}`), sql`, `)})
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    const row = a.rows[0] as any;
+    if (row && !(row.change_type === "lifecycle_transition" && row.actor_user_id === "system")) return "admin";
+    console.warn(`[BillingLifecycle] ${PROVISIONING_AUDIT_TABLE} is missing; suspension source of company ${companyId} is unverifiable`);
+    return "unverifiable";
+  }
   const r = await tx.execute(sql`
     SELECT actor_user_id, change_type, created_at FROM authorization_audit_log
     WHERE company_id = ${companyId}
@@ -143,6 +169,7 @@ async function reactivateFromBilling(companyId: string, note: string): Promise<b
     else if (status === "suspended") {
       const source = await getSuspensionSource(tx, companyId);
       if (source === "admin") refused = "tenant was suspended by a platform administrator";
+      else if (source === "unverifiable") refused = `suspension source cannot be verified (${PROVISIONING_AUDIT_TABLE} is missing); reinstatement requires a platform administrator`;
       else if (source !== "billing") refused = "suspension has no billing audit trail; reinstatement requires a platform administrator";
     } else if (status !== "grace_period") return null;
     if (!refused) {

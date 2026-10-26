@@ -40,6 +40,9 @@ async function main() {
   const sfx = crypto.randomBytes(4).toString("hex");
   const companyIds: string[] = [], tenantIds: string[] = [];
   let server: TestServer | undefined;
+  // Schema-state helpers (disposable DB only): tables hidden by renaming, and
+  // test-only triggers; every entry is undone first thing in finally.
+  const undo: string[] = [];
   const pw = crypto.randomBytes(10).toString("hex");
 
   try {
@@ -194,9 +197,89 @@ async function main() {
     const i1 = await provEvent("platform_admin", ir.c, "tenant.suspended");
     check("integrity-repair record → 409, untouched", i1.status === 409 && (await sub(ir.c)) === "active_paid");
 
-    console.log("\n── 8. Isolation ──");
+    console.log("\n── 9. Provisioning audit table ABSENT (production schema state) ──");
+    // Production (v2.2.16) has no tenant_provisioning_audit_logs or
+    // tenant_commercial_gates: deploys never run drizzle push. Reproduce that
+    // here by hiding the tables, then restore them in the same order reversed.
+    const hide = async (table: string) => {
+      const hidden = `${table}_zzhidden_${sfx}`;
+      await pool.query(`ALTER TABLE ${table} RENAME TO ${hidden}`);
+      undo.unshift(`ALTER TABLE IF EXISTS ${hidden} RENAME TO ${table}`);
+    };
+    const restore = async () => { while (undo.length) await pool.query(undo.shift()!); };
+    const present = async (table: string) => (await pool.query(`SELECT to_regclass($1) IS NOT NULL AS p`, [`public.${table}`])).rows[0].p as boolean;
+
+    const xb = await mk("absentBilling", "active_paid");
+    await handleTenantBillingEvent("customer.subscription.deleted", { customer: xb.cus });
+    const xa = await mk("absentAdmin", "active_paid");
+    await provEvent("platform_admin", xa.c, "tenant.suspended", { reason: "hold" });
+    const xr = await mk("absentRollback", "active_paid");
+    const xbSrcPresent = await source(xb.c);
+    await hide("tenant_provisioning_audit_logs");
+    check("table hidden: to_regclass reports it absent", !(await present("tenant_provisioning_audit_logs")));
+
+    let threw: unknown = null;
+    try { await handleTenantBillingEvent("invoice.payment_succeeded", { customer: xb.cus }); } catch (e) { threw = e; }
+    const xbRefused = (await audits(xb.c)).filter((x: any) => x.change_type === "lifecycle_reactivation_refused").pop();
+    check("billing suspension + payment: no error (no 42P01), still suspended, gate blocks", threw === null && (await sub(xb.c)) === "suspended" && !(await checkTenantGate(xb.c)).allowed, String(threw));
+    check("…source is unverifiable (fail closed) and the refusal is audited with that reason", xbSrcPresent === "billing" && (await source(xb.c)) === "unverifiable" && /cannot be verified \(tenant_provisioning_audit_logs is missing\)/.test(xbRefused?.note ?? ""), xbRefused?.note);
+    await handleTenantBillingEvent("customer.subscription.updated", { customer: xb.cus, status: "active" });
+    check("subscription.updated active: still suspended", (await sub(xb.c)) === "suspended");
+
+    await pay(xa.cus);
+    check("admin suspension + payment: admin precedence kept (source admin, refused as admin, still suspended)", (await source(xa.c)) === "admin" && (await sub(xa.c)) === "suspended"
+      && /suspended by a platform administrator/.test((await audits(xa.c)).filter((x: any) => x.change_type === "lifecycle_reactivation_refused").pop()?.note ?? ""));
+
+    const xu = await patchTenant("platform_admin", xb.t, { status: "active", statusReason: "manual billing review" });
+    check("authorized reinstatement works with the table absent: PATCH /api/tenants/:id → 200, active_paid, gate allows", xu.status === 200 && (await sub(xb.c)) === "active_paid" && (await checkTenantGate(xb.c)).allowed, String(xu.status));
+    const xu0 = await patchTenant("platform_auditor", xa.t, { status: "active" });
+    check("…platform_auditor still cannot reinstate (403)", xu0.status === 403 && (await sub(xa.c)) === "suspended");
+
+    const xrGateBefore = (await pool.query(`SELECT lifecycle_state FROM tenant_commercial_gates WHERE company_id=$1`, [xr.c])).rows[0]?.lifecycle_state ?? null;
+    const xs = await provEvent("platform_admin", xr.c, "tenant.suspended", { reason: "x" });
+    const xrGateAfter = (await pool.query(`SELECT lifecycle_state FROM tenant_commercial_gates WHERE company_id=$1`, [xr.c])).rows[0]?.lifecycle_state ?? null;
+    // getOrCreateGate() creates a default gate row before any provisioning event (pre-existing); the suspension itself must not survive.
+    check("admin suspension with the provisioning log table absent → 500, transaction rolled back (status, gate, mirror, audit unchanged)",
+      xs.status === 500 && xs.body?.success === false && (await sub(xr.c)) === "active_paid" && (await tstat(xr.t)) === "active" && xrGateAfter !== "suspended"
+      && !(await audits(xr.c)).some((x: any) => x.change_type === "admin_suspension"), `${xs.status} ${JSON.stringify(xs.body)} gate ${xrGateBefore}→${xrGateAfter}`);
+
+    await hide("tenant_commercial_gates");
+    const xp = await provEvent("platform_admin", xr.c, "tenant.suspended", { reason: "x" });
+    check("production state (gates table also absent): tenant.suspended → 500, no raw SQL error in the body, nothing written",
+      xp.status === 500 && !/relation|does not exist/i.test(JSON.stringify(xp.body)) && (await sub(xr.c)) === "active_paid" && !(await audits(xr.c)).some((x: any) => x.change_type === "admin_suspension"), `${xp.status} ${JSON.stringify(xp.body)}`);
+
+    await restore();
+    check("tables restored", (await present("tenant_provisioning_audit_logs")) && (await present("tenant_commercial_gates")));
+
+    console.log("\n── 10. Table PRESENT again: billing recovery preserved ──");
+    const yb = await mk("presentBilling", "active_paid");
+    await handleTenantBillingEvent("customer.subscription.deleted", { customer: yb.cus });
+    await handleTenantBillingEvent("invoice.payment_succeeded", { customer: yb.cus });
+    check("billing suspension → payment → active_paid", (await sub(yb.c)) === "active_paid" && (await checkTenantGate(yb.c)).allowed);
+
+    console.log("\n── 11. Handler failure: rollback, propagated error, retry ──");
+    const rb = await mk("retry", "active_paid");
+    await handleTenantBillingEvent("customer.subscription.deleted", { customer: rb.cus });
+    const fn = `zz_asus_fail_${sfx}`;
+    await pool.query(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.company_id = '${rb.c}' AND NEW.after_value = 'active_paid' THEN RAISE EXCEPTION 'simulated audit failure'; END IF; RETURN NEW; END $$`);
+    undo.unshift(`DROP FUNCTION IF EXISTS ${fn}()`);
+    await pool.query(`CREATE TRIGGER ${fn} BEFORE INSERT ON authorization_audit_log FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+    undo.unshift(`DROP TRIGGER IF EXISTS ${fn} ON authorization_audit_log`);
+    let err: unknown = null;
+    try { await handleTenantBillingEvent("invoice.payment_succeeded", { customer: rb.cus }); } catch (e) { err = e; }
+    check("audit insert fails mid-reactivation → handler rejects (route answers 500 so Stripe retries)", err instanceof Error && /simulated audit failure/.test((err as Error).message), String(err));
+    check("…transaction rolled back: still suspended, no active_paid audit row", (await sub(rb.c)) === "suspended" && !(await audits(rb.c)).some((x: any) => x.after_value === "active_paid"));
+    await restore();
+    await handleTenantBillingEvent("invoice.payment_succeeded", { customer: rb.cus });
+    await handleTenantBillingEvent("invoice.payment_succeeded", { customer: rb.cus });
+    check("retry after recovery → active_paid; a duplicate delivery is a no-op (exactly one reactivation row)", (await sub(rb.c)) === "active_paid"
+      && (await audits(rb.c)).filter((x: any) => x.change_type === "lifecycle_transition" && x.after_value === "active_paid").length === 1);
+
+    console.log("\n── 12. Isolation ──");
     check("bystander untouched", (await sub(bystander.c)) === "active_paid" && (await tstat(bystander.t)) === "active" && (await audits(bystander.c)).length === 0);
   } finally {
+    for (const q of undo) await pool.query(q).catch((e) => { console.error(`RESTORE FAILED: ${q}: ${e.message}`); failed++; });
     if (server) await server.stop();
     await pool.query(`DELETE FROM authorization_audit_log WHERE company_id = ANY($1::varchar[]) OR tenant_id = ANY($2::varchar[])`, [companyIds, tenantIds]);
     await pool.query(`DELETE FROM tenant_provisioning_audit_logs WHERE company_id = ANY($1::varchar[])`, [companyIds]).catch(() => {});

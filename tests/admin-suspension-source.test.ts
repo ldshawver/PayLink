@@ -143,7 +143,68 @@ async function main() {
   ok("admin_suspension is classified as an admin source", /admin_suspension: "admin"/.test(billing));
   ok("legacy provisioning 'tenant.suspended' rows are classified (no backfill needed)", /FROM tenant_provisioning_audit_logs[\s\S]{0,120}event_type = 'tenant\.suspended' AND status = 'success'/.test(billing));
   ok("only a system lifecycle_transition is a billing suspension", /row\.change_type === "lifecycle_transition"\) return row\.actor_user_id === "system" \? "billing" : "admin"/.test(billing));
-  ok("Stripe reactivation refuses admin and unknown sources", /if \(source === "admin"\) refused = [\s\S]{0,80}else if \(source !== "billing"\) refused = /.test(billing));
+  ok("Stripe reactivation refuses admin, unverifiable and unknown sources", /if \(source === "admin"\) refused = [\s\S]{0,80}else if \(source === "unverifiable"\) refused = [\s\S]{0,200}else if \(source !== "billing"\) refused = /.test(billing));
+
+  console.log("\n── getSuspensionSource: provisioning audit table present / absent ──");
+  {
+    const { getSuspensionSource } = await import("../server/billingLifecycle");
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    const dialect = new PgDialect();
+    type Row = { actor_user_id: string; change_type: string; created_at: string };
+    // auth = authorization_audit_log rows that set 'suspended'; legacy = provisioning 'tenant.suspended' rows.
+    const fakeTx = (present: boolean, auth: Row[], legacy: Row[]) => {
+      const seen: string[] = [];
+      const tx = {
+        async execute(q: any) {
+          const { sql: text } = dialect.sqlToQuery(q);
+          const t = text.replace(/\s+/g, " ").trim();
+          seen.push(t);
+          const latest = (rows: Row[]) => [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 1);
+          if (t.startsWith("SELECT to_regclass(")) return { rows: [{ present }] };
+          if (t.includes("FROM tenant_provisioning_audit_logs")) {
+            if (!present) throw new Error('relation "tenant_provisioning_audit_logs" does not exist');
+            return { rows: latest([...auth, ...legacy.map((r) => ({ ...r, change_type: "legacy_provisioning_suspension" }))]) };
+          }
+          if (t.startsWith("SELECT actor_user_id, change_type FROM authorization_audit_log")) return { rows: latest(auth) };
+          throw new Error(`unexpected query: ${t.slice(0, 80)}`);
+        },
+      };
+      return { tx, seen };
+    };
+    const billingRow: Row = { actor_user_id: "system", change_type: "lifecycle_transition", created_at: "2026-01-01" };
+    const adminRow = (change_type: string, at = "2026-02-01"): Row => ({ actor_user_id: "u_admin", change_type, created_at: at });
+    const legacyRow: Row = { actor_user_id: "admin", change_type: "", created_at: "2026-03-01" };
+    const src = async (present: boolean, auth: Row[], legacy: Row[] = []) => {
+      const f = fakeTx(present, auth, legacy);
+      return { source: await getSuspensionSource(f.tx as any, "co_1"), seen: f.seen };
+    };
+
+    // Table present: unchanged classification.
+    ok("present: system lifecycle_transition → billing", (await src(true, [billingRow])).source === "billing");
+    ok("present: admin_suspension → admin", (await src(true, [billingRow, adminRow("admin_suspension")])).source === "admin");
+    ok("present: newer legacy provisioning row over a billing row → admin", (await src(true, [billingRow], [legacyRow])).source === "admin");
+    ok("present: no trail → unknown", (await src(true, [])).source === "unknown");
+
+    // Table absent: never queried, admin still wins, everything else fails closed.
+    const absentNone = await src(false, []);
+    ok("absent: provisioning table is never queried (no 42P01)", !absentNone.seen.some((t) => t.includes("tenant_provisioning_audit_logs")) && absentNone.seen[0].startsWith("SELECT to_regclass("));
+    ok("absent: no trail → unverifiable (not unknown, not billing)", absentNone.source === "unverifiable");
+    ok("absent: latest row a system billing suspension → unverifiable (fail closed)", (await src(false, [billingRow])).source === "unverifiable");
+    for (const ct of ["admin_suspension", "tenant_status_change", "gate_override", "license_admin_update"]) {
+      ok(`absent: latest row ${ct} → admin (admin precedence kept)`, (await src(false, [billingRow, adminRow(ct)])).source === "admin");
+    }
+    ok("absent: lifecycle_transition by a non-system actor → admin", (await src(false, [{ ...billingRow, actor_user_id: "u_admin" }])).source === "admin");
+    ok("absent: admin row older than a billing row → unverifiable", (await src(false, [adminRow("gate_override", "2025-12-01"), billingRow])).source === "unverifiable");
+  }
+
+  console.log("\n── static: Stripe webhook delivery semantics ──");
+  {
+    const index = fs.readFileSync("server/index.ts", "utf8");
+    const block = index.match(/const \{ handleTenantBillingEvent \} = await import\('\.\/billingLifecycle'\);[\s\S]{0,400}/)?.[0] ?? "";
+    ok("a tenant lifecycle handler error is answered with 500 (Stripe retries), not acknowledged", /catch \(be: any\) \{[\s\S]{0,120}return res\.status\(500\)/.test(block));
+    ok("the 200 acknowledgement comes only after the lifecycle handler returned", index.indexOf("await handleTenantBillingEvent(eventType, event.data.object);") < index.indexOf("res.status(200).json({ received: true });"));
+    ok("provisioning event failures return status 500 and no raw database message", /return \{ success: false, status: 500, message: "Failed to handle provisioning event", allGatesPassed: false \};/.test(svc) && !/return \{ success: false, message: msg, allGatesPassed: false \}/.test(svc));
+  }
 
   console.log("\n── guard: every 'suspended' writer is audited ──");
   // Any literal write of subscription_status = 'suspended' must live in a

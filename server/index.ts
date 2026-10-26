@@ -222,11 +222,15 @@ app.post(
         eventType === "invoice.payment_succeeded" ||
         eventType === "customer.subscription.updated"
       ) {
+        // A failure here must not be acknowledged: a non-2xx makes Stripe
+        // retry the event. Lifecycle changes are transactional and the
+        // handlers are idempotent on retry (status guards).
         try {
           const { handleTenantBillingEvent } = await import('./billingLifecycle');
           await handleTenantBillingEvent(eventType, event.data.object);
         } catch (be: any) {
           console.error('[BillingLifecycle] Handler error:', be.message);
+          return res.status(500).json({ error: 'Tenant billing lifecycle processing failed' });
         }
       }
 

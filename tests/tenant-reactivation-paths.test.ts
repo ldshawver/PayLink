@@ -166,7 +166,7 @@ async function main() {
   console.log("\nStripe lifecycle (static)");
   const billing = fs.readFileSync("server/billingLifecycle.ts", "utf8");
   ok("reactivation never from cancelled", /if \(status === "cancelled"\) refused = /.test(billing));
-  ok("reactivation from suspended only when the suspension was applied by billing", /else if \(status === "suspended"\) \{\s*const source = await getSuspensionSource\(tx, companyId\);\s*if \(source === "admin"\) refused = [\s\S]{0,120}else if \(source !== "billing"\) refused = /.test(billing));
+  ok("reactivation from suspended only when the suspension was applied by billing", /else if \(status === "suspended"\) \{\s*const source = await getSuspensionSource\(tx, companyId\);\s*if \(source === "admin"\) refused = [\s\S]{0,120}else if \(source === "unverifiable"\) refused = [\s\S]{0,200}else if \(source !== "billing"\) refused = /.test(billing));
   ok("getSuspensionSource: latest suspension audit row must be a system lifecycle_transition", /after_value = 'suspended'[\s\S]{0,700}ORDER BY created_at DESC[\s\S]{0,300}row\.change_type === "lifecycle_transition"\) return row\.actor_user_id === "system" \? "billing" : "admin"/.test(billing));
   ok("refused reactivations are audited (lifecycle_reactivation_refused)", /insertLifecycleAudit\(tx, companyId, "lifecycle_reactivation_refused"/.test(billing));
   ok("subscription.deleted leaves cancelled and suspended companies unchanged", /if \(status === "cancelled" \|\| status === "suspended"\) return null;/.test(billing));
