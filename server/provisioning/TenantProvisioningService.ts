@@ -11,6 +11,7 @@ import {
 } from "@shared/schema";
 import { getTemplate, type ImplementationTemplate } from "./implementationTemplates";
 import { emitIntegrationEvent } from "../integrationEvents";
+import { applyAdminSuspension, type AdminSuspensionActor } from "../tenant-admin-suspension";
 import bcrypt from "bcrypt";
 import { sql } from "drizzle-orm";
 
@@ -223,8 +224,9 @@ export async function handleProvisioningEvent(
   companyId: string,
   event: ProvisioningEvent,
   payload: Record<string, any> = {},
-  triggeredBy = "system"
-): Promise<{ success: boolean; message: string; allGatesPassed: boolean }> {
+  triggeredBy = "system",
+  actor?: AdminSuspensionActor
+): Promise<{ success: boolean; message: string; allGatesPassed: boolean; status?: number }> {
   try {
     const gate = await getOrCreateGate(companyId);
 
@@ -251,15 +253,23 @@ export async function handleProvisioningEvent(
         await writeAuditLog(companyId, event, null, "success", "Payment failed; tenant moved to grace period", triggeredBy);
         await emitIntegrationEvent(companyId, event, { companyId, ...payload });
         return { success: true, message: "Payment failure recorded", allGatesPassed: false };
-      case "tenant.suspended":
-        await db
-          .update(tenantCommercialGates)
-          .set({ lifecycleState: "suspended", suspendedAt: new Date(), updatedAt: new Date() })
-          .where(eq(tenantCommercialGates.companyId, companyId));
-        await db.update(companies).set({ subscriptionStatus: "suspended" }).where(eq(companies.id, companyId));
-        await writeAuditLog(companyId, event, null, "success", "Tenant suspended", triggeredBy);
+      case "tenant.suspended": {
+        // Administrative suspension: shared transition policy + mandatory
+        // authorization_audit_log row (server/tenant-admin-suspension.ts), so
+        // it is never mistaken for a billing suspension and lifted by Stripe.
+        if (!actor) return { success: false, status: 403, message: "tenant.suspended requires a platform administrator", allGatesPassed: false };
+        let result;
+        try {
+          result = await applyAdminSuspension(db.$client as any, companyId, { reason: payload.reason, via: "provisioning" }, actor);
+        } catch (e) {
+          // Rolled back (e.g. audit insert failed): report failure, not a 200.
+          console.error(`[Provisioning] admin suspension failed for company ${companyId}:`, e instanceof Error ? e.message : String(e));
+          return { success: false, status: 500, message: "Failed to suspend tenant", allGatesPassed: false };
+        }
+        if (!result.ok) return { success: false, status: result.status, message: result.message, allGatesPassed: false };
         await emitIntegrationEvent(companyId, event, { companyId, ...payload });
-        return { success: true, message: "Tenant suspended", allGatesPassed: false };
+        return { success: true, message: result.statusChanged ? "Tenant suspended" : "Tenant already suspended; recorded as an administrative suspension", allGatesPassed: false };
+      }
       case "go_live.approved":
         await writeAuditLog(companyId, event, null, "success", "Go-live approved", triggeredBy);
         await emitIntegrationEvent(companyId, event, { companyId, ...payload });
@@ -295,7 +305,8 @@ export async function handleProvisioningEvent(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Provisioning] Error handling event ${event} for company ${companyId}:`, msg);
-    return { success: false, message: msg, allGatesPassed: false };
+    // Not a 200: e.g. tenant_commercial_gates missing on a schema that was never pushed.
+    return { success: false, status: 500, message: "Failed to handle provisioning event", allGatesPassed: false };
   }
 }
 

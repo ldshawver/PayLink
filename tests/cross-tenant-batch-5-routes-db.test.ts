@@ -210,6 +210,22 @@ import fs from "node:fs";
 import { startTestServer, login, apiRequest, type TestServer, type Session } from "../scripts/cross-tenant-negative-tests/server-harness";
 import { cascadeDelete, verifyZeroResidue } from "../scripts/cross-tenant-negative-tests/cascade-cleanup";
 
+// POST /api/provisioning/event requires a CSRF token (double-submit cookie +
+// x-csrf-token header). Role/auth denials are decided before the CSRF check,
+// so only the authorized cases need it.
+async function csrfApiRequest(baseUrl: string, method: string, path: string, session: Session, jsonBody: unknown) {
+  const me = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: session.cookie } });
+  const token = (me.headers.get("set-cookie") || "").match(/csrf_token=([0-9a-f]+)/)?.[1] || "";
+  const res = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: { cookie: `${session.cookie}; csrf_token=${token}`, "x-csrf-token": token, "content-type": "application/json" },
+    body: JSON.stringify(jsonBody),
+  });
+  let body: unknown;
+  try { body = await res.json(); } catch { body = undefined; }
+  return { status: res.status, body };
+}
+
 const FORBIDDEN_PATTERNS = [/staging/i, /production/i, /^prod$/i, /apppaylinkstaging/i, /apppaylinkmain/i];
 const MANIFEST_PATH = "docs/saas-readiness/cross-tenant-batch-5-test-manifest.json";
 
@@ -665,7 +681,7 @@ async function main() {
 
       // Authorized narrow platform-role behavior: platform_admin (not just
       // platform_super_admin) must still be able to fire a legitimate event.
-      const r2b = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformAdmin, { companyId: companyB, event: "agreement.signed" });
+      const r2b = await csrfApiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformAdmin, { companyId: companyB, event: "agreement.signed" });
       const gateBAfterAdmin = await pool.query("SELECT agreement_status FROM tenant_commercial_gates WHERE company_id = $1", [companyB]);
       cases.push({
         case: "2b. Authorized narrow platform-role behavior: platform_admin can still fire a legitimate provisioning event for Tenant B",
@@ -673,7 +689,7 @@ async function main() {
         detail: `status=${r2b.status} agreementStatus=${gateBAfterAdmin.rows[0]?.agreement_status}`,
       });
 
-      const r3 = await apiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformSuperAdmin, { companyId: nonexistentId, event: "agreement.signed" });
+      const r3 = await csrfApiRequest(baseUrl, "POST", `/api/provisioning/event`, sessionPlatformSuperAdmin, { companyId: nonexistentId, event: "agreement.signed" });
       cases.push({
         case: "3. Hardening: POST /api/provisioning/event now validates the target company exists before calling handleProvisioningEvent — a nonexistent companyId 404s explicitly instead of relying on an internal FK-violation catch that returned a 200 with success:false",
         disposition: r3.status === 404 ? "PASS" : "FAIL",

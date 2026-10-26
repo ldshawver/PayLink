@@ -74,24 +74,82 @@ async function lockCompany(tx: Tx, companyId: string): Promise<{ subscription_st
 }
 
 /**
- * True only when the company's CURRENT suspension was applied by the billing
- * lifecycle itself (grace-period expiry / Stripe subscription deletion). The
- * latest status-change audit row that set "suspended" decides; a suspension by
- * a platform administrator (tenant status admin, gate override, license
- * admin) — or one with no audit trail at all — is never lifted by a Stripe
- * payment (P0-E).
+ * Every authorization_audit_log change_type that can set
+ * companies.subscription_status to "suspended", and the suspension SOURCE it
+ * records. A new suspension writer must write one of these (or be added
+ * here); tests/admin-suspension-source.test.ts fails on an unaudited writer.
  */
-export async function wasSuspendedByBilling(tx: Tx, companyId: string): Promise<boolean> {
+export const SUSPENSION_SOURCE_BY_CHANGE_TYPE = {
+  lifecycle_transition: "billing", // grace-period expiry, Stripe subscription.deleted (actor 'system')
+  admin_suspension: "admin", // POST /api/provisioning/event tenant.suspended
+  tenant_status_change: "admin", // PATCH /api/tenants/:id
+  gate_override: "admin", // platform_super_admin gate override
+  license_admin_update: "admin", // PUT /api/platform/companies/:id/license
+} as const;
+
+export type SuspensionSource = "billing" | "admin" | "unknown" | "unverifiable";
+
+/**
+ * Legacy provisioning suspensions are only recorded here. The table is in
+ * shared/schema.ts but production deploys do not run drizzle push, so it can
+ * be missing (it is on production as of v2.2.16).
+ */
+export const PROVISIONING_AUDIT_TABLE = "tenant_provisioning_audit_logs";
+
+/**
+ * Who applied the company's CURRENT suspension: the latest audit row that set
+ * "suspended" decides. Pre-existing suspensions are classified from history
+ * that already exists (no backfill):
+ *   - latest row a system lifecycle_transition          → "billing"
+ *   - latest row an admin change_type above             → "admin"
+ *   - latest a legacy tenant_provisioning_audit_logs
+ *     'tenant.suspended' row (provisioning suspensions
+ *     written before they were audited here)            → "admin"
+ *   - no trail at all                                   → "unknown"
+ * If tenant_provisioning_audit_logs does not exist, a provisioning suspension
+ * cannot be ruled out: an admin row still wins, anything else (including a
+ * billing row) is "unverifiable". Missing history is never proof that a
+ * payment may reinstate the tenant.
+ * Only "billing" may be lifted by a Stripe payment; "admin", "unknown" and
+ * "unverifiable" need an explicit, audited platform-administrator action.
+ */
+export async function getSuspensionSource(tx: Tx, companyId: string): Promise<SuspensionSource> {
+  const types = Object.keys(SUSPENSION_SOURCE_BY_CHANGE_TYPE);
+  const present = await tx.execute(sql`SELECT to_regclass(${`public.${PROVISIONING_AUDIT_TABLE}`}) IS NOT NULL AS present`);
+  if ((present.rows[0] as any)?.present !== true) {
+    const a = await tx.execute(sql`
+      SELECT actor_user_id, change_type FROM authorization_audit_log
+      WHERE company_id = ${companyId}
+        AND after_value = 'suspended'
+        AND change_type IN (${sql.join(types.map((t) => sql`${t}`), sql`, `)})
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    const row = a.rows[0] as any;
+    if (row && !(row.change_type === "lifecycle_transition" && row.actor_user_id === "system")) return "admin";
+    console.warn(`[BillingLifecycle] ${PROVISIONING_AUDIT_TABLE} is missing; suspension source of company ${companyId} is unverifiable`);
+    return "unverifiable";
+  }
   const r = await tx.execute(sql`
-    SELECT actor_user_id, change_type FROM authorization_audit_log
+    SELECT actor_user_id, change_type, created_at FROM authorization_audit_log
     WHERE company_id = ${companyId}
       AND after_value = 'suspended'
-      AND change_type IN ('lifecycle_transition', 'tenant_status_change', 'gate_override', 'license_admin_update')
+      AND change_type IN (${sql.join(types.map((t) => sql`${t}`), sql`, `)})
+    UNION ALL
+    SELECT triggered_by AS actor_user_id, 'legacy_provisioning_suspension' AS change_type, created_at FROM tenant_provisioning_audit_logs
+    WHERE company_id = ${companyId} AND event_type = 'tenant.suspended' AND status = 'success'
     ORDER BY created_at DESC
     LIMIT 1
   `);
   const row = r.rows[0] as any;
-  return !!row && row.actor_user_id === "system" && row.change_type === "lifecycle_transition";
+  if (!row) return "unknown";
+  if (row.change_type === "lifecycle_transition") return row.actor_user_id === "system" ? "billing" : "admin";
+  return "admin";
+}
+
+/** True only when the CURRENT suspension was applied by the billing lifecycle (P0-E). */
+export async function wasSuspendedByBilling(tx: Tx, companyId: string): Promise<boolean> {
+  return (await getSuspensionSource(tx, companyId)) === "billing";
 }
 
 /**
@@ -109,7 +167,10 @@ async function reactivateFromBilling(companyId: string, note: string): Promise<b
     let refused: string | null = null;
     if (status === "cancelled") refused = "tenant is cancelled; reinstatement requires a platform administrator";
     else if (status === "suspended") {
-      if (!(await wasSuspendedByBilling(tx, companyId))) refused = "tenant was suspended by a platform administrator";
+      const source = await getSuspensionSource(tx, companyId);
+      if (source === "admin") refused = "tenant was suspended by a platform administrator";
+      else if (source === "unverifiable") refused = `suspension source cannot be verified (${PROVISIONING_AUDIT_TABLE} is missing); reinstatement requires a platform administrator`;
+      else if (source !== "billing") refused = "suspension has no billing audit trail; reinstatement requires a platform administrator";
     } else if (status !== "grace_period") return null;
     if (!refused) {
       const check = checkSubscriptionTransition(c.subscription_status, "active_paid", c.is_demo === true, { allowReinstatement: false });
