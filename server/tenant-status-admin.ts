@@ -59,6 +59,8 @@ export function checkTenantStatusTransition(from: string | null | undefined, to:
 export interface TenantPatchInput {
   name?: string; status?: string; billingContactName?: string | null; billingContactEmail?: string | null;
   defaultTimezone?: string; notes?: string | null; stripeCustomerId?: string;
+  // Optional reason for a status change; recorded on the audit row.
+  statusReason?: string | null;
 }
 
 export interface TenantPatchActor { userId: string; role: string | null | undefined }
@@ -83,6 +85,11 @@ export async function applyTenantPatch(pool: PgPool, tenantId: string, input: Te
   if (status !== undefined && status !== null && status !== "" && !KNOWN_STATUSES.includes(String(status))) {
     return { ok: false, status: 400, message: "Invalid status" };
   }
+  if (input.statusReason !== undefined && input.statusReason !== null && typeof input.statusReason !== "string") {
+    return { ok: false, status: 400, message: "statusReason must be a string" };
+  }
+  const statusReason = typeof input.statusReason === "string" ? input.statusReason.trim() || null : null;
+  if (statusReason && statusReason.length > 500) return { ok: false, status: 400, message: "statusReason must be at most 500 characters" };
 
   const client = await pool.connect();
   try {
@@ -144,7 +151,7 @@ export async function applyTenantPatch(pool: PgPool, tenantId: string, input: Te
       await client.query(
         `INSERT INTO authorization_audit_log (actor_user_id, target_resource, change_type, before_value, after_value, note, company_id, tenant_id)
          VALUES ($1, $2, 'tenant_status_change', $3, $4, $5, $6, $7)`,
-        [actor.userId, `tenant:${tenantId}`, String(beforeStatus ?? ""), String(after.status ?? ""), `role=${actor.role}`, primaryCompanyId ?? null, tenantId],
+        [actor.userId, `tenant:${tenantId}`, String(beforeStatus ?? ""), String(after.status ?? ""), `source=admin; role=${actor.role}${statusReason ? `; reason=${statusReason}` : ""}`, primaryCompanyId ?? null, tenantId],
       );
     }
     if (changedFields.length) {

@@ -35832,13 +35832,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     // platform_support/platform_implementation/platform_auditor can no
     // longer suspend or activate any tenant's subscription through this
     // endpoint (batch 5 audit, verified defects 4 and 5).
-    app.post("/api/provisioning/event", requireAuth, requirePlatformAdminRole(), async (req, res) => {
+    // tenant.suspended is an administrative suspension: the acting user is
+    // passed through so it is authorization-checked again and audited with
+    // its source (server/tenant-admin-suspension.ts).
+    app.post("/api/provisioning/event", requireAuth, requirePlatformAdminRole(), requireCsrfToken, async (req, res) => {
       try {
         const { companyId, event, payload } = req.body;
         if (!companyId || !event) return res.status(400).json({ message: "companyId and event are required" });
         const targetCompany = await storage.getCompany(companyId);
         if (!targetCompany) return res.status(404).json({ message: "Company not found" });
-        const result = await handleProvisioningEvent(companyId, event, payload || {}, "admin");
+        const actor = await storage.getUser(req.session.userId!);
+        const result = await handleProvisioningEvent(companyId, event, payload || {}, "admin", actor ? { userId: actor.id, role: actor.role } : undefined);
+        if (!result.success && result.status) return res.status(result.status).json(result);
+        if (event === "tenant.suspended" && result.success) invalidateTenantCache(companyId);
         res.json(result);
       } catch (e) { res.status(500).json({ message: "Failed to handle provisioning event" }); }
     });
