@@ -34,8 +34,13 @@ ok(
   !!activateMatch && /if \(!companyId/.test(activateMatch[0])
 );
 ok(
-  "POST /api/billing/activate writes an audit log entry",
-  !!activateMatch && /writeAuditLog\(/.test(activateMatch[0])
+  "POST /api/billing/activate delegates to applyBillingActivation (status + mirror + mandatory audit row in one transaction, P0-E)",
+  !!activateMatch && /applyBillingActivation\(db\.\$client/.test(activateMatch[0])
+);
+const activationService = fs.readFileSync("server/tenant-billing-activation.ts", "utf8");
+ok(
+  "applyBillingActivation writes a billing_activated authorization_audit_log row before COMMIT",
+  /'billing_activated'[\s\S]*await client\.query\("COMMIT"\)/.test(activationService)
 );
 
 ok("billing.tsx no longer calls POST /api/billing/activate itself", !/apiRequest\("POST",\s*"\/api\/billing\/activate"/.test(billingPage));
