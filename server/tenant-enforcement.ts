@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { mapSubscriptionStatusToTenantStatus } from "./tenant-context";
-import { normalizeSubscriptionStatus } from "./subscription-status";
+import { GRACE_SUBSCRIPTION_STATUSES, TRIAL_SUBSCRIPTION_STATUSES, isKnownSubscriptionStatus, normalizeSubscriptionStatus } from "./subscription-status";
 
 export type GateCode =
   | "trial_expired"
@@ -10,7 +10,8 @@ export type GateCode =
   | "suspended"
   | "cancelled"
   | "tenant_inactive"
-  | "agreement_required";
+  | "agreement_required"
+  | "gate_unavailable";
 
 export interface TenantGateResult {
   allowed: boolean;
@@ -56,7 +57,7 @@ export async function checkTenantGate(companyId: string): Promise<TenantGateResu
       };
     }
 
-    if (status === "trial_active" || status === "trialing") {
+    if ((TRIAL_SUBSCRIPTION_STATUSES as readonly string[]).includes(status)) {
       if (c.trial_end && new Date(c.trial_end) < now) {
         return {
           allowed: false,
@@ -69,11 +70,21 @@ export async function checkTenantGate(companyId: string): Promise<TenantGateResu
       return { allowed: true };
     }
 
+    if (status === "trial_expired") {
+      return {
+        allowed: false,
+        reason: "Your free trial has expired.",
+        code: "trial_expired",
+        policyDetail: "Please subscribe to a plan to restore access.",
+        details: { trialEnd: c.trial_end, subscriptionStatus: status },
+      };
+    }
+
     if (status === "active_paid" || status === "active") {
       return { allowed: true };
     }
 
-    if (status === "grace") {
+    if ((GRACE_SUBSCRIPTION_STATUSES as readonly string[]).includes(status)) {
       if (c.grace_period_end && new Date(c.grace_period_end) < now) {
         return {
           allowed: false,
@@ -116,10 +127,26 @@ export async function checkTenantGate(companyId: string): Promise<TenantGateResu
       };
     }
 
-    return { allowed: true };
+    // Fail closed: a status this gate cannot classify (NULL, empty, unknown)
+    // means eligibility cannot be determined.
+    if (!isKnownSubscriptionStatus(status)) {
+      console.warn(`[TenantGate] company ${companyId} has unrecognized subscription_status; access denied`);
+    }
+    return {
+      allowed: false,
+      reason: "Your account status could not be verified.",
+      code: "tenant_inactive",
+      policyDetail: "Contact support at support@mypaylink.app to restore access.",
+    };
   } catch (e) {
+    // Fail closed: if eligibility cannot be read, access is not granted. The
+    // error is logged here only; callers return the generic reason below.
     console.error("[TenantGate] check failed:", e);
-    return { allowed: true };
+    return {
+      allowed: false,
+      reason: "We couldn't verify your account status. Please try again shortly.",
+      code: "gate_unavailable",
+    };
   }
 }
 

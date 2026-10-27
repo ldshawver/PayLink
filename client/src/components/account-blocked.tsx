@@ -11,6 +11,7 @@ const CODE_LABELS: Record<string, string> = {
   suspended: "Account Suspended",
   cancelled: "Subscription Cancelled",
   tenant_inactive: "Account Inactive",
+  gate_unavailable: "Status Unavailable",
 };
 
 interface AccountBlockedProps {
@@ -66,6 +67,12 @@ export function AccountBlocked({ gate }: AccountBlockedProps) {
               )}
               {gate.code === "suspended" && (
                 <li>• Contact support to resolve your account status</li>
+              )}
+              {gate.code === "gate_unavailable" && (
+                <>
+                  <li>• Reload the page in a few minutes</li>
+                  <li>• Contact support if this persists</li>
+                </>
               )}
               {!gate.code && (
                 <li>• Contact support for assistance</li>
