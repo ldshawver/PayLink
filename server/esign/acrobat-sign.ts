@@ -82,26 +82,7 @@ export class AcrobatSignAdapter implements ESignProviderAdapter {
   readonly providerName = "acrobat_sign";
 
   async createPackage(options: CreatePackageOptions, companyConfig?: CompanyESignConfig): Promise<CreatePackageResult> {
-    const fs = await import("fs");
-    const pathMod = await import("path");
-
-    let fileBuffer: Buffer;
-    if (options.documentUrl.startsWith("http")) {
-      const response = await fetch(options.documentUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch document from ${options.documentUrl}: ${response.status}`);
-      }
-      const arrayBuffer = await response.arrayBuffer();
-      fileBuffer = Buffer.from(arrayBuffer);
-    } else {
-      const filePath = options.documentUrl.startsWith("/")
-        ? pathMod.join(process.cwd(), options.documentUrl)
-        : pathMod.join(process.cwd(), options.documentUrl);
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Document not found at path: ${options.documentUrl}`);
-      }
-      fileBuffer = fs.readFileSync(filePath);
-    }
+    const fileBuffer = options.documentContent;
 
     const boundary = `----FormBoundary${Date.now()}`;
     const mimeType = options.documentName.endsWith(".pdf") ? "application/pdf" : "application/octet-stream";

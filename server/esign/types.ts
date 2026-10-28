@@ -23,7 +23,12 @@ export interface CompanyESignConfig {
 
 export interface CreatePackageOptions {
   companyId: string;
-  documentUrl: string;
+  /**
+   * The document bytes, read server-side by the caller (see
+   * server/esign/stored-document.ts). Adapters never fetch a URL or read a
+   * path themselves.
+   */
+  documentContent: Buffer;
   documentName: string;
   subject: string;
   message?: string;

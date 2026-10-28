@@ -89,31 +89,7 @@ export class DocuSignAdapter implements ESignProviderAdapter {
       })),
     };
 
-    let documentBase64 = "";
-    const fs = await import("fs");
-    const path = await import("path");
-    if (options.documentUrl.startsWith("/uploads/") || options.documentUrl.startsWith("uploads/")) {
-      const filePath = options.documentUrl.startsWith("/")
-        ? path.join(process.cwd(), options.documentUrl)
-        : path.join(process.cwd(), options.documentUrl);
-      const fileBuffer = fs.readFileSync(filePath);
-      documentBase64 = fileBuffer.toString("base64");
-    } else if (options.documentUrl.startsWith("http")) {
-      const response = await fetch(options.documentUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch document from ${options.documentUrl}: ${response.status}`);
-      }
-      const arrayBuffer = await response.arrayBuffer();
-      documentBase64 = Buffer.from(arrayBuffer).toString("base64");
-    } else {
-      const filePath = path.join(process.cwd(), options.documentUrl);
-      if (fs.existsSync(filePath)) {
-        const fileBuffer = fs.readFileSync(filePath);
-        documentBase64 = fileBuffer.toString("base64");
-      } else {
-        throw new Error(`Document not found at path: ${options.documentUrl}`);
-      }
-    }
+    const documentBase64 = options.documentContent.toString("base64");
 
     const fileExtension = options.documentName.split(".").pop() || "pdf";
 

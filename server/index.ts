@@ -257,7 +257,9 @@ app.use(express.urlencoded({
   },
 }));
 
-app.use("/uploads", express.static(uploadsDir));
+// /uploads is NOT served statically: registerRoutes() mounts the authenticated,
+// ownership-checked handler (server/auth/upload-route.ts) after the session
+// middleware. Never re-add express.static for the uploads directory.
 app.use("/docs", express.static(path.join(process.cwd(), "docs")));
 
 const PgStore = connectPgSimple(session);

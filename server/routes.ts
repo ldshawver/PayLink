@@ -51,6 +51,8 @@ import {
   extractSuppliedCompanyIds, decideSuppliedCompanyAccess, SUPPLIED_COMPANY_GATE_EXEMPT_PREFIXES,
   OWNED_RESOURCES, decideOwnedOrSelfAccess, type OwnedResourceKind,
 } from "./auth/stored-resource-guard.js";
+import { resolveUploadOwners } from "./auth/upload-ownership-registry.js";
+import { createUploadsHandler, createSessionActorLoader } from "./auth/upload-route.js";
 import type { User } from "@shared/schema";
 import { db } from "./db";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
@@ -58,6 +60,7 @@ import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema, normalizeContractorDocumentType } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
+import { readStoredUploadForDelivery } from "./esign/stored-document";
 import fs from "fs";
 import { createDocumensoDocument, getDocumensoDocument, downloadCompletedDocumensoPdf, downloadDocumensoAuditTrail, resendDocumensoDocument, voidDocumensoDocument, verifyWebhookSecret, toLocalDocumensoStatus, validateDocumensoConfig, serializeDocumensoError, getDocumensoBaseUrlInfo } from "./services/documenso";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
@@ -1993,6 +1996,22 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // ── Uploaded files — authenticated, ownership-checked (replaces the former
+  // anonymous express.static mount in server/index.ts). See
+  // server/auth/upload-route.ts and upload-ownership-registry.ts.
+  app.use("/uploads", createUploadsHandler({
+    uploadsDir: resolvedUploadDir,
+    resolveOwners: (ref) => resolveUploadOwners((q) => db.execute(q), ref),
+    loadActor: createSessionActorLoader({
+      getUser: (id) => storage.getUser(id),
+      resolveVendorId: async (userId) => (await resolveVendorForUser(userId))?.vendorId ?? null,
+      canAccessStoredCompany: (user, companyId) => canAccessStoredCompany(user, companyId),
+      expandRoleForGuard,
+      isPlatformOrgAdminRole,
+    }),
+    onError: (err) => console.error("[uploads] request failed:", (err as Error)?.message),
+  }));
 
   // ── Health / readiness endpoints (required by deploy health check) ───────────
   app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
@@ -14688,6 +14707,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       if (!pdfRel?.file_path) return res.status(500).json({ message: "Approval PDF unavailable" });
 
+      // DocuSign / Acrobat Sign receive the PDF bytes, read here from the uploads
+      // root — never a public /uploads URL fetched back over HTTP.
+      const providerDocument = provider === "documenso"
+        ? null
+        : await readStoredUploadForDelivery(pdfRel.file_path, resolvedUploadDir);
+      if (provider !== "documenso" && !providerDocument) {
+        return res.status(500).json({ message: "Approval PDF unavailable on server storage" });
+      }
+
       // Create a Documents record so signature_packages can reference a real document row.
       const docTitle = `${proposal.title || proposal.proposal_number || "Proposal"} — Signature`;
       const docRow = await storage.createDocument({
@@ -14759,7 +14787,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         } else {
           result = await adapter!.createPackage({
             companyId,
-            documentUrl: `${baseUrl}${pdfRel.file_path}`,
+            documentContent: providerDocument!,
             documentName: pdfRel.file_name || "proposal.pdf",
             subject,
             message,
@@ -32786,6 +32814,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       }
       const companyConfig = await getCompanyESignConfig(companyId);
 
+      const documentContent = await readStoredUploadForDelivery(doc.fileUrl, resolvedUploadDir);
+      if (!documentContent) {
+        return res.status(422).json({ message: "Document file is not available on server storage" });
+      }
+
       const baseUrl = getAppBaseUrl(req);
       const returnUrl = `${baseUrl}/documents/${documentId}`;
 
@@ -32811,7 +32844,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const result = await adapter.createPackage({
         companyId,
-        documentUrl: doc.fileUrl,
+        documentContent,
         documentName: doc.fileName,
         subject,
         message,
