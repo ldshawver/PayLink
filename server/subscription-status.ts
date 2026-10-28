@@ -17,3 +17,20 @@ export function normalizeSubscriptionStatus(raw: string | null | undefined): str
 export function isCancelledSubscriptionStatus(raw: string | null | undefined): boolean {
   return normalizeSubscriptionStatus(raw) === CANCELLED_SUBSCRIPTION_STATUS;
 }
+
+// Fail-closed gating: every normalized companies.subscription_status value the
+// tenant gates (checkTenantGate, requireActiveSubscription) know how to
+// classify. Anything else — NULL, empty, a typo, a value from a newer or older
+// release — means eligibility cannot be determined, so both gates deny.
+export const TRIAL_SUBSCRIPTION_STATUSES = ["trial_active", "trialing", "trial"] as const;
+export const GRACE_SUBSCRIPTION_STATUSES = ["grace_period", "grace"] as const;
+export const KNOWN_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set([
+  "active_paid", "active",
+  ...TRIAL_SUBSCRIPTION_STATUSES, "trial_expired",
+  ...GRACE_SUBSCRIPTION_STATUSES, "past_due",
+  "suspended", CANCELLED_SUBSCRIPTION_STATUS,
+]);
+
+export function isKnownSubscriptionStatus(normalized: string): boolean {
+  return KNOWN_SUBSCRIPTION_STATUSES.has(normalized);
+}

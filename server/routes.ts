@@ -14,7 +14,7 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
-import { normalizeSubscriptionStatus } from "./subscription-status";
+import { GRACE_SUBSCRIPTION_STATUSES, TRIAL_SUBSCRIPTION_STATUSES, isKnownSubscriptionStatus, normalizeSubscriptionStatus } from "./subscription-status";
 import { createRateLimiter, requireCsrfToken } from "./security-middleware";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany, mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 import { applyTenantPatch } from "./tenant-status-admin";
@@ -1195,7 +1195,11 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
     const user = await storage.getUser(req.session.userId!);
     if (!user?.companyId) return next();
     const rows = await db.execute(sql`SELECT subscription_status, trial_end, grace_period_end FROM companies WHERE id = ${user.companyId}`);
-    if (rows.rows.length === 0) return next();
+    // Fail closed: a tenant user whose company row is gone has no verifiable
+    // eligibility.
+    if (rows.rows.length === 0) {
+      return res.status(403).json({ message: "Your account status could not be verified. Please contact support.", reason: "tenant_inactive" });
+    }
     const company = rows.rows[0] as any;
     // Both "cancelled" and "canceled" are stored; normalize before comparing
     // (P0-D: "cancelled" used to pass this gate). /auth/ and /billing/activate
@@ -1218,9 +1222,18 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
     if (status === "trial_expired") {
       return res.status(403).json({ message: "Your subscription is inactive. Please upgrade to continue." });
     }
-    if (status === "grace_period") {
+    if ((GRACE_SUBSCRIPTION_STATUSES as readonly string[]).includes(status)) {
       const gracePeriodEnd = company.grace_period_end ? new Date(company.grace_period_end) : null;
       if (gracePeriodEnd && new Date() > gracePeriodEnd) {
+        // "grace" (gate-override spelling) is not swept by
+        // suspendExpiredGracePeriod(); deny without changing its status.
+        if (status === "grace") {
+          return res.status(403).json({
+            message: "Your grace period has expired. Please resolve billing to restore access.",
+            reason: "tenant_grace_expired",
+            subscriptionStatus: status,
+          });
+        }
         // Same audited transition as the scheduled sweep, so a later Stripe
         // payment can recognise this as a billing suspension (P0-E).
         if (await suspendExpiredGracePeriod(user.companyId)) {
@@ -1234,13 +1247,18 @@ async function requireActiveSubscription<P extends ParamsDictionary>(req: Reques
       }
       return next();
     }
-    if (status === "trial_active" && company.trial_end) {
+    if ((TRIAL_SUBSCRIPTION_STATUSES as readonly string[]).includes(status) && company.trial_end) {
       const trialEnd = new Date(company.trial_end);
       if (new Date() > trialEnd) {
         await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
         await mirrorTenantStatusFromCompany(user.companyId, "trial_expired");
         return res.status(403).json({ message: "Your trial has expired. Please upgrade to continue." });
       }
+    }
+    // Fail closed: NULL, empty or unrecognized statuses cannot be classified.
+    if (!isKnownSubscriptionStatus(status)) {
+      console.warn(`[TenantGate] company ${user.companyId} has unrecognized subscription_status; write denied`);
+      return res.status(403).json({ message: "Your account status could not be verified. Please contact support.", reason: "tenant_inactive" });
     }
     next();
   } catch (_e) {
