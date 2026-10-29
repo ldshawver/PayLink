@@ -14777,7 +14777,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         } else {
           result = await adapter!.createPackage({
             companyId,
-            documentUrl: `${baseUrl}${pdfRel.file_path}`,
+            // Local path, read from disk by the adapter — never a URL fetched back through
+            // /uploads, which requires an authenticated session.
+            documentUrl: pdfRel.file_path,
             documentName: pdfRel.file_name || "proposal.pdf",
             subject,
             message,
