@@ -53,6 +53,7 @@ import {
 } from "./auth/stored-resource-guard.js";
 import type { User } from "@shared/schema";
 import { db } from "./db";
+import { createUploadsHandler, findUploadOwners } from "./uploads-access";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema, normalizeContractorDocumentType } from "@shared/schema";
@@ -2019,6 +2020,18 @@ export async function registerRoutes(
     res.setHeader("Content-Type", "application/json");
     res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
   });
+
+  // ── Stored uploads — authenticated, ownership-checked (server/uploads-access.ts) ──
+  app.use("/uploads", createUploadsHandler({
+    uploadsDir: resolvedUploadDir,
+    findOwners: (rel) => findUploadOwners((q) => db.execute(q), rel),
+    loadActor: async (req) => {
+      if (!req.session?.userId || req.session.mfaEnrollmentRequired) return null;
+      const user = await storage.getUser(req.session.userId);
+      return user && user.isActive !== false ? user : null;
+    },
+    canAccessCompany: (actor, companyId) => canAccessStoredCompany(actor as User, companyId),
+  }));
 
   // ── Tenant context middleware — Phase 2 ──────────────────────────────────────
   // Populates req.tenantId, req.resolvedCompanyId, req.accessibleCompanyIds
