@@ -1,0 +1,94 @@
+name: Apply Production Schema Readiness 0027-0028
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Deployed release tag containing migrations 0027 and 0028"
+        required: true
+        type: string
+
+concurrency:
+  group: migrate-mypaylink-production
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Back up, apply 0027-0028, and reconcile
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate release tag
+        run: test "${{ inputs.release_tag }}" = "v2.2.17"
+
+      - name: Apply additive production migrations
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.APP_VPS_HOST }}
+          username: ${{ secrets.APP_VPS_USER }}
+          key: ${{ secrets.APP_VPS_SSH_KEY }}
+          port: ${{ secrets.APP_VPS_PORT }}
+          timeout: 30s
+          command_timeout: 20m
+          script_stop: true
+          script: |
+            set -Eeuo pipefail
+            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+            ENV_FILE="/etc/paylink/.env"
+            RELEASE_TAG="${{ inputs.release_tag }}"
+            BACKUP_DIR="/home/paylinkssh/paylink-db-backups"
+
+            test -f "$ENV_FILE"
+            cd "$APP_PATH"
+            test "$(git describe --tags --exact-match HEAD)" = "$RELEASE_TAG"
+            test -f migrations/0027_tenant_provisioning_audit_logs.sql
+            test -f migrations/0028_tenant_provisioning_gates_and_projects.sql
+
+            set -a
+            . "$ENV_FILE"
+            set +a
+            test -n "${DATABASE_URL:-}"
+
+            mkdir -p "$BACKUP_DIR" 2>/dev/null || true
+            if [ ! -w "$BACKUP_DIR" ]; then
+              BACKUP_DIR="${HOME:-/home/paylinkssh}/paylink-predeploy-backups"
+              mkdir -p "$BACKUP_DIR"
+            fi
+
+            BACKUP_FILE="$BACKUP_DIR/pre-migration-0027-0028-$(date -u '+%Y%m%dT%H%M%SZ').sql"
+            pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
+            test -s "$BACKUP_FILE"
+            test "$(tail -n 10 "$BACKUP_FILE" | grep -c -- '-- PostgreSQL database dump complete')" -ge 1
+            gzip -f "$BACKUP_FILE"
+            gzip -t "${BACKUP_FILE}.gz"
+            sha256sum "${BACKUP_FILE}.gz" > "${BACKUP_FILE}.gz.sha256"
+
+            BEFORE_COUNTS="$(psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c \"
+              SELECT 'companies=' || count(*) FROM companies
+              UNION ALL SELECT 'tenants=' || count(*) FROM tenants
+              UNION ALL SELECT 'tenant_companies=' || count(*) FROM tenant_companies
+              UNION ALL SELECT 'authorization_audit_log=' || count(*) FROM authorization_audit_log
+              ORDER BY 1\")"
+
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f migrations/0027_tenant_provisioning_audit_logs.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f migrations/0028_tenant_provisioning_gates_and_projects.sql
+
+            AFTER_COUNTS="$(psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c \"
+              SELECT 'companies=' || count(*) FROM companies
+              UNION ALL SELECT 'tenants=' || count(*) FROM tenants
+              UNION ALL SELECT 'tenant_companies=' || count(*) FROM tenant_companies
+              UNION ALL SELECT 'authorization_audit_log=' || count(*) FROM authorization_audit_log
+              ORDER BY 1\")"
+            test "$BEFORE_COUNTS" = "$AFTER_COUNTS"
+
+            psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c \"
+              SELECT version || '|' || name
+              FROM paylink_migrations.applied
+              WHERE version IN ('0027','0028')
+              ORDER BY version\"
+            psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c \"
+              SELECT to_regclass('public.tenant_provisioning_audit_logs'),
+                     to_regclass('public.tenant_commercial_gates'),
+                     to_regclass('public.tenant_implementation_projects'),
+                     to_regtype('public.tenant_lifecycle_state')\"
+            echo "Pre/post protected row counts match; migrations 0027 and 0028 are recorded."
