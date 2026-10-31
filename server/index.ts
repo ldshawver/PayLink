@@ -260,7 +260,9 @@ app.use(express.urlencoded({
 // /uploads is served by createUploadsHandler (server/uploads-access.ts), mounted in
 // registerRoutes after the session middleware. Never serve it with express.static:
 // that exposes every stored W-9, contract and financial document anonymously.
-app.use("/docs", express.static(path.join(process.cwd(), "docs")));
+// Repository documentation is not a production web root. Deny this namespace
+// explicitly so requests cannot expose source documents or fall through to the SPA.
+app.use("/docs", (_req, res) => res.status(404).type("text/plain").send("Not found"));
 
 const PgStore = connectPgSimple(session);
 const sessionMiddleware = session({
