@@ -63,32 +63,14 @@ jobs:
             gzip -t "${BACKUP_FILE}.gz"
             sha256sum "${BACKUP_FILE}.gz" > "${BACKUP_FILE}.gz.sha256"
 
-            BEFORE_COUNTS="$(psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "
-              SELECT 'companies=' || count(*) FROM companies
-              UNION ALL SELECT 'tenants=' || count(*) FROM tenants
-              UNION ALL SELECT 'tenant_companies=' || count(*) FROM tenant_companies
-              UNION ALL SELECT 'authorization_audit_log=' || count(*) FROM authorization_audit_log
-              ORDER BY 1")"
+            BEFORE_COUNTS="$(psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "SELECT 'companies=' || count(*) FROM companies UNION ALL SELECT 'tenants=' || count(*) FROM tenants UNION ALL SELECT 'tenant_companies=' || count(*) FROM tenant_companies UNION ALL SELECT 'authorization_audit_log=' || count(*) FROM authorization_audit_log ORDER BY 1")"
 
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f migrations/0027_tenant_provisioning_audit_logs.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f migrations/0028_tenant_provisioning_gates_and_projects.sql
 
-            AFTER_COUNTS="$(psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "
-              SELECT 'companies=' || count(*) FROM companies
-              UNION ALL SELECT 'tenants=' || count(*) FROM tenants
-              UNION ALL SELECT 'tenant_companies=' || count(*) FROM tenant_companies
-              UNION ALL SELECT 'authorization_audit_log=' || count(*) FROM authorization_audit_log
-              ORDER BY 1")"
+            AFTER_COUNTS="$(psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "SELECT 'companies=' || count(*) FROM companies UNION ALL SELECT 'tenants=' || count(*) FROM tenants UNION ALL SELECT 'tenant_companies=' || count(*) FROM tenant_companies UNION ALL SELECT 'authorization_audit_log=' || count(*) FROM authorization_audit_log ORDER BY 1")"
             test "$BEFORE_COUNTS" = "$AFTER_COUNTS"
 
-            psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "
-              SELECT version || '|' || name
-              FROM paylink_migrations.applied
-              WHERE version IN ('0027','0028')
-              ORDER BY version"
-            psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "
-              SELECT to_regclass('public.tenant_provisioning_audit_logs'),
-                     to_regclass('public.tenant_commercial_gates'),
-                     to_regclass('public.tenant_implementation_projects'),
-                     to_regtype('public.tenant_lifecycle_state')"
+            psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "SELECT version || '|' || name FROM paylink_migrations.applied WHERE version IN ('0027','0028') ORDER BY version"
+            psql "$DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.tenant_provisioning_audit_logs'), to_regclass('public.tenant_commercial_gates'), to_regclass('public.tenant_implementation_projects'), to_regtype('public.tenant_lifecycle_state')"
             echo "Pre/post protected row counts match; migrations 0027 and 0028 are recorded."
