@@ -50,8 +50,15 @@ const TEXT_PATTERNS: Array<[RegExp, string | ((...m: string[]) => string)]> = [
   [new RegExp(`("${KEY_ALT}"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|-?\\d[\\d.eE+-]*)`, "g"), (_m, k, v) => (v === '""' ? `${k}""` : `${k}"${REDACTED}"`)],
   // util.inspect: accountNumber: '123' | ein: 123456789 | 'tax-id': "x"
   [new RegExp(`(\\b${KEY_ALT}'?\\s*:\\s*)('(?:[^'\\\\]|\\\\.)*'|"(?:[^"\\\\]|\\\\.)*"|\`[^\`]*\`|-?\\d[\\d.eE+-]*)`, "g"), (_m, k, v) => (/^(''|""|``)$/.test(v) ? `${k}${v}` : `${k}'${REDACTED}'`)],
-  // Free text: ssn=123..., routing number: 990000011, EIN 00-1230000
-  [new RegExp(`(\\b(?:ssn|ein|fein|tin|itin|tax[ _-]?id|routing(?:[ _-]?(?:number|no))?|account[ _-]?(?:number|no)|bank[ _-]?account(?:[ _-]?number)?)\\b\\s*[=:#]?\\s*)[0-9][0-9 -]{3,}[0-9]`, "gi"), `$1${REDACTED}`],
+  // Free text: ssn=123..., routing number: 990000011, EIN 00-1230000, /ssn/123...
+  // The value may only contain spaces in explicit SSN (3-2-4) or 4-digit-group
+  // shapes, so a following HTTP status ("... 404 in 3ms") is never swallowed.
+  [new RegExp(`(\\b(?:ssn|ein|fein|tin|itin|tax[ _-]?id|routing(?:[ _-]?(?:number|no))?|account[ _-]?(?:number|no)|bank[ _-]?account(?:[ _-]?number)?)\\b\\s*[=:#/]?\\s*)(?:\\d{3} \\d{2} \\d{4}|\\d{4}(?: \\d{4})+|\\d[\\d-]{3,}\\d)(?!\\d)`, "gi"), `$1${REDACTED}`],
+  // Bare "account"/"acct" followed by a bank-length number (6+ digits):
+  // "payout failed for account 000777000111". Shorter numbers ("account 42",
+  // "account 1001 locked"), plurals and id keys (account_id, accountId,
+  // acct_...) are operational context and are kept.
+  [/(\b(?:account|acct)\b\s*[=:#/]?\s*)(?:\d{4}(?: \d{4})+|\d(?:-?\d){5,})(?!\d)/gi, `$1${REDACTED}`],
   // Generic key=value / key: value (query strings, ad-hoc interpolation). Uses
   // the same classifier as structured args, so prefixed names (worker_ssn,
   // companyEin, employer_ein) and percent-encoded values are caught too.
@@ -101,6 +108,7 @@ export function redactLogValue(value: unknown, depth = 0, seen: WeakSet<object> 
     copy.name = value.name;
     copy.stack = redactLogText(value.stack ?? "");
     for (const key of Object.keys(value)) {
+      if (key === "cause") continue; // handled below; visiting it twice printed "[Circular]"
       (copy as any)[key] = isSensitiveLogKey(key) ? REDACTED : redactLogValue((value as any)[key], depth + 1, seen);
     }
     if ((value as any).cause !== undefined) (copy as any).cause = redactLogValue((value as any).cause, depth + 1, seen);
