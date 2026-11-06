@@ -146,6 +146,85 @@ console.log("\nFree-text and shapes");
   ok("depth-bounded (no runaway recursion)", !JSON.stringify(value).includes(SYN.ein));
 }
 
+console.log("\nv2.2.19: 'account' + bare digits");
+{
+  // Synthetic, never-issuable account values (not used elsewhere in this file).
+  const ACCT = ["000777000111", "4440009990", "00011122233"];
+  const acctLeaks = (text: string) => [...ACCT, ...SYN_VALUES].filter((v) => text.includes(v));
+  const freeText = [
+    `payout failed for account ${ACCT[0]}`,
+    `Account ${ACCT[1]} rejected by bank`,
+    `ACH return: account #${ACCT[2]}`,
+    `could not verify account: ${ACCT[0]}`,
+    `account=${ACCT[1]} status=failed`,
+    `acct ${ACCT[2]} closed`,
+    `checking account ${ACCT[0]} at Synthetic CU`,
+  ].map((t) => redactLogText(t)).join("\n");
+  ok("free text 'account <digits>' masked", acctLeaks(freeText).length === 0, freeText);
+  ok("free text keeps surrounding context", freeText.includes("rejected by bank") && freeText.includes("Synthetic CU") && freeText.includes("status=failed"));
+
+  const { c, err } = captureConsole();
+  const e1 = new Error(`ACH debit rejected for account ${ACCT[0]}`, { cause: new Error(`upstream: account ${ACCT[1]} frozen`) });
+  c.error("[Payments] failed:", e1);
+  c.error(e1);
+  const e2: any = new Error("transfer failed");
+  e2.stack = `Error: transfer failed for account ${ACCT[2]}\n    at pay (synthetic/payments.ts:10:5)`;
+  e2.cause = { reason: `account ${ACCT[0]} invalid`, accountId: "a_syn_1" };
+  c.error(e2);
+  c.error(`[Payments] ${util.inspect(e1)}`);
+  const errText = err.join("");
+  ok("message/stack/cause/inspect forms masked", acctLeaks(errText).length === 0, `leaked: ${acctLeaks(errText).join(",")}`);
+  ok("error context kept", errText.includes("ACH debit rejected") && errText.includes("frozen") && errText.includes("a_syn_1") && /\n\s+at /.test(errText));
+
+  // Negative controls: ordinary operational text and unrelated numbers survive.
+  const controls = [
+    "account 42 suspended by admin",
+    "[Auth] account 1001 locked after 5 failed attempts",
+    "accounts: 3 active, 120000 total rows scanned",
+    "account_id=123456789 accountId=987654321",
+    "Stripe connected account acct_1SynTh3t1c0000 ready",
+    "account created in 1250ms; next sync in 300000ms",
+    "account ending in 6789",
+    "GET /api/accounts/1234567 200 in 12ms",
+    "[Billing] invoice 20261106001 total 125000 cents",
+  ];
+  for (const line of controls) ok(`kept: ${line}`, redactLogText(line) === line, redactLogText(line));
+}
+
+console.log("\nv2.2.19: URL-path values keep the trailing HTTP status");
+{
+  const lines: Array<[string, string, string]> = [
+    // [input, sensitive value, expected visible tail]
+    [`GET /api/verify?routing=${SYN.routingNumber} 404 in 3ms`, SYN.routingNumber, " 404 in 3ms"],
+    [`GET /api/lookup/ein=${SYN.ein} 400 in 2ms`, SYN.ein, " 400 in 2ms"],
+    [`GET /api/lookup/ssn:${SYN.ssnBare} 403 in 1ms`, SYN.ssnBare, " 403 in 1ms"],
+    [`POST /api/banks/account/${SYN.accountNumber} 422 in 9ms`, SYN.accountNumber, " 422 in 9ms"],
+    [`GET /api/x?account=${SYN.accountNumber} 500 in 4ms`, SYN.accountNumber, " 500 in 4ms"],
+    [`GET /api/x/tin#${SYN.tin} 401 in 2ms :: {"message":"Unauthorized"}`, SYN.tin, ` 401 in 2ms :: {"message":"Unauthorized"}`],
+    [`GET /api/workers/ssn/${SYN.ssn} 404 in 5ms`, SYN.ssn, " 404 in 5ms"],
+  ];
+  for (const [input, secret, tail] of lines) {
+    const r = redactLogText(input);
+    ok(`status visible + value masked: ${r}`, !r.includes(secret) && r.endsWith(tail), r);
+  }
+  // Multi-group values must still be fully masked.
+  const spaced = redactLogText(`ssn ${SYN.ssnSpaced} 200 account number 0001 2223 3344 404`);
+  ok("spaced SSN / grouped account masked, statuses kept", !spaced.includes("6789") && !spaced.includes("3344") && spaced.includes(" 200 ") && spaced.endsWith(" 404"), spaced);
+}
+
+console.log("\nRedaction-failure fallback");
+{
+  const out: string[] = [];
+  const c = new Console({ stdout: new Writable({ write(chunk, _e, cb) { out.push(String(chunk)); cb(); } }), stderr: process.stderr });
+  installConsoleRedaction(c);
+  const hostile = { label: `account ${SYN.accountNumber}` } as any;
+  Object.defineProperty(hostile, "boom", { enumerable: true, get() { throw new Error(`getter leaked ${SYN.ssn}`); } });
+  c.log("fallback probe", SYN.routingNumber, hostile);
+  const text = out.join("");
+  ok("fallback line emitted", text.includes("[log-redaction] log line dropped"), text);
+  ok("fallback exposes none of its input", leaks(text).length === 0 && !text.includes("fallback probe"), text);
+}
+
 console.log("\nProcess-level install (child process)");
 {
   const script = `
@@ -153,6 +232,9 @@ console.log("\nProcess-level install (child process)");
     console.log("boot", { routingNumber: "${SYN.routingNumber}", companyId: "c_syn_child" });
     const e = new Error("insert failed");
     Object.assign(e, { code: "23505", detail: "Key (ein)=(${SYN.ein}) already exists. Failing row contains (${SYN.ssn}, ${SYN.accountNumber})." });
+    e.message = "insert failed for account ${SYN.bankAccountNumber}";
+    e.stack = "Error: insert failed for account ${SYN.bankAccountNumber}\\n    at child (synthetic.ts:1:1)";
+    (e as any).cause = new Error("bank said: account ${SYN.bankAccountNumber} closed");
     setTimeout(() => { throw e; }, 0);
   `;
   const tmp = `tests/.log-redaction-child-${process.pid}.ts`;
