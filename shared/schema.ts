@@ -2080,8 +2080,11 @@ export const contractorProposals = pgTable("contractor_proposals", {
   rejectionReason: text("rejection_reason"),
   convertedToInvoiceId: varchar("converted_to_invoice_id"),
   convertedToContractId: varchar("converted_to_contract_id"),
-  jobId: varchar("job_id"),
+  jobId: varchar("job_id"), // cost-accounting jobs.id (NOT a job-board posting)
   costCenterId: varchar("cost_center_id"),
+  // ── Job board award linkage (migration 0029) ──
+  jobPostId: varchar("job_post_id"),
+  jobBidId: varchar("job_bid_id"),
   // ── Client contact (for emailing the proposal portal link) ──
   clientName: text("client_name"),
   clientEmail: text("client_email"),
@@ -5491,3 +5494,154 @@ export const tenantLicenseEvents = pgTable("tenant_license_events", {
 export const insertTenantLicenseEventSchema = createInsertSchema(tenantLicenseEvents).omit({ id: true, createdAt: true });
 export type TenantLicenseEvent = typeof tenantLicenseEvents.$inferSelect;
 export type InsertTenantLicenseEvent = z.infer<typeof insertTenantLicenseEventSchema>;
+
+// ── Contractor Hub job board (migration 0029) ─────────────────────────────
+// Columns mirror migrations/0029_contractor_job_board.sql. CHECK constraints,
+// partial unique indexes and the audit-immutability triggers live in that SQL
+// file only (same convention as contractor_access_requests / 0020).
+export const contractorJobPosts = pgTable("contractor_job_posts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  createdByUserId: varchar("created_by_user_id").notNull(),
+  title: text("title").notNull(),
+  summary: text("summary"),
+  scopeOfWork: text("scope_of_work"),
+  requirements: text("requirements"),
+  deliverables: text("deliverables"),
+  locationType: text("location_type").notNull().default("onsite"), // onsite | remote | hybrid
+  locationText: text("location_text"),
+  workType: text("work_type").notNull().default("one_time"), // one_time | recurring
+  recurrenceFrequency: text("recurrence_frequency"), // weekly | biweekly | monthly | quarterly | custom
+  recurrenceDescription: text("recurrence_description"),
+  estimatedStartDate: date("estimated_start_date"),
+  estimatedEndDate: date("estimated_end_date"),
+  submissionDeadline: timestamp("submission_deadline"),
+  budgetType: text("budget_type").notNull().default("contractor_quote"), // fixed | hourly | range | contractor_quote | undisclosed
+  budgetMin: numeric("budget_min", { precision: 14, scale: 2 }),
+  budgetMax: numeric("budget_max", { precision: 14, scale: 2 }),
+  currency: text("currency").notNull().default("USD"),
+  paymentTerms: text("payment_terms"),
+  maximumAwards: integer("maximum_awards"), // null = unlimited
+  awardsMade: integer("awards_made").notNull().default(0),
+  visibility: text("visibility").notNull().default("all_eligible"), // all_eligible | invited_only | selected_groups
+  eligibleGroups: jsonb("eligible_groups").notNull().default(sql`'[]'::jsonb`),
+  costJobId: varchar("cost_job_id"), // optional cost-accounting jobs.id, copied to the awarded proposal's job_id
+  status: text("status").notNull().default("draft"), // draft | published | paused | closed | archived
+  closeReason: text("close_reason"),
+  publishedAt: timestamp("published_at"),
+  closedAt: timestamp("closed_at"),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export type ContractorJobPost = typeof contractorJobPosts.$inferSelect;
+
+export const contractorJobBids = pgTable("contractor_job_bids", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => contractorJobPosts.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  submittedByUserId: varchar("submitted_by_user_id"),
+  status: text("status").notNull().default("draft"),
+  coverMessage: text("cover_message"),
+  proposedScope: text("proposed_scope"),
+  proposedAmount: numeric("proposed_amount", { precision: 14, scale: 2 }),
+  rateType: text("rate_type"), // fixed | hourly | recurring | custom
+  hourlyRate: numeric("hourly_rate", { precision: 14, scale: 2 }),
+  estimatedHours: numeric("estimated_hours", { precision: 10, scale: 2 }),
+  estimatedStartDate: date("estimated_start_date"),
+  estimatedCompletionDate: date("estimated_completion_date"),
+  recurrenceTerms: text("recurrence_terms"),
+  assumptions: text("assumptions"),
+  exclusions: text("exclusions"),
+  revisionNumber: integer("revision_number").notNull().default(0),
+  revisionRequestNote: text("revision_request_note"),
+  rejectionReason: text("rejection_reason"),
+  submittedAt: timestamp("submitted_at"),
+  withdrawnAt: timestamp("withdrawn_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  awardedAt: timestamp("awarded_at"),
+  awardedByUserId: varchar("awarded_by_user_id"),
+  awardIdempotencyKey: text("award_idempotency_key"),
+  convertedProposalId: varchar("converted_proposal_id"),
+  convertedContractId: varchar("converted_contract_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export type ContractorJobBid = typeof contractorJobBids.$inferSelect;
+
+export const contractorJobBidVersions = pgTable("contractor_job_bid_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => contractorJobPosts.id),
+  bidId: varchar("bid_id").notNull().references(() => contractorJobBids.id),
+  revisionNumber: integer("revision_number").notNull(),
+  snapshot: jsonb("snapshot").notNull(),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const contractorJobBidEvents = pgTable("contractor_job_bid_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => contractorJobPosts.id),
+  bidId: varchar("bid_id").references(() => contractorJobBids.id), // null = posting-level event
+  eventType: text("event_type").notNull(),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  actorUserId: varchar("actor_user_id"),
+  actorWorkerId: varchar("actor_worker_id"),
+  details: jsonb("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const contractorJobInvitations = pgTable("contractor_job_invitations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => contractorJobPosts.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  invitedByUserId: varchar("invited_by_user_id").notNull(),
+  status: text("status").notNull().default("invited"), // invited | revoked
+  invitedAt: timestamp("invited_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+  revokedByUserId: varchar("revoked_by_user_id"),
+});
+
+export const contractorJobQuestions = pgTable("contractor_job_questions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => contractorJobPosts.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  askedByUserId: varchar("asked_by_user_id").notNull(),
+  question: text("question").notNull(),
+  answer: text("answer"),
+  answeredByUserId: varchar("answered_by_user_id"),
+  answeredAt: timestamp("answered_at"),
+  isPublic: boolean("is_public").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const contractorJobAttachments = pgTable("contractor_job_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => contractorJobPosts.id),
+  bidId: varchar("bid_id").references(() => contractorJobBids.id), // null = posting attachment
+  storageKey: text("storage_key").notNull(), // relative to the private store; never an /uploads path
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type"),
+  fileSize: integer("file_size"),
+  uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
+  uploadedByWorkerId: varchar("uploaded_by_worker_id"),
+  removedAt: timestamp("removed_at"),
+  removedByUserId: varchar("removed_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
