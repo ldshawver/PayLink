@@ -33,6 +33,7 @@ import {
   UserCheck
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { JobBoardSection, JobBoardSummaryCard, jobBoardViewsFor } from "@/components/contractor-hub/job-board";
 import { canShowContractSignatureActions, getDocumensoDisabledReason, buildContractorHubProposalRoute, buildContractorHubInvoiceRoute, isDocumensoManagedContract, canManuallyActivateContract } from "@/lib/contractSignatureActions";
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -69,7 +70,7 @@ class ProposalErrorBoundary extends Component<
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "signatures" | "onboarding" | "payments" | "messages" | "branding" | "settings" | "trade";
+type HubSection = "dashboard" | "jobs" | "proposals" | "contracts" | "invoices" | "documents" | "signatures" | "onboarding" | "payments" | "messages" | "branding" | "settings" | "trade";
 
 interface Proposal {
   id: string; proposalNumber: string; title: string; description: string;
@@ -8522,6 +8523,7 @@ function OnboardingSection({ isAdmin }: { isAdmin: boolean }) {
 
 const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: string }> }[] = [
   { id: "dashboard", label: "Overview", icon: LayoutDashboard },
+  { id: "jobs", label: "Jobs", icon: Briefcase },
   { id: "proposals", label: "Proposals", icon: FileText },
   { id: "contracts", label: "Contracts", icon: FileSignature },
   { id: "invoices", label: "Invoices", icon: Receipt },
@@ -8541,7 +8543,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","signatures","onboarding","payments","messages","branding","settings","trade"];
+      const valid: HubSection[] = ["dashboard","jobs","proposals","contracts","invoices","documents","signatures","onboarding","payments","messages","branding","settings","trade"];
       return (s && valid.includes(s)) ? s : "dashboard";
     } catch { return "dashboard"; }
   })();
@@ -8552,7 +8554,7 @@ export default function ContractorHubPage() {
   // same-pathname query-param changes (e.g. sidebar going from ?section=proposals to ?section=contracts)
   // never change the wouter location value so the effect would never re-fire.
   useEffect(() => {
-    const VALID_SECTIONS: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","signatures","onboarding","payments","messages","branding","settings","trade"];
+    const VALID_SECTIONS: HubSection[] = ["dashboard","jobs","proposals","contracts","invoices","documents","signatures","onboarding","payments","messages","branding","settings","trade"];
     const syncSection = () => {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -8735,6 +8737,16 @@ export default function ContractorHubPage() {
   const reminderEntityIds = new Set(allPendingReminders.map(r => r.entityId).filter(Boolean));
 
   const [deepLinkContractId, setDeepLinkContractId] = useState<string | null>(null);
+  const [deepLinkJobId, setDeepLinkJobId] = useState<string | null>(null);
+  // A proposal created moments ago (job-board award) may not be in the loaded list yet;
+  // remember it and open it once the proposals query refetches.
+  const [pendingProposalId, setPendingProposalId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingProposalId) return;
+    const found = proposals.find(p => p.id === pendingProposalId);
+    if (found) { setSelectedProposal(found); setPendingProposalId(null); }
+  }, [pendingProposalId, proposals]);
+  const jobViews = jobBoardViewsFor(user);
 
   function handleSectionChange(s: HubSection, entityId?: string, statusFilterOverride?: string) {
     setSection(s);
@@ -8754,6 +8766,7 @@ export default function ContractorHubPage() {
       if (s === "proposals") {
         const found = proposals.find(p => p.id === entityId);
         if (found) setSelectedProposal(found);
+        else setPendingProposalId(entityId);
       }
       if (s === "invoices") {
         const found = invoices.find(i => i.id === entityId);
@@ -8762,8 +8775,10 @@ export default function ContractorHubPage() {
       if (s === "contracts") {
         setDeepLinkContractId(entityId);
       }
+      setDeepLinkJobId(s === "jobs" ? entityId : null);
     } else {
       setDeepLinkContractId(null);
+      setDeepLinkJobId(null);
     }
   }
 
@@ -8790,6 +8805,7 @@ export default function ContractorHubPage() {
             </h1>
             <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">
               {section === "dashboard" && (isAdmin ? "Review and manage all contractor activity" : "Your hub overview")}
+              {section === "jobs" && (jobViews.canManage ? "Publish work opportunities and review contractor bids" : "Browse open jobs and manage your bids")}
               {section === "proposals" && (isAdmin ? `${proposals.length} total · ${pendingProposals} awaiting review` : `${proposals.length} total · ${revisionNeeded} need revision`)}
               {section === "contracts" && `${contracts.length} contract${contracts.length !== 1 ? "s" : ""}`}
               {section === "invoices" && `${invoices.length} invoice${invoices.length !== 1 ? "s" : ""} · ${overdueInvoices} overdue`}
@@ -8852,6 +8868,16 @@ export default function ContractorHubPage() {
                 isAdmin={isAdmin} onNavigate={handleSectionChange}
                 expiryWarningDays={hubExpiryWarningDays}
               />
+            )}
+            {section === "dashboard" && (jobViews.canManage || jobViews.canBid) && (
+              <div className="mt-6">
+                <JobBoardSummaryCard mode={jobViews.canManage ? "admin" : "contractor"} onOpen={() => handleSectionChange("jobs")} />
+              </div>
+            )}
+
+            {/* Jobs (job board) */}
+            {section === "jobs" && (
+              <JobBoardSection user={user} initialJobId={deepLinkJobId} onNavigate={(s, id) => handleSectionChange(s, id)} />
             )}
 
             {/* Proposals */}
