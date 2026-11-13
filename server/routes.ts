@@ -100,6 +100,14 @@ import {
   normalizeExpensePaymentMethod, checkExpenseTradeCreditApplicable,
 } from "./expense-payments";
 import { renderPaymentDocumentPdf, type PaymentDocInput } from "./payment-documents";
+import {
+  jobBoardSchemaReady, JOB_ATTACHMENT_MAX_BYTES, type JobBoardActor, type JobBoardDeps,
+  createPost, listPostsForAdmin, getPost, updatePost, transitionPost, listPostEvents,
+  listAvailablePosts, listMyBids, createBid, updateBid, submitBid, withdrawBid, listBidVersions,
+  listBidsForPost, reviewBid, awardBid, inviteContractors, listInvitations, revokeInvitation,
+  askQuestion, listQuestions, answerQuestion, addPostAttachment, addBidAttachment, listBidAttachments,
+  authorizeAttachmentDownload, removeAttachment, adminSummary, contractorSummary,
+} from "./contractor-jobs/service";
 import { fetchRemoteImageBytesSafe } from "./remote-image-fetch";
 
 // This module is ESM ("type": "module" in package.json) and has no native
@@ -13772,6 +13780,198 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json(rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch vendor checks" }); }
   });
+
+  // ── CONTRACTOR HUB JOB BOARD (migration 0029) ─────────────────────────────
+  // Postings administrators publish and eligible contractors bid on. All logic
+  // and authorization (stored company → canAccessCompany, contractor identity,
+  // tenant gate, state machines, immutable events) lives in
+  // server/contractor-jobs/service.ts; these handlers only resolve the actor,
+  // authorize a supplied list companyId, and translate the result. Explicit
+  // transition endpoints only — there is no generic status update and no
+  // hard-delete route. Answers 503 until migration 0029 is applied.
+  const jobBoardDeps: JobBoardDeps = {
+    pool: (db as any).$client,
+    tenantGate: (companyId: string) => checkTenantGate(companyId),
+    tenantIdForCompany: (companyId: string) => getTenantIdForCompany(companyId),
+  };
+  let jobBoardReadyAt = 0;
+  let jobBoardReady = false;
+  async function jobBoardActor(req: Request<any, any, any, any>, res: Response): Promise<JobBoardActor | null> {
+    if (!jobBoardReady && Date.now() - jobBoardReadyAt > 60_000) {
+      jobBoardReadyAt = Date.now();
+      jobBoardReady = await jobBoardSchemaReady(jobBoardDeps.pool).catch(() => false);
+    }
+    if (!jobBoardReady) { res.status(503).json({ message: "The job board is not enabled yet." }); return null; }
+    const user = req.session?.userId ? await storage.getUser(req.session.userId) : undefined;
+    if (!user) { res.status(401).json({ message: "Not authenticated" }); return null; }
+    let contractor: JobBoardActor["contractor"] = null;
+    if (user.workerId) {
+      const w = await storage.getWorker(user.workerId);
+      if (w) contractor = { workerId: w.id, companyId: w.companyId ?? null, workerType: w.workerType ?? null, workerGroup: (w as any).workerGroup ?? null, status: w.status ?? null };
+    }
+    // Administrator/manager role (platform_support/_implementation get no alias — fail closed) AND company access.
+    const effective = expandRoleForGuard(user.role || "");
+    const isManager = effective.includes("admin") || effective.includes("manager");
+    return {
+      userId: user.id,
+      contractor,
+      canManageCompany: async (companyId: string) => isManager && await canAccessCompany(user, companyId),
+    };
+  }
+  function sendJobBoard(res: Response, r: { ok: boolean; status: number; body?: unknown; message?: string }) {
+    if (r.ok) return res.status(r.status).json(r.body);
+    return res.status(r.status).json({ message: r.message });
+  }
+  function jobBoardRoute(label: string, fn: (req: Request<any, any, any, any>, res: Response, actor: JobBoardActor) => Promise<unknown>) {
+    return async (req: Request<any, any, any, any>, res: Response) => {
+      try {
+        const actor = await jobBoardActor(req, res);
+        if (!actor) return;
+        await fn(req, res, actor);
+      } catch (e) {
+        console.error(`[job-board] ${label} failed:`, (e as Error)?.message);
+        if (!res.headersSent) res.status(500).json({ message: "Job board request failed" });
+      }
+    };
+  }
+  const jobAttachmentUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: JOB_ATTACHMENT_MAX_BYTES, files: 1 } });
+  const JOB_FEATURE = requireFeature("tenant.finance.contractor-hub");
+
+  // Administrator: postings
+  app.get("/api/contractor-jobs", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), jobBoardRoute("list", async (req, res, actor) => {
+    const scope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: false });
+    if (!scope || !scope.companyId) { if (!res.headersSent) res.status(400).json({ message: "Choose a company" }); return; }
+    sendJobBoard(res, await listPostsForAdmin(jobBoardDeps, actor, scope.companyId, { status: queryStr(req.query.status) }));
+  }));
+  app.post("/api/contractor-jobs", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, jobBoardRoute("create", async (req, res, actor) => {
+    const scope = await resolveListScope(req, res, req.body?.companyId, { allowPlatformAll: false });
+    if (!scope || !scope.companyId) { if (!res.headersSent) res.status(400).json({ message: "Choose a company" }); return; }
+    sendJobBoard(res, await createPost(jobBoardDeps, actor, scope.companyId, req.body ?? {}));
+  }));
+
+  // Contractor discovery (static paths before /:id)
+  app.get("/api/contractor-jobs/available", requireAuth, JOB_FEATURE, jobBoardRoute("available", async (_req, res, actor) => {
+    sendJobBoard(res, await listAvailablePosts(jobBoardDeps, actor));
+  }));
+  app.get("/api/contractor-jobs/summary", requireAuth, JOB_FEATURE, jobBoardRoute("summary", async (req, res, actor) => {
+    if (req.query.view === "contractor" || (actor.contractor && req.query.view !== "admin")) {
+      return sendJobBoard(res, await contractorSummary(jobBoardDeps, actor));
+    }
+    const scope = await resolveListScope(req, res, req.query.companyId, { allowPlatformAll: false });
+    if (!scope || !scope.companyId) { if (!res.headersSent) res.status(400).json({ message: "Choose a company" }); return; }
+    sendJobBoard(res, await adminSummary(jobBoardDeps, actor, scope.companyId));
+  }));
+  app.get("/api/contractor-job-bids/mine", requireAuth, JOB_FEATURE, jobBoardRoute("my bids", async (_req, res, actor) => {
+    sendJobBoard(res, await listMyBids(jobBoardDeps, actor));
+  }));
+
+  // Shared read (administrator projection or contractor projection, by stored ownership)
+  app.get("/api/contractor-jobs/:id", requireAuth, JOB_FEATURE, jobBoardRoute("get", async (req, res, actor) => {
+    sendJobBoard(res, await getPost(jobBoardDeps, actor, req.params.id));
+  }));
+  app.patch("/api/contractor-jobs/:id", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, jobBoardRoute("update", async (req, res, actor) => {
+    sendJobBoard(res, await updatePost(jobBoardDeps, actor, req.params.id, req.body ?? {}));
+  }));
+  // Explicit literal paths (one per transition) so the route inventory sees each endpoint.
+  const postTransition = (action: "publish" | "pause" | "reopen" | "close" | "archive") =>
+    jobBoardRoute(action, async (req, res, actor) => {
+      sendJobBoard(res, await transitionPost(jobBoardDeps, actor, req.params.id, action, { reason: req.body?.reason }));
+    });
+  app.post("/api/contractor-jobs/:id/publish", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, postTransition("publish"));
+  app.post("/api/contractor-jobs/:id/pause", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, postTransition("pause"));
+  app.post("/api/contractor-jobs/:id/reopen", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, postTransition("reopen"));
+  app.post("/api/contractor-jobs/:id/close", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, postTransition("close"));
+  app.post("/api/contractor-jobs/:id/archive", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, postTransition("archive"));
+  app.get("/api/contractor-jobs/:id/events", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), jobBoardRoute("events", async (req, res, actor) => {
+    sendJobBoard(res, await listPostEvents(jobBoardDeps, actor, req.params.id));
+  }));
+
+  // Bids on a posting
+  app.get("/api/contractor-jobs/:id/bids", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), jobBoardRoute("list bids", async (req, res, actor) => {
+    sendJobBoard(res, await listBidsForPost(jobBoardDeps, actor, req.params.id));
+  }));
+  app.post("/api/contractor-jobs/:id/bids", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("create bid", async (req, res, actor) => {
+    sendJobBoard(res, await createBid(jobBoardDeps, actor, req.params.id, req.body ?? {}));
+  }));
+
+  // Invitations
+  app.get("/api/contractor-jobs/:id/invitations", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), jobBoardRoute("list invitations", async (req, res, actor) => {
+    sendJobBoard(res, await listInvitations(jobBoardDeps, actor, req.params.id));
+  }));
+  app.post("/api/contractor-jobs/:id/invitations", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, jobBoardRoute("invite", async (req, res, actor) => {
+    sendJobBoard(res, await inviteContractors(jobBoardDeps, actor, req.params.id, req.body?.contractorIds));
+  }));
+  app.post("/api/contractor-job-invitations/:invitationId/revoke", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, jobBoardRoute("revoke invitation", async (req, res, actor) => {
+    sendJobBoard(res, await revokeInvitation(jobBoardDeps, actor, req.params.invitationId));
+  }));
+
+  // Questions
+  app.get("/api/contractor-jobs/:id/questions", requireAuth, JOB_FEATURE, jobBoardRoute("list questions", async (req, res, actor) => {
+    sendJobBoard(res, await listQuestions(jobBoardDeps, actor, req.params.id));
+  }));
+  app.post("/api/contractor-jobs/:id/questions", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("ask question", async (req, res, actor) => {
+    sendJobBoard(res, await askQuestion(jobBoardDeps, actor, req.params.id, req.body?.question));
+  }));
+  app.post("/api/contractor-job-questions/:questionId/answer", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, jobBoardRoute("answer question", async (req, res, actor) => {
+    sendJobBoard(res, await answerQuestion(jobBoardDeps, actor, req.params.questionId, req.body ?? {}));
+  }));
+
+  // Posting attachments (private store — never /uploads)
+  app.post("/api/contractor-jobs/:id/attachments", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites,
+    singleFileUpload(jobAttachmentUpload, "file", { maxBytes: JOB_ATTACHMENT_MAX_BYTES }),
+    jobBoardRoute("add post attachment", async (req, res, actor) => {
+      sendJobBoard(res, await addPostAttachment(jobBoardDeps, actor, req.params.id, (req as any).file));
+    }));
+
+  // Contractor bid lifecycle
+  app.patch("/api/contractor-job-bids/:bidId", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("update bid", async (req, res, actor) => {
+    sendJobBoard(res, await updateBid(jobBoardDeps, actor, req.params.bidId, req.body ?? {}));
+  }));
+  app.post("/api/contractor-job-bids/:bidId/submit", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("submit bid", async (req, res, actor) => {
+    sendJobBoard(res, await submitBid(jobBoardDeps, actor, req.params.bidId));
+  }));
+  app.post("/api/contractor-job-bids/:bidId/withdraw", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("withdraw bid", async (req, res, actor) => {
+    sendJobBoard(res, await withdrawBid(jobBoardDeps, actor, req.params.bidId));
+  }));
+  app.get("/api/contractor-job-bids/:bidId/versions", requireAuth, JOB_FEATURE, jobBoardRoute("bid versions", async (req, res, actor) => {
+    sendJobBoard(res, await listBidVersions(jobBoardDeps, actor, req.params.bidId));
+  }));
+  app.get("/api/contractor-job-bids/:bidId/attachments", requireAuth, JOB_FEATURE, jobBoardRoute("list bid attachments", async (req, res, actor) => {
+    sendJobBoard(res, await listBidAttachments(jobBoardDeps, actor, req.params.bidId));
+  }));
+  app.post("/api/contractor-job-bids/:bidId/attachments", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites,
+    singleFileUpload(jobAttachmentUpload, "file", { maxBytes: JOB_ATTACHMENT_MAX_BYTES }),
+    jobBoardRoute("add bid attachment", async (req, res, actor) => {
+      sendJobBoard(res, await addBidAttachment(jobBoardDeps, actor, req.params.bidId, (req as any).file));
+    }));
+
+  // Administrator bid review
+  const bidReview = (action: "review" | "shortlist" | "request_revision" | "reject") =>
+    jobBoardRoute(`bid ${action}`, async (req, res, actor) => {
+      sendJobBoard(res, await reviewBid(jobBoardDeps, actor, req.params.bidId, action, { note: req.body?.note }));
+    });
+  app.post("/api/contractor-job-bids/:bidId/review", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, bidReview("review"));
+  app.post("/api/contractor-job-bids/:bidId/shortlist", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, bidReview("shortlist"));
+  app.post("/api/contractor-job-bids/:bidId/request-revision", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, bidReview("request_revision"));
+  app.post("/api/contractor-job-bids/:bidId/reject", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, bidReview("reject"));
+  app.post("/api/contractor-job-bids/:bidId/award", requireAuth, JOB_FEATURE, requireRole("admin", "manager"), requireCsrfToken, blockDemoWrites, jobBoardRoute("award", async (req, res, actor) => {
+    sendJobBoard(res, await awardBid(jobBoardDeps, actor, req.params.bidId, String(req.get("Idempotency-Key") ?? "")));
+  }));
+
+  // Attachment download / soft removal (ownership checked per attachment)
+  app.get("/api/contractor-job-attachments/:attachmentId/download", requireAuth, JOB_FEATURE, jobBoardRoute("download", async (req, res, actor) => {
+    const r = await authorizeAttachmentDownload(jobBoardDeps, actor, req.params.attachmentId);
+    if (!r.ok) return sendJobBoard(res, r);
+    const f = r.body as { absPath: string; fileName: string; contentType: string };
+    res.setHeader("Content-Type", f.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${f.fileName.replace(/["\\\r\n]/g, "_")}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.sendFile(f.absPath);
+  }));
+  app.post("/api/contractor-job-attachments/:attachmentId/remove", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("remove attachment", async (req, res, actor) => {
+    sendJobBoard(res, await removeAttachment(jobBoardDeps, actor, req.params.attachmentId));
+  }));
 
   // ── CONTRACTOR PROPOSALS ──────────────────────────────────────────────────
 

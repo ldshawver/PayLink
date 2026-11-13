@@ -19,6 +19,7 @@ import {
 } from "./demo-cleanup";
 import { purgeExpiredDemoCompanyInTransaction } from "./demo-tenant-purge";
 import { mapSubscriptionStatusToTenantStatus } from "../tenant-context";
+import { runJobBoardMaintenance } from "../contractor-jobs/service";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
 const HOUR_MS  = 60 * 60 * 1000;
@@ -173,6 +174,19 @@ async function jobTenantStatusMirrorReconcile(): Promise<void> {
   }
 }
 
+/**
+ * Contractor job board maintenance (migration 0029). Idempotent and row-scoped:
+ * closes fixed-term recurring postings past their end date, links awarded bids
+ * to the contract their proposal became, and sends one deadline reminder per
+ * unsubmitted bid. A no-op until migration 0029 is applied.
+ */
+async function jobContractorJobBoardMaintenance(): Promise<void> {
+  const r = await runJobBoardMaintenance((db as any).$client);
+  if (r.expired || r.contractsLinked || r.deadlineReminders) {
+    console.log(`[Orchestrator][ContractorJobBoard] closed=${r.expired} contractsLinked=${r.contractsLinked} reminders=${r.deadlineReminders}`);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STUB JOBS — defined but NOT yet scheduled.
 // Uncomment the scheduleJob() call when the real implementation is ready.
@@ -304,6 +318,7 @@ export function startWorkerOrchestrator(): void {
   scheduleJob("DemoCleanup",                 jobDemoCleanup,                 DAY_MS, 15_000);
   scheduleJob("DocumentRetentionCleanup",    jobDocumentRetentionCleanup,    DAY_MS, 20_000);
   scheduleJob("TenantStatusMirrorReconcile", jobTenantStatusMirrorReconcile, DAY_MS, 25_000);
+  scheduleJob("ContractorJobBoard",          jobContractorJobBoardMaintenance, 15 * MIN_MS, 30_000);
 
   // ── Stub jobs (uncomment to activate) ─────────────────────────────────────
   // scheduleJob("PayrollReminders",     jobPayrollReminders,     DAY_MS,        30_000);
