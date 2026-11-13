@@ -193,7 +193,7 @@ async function notifyWorkers(pool: Pool, workerIds: string[], n: Note) {
       `INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
        SELECT w.id, (SELECT u.id FROM users u WHERE u.worker_id = w.id LIMIT 1), $2::varchar, $3::text, $4::text, $5::text, $6::text, $7::varchar, $8::text
          FROM workers w WHERE w.id = ANY($1::varchar[]) AND w.company_id = $2::varchar`,
-      [workerIds, n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/contractor-hub?section=jobs"],
+      [workerIds, n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/app/contractor-hub?section=jobs"],
     );
   } catch (e) {
     console.error("[job-board] contractor notification failed:", (e as Error)?.message);
@@ -207,7 +207,7 @@ async function notifyCompanyAdmins(pool: Pool, n: Note) {
        SELECT NULL, u.id, $1::varchar, $2::text, $3::text, $4::text, $5::text, $6::varchar, $7::text FROM users u
         WHERE u.company_id = $1::varchar AND u.role IN ('admin','manager','owner','tenant_owner','tenant_admin','tenant_manager')
         LIMIT 25`,
-      [n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/contractor-hub?section=jobs"],
+      [n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/app/contractor-hub?section=jobs"],
     );
   } catch (e) {
     console.error("[job-board] admin notification failed:", (e as Error)?.message);
@@ -805,7 +805,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
       await notifyWorkers(deps.pool, [out.bid.contractor_id], {
         companyId: out.post.company_id, type: "job_bid_awarded", title: `You were awarded: ${out.post.title}`,
         body: "Review the generated proposal in Contractor Hub to continue.", entityType: "contractor_proposal",
-        entityId: out.bid.converted_proposal_id, actionUrl: "/contractor-hub?section=proposals",
+        entityId: out.bid.converted_proposal_id, actionUrl: "/app/contractor-hub?section=proposals",
       });
       if (out.closed) {
         const others = (await activeBidderIds(deps.pool, out.post.id)).filter((id) => id !== out.bid.contractor_id);
