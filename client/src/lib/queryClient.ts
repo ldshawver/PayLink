@@ -43,7 +43,7 @@ export function normalizeApiError(error: unknown): Error {
 // issues a readable `csrf_token` cookie once a session exists; every mutating
 // request through apiRequest() echoes it back as a header so the server can
 // verify the two match.
-function getCsrfToken(): string | undefined {
+export function getCsrfToken(): string | undefined {
   const match = document.cookie.match(/(?:^|; )csrf_token=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : undefined;
 }
