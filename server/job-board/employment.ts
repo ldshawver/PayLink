@@ -409,6 +409,10 @@ export function transitionApplication(deps: JobBoardDeps, actor: JobBoardActor, 
  * changed. The new record starts inactive so it cannot enter payroll until the
  * administrator completes onboarding. An applicant's existing worker record
  * (for example, a contractor who applied) is never modified.
+ *
+ * Idempotent: the application row is locked, and a retry after a successful
+ * conversion returns the SAME worker (200, replayed) instead of creating a
+ * second one (uq_employment_applications_converted backs this in the DB).
  */
 export function convertApplicationToWorker(deps: JobBoardDeps, actor: JobBoardActor, appId: string, body: Record<string, unknown> = {}) {
   return run(async () => {
@@ -421,11 +425,11 @@ export function convertApplicationToWorker(deps: JobBoardDeps, actor: JobBoardAc
       const app = await loadApplication(deps, c, appId, "FOR UPDATE");
       if (app.company_id !== post.company_id) fail(404, NOT_FOUND_APP);
       if (app.status !== "hired") fail(409, "Only a hired applicant can be converted to a worker record");
-      if (app.converted_worker_id) fail(409, "This applicant already has a worker record from this application");
       const requested = body?.workerType ?? body?.workerClassification;
       if (requested != null && requested !== post.worker_classification) {
         fail(409, `Worker classification is fixed by the posting (${post.worker_classification}) and cannot be changed during conversion`);
       }
+      if (app.converted_worker_id) return { app, workerId: app.converted_worker_id as string, replayed: true };
       await requireGate(deps, post.company_id);
       const u = await c.query(`SELECT first_name, last_name, email FROM users WHERE id = $1`, [app.applicant_user_id]);
       const w = app.applicant_worker_id
@@ -449,9 +453,12 @@ export function convertApplicationToWorker(deps: JobBoardDeps, actor: JobBoardAc
         [app.id, worker.id, worker.worker_type, actor.userId]);
       await appEvent(c, { app, type: "application_converted_to_worker", oldStatus: app.status, newStatus: app.status, actorUserId: actor.userId,
         details: { workerId: worker.id, workerType: worker.worker_type, postingClassification: post.worker_classification } });
-      return { app: upd.rows[0], workerId: worker.id as string };
+      return { app: upd.rows[0], workerId: worker.id as string, replayed: false };
     });
-    return { status: 201, body: { application: projectApplicationForAdmin(out.app), workerId: out.workerId, workerType: "employee", nextStep: "complete_onboarding" } };
+    return {
+      status: out.replayed ? 200 : 201,
+      body: { application: projectApplicationForAdmin(out.app), workerId: out.workerId, workerType: "employee", replayed: out.replayed, nextStep: "complete_onboarding" },
+    };
   });
 }
 

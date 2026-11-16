@@ -574,7 +574,27 @@ async function main() {
       newWorker.worker_type === "employee" && newWorker.status === "inactive_temporary" && newWorker.is_active === false && newWorker.company_id === ids.coA);
     ok("the applicant's existing contractor record is untouched", (await pool.query(`SELECT worker_type, status FROM workers WHERE id = $1`, [ids.cA1])).rows[0].worker_type === "contractor");
     ok("exactly one worker created", Number((await pool.query(`SELECT count(*) FROM workers WHERE company_id = $1`, [ids.coA])).rows[0].count) === workersBefore + 1);
-    okR("converting twice is a 409", await emp.convertApplicationToWorker(deps, ADMIN_A, appCA1.id, { confirm: true }), 409);
+    const firstWorkerId = r.body.workerId;
+    const retry = await emp.convertApplicationToWorker(deps, ADMIN_A, appCA1.id, { confirm: true }) as any;
+    ok("a retried conversion returns the SAME worker (200, replayed) — no duplicate",
+      retry.status === 200 && retry.body.replayed === true && retry.body.workerId === firstWorkerId &&
+      Number((await pool.query(`SELECT count(*) FROM workers WHERE company_id = $1`, [ids.coA])).rows[0].count) === workersBefore + 1);
+    const [c1, c2] = await Promise.all([
+      emp.convertApplicationToWorker(deps, ADMIN_A, appCA1.id, { confirm: true }),
+      emp.convertApplicationToWorker(deps, ADMIN_A, appCA1.id, { confirm: true }),
+    ]) as any[];
+    ok("concurrent retries both return the existing worker", c1.body.workerId === firstWorkerId && c2.body.workerId === firstWorkerId &&
+      Number((await pool.query(`SELECT count(*) FROM workers WHERE company_id = $1`, [ids.coA])).rows[0].count) === workersBefore + 1);
+    const wBefore2 = Number((await pool.query(`SELECT count(*) FROM workers WHERE company_id = $1`, [ids.coA])).rows[0].count);
+    const [f1, f2] = await Promise.all([
+      emp.convertApplicationToWorker(deps, ADMIN_A, appEA.id, { confirm: true }),
+      emp.convertApplicationToWorker(deps, ADMIN_A, appEA.id, { confirm: true }),
+    ]) as any[];
+    ok(`concurrent FIRST conversions create exactly one worker (${f1.status}/${f2.status})`,
+      [f1.status, f2.status].sort().join() === "200,201" && f1.body.workerId === f2.body.workerId &&
+      Number((await pool.query(`SELECT count(*) FROM workers WHERE company_id = $1`, [ids.coA])).rows[0].count) === wBefore2 + 1);
+    okR("a retry asking for a different classification is still refused", await emp.convertApplicationToWorker(deps, ADMIN_A, appCA1.id, { confirm: true, workerType: "contractor" }), 409);
+    ok("exactly one conversion audit event", (await pool.query(`SELECT count(*)::int c FROM employment_application_events WHERE application_id = $1 AND event_type = 'application_converted_to_worker'`, [appCA1.id])).rows[0].c === 1);
     let convRefused = false;
     try { await pool.query(`UPDATE employment_applications SET converted_worker_type = 'contractor' WHERE id = $1`, [appCA1.id]); } catch { convRefused = true; }
     ok("DB refuses a non-employee conversion type", convRefused);
