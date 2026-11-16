@@ -2080,8 +2080,11 @@ export const contractorProposals = pgTable("contractor_proposals", {
   rejectionReason: text("rejection_reason"),
   convertedToInvoiceId: varchar("converted_to_invoice_id"),
   convertedToContractId: varchar("converted_to_contract_id"),
-  jobId: varchar("job_id"),
+  jobId: varchar("job_id"), // cost-accounting jobs.id (NOT a job-board posting)
   costCenterId: varchar("cost_center_id"),
+  // ── Job board award linkage (migration 0029) ──
+  jobPostId: varchar("job_post_id"),
+  jobBidId: varchar("job_bid_id"),
   // ── Client contact (for emailing the proposal portal link) ──
   clientName: text("client_name"),
   clientEmail: text("client_email"),
@@ -5491,3 +5494,282 @@ export const tenantLicenseEvents = pgTable("tenant_license_events", {
 export const insertTenantLicenseEventSchema = createInsertSchema(tenantLicenseEvents).omit({ id: true, createdAt: true });
 export type TenantLicenseEvent = typeof tenantLicenseEvents.$inferSelect;
 export type InsertTenantLicenseEvent = z.infer<typeof insertTenantLicenseEventSchema>;
+
+// ── Job board (migration 0029) ────────────────────────────────────────────
+// Columns mirror migrations/0029_job_board.sql. CHECK constraints, partial
+// unique indexes, the classification guard triggers and the audit-immutability
+// triggers live in that SQL file only (same convention as
+// contractor_access_requests / 0020).
+//
+// One posting model (job_posts) with two physically separate submission paths:
+//   contractor postings → contractor_job_bids (→ contractor_proposals on award)
+//   employee postings   → employment_applications (hiring only; no proposal,
+//                          contract, invoice or contractor-payment linkage)
+export const jobPosts = pgTable("job_posts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  createdByUserId: varchar("created_by_user_id").notNull(),
+  workerClassification: text("worker_classification").notNull(), // contractor | employee (frozen after publish)
+  opportunityType: text("opportunity_type").notNull(), // project | recurring_work | position (employee only)
+  scheduleType: text("schedule_type").notNull(), // one_time | recurring | part_time | full_time
+  employmentType: text("employment_type"), // part_time | full_time — employee postings only
+  durationType: text("duration_type").notNull().default("fixed_term"), // fixed_term | ongoing
+  hoursPerWeekMin: numeric("hours_per_week_min", { precision: 5, scale: 2 }),
+  hoursPerWeekMax: numeric("hours_per_week_max", { precision: 5, scale: 2 }),
+  classificationDeclaredByUserId: varchar("classification_declared_by_user_id").notNull(),
+  classificationDeclaredAt: timestamp("classification_declared_at").notNull().defaultNow(),
+  classificationIndicators: jsonb("classification_indicators").notNull().default(sql`'[]'::jsonb`),
+  classificationAcknowledgedByUserId: varchar("classification_acknowledged_by_user_id"),
+  classificationAcknowledgedAt: timestamp("classification_acknowledged_at"),
+  title: text("title").notNull(),
+  summary: text("summary"),
+  scopeOfWork: text("scope_of_work"),
+  requirements: text("requirements"),
+  deliverables: text("deliverables"),
+  requiredSkills: jsonb("required_skills").notNull().default(sql`'[]'::jsonb`),
+  experienceRequirements: text("experience_requirements"),
+  workLocationType: text("work_location_type").notNull().default("onsite"), // onsite | remote | hybrid
+  locationText: text("location_text"),
+  recurrenceFrequency: text("recurrence_frequency"), // weekly | biweekly | monthly | quarterly | custom
+  recurrenceDescription: text("recurrence_description"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  applicationDeadline: timestamp("application_deadline"),
+  compensationType: text("compensation_type").notNull().default("undisclosed"), // fixed_bid | hourly | salary | range | undisclosed
+  compensationMin: numeric("compensation_min", { precision: 14, scale: 2 }),
+  compensationMax: numeric("compensation_max", { precision: 14, scale: 2 }),
+  currency: text("currency").notNull().default("USD"),
+  paymentTerms: text("payment_terms"),
+  numberOfOpenings: integer("number_of_openings"), // null = unlimited (recurring work only)
+  filledCount: integer("filled_count").notNull().default(0),
+  visibility: text("visibility").notNull().default("all_eligible"), // all_eligible | invited_only | selected_groups
+  eligibleGroups: jsonb("eligible_groups").notNull().default(sql`'[]'::jsonb`),
+  costJobId: varchar("cost_job_id"), // optional cost-accounting jobs.id, copied to the awarded proposal's job_id
+  status: text("status").notNull().default("draft"), // draft | published | paused | closed | archived
+  closeReason: text("close_reason"),
+  publishedAt: timestamp("published_at"),
+  closedAt: timestamp("closed_at"),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export type JobPost = typeof jobPosts.$inferSelect;
+
+export const jobPostEvents = pgTable("job_post_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  eventType: text("event_type").notNull(),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  actorUserId: varchar("actor_user_id"),
+  actorWorkerId: varchar("actor_worker_id"),
+  details: jsonb("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Contractor path ──
+export const contractorJobBids = pgTable("contractor_job_bids", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  submittedByUserId: varchar("submitted_by_user_id"),
+  status: text("status").notNull().default("draft"),
+  coverMessage: text("cover_message"),
+  scopeAndDeliverables: text("scope_and_deliverables"),
+  proposedAmount: numeric("proposed_amount", { precision: 14, scale: 2 }),
+  rateType: text("rate_type"), // fixed | hourly | recurring | custom
+  hourlyRate: numeric("hourly_rate", { precision: 14, scale: 2 }),
+  estimatedHours: numeric("estimated_hours", { precision: 10, scale: 2 }),
+  proposedSchedule: text("proposed_schedule"),
+  availability: text("availability"),
+  estimatedStartDate: date("estimated_start_date"),
+  estimatedCompletionDate: date("estimated_completion_date"),
+  recurrenceTerms: text("recurrence_terms"),
+  assumptions: text("assumptions"),
+  exclusions: text("exclusions"),
+  revisionNumber: integer("revision_number").notNull().default(0),
+  revisionRequestNote: text("revision_request_note"),
+  rejectionReason: text("rejection_reason"),
+  submittedAt: timestamp("submitted_at"),
+  withdrawnAt: timestamp("withdrawn_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  awardedAt: timestamp("awarded_at"),
+  awardedByUserId: varchar("awarded_by_user_id"),
+  awardIdempotencyKey: text("award_idempotency_key"),
+  convertedProposalId: varchar("converted_proposal_id"),
+  convertedContractId: varchar("converted_contract_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export type ContractorJobBid = typeof contractorJobBids.$inferSelect;
+
+export const contractorJobBidVersions = pgTable("contractor_job_bid_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  bidId: varchar("bid_id").notNull().references(() => contractorJobBids.id),
+  revisionNumber: integer("revision_number").notNull(),
+  snapshot: jsonb("snapshot").notNull(),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const contractorJobBidEvents = pgTable("contractor_job_bid_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  bidId: varchar("bid_id").notNull().references(() => contractorJobBids.id),
+  eventType: text("event_type").notNull(),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  actorUserId: varchar("actor_user_id"),
+  actorWorkerId: varchar("actor_worker_id"),
+  details: jsonb("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const contractorJobInvitations = pgTable("contractor_job_invitations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  invitedByUserId: varchar("invited_by_user_id").notNull(),
+  status: text("status").notNull().default("invited"), // invited | revoked
+  invitedAt: timestamp("invited_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+  revokedByUserId: varchar("revoked_by_user_id"),
+});
+
+export const contractorJobQuestions = pgTable("contractor_job_questions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  askedByUserId: varchar("asked_by_user_id").notNull(),
+  question: text("question").notNull(),
+  answer: text("answer"),
+  answeredByUserId: varchar("answered_by_user_id"),
+  answeredAt: timestamp("answered_at"),
+  isPublic: boolean("is_public").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Posting files and contractor-bid files. Employee application documents are NOT stored here. */
+export const jobPostAttachments = pgTable("job_post_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  bidId: varchar("bid_id").references(() => contractorJobBids.id),
+  storageKey: text("storage_key").notNull(), // relative key under PRIVATE_STORAGE_DIR — never /uploads
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type"),
+  fileSize: integer("file_size"),
+  uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
+  uploadedByWorkerId: varchar("uploaded_by_worker_id"),
+  removedAt: timestamp("removed_at"),
+  removedByUserId: varchar("removed_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Employee path ──
+export const jobScreeningQuestions = pgTable("job_screening_questions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  prompt: text("prompt").notNull(),
+  answerType: text("answer_type").notNull().default("text"), // text | yes_no | choice | number
+  options: jsonb("options").notNull().default(sql`'[]'::jsonb`),
+  required: boolean("required").notNull().default(false),
+  position: integer("position").notNull().default(0),
+  createdByUserId: varchar("created_by_user_id").notNull(),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const employmentApplications = pgTable("employment_applications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  applicantUserId: varchar("applicant_user_id").notNull(),
+  applicantWorkerId: varchar("applicant_worker_id").references(() => workers.id),
+  status: text("status").notNull().default("draft"), // draft | submitted | under_review | interviewing | offer_extended | hired | rejected | withdrawn
+  coverMessage: text("cover_message"),
+  availability: text("availability"),
+  desiredCompensation: text("desired_compensation"),
+  qualifications: text("qualifications"),
+  consentVersion: text("consent_version"),
+  consentAcceptedAt: timestamp("consent_accepted_at"),
+  acknowledgements: jsonb("acknowledgements").notNull().default(sql`'{}'::jsonb`),
+  submittedAt: timestamp("submitted_at"),
+  withdrawnAt: timestamp("withdrawn_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  rejectionReason: text("rejection_reason"),
+  hiredAt: timestamp("hired_at"),
+  hiredByUserId: varchar("hired_by_user_id"),
+  convertedWorkerId: varchar("converted_worker_id").references(() => workers.id),
+  convertedWorkerType: text("converted_worker_type"), // always 'employee' when set
+  convertedAt: timestamp("converted_at"),
+  convertedByUserId: varchar("converted_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export type EmploymentApplication = typeof employmentApplications.$inferSelect;
+
+export const employmentApplicationAnswers = pgTable("employment_application_answers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  applicationId: varchar("application_id").notNull().references(() => employmentApplications.id),
+  questionId: varchar("question_id").notNull().references(() => jobScreeningQuestions.id),
+  questionPrompt: text("question_prompt").notNull(),
+  answer: text("answer"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const employmentApplicationEvents = pgTable("employment_application_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  applicationId: varchar("application_id").notNull().references(() => employmentApplications.id),
+  eventType: text("event_type").notNull(),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  actorUserId: varchar("actor_user_id"),
+  details: jsonb("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Private HR records (résumé/CV etc.) — stored under PRIVATE_HR_STORAGE_DIR, never /uploads. */
+export const employmentApplicationDocuments = pgTable("employment_application_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id"),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  applicationId: varchar("application_id").notNull().references(() => employmentApplications.id),
+  documentType: text("document_type").notNull().default("resume"), // resume | cover_letter | certification | other
+  storageKey: text("storage_key").notNull(),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type"),
+  fileSize: integer("file_size"),
+  uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
+  removedAt: timestamp("removed_at"),
+  removedByUserId: varchar("removed_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
