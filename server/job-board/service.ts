@@ -1,17 +1,19 @@
 /**
- * Contractor Hub job board — transactional service (migration 0029).
+ * Job board — postings + the CONTRACTOR proposal path (migration 0029).
+ * The EMPLOYEE application path lives in ./employment.ts and shares only the
+ * posting primitives exported from here.
  *
  * Every operation re-derives authorization from STORED data:
  *   posting/bid id → load row → stored company_id (+ tenant consistency) →
  *   actor.canManageCompany(company)  (administrators/managers), or
- *   actor.contractor (worker id + worker company) for contractor operations.
+ *   actor.worker (worker id + worker company + worker type) for worker operations.
  * Request-supplied company ids are only ever used for list scoping after the
  * route has authorized them. Cross-company / cross-tenant / other-contractor
  * rows answer 404 so existence never leaks.
  *
  * State changes validate through ./rules, run inside one transaction with row
  * locks taken in a fixed order (posting → bid) and write an immutable event to
- * contractor_job_bid_events in the same transaction. Notifications are in-app
+ * job_post_events / contractor_job_bid_events in the same transaction. Notifications are in-app
  * only (contractor_notifications), written after commit, best-effort, and never
  * carry bid amounts or documents.
  *
@@ -23,12 +25,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Pool, PoolClient } from "pg";
 import {
-  awardProposalAmount, bidIsContractorEditable, bidVisibleToAdmin, contractorEligibleForPost,
-  dateOnlyString, decideAward, decideBidTransition, decidePostEdit, decidePostTransition, effectiveMaxAwards,
-  isoDate, MATERIAL_POST_FIELDS, normalizeBidInput, normalizePostInput, POST_FIELD_COLUMNS,
-  projectBidForAdmin, projectBidForContractor, projectPostForAdmin, projectPostForContractor,
-  submissionsOpen, validateBidForSubmit, validatePostShape,
-  type BidAction, type ContractorIdentity, type PostAction, type PostField,
+  awardProposalAmount, bidIsContractorEditable, bidVisibleToAdmin, dateOnlyString, decideBidTransition,
+  decideClassificationChange, decideFill, decidePostEdit, decidePostTransition, derivePostDefaults,
+  effectiveOpenings, employmentIndicators, hasUnacknowledgedIndicators, isoDate, JSON_POST_COLUMNS,
+  MATERIAL_POST_FIELDS, normalizeBidInput, normalizePostInput, POST_FIELD_COLUMNS, projectApplicationForApplicant, projectBidForAdmin,
+  projectBidForContractor, projectPostForAdmin, projectPostForWorker, reconcileClassificationColumns,
+  submissionCta, submissionsOpen, validateBidForSubmit, validatePostShape, workerEligibleForPost,
+  type BidAction, type PostAction, type PostField, type WorkerIdentity,
 } from "./rules";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -38,8 +41,8 @@ export interface JobBoardActor {
   userId: string;
   /** true only for an administrator/manager role WITH access to that company (fail closed). */
   canManageCompany(companyId: string): Promise<boolean>;
-  /** The caller's contractor identity (users.worker_id → workers), or null. */
-  contractor: ContractorIdentity | null;
+  /** The caller's worker identity (users.worker_id → workers), any worker type, or null. */
+  worker: WorkerIdentity | null;
 }
 
 export interface JobBoardDeps {
@@ -51,18 +54,20 @@ export interface JobBoardDeps {
 
 export type Result<T = unknown> = { ok: true; status: number; body: T } | { ok: false; status: number; message: string };
 
+export type { WorkerIdentity };
+
 export class JobBoardError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-function fail(status: number, message: string): never {
+export function fail(status: number, message: string): never {
   throw new JobBoardError(status, message);
 }
 const NOT_FOUND_POST = "Job posting not found";
 const NOT_FOUND_BID = "Bid not found";
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function run(fn: () => Promise<{ status?: number; body: unknown }>): Promise<Result> {
+export async function run(fn: () => Promise<{ status?: number; body: unknown }>): Promise<Result> {
   try {
     const r = await fn();
     return { ok: true, status: r.status ?? 200, body: r.body };
@@ -74,7 +79,7 @@ async function run(fn: () => Promise<{ status?: number; body: unknown }>): Promi
   }
 }
 
-async function tx<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T> {
+export async function tx<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
@@ -91,14 +96,17 @@ async function tx<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T> 
 
 /** True once migration 0029 has been applied. Routes answer 503 until then. */
 export async function jobBoardSchemaReady(pool: Pool): Promise<boolean> {
-  const r = await pool.query(`SELECT to_regclass('public.contractor_job_posts') AS a, to_regclass('public.contractor_job_bid_events') AS b`);
-  return !!(r.rows[0]?.a && r.rows[0]?.b);
+  const r = await pool.query(
+    `SELECT to_regclass('public.job_posts') AS a, to_regclass('public.contractor_job_bid_events') AS b,
+            to_regclass('public.employment_applications') AS c, to_regclass('public.employment_application_documents') AS d`);
+  const x = r.rows[0] ?? {};
+  return !!(x.a && x.b && x.c && x.d);
 }
 
 // ── Loading + authorization primitives ──────────────────────────────────────
-async function loadPost(deps: JobBoardDeps, q: Q, id: string, lock: "" | "FOR UPDATE" | "FOR SHARE" = ""): Promise<any> {
+export async function loadPost(deps: JobBoardDeps, q: Q, id: string, lock: "" | "FOR UPDATE" | "FOR SHARE" = ""): Promise<any> {
   if (!UUID_RE.test(String(id))) fail(404, NOT_FOUND_POST);
-  const r = await q.query(`SELECT * FROM contractor_job_posts WHERE id = $1 ${lock}`, [id]);
+  const r = await q.query(`SELECT * FROM job_posts WHERE id = $1 ${lock}`, [id]);
   const post = r.rows[0];
   if (!post) fail(404, NOT_FOUND_POST);
   await assertTenantConsistent(deps, post);
@@ -115,30 +123,42 @@ async function loadBid(deps: JobBoardDeps, q: Q, id: string, lock: "" | "FOR UPD
 }
 
 /** A row stamped with a tenant must still belong to that tenant (company moved → unreachable, fail closed). */
-async function assertTenantConsistent(deps: JobBoardDeps, row: { tenant_id: string | null; company_id: string }) {
+export async function assertTenantConsistent(deps: JobBoardDeps, row: { tenant_id: string | null; company_id: string }) {
   if (!row.tenant_id) return;
   const current = await deps.tenantIdForCompany(row.company_id);
   if (current !== row.tenant_id) fail(404, "Not found");
 }
 
-async function canManage(actor: JobBoardActor, companyId: string): Promise<boolean> {
+export async function canManage(actor: JobBoardActor, companyId: string): Promise<boolean> {
   try { return await actor.canManageCompany(companyId); } catch { return false; }
 }
 
-async function requireManage(actor: JobBoardActor, companyId: string, notFound: string) {
+export async function requireManage(actor: JobBoardActor, companyId: string, notFound: string) {
   if (!(await canManage(actor, companyId))) fail(404, notFound);
 }
 
-async function requireGate(deps: JobBoardDeps, companyId: string) {
+export async function requireGate(deps: JobBoardDeps, companyId: string) {
   let g: { allowed: boolean; reason?: string };
   try { g = await deps.tenantGate(companyId); } catch { g = { allowed: false, reason: "Account status could not be verified" }; }
   if (!g.allowed) fail(403, g.reason || "This company's account is not active");
 }
 
-function requireContractor(actor: JobBoardActor): ContractorIdentity {
-  const c = actor.contractor;
+function requireContractor(actor: JobBoardActor): WorkerIdentity {
+  const c = actor.worker;
   if (!c || c.workerType !== "contractor" || !c.companyId) fail(403, "Only contractors can do this");
   return c!;
+}
+
+/** Any active worker identity (contractor or employee) — browsing + employee applications. */
+export function requireWorker(actor: JobBoardActor): WorkerIdentity {
+  const w = actor.worker;
+  if (!w || !w.companyId || (w.workerType !== "contractor" && w.workerType !== "employee")) fail(403, "Only workers can do this");
+  return w!;
+}
+
+/** Contractor-only operations on a posting: an employee position never takes bids, invitations or bid questions. */
+function requireContractorPost(post: any) {
+  if (post.worker_classification !== "contractor") fail(409, "This is an employee position — use Apply instead of a proposal");
 }
 
 async function isInvited(q: Q, postId: string, workerId: string): Promise<boolean> {
@@ -146,36 +166,50 @@ async function isInvited(q: Q, postId: string, workerId: string): Promise<boolea
   return r.rows.length > 0;
 }
 
-async function contractorCanSeePost(q: Q, post: any, who: ContractorIdentity): Promise<{ eligible: boolean; hasBid: boolean }> {
+/**
+ * Can this worker see the posting? `hasBid` = they already have a submission
+ * of the posting's own kind (bid for contractor work, application for an
+ * employee position) — which keeps it visible after the posting closes.
+ */
+export async function workerCanSeePost(q: Q, post: any, who: WorkerIdentity, userId: string): Promise<{ eligible: boolean; hasBid: boolean }> {
   if (!who.companyId || who.companyId !== post.company_id) return { eligible: false, hasBid: false };
-  const hasBidRow = await q.query(`SELECT 1 FROM contractor_job_bids WHERE job_post_id = $1 AND contractor_id = $2 LIMIT 1`, [post.id, who.workerId]);
-  const hasBid = hasBidRow.rows.length > 0;
-  const eligible = post.status === "published" && contractorEligibleForPost(post, who, await isInvited(q, post.id, who.workerId));
+  const mine = post.worker_classification === "employee"
+    ? await q.query(`SELECT 1 FROM employment_applications WHERE job_post_id = $1 AND applicant_user_id = $2 LIMIT 1`, [post.id, userId])
+    : await q.query(`SELECT 1 FROM contractor_job_bids WHERE job_post_id = $1 AND contractor_id = $2 LIMIT 1`, [post.id, who.workerId]);
+  const hasBid = mine.rows.length > 0;
+  const invited = post.worker_classification === "contractor" ? await isInvited(q, post.id, who.workerId) : false;
+  const eligible = post.status === "published" && workerEligibleForPost(post, who, invited);
   return { eligible, hasBid };
 }
 
 /** The contractor must own the bid AND still belong to the bid's company. */
-function requireOwnBid(bid: any, who: ContractorIdentity) {
+function requireOwnBid(bid: any, who: WorkerIdentity) {
   if (bid.contractor_id !== who.workerId || bid.company_id !== who.companyId) fail(404, NOT_FOUND_BID);
 }
 
-async function event(q: Q, e: {
+/** Immutable audit row: bid-level events → contractor_job_bid_events, everything else → job_post_events. */
+export async function event(q: Q, e: {
   post: { id: string; company_id: string; tenant_id: string | null };
   bidId?: string | null; type: string; oldStatus?: string | null; newStatus?: string | null;
   actorUserId?: string | null; actorWorkerId?: string | null; details?: Record<string, unknown> | null;
 }) {
-  await q.query(
-    `INSERT INTO contractor_job_bid_events (tenant_id, company_id, job_post_id, bid_id, event_type, old_status, new_status, actor_user_id, actor_worker_id, details)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [e.post.tenant_id, e.post.company_id, e.post.id, e.bidId ?? null, e.type, e.oldStatus ?? null, e.newStatus ?? null,
-      e.actorUserId ?? null, e.actorWorkerId ?? null, e.details ? JSON.stringify(e.details) : null],
-  );
+  const params = [e.post.tenant_id, e.post.company_id, e.post.id, e.type, e.oldStatus ?? null, e.newStatus ?? null,
+    e.actorUserId ?? null, e.actorWorkerId ?? null, e.details ? JSON.stringify(e.details) : null];
+  if (e.bidId) {
+    await q.query(
+      `INSERT INTO contractor_job_bid_events (tenant_id, company_id, job_post_id, event_type, old_status, new_status, actor_user_id, actor_worker_id, details, bid_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [...params, e.bidId]);
+  } else {
+    await q.query(
+      `INSERT INTO job_post_events (tenant_id, company_id, job_post_id, event_type, old_status, new_status, actor_user_id, actor_worker_id, details)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, params);
+  }
 }
 
 async function snapshotBid(q: Q, bid: any, userId: string) {
   const snap: Record<string, unknown> = {};
-  for (const k of ["status", "cover_message", "proposed_scope", "proposed_amount", "rate_type", "hourly_rate", "estimated_hours",
-    "estimated_start_date", "estimated_completion_date", "recurrence_terms", "assumptions", "exclusions"]) snap[k] = bid[k];
+  for (const k of ["status", "cover_message", "scope_and_deliverables", "proposed_amount", "rate_type", "hourly_rate", "estimated_hours",
+    "proposed_schedule", "availability", "estimated_start_date", "estimated_completion_date", "recurrence_terms", "assumptions", "exclusions"]) snap[k] = bid[k];
   await q.query(
     `INSERT INTO contractor_job_bid_versions (tenant_id, company_id, job_post_id, bid_id, revision_number, snapshot, created_by_user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -184,30 +218,30 @@ async function snapshotBid(q: Q, bid: any, userId: string) {
 }
 
 // ── Notifications (in-app only; after commit; best-effort) ──────────────────
-interface Note { companyId: string; type: string; title: string; body?: string; entityType: string; entityId: string; actionUrl?: string }
+export interface Note { companyId: string; type: string; title: string; body?: string; entityType: string; entityId: string; actionUrl?: string }
 
-async function notifyWorkers(pool: Pool, workerIds: string[], n: Note) {
+export async function notifyWorkers(pool: Pool, workerIds: string[], n: Note) {
   if (!workerIds.length) return;
   try {
     await pool.query(
       `INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
        SELECT w.id, (SELECT u.id FROM users u WHERE u.worker_id = w.id LIMIT 1), $2::varchar, $3::text, $4::text, $5::text, $6::text, $7::varchar, $8::text
          FROM workers w WHERE w.id = ANY($1::varchar[]) AND w.company_id = $2::varchar`,
-      [workerIds, n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/contractor-hub?section=jobs"],
+      [workerIds, n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/app/contractor-hub?section=jobs"],
     );
   } catch (e) {
     console.error("[job-board] contractor notification failed:", (e as Error)?.message);
   }
 }
 
-async function notifyCompanyAdmins(pool: Pool, n: Note) {
+export async function notifyCompanyAdmins(pool: Pool, n: Note) {
   try {
     await pool.query(
       `INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
        SELECT NULL, u.id, $1::varchar, $2::text, $3::text, $4::text, $5::text, $6::varchar, $7::text FROM users u
         WHERE u.company_id = $1::varchar AND u.role IN ('admin','manager','owner','tenant_owner','tenant_admin','tenant_manager')
         LIMIT 25`,
-      [n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/contractor-hub?section=jobs"],
+      [n.companyId, n.type, n.title, n.body ?? null, n.entityType, n.entityId, n.actionUrl ?? "/app/contractor-hub?section=jobs"],
     );
   } catch (e) {
     console.error("[job-board] admin notification failed:", (e as Error)?.message);
@@ -222,17 +256,29 @@ async function activeBidderIds(pool: Pool, postId: string): Promise<string[]> {
   return r.rows.map((x: any) => x.contractor_id);
 }
 
-/** Contractors who can see a freshly published posting (company-bound; capped). */
-async function eligibleContractorIds(pool: Pool, post: any): Promise<string[]> {
+/** Workers who can see a freshly published posting (company-bound; capped). */
+async function eligibleWorkerIds(pool: Pool, post: any): Promise<string[]> {
   const r = await pool.query(
     `SELECT w.id, w.company_id, w.worker_type, w.worker_group, w.status,
             EXISTS (SELECT 1 FROM contractor_job_invitations i WHERE i.job_post_id = $2 AND i.contractor_id = w.id AND i.status = 'invited') AS invited
-       FROM workers w WHERE w.company_id = $1 AND w.worker_type = 'contractor' LIMIT 2000`,
+       FROM workers w WHERE w.company_id = $1 AND w.worker_type IN ('contractor','employee') LIMIT 2000`,
     [post.company_id, post.id],
   );
   return r.rows
-    .filter((w: any) => contractorEligibleForPost(post, { workerId: w.id, companyId: w.company_id, workerType: w.worker_type, workerGroup: w.worker_group, status: w.status }, w.invited))
+    .filter((w: any) => workerEligibleForPost(post, { workerId: w.id, companyId: w.company_id, workerType: w.worker_type, workerGroup: w.worker_group, status: w.status }, w.invited))
     .map((w: any) => w.id);
+}
+
+/** Workers with a live submission on the posting, whichever path it uses. */
+export async function activeCandidateWorkerIds(pool: Pool, post: any): Promise<string[]> {
+  if (post.worker_classification === "employee") {
+    const r = await pool.query(
+      `SELECT DISTINCT applicant_worker_id FROM employment_applications
+        WHERE job_post_id = $1 AND applicant_worker_id IS NOT NULL AND status IN ('draft','submitted','under_review','interviewing','offer_extended')`,
+      [post.id]);
+    return r.rows.map((x: any) => x.applicant_worker_id);
+  }
+  return activeBidderIds(pool, post.id);
 }
 
 // ── Postings (administrator) ────────────────────────────────────────────────
@@ -242,51 +288,76 @@ async function validateCostJob(q: Q, companyId: string, costJobId: unknown) {
   if (!r.rows.length) fail(400, "Invalid cost job");
 }
 
+function postParams(cols: string[], values: Record<string, unknown>) {
+  return cols.map((k) => (JSON_POST_COLUMNS.has(k) ? JSON.stringify(values[k] ?? []) : values[k]));
+}
+
+/**
+ * Create a draft. The administrator chooses Contractor Work or Employee
+ * Position first (workerClassification) and then the schedule; the
+ * classification-dependent columns are derived from those two choices and the
+ * declaration is stamped with who made it and when.
+ */
 export function createPost(deps: JobBoardDeps, actor: JobBoardActor, companyId: string, body: Record<string, unknown>) {
   return run(async () => {
     await requireManage(actor, companyId, "Company not found");
     await requireGate(deps, companyId);
     const n = normalizePostInput(body, { partial: false });
     if (!n.ok) fail(n.status, n.message);
-    const values = (n as any).values as Record<string, unknown>;
-    const merged = { location_type: "onsite", work_type: "one_time", budget_type: "contractor_quote", visibility: "all_eligible", eligible_groups: [], awards_made: 0, ...values };
-    const shape = validatePostShape(merged, { forPublish: false });
+    const values = derivePostDefaults((n as any).values) as Record<string, unknown>;
+    const merged = { work_location_type: "onsite", visibility: "all_eligible", eligible_groups: [], required_skills: [], filled_count: 0, currency: "USD", ...values };
+    const shape = validatePostShape(merged, { forPublish: false, now: deps.now?.() });
     if (!shape.ok) fail(shape.status, shape.message);
     const tenantId = await deps.tenantIdForCompany(companyId);
     return tx(deps.pool, async (c) => {
       await validateCostJob(c, companyId, values.cost_job_id);
       const cols = Object.keys(values);
-      const params = cols.map((k) => (k === "eligible_groups" ? JSON.stringify(values[k]) : values[k]));
       const ins = await c.query(
-        `INSERT INTO contractor_job_posts (tenant_id, company_id, created_by_user_id${cols.map((k) => ", " + k).join("")})
-         VALUES ($1, $2, $3${cols.map((_, i) => `, $${i + 4}`).join("")}) RETURNING *`,
-        [tenantId, companyId, actor.userId, ...params],
+        `INSERT INTO job_posts (tenant_id, company_id, created_by_user_id, classification_declared_by_user_id${cols.map((k) => ", " + k).join("")})
+         VALUES ($1, $2, $3, $3${cols.map((_, i) => `, $${i + 4}`).join("")}) RETURNING *`,
+        [tenantId, companyId, actor.userId, ...postParams(cols, values)],
       );
       const post = ins.rows[0];
       await event(c, { post, type: "post_created", newStatus: "draft", actorUserId: actor.userId, details: { fields: (n as any).fields } });
+      await event(c, {
+        post, type: "classification_declared", newStatus: "draft", actorUserId: actor.userId,
+        details: { workerClassification: post.worker_classification, opportunityType: post.opportunity_type, scheduleType: post.schedule_type,
+          employmentType: post.employment_type, indicators: employmentIndicators(post) },
+      });
       return { status: 201, body: projectPostForAdmin(post) };
     });
   });
 }
 
-export function listPostsForAdmin(deps: JobBoardDeps, actor: JobBoardActor, companyId: string, opts: { status?: string } = {}) {
+export function listPostsForAdmin(deps: JobBoardDeps, actor: JobBoardActor, companyId: string, opts: { status?: string; classification?: string } = {}) {
   return run(async () => {
     await requireManage(actor, companyId, "Company not found");
     const status = opts.status && opts.status !== "all" ? opts.status : null;
+    const cls = opts.classification === "contractor" || opts.classification === "employee" ? opts.classification : null;
     const r = await deps.pool.query(
-      `SELECT p.*, (
+      `SELECT p.*, CASE WHEN p.worker_classification = 'contractor' THEN (
           SELECT json_build_object(
+            'kind', 'proposals',
             'total', count(*) FILTER (WHERE b.revision_number > 0),
             'awaitingReview', count(*) FILTER (WHERE b.status IN ('submitted','under_review')),
             'shortlisted', count(*) FILTER (WHERE b.status = 'shortlisted'),
-            'awarded', count(*) FILTER (WHERE b.status IN ('awarded','converted_to_proposal','converted_to_contract')))
-          FROM contractor_job_bids b WHERE b.job_post_id = p.id) AS bid_counts
-         FROM contractor_job_posts p
+            'filled', count(*) FILTER (WHERE b.status IN ('awarded','converted_to_proposal','converted_to_contract')))
+          FROM contractor_job_bids b WHERE b.job_post_id = p.id)
+        ELSE (
+          SELECT json_build_object(
+            'kind', 'applications',
+            'total', count(*) FILTER (WHERE a.submitted_at IS NOT NULL),
+            'awaitingReview', count(*) FILTER (WHERE a.status IN ('submitted','under_review')),
+            'shortlisted', count(*) FILTER (WHERE a.status IN ('interviewing','offer_extended')),
+            'filled', count(*) FILTER (WHERE a.status = 'hired'))
+          FROM employment_applications a WHERE a.job_post_id = p.id) END AS submission_counts
+         FROM job_posts p
         WHERE p.company_id = $1
           AND ($2::text IS NULL OR p.status = $2)
           AND ($2::text IS NOT NULL OR $3::boolean OR p.status <> 'archived')
+          AND ($4::text IS NULL OR p.worker_classification = $4)
         ORDER BY p.updated_at DESC NULLS LAST LIMIT 500`,
-      [companyId, status, opts.status === "all"],
+      [companyId, status, opts.status === "all", cls],
     );
     return { body: r.rows.map(projectPostForAdmin) };
   });
@@ -296,33 +367,39 @@ export function getPost(deps: JobBoardDeps, actor: JobBoardActor, id: string) {
   return run(async () => {
     const post = await loadPost(deps, deps.pool, id);
     const attachments = await deps.pool.query(
-      `SELECT id, file_name, content_type, file_size, created_at FROM contractor_job_attachments
+      `SELECT id, file_name, content_type, file_size, created_at FROM job_post_attachments
         WHERE job_post_id = $1 AND bid_id IS NULL AND removed_at IS NULL ORDER BY created_at`, [post.id]);
     const att = attachments.rows.map((a: any) => ({ id: a.id, fileName: a.file_name, contentType: a.content_type, fileSize: a.file_size, createdAt: a.created_at }));
+    const screening = post.worker_classification === "employee"
+      ? (await deps.pool.query(
+          `SELECT id, prompt, answer_type, options, required, position FROM job_screening_questions
+            WHERE job_post_id = $1 AND archived_at IS NULL ORDER BY position, created_at`, [post.id])).rows
+          .map((q: any) => ({ id: q.id, prompt: q.prompt, answerType: q.answer_type, options: q.options ?? [], required: q.required, position: q.position }))
+      : [];
     if (await canManage(actor, post.company_id)) {
-      return { body: { ...projectPostForAdmin(post), attachments: att, viewer: "admin" } };
+      return { body: { ...projectPostForAdmin(post), attachments: att, screeningQuestions: screening, viewer: "admin" } };
     }
-    const who = actor.contractor;
+    const who = actor.worker;
     if (!who) fail(404, NOT_FOUND_POST);
-    const vis = await contractorCanSeePost(deps.pool, post, who!);
+    const vis = await workerCanSeePost(deps.pool, post, who!, actor.userId);
     if (!vis.eligible && !vis.hasBid) fail(404, NOT_FOUND_POST);
     if (!vis.hasBid) {
       const g = await deps.tenantGate(post.company_id).catch(() => ({ allowed: false }));
       if (!g.allowed) fail(404, NOT_FOUND_POST);
     }
+    const company = await deps.pool.query(`SELECT name FROM companies WHERE id = $1`, [post.company_id]);
+    const accepting = submissionsOpen(post, deps.now?.()).ok && vis.eligible;
+    const base = { ...projectPostForWorker({ ...post, company_name: company.rows[0]?.name }), attachments: att, acceptingSubmissions: accepting, viewer: "worker" };
+    if (post.worker_classification === "employee") {
+      const mine = await deps.pool.query(
+        `SELECT * FROM employment_applications WHERE job_post_id = $1 AND applicant_user_id = $2 ORDER BY (status = 'withdrawn'), updated_at DESC LIMIT 1`,
+        [post.id, actor.userId]);
+      return { body: { ...base, screeningQuestions: screening, myApplication: mine.rows[0] ? projectApplicationForApplicant(mine.rows[0]) : null, myBid: null } };
+    }
     const mine = await deps.pool.query(
       `SELECT * FROM contractor_job_bids WHERE job_post_id = $1 AND contractor_id = $2 ORDER BY (status = 'withdrawn'), updated_at DESC LIMIT 1`,
       [post.id, who!.workerId]);
-    const company = await deps.pool.query(`SELECT name FROM companies WHERE id = $1`, [post.company_id]);
-    return {
-      body: {
-        ...projectPostForContractor({ ...post, company_name: company.rows[0]?.name }),
-        attachments: att,
-        acceptingBids: submissionsOpen(post, deps.now?.()).ok && vis.eligible,
-        myBid: mine.rows[0] ? projectBidForContractor(mine.rows[0]) : null,
-        viewer: "contractor",
-      },
-    };
+    return { body: { ...base, myBid: mine.rows[0] ? projectBidForContractor(mine.rows[0]) : null, myApplication: null } };
   });
 }
 
@@ -330,24 +407,36 @@ export function updatePost(deps: JobBoardDeps, actor: JobBoardActor, id: string,
   return run(async () => {
     const n = normalizePostInput(body, { partial: true });
     if (!n.ok) fail(n.status, n.message);
-    const values = (n as any).values as Record<string, unknown>;
-    const fields = (n as any).fields as PostField[];
+    const values = { ...((n as any).values as Record<string, unknown>) };
+    const fields = [...((n as any).fields as PostField[])];
     if (!fields.length) fail(400, "No editable fields supplied");
+    const acknowledge = body?.acknowledgeClassification === true;
     const out = await tx(deps.pool, async (c) => {
       const post = await loadPost(deps, c, id, "FOR UPDATE");
       await requireManage(actor, post.company_id, NOT_FOUND_POST);
       await requireGate(deps, post.company_id);
       const edit = decidePostEdit(post.status);
       if (!edit.ok) fail(edit.status, edit.message);
+      if ("worker_classification" in values) {
+        const cc = decideClassificationChange(post, String(values.worker_classification));
+        if (!cc.ok) fail(cc.status, cc.message);
+      }
       if ("cost_job_id" in values) await validateCostJob(c, post.company_id, values.cost_job_id);
+      // Keep the classification-dependent columns consistent with the edit.
+      const fix = reconcileClassificationColumns({ ...post, ...values });
+      for (const [col, v] of Object.entries(fix)) {
+        values[col] = v;
+        const f = (Object.keys(POST_FIELD_COLUMNS) as PostField[]).find((k) => POST_FIELD_COLUMNS[k] === col);
+        if (f && !fields.includes(f)) fields.push(f);
+      }
       const merged = { ...post, ...values };
-      const shape = validatePostShape(merged, { forPublish: post.status === "published" });
+      const shape = validatePostShape(merged, { forPublish: post.status === "published", now: deps.now?.() });
       if (!shape.ok) fail(shape.status, shape.message);
 
       const changed: Record<string, { from: unknown; to: unknown }> = {};
       for (const f of fields) {
         const col = POST_FIELD_COLUMNS[f];
-        const isDateCol = col === "estimated_start_date" || col === "estimated_end_date";
+        const isDateCol = col === "start_date" || col === "end_date";
         const before = isDateCol ? (dateOnlyString(post[col]) ?? "") : normalizeForCompare(post[col]);
         const after = isDateCol ? (dateOnlyString(values[col]) ?? "") : normalizeForCompare(values[col]);
         if (before !== after) changed[f] = { from: post[col] ?? null, to: values[col] ?? null };
@@ -355,23 +444,53 @@ export function updatePost(deps: JobBoardDeps, actor: JobBoardActor, id: string,
       const changedFields = Object.keys(changed) as PostField[];
       if (!changedFields.length) return { post, material: [] as string[] };
 
+      // A live contractor posting that gains a new employment indicator must be re-acknowledged.
+      const indicators = employmentIndicators(merged);
+      const needsAck = post.status !== "draft" && hasUnacknowledgedIndicators(indicators, post.classification_indicators);
+      if (needsAck && !acknowledge) {
+        fail(409, "This change makes the contractor work resemble employment. Review the classification indicators and confirm to continue.");
+      }
+
       const cols = changedFields.map((f) => POST_FIELD_COLUMNS[f]);
-      const params = cols.map((k) => (k === "eligible_groups" ? JSON.stringify(values[k]) : values[k]));
+      const ackSql = needsAck ? `, classification_indicators = $${cols.length + 2}::jsonb, classification_acknowledged_by_user_id = $${cols.length + 3}, classification_acknowledged_at = now()` : "";
+      const classSql = changedFields.includes("workerClassification")
+        ? `, classification_declared_by_user_id = $${cols.length + (needsAck ? 4 : 2)}, classification_declared_at = now(), classification_indicators = '[]'::jsonb, classification_acknowledged_by_user_id = NULL, classification_acknowledged_at = NULL`
+        : "";
+      const params: unknown[] = [post.id, ...postParams(cols, values)];
+      if (needsAck) params.push(JSON.stringify(indicators), actor.userId);
+      if (classSql) params.push(actor.userId);
       const upd = await c.query(
-        `UPDATE contractor_job_posts SET ${cols.map((k, i) => `${k} = $${i + 2}`).join(", ")}, updated_at = now() WHERE id = $1 RETURNING *`,
-        [post.id, ...params],
+        `UPDATE job_posts SET ${cols.map((k, i) => `${k} = $${i + 2}`).join(", ")}${ackSql}${classSql}, updated_at = now() WHERE id = $1 RETURNING *`,
+        params,
       );
+      const after = upd.rows[0];
       const material = changedFields.filter((f) => MATERIAL_POST_FIELDS.has(f));
       await event(c, { post, type: "post_updated", oldStatus: post.status, newStatus: post.status, actorUserId: actor.userId, details: { changed } });
+      const classFields: PostField[] = ["workerClassification", "opportunityType", "scheduleType", "employmentType"];
+      if (changedFields.some((f) => classFields.includes(f))) {
+        await event(c, {
+          post, type: "classification_changed", oldStatus: post.status, newStatus: post.status, actorUserId: actor.userId,
+          details: {
+            from: { workerClassification: post.worker_classification, opportunityType: post.opportunity_type, scheduleType: post.schedule_type, employmentType: post.employment_type },
+            to: { workerClassification: after.worker_classification, opportunityType: after.opportunity_type, scheduleType: after.schedule_type, employmentType: after.employment_type },
+            indicators,
+          },
+        });
+      }
+      if (needsAck) {
+        await event(c, { post, type: "classification_indicators_acknowledged", oldStatus: post.status, newStatus: post.status, actorUserId: actor.userId, details: { indicators } });
+      }
       if (edit.audited && material.length) {
         await event(c, { post, type: "post_material_change", oldStatus: post.status, newStatus: post.status, actorUserId: actor.userId, details: { fields: material } });
       }
-      return { post: upd.rows[0], material: edit.audited ? material : [] };
+      return { post: after, material: edit.audited ? material : [] };
     });
     if (out.material.length) {
-      await notifyWorkers(deps.pool, await activeBidderIds(deps.pool, out.post.id), {
+      await notifyWorkers(deps.pool, await activeCandidateWorkerIds(deps.pool, out.post), {
         companyId: out.post.company_id, type: "job_post_changed", title: `Job posting updated: ${out.post.title}`,
-        body: "The posting you bid on has changed. Review the updated details and revise your bid if needed.",
+        body: out.post.worker_classification === "employee"
+          ? "A position you applied for has changed. Review the updated details."
+          : "The posting you sent a proposal for has changed. Review the updated details and revise your proposal if needed.",
         entityType: "job_post", entityId: out.post.id,
       });
     }
@@ -389,7 +508,10 @@ function normalizeForCompare(v: unknown): string {
   return s;
 }
 
-export function transitionPost(deps: JobBoardDeps, actor: JobBoardActor, id: string, action: PostAction, opts: { reason?: string } = {}) {
+export function transitionPost(
+  deps: JobBoardDeps, actor: JobBoardActor, id: string, action: PostAction,
+  opts: { reason?: string; acknowledgeClassification?: boolean } = {},
+) {
   return run(async () => {
     const out = await tx(deps.pool, async (c) => {
       const post = await loadPost(deps, c, id, "FOR UPDATE");
@@ -397,41 +519,58 @@ export function transitionPost(deps: JobBoardDeps, actor: JobBoardActor, id: str
       const d = decidePostTransition(post.status, action);
       if (!d.ok) fail(d.status, d.message);
       const to = (d as any).to as string;
+      let ackIndicators: string[] | null = null;
       if (action === "publish" || action === "reopen") {
         await requireGate(deps, post.company_id);
-        const shape = validatePostShape(post, { forPublish: true });
+        const shape = validatePostShape(post, { forPublish: true, now: deps.now?.() });
         if (!shape.ok) fail(shape.status, shape.message);
-        const max = effectiveMaxAwards(post);
-        if (max != null && post.awards_made >= max) fail(409, "This posting has reached its award limit — raise the limit before reopening");
+        const max = effectiveOpenings(post);
+        if (max != null && Number(post.filled_count) >= max) fail(409, "Every opening on this posting is filled — add openings before reopening");
         const today = isoDate(deps.now?.() ?? new Date());
-        if (post.work_type === "recurring" && post.estimated_end_date && String(isoDateOf(post.estimated_end_date)) < today) {
+        if (post.opportunity_type === "recurring_work" && post.end_date && String(isoDateOf(post.end_date)) < today) {
           fail(409, "This posting's end date has passed — extend it before reopening");
+        }
+        const indicators = employmentIndicators(post);
+        if (hasUnacknowledgedIndicators(indicators, post.classification_indicators)) {
+          if (opts.acknowledgeClassification !== true) {
+            fail(409, "This contractor work resembles employment (" + indicators.join(", ") + "). Confirm the classification to publish.");
+          }
+          ackIndicators = indicators;
         }
       }
       const reason = opts.reason ? String(opts.reason).slice(0, 500) : null;
       const upd = await c.query(
-        `UPDATE contractor_job_posts SET status = $2,
+        `UPDATE job_posts SET status = $2,
             published_at = CASE WHEN $2 = 'published' AND published_at IS NULL THEN now() ELSE published_at END,
             closed_at    = CASE WHEN $2 = 'closed' THEN now() WHEN $2 = 'published' THEN NULL ELSE closed_at END,
             close_reason = CASE WHEN $2 = 'closed' THEN COALESCE($3, 'closed_by_admin') WHEN $2 = 'published' THEN NULL ELSE close_reason END,
             archived_at  = CASE WHEN $2 = 'archived' THEN now() ELSE archived_at END,
+            classification_indicators = CASE WHEN $4::jsonb IS NOT NULL THEN $4::jsonb ELSE classification_indicators END,
+            classification_acknowledged_by_user_id = CASE WHEN $4::jsonb IS NOT NULL THEN $5 ELSE classification_acknowledged_by_user_id END,
+            classification_acknowledged_at = CASE WHEN $4::jsonb IS NOT NULL THEN now() ELSE classification_acknowledged_at END,
             updated_at = now()
           WHERE id = $1 RETURNING *`,
-        [post.id, to, reason],
+        [post.id, to, reason, ackIndicators ? JSON.stringify(ackIndicators) : null, actor.userId],
       );
-      await event(c, { post, type: `post_${action === "reopen" ? "reopened" : to}`, oldStatus: post.status, newStatus: to, actorUserId: actor.userId, details: reason ? { reason } : null });
+      if (ackIndicators) {
+        await event(c, { post, type: "classification_indicators_acknowledged", oldStatus: post.status, newStatus: to, actorUserId: actor.userId,
+          details: { workerClassification: post.worker_classification, indicators: ackIndicators } });
+      }
+      await event(c, { post, type: `post_${action === "reopen" ? "reopened" : to}`, oldStatus: post.status, newStatus: to, actorUserId: actor.userId,
+        details: { workerClassification: post.worker_classification, ...(reason ? { reason } : {}) } });
       return { before: post, post: upd.rows[0] };
     });
     if (action === "publish" && !out.before.published_at) {
-      await notifyWorkers(deps.pool, await eligibleContractorIds(deps.pool, out.post), {
-        companyId: out.post.company_id, type: "job_published", title: `New job posted: ${out.post.title}`,
-        body: "A new job is open for bids in Contractor Hub.", entityType: "job_post", entityId: out.post.id,
+      await notifyWorkers(deps.pool, await eligibleWorkerIds(deps.pool, out.post), {
+        companyId: out.post.company_id, type: "job_published", title: `New ${out.post.worker_classification === "employee" ? "position" : "job"} posted: ${out.post.title}`,
+        body: out.post.worker_classification === "employee" ? "A new employee position is open for applications." : "New contractor work is open for proposals.",
+        entityType: "job_post", entityId: out.post.id,
       });
     }
     if (out.post.status === "closed") {
-      await notifyWorkers(deps.pool, await activeBidderIds(deps.pool, out.post.id), {
+      await notifyWorkers(deps.pool, await activeCandidateWorkerIds(deps.pool, out.post), {
         companyId: out.post.company_id, type: "job_closed", title: `Job posting closed: ${out.post.title}`,
-        body: "This posting is no longer accepting bids.", entityType: "job_post", entityId: out.post.id,
+        body: "This posting is no longer accepting submissions.", entityType: "job_post", entityId: out.post.id,
       });
     }
     return { body: projectPostForAdmin(out.post) };
@@ -442,58 +581,93 @@ function isoDateOf(v: unknown): string {
   return dateOnlyString(v) ?? "";
 }
 
+/** Full audit trail for a posting: posting events + bid events + application status events (admin only). */
 export function listPostEvents(deps: JobBoardDeps, actor: JobBoardActor, id: string) {
   return run(async () => {
     const post = await loadPost(deps, deps.pool, id);
     await requireManage(actor, post.company_id, NOT_FOUND_POST);
     const r = await deps.pool.query(
-      `SELECT id, bid_id, event_type, old_status, new_status, actor_user_id, actor_worker_id, details, created_at
-         FROM contractor_job_bid_events WHERE job_post_id = $1 AND company_id = $2 ORDER BY created_at, id`,
+      `SELECT id, NULL::varchar AS bid_id, NULL::varchar AS application_id, event_type, old_status, new_status, actor_user_id, actor_worker_id, details, created_at
+         FROM job_post_events WHERE job_post_id = $1 AND company_id = $2
+       UNION ALL
+       SELECT id, bid_id, NULL, event_type, old_status, new_status, actor_user_id, actor_worker_id, details, created_at
+         FROM contractor_job_bid_events WHERE job_post_id = $1 AND company_id = $2
+       UNION ALL
+       SELECT id, NULL, application_id, event_type, old_status, new_status, actor_user_id, NULL, details, created_at
+         FROM employment_application_events WHERE job_post_id = $1 AND company_id = $2
+       ORDER BY created_at, id`,
       [post.id, post.company_id]);
     return {
       body: r.rows.map((e: any) => ({
-        id: e.id, bidId: e.bid_id, eventType: e.event_type, oldStatus: e.old_status, newStatus: e.new_status,
+        id: e.id, bidId: e.bid_id, applicationId: e.application_id, eventType: e.event_type, oldStatus: e.old_status, newStatus: e.new_status,
         actorUserId: e.actor_user_id, actorWorkerId: e.actor_worker_id, details: e.details, createdAt: e.created_at,
       })),
     };
   });
 }
 
-// ── Contractor discovery + bids ─────────────────────────────────────────────
-export function listAvailablePosts(deps: JobBoardDeps, actor: JobBoardActor) {
+// ── Worker discovery (both paths) ───────────────────────────────────────────
+export interface AvailableFilters {
+  opportunityType?: string; scheduleType?: string; classification?: string; workLocationType?: string; compensationType?: string;
+}
+
+/**
+ * Published postings this worker may see: contractor work (contractors only)
+ * and employee positions (any active worker of the company). Never includes
+ * any other candidate's data.
+ */
+export function listAvailablePosts(deps: JobBoardDeps, actor: JobBoardActor, filters: AvailableFilters = {}) {
   return run(async () => {
-    const who = requireContractor(actor);
+    const who = requireWorker(actor);
     const g = await deps.tenantGate(who.companyId!).catch(() => ({ allowed: false }));
     if (!g.allowed) return { body: [] };
+    const f = (v: unknown) => (typeof v === "string" && v && v !== "all" ? v.slice(0, 40) : null);
     const r = await deps.pool.query(
-      `SELECT p.*, c.name AS company_name, b.id AS my_bid_id, b.status AS my_bid_status,
+      `SELECT p.*, c.name AS company_name,
+              b.id AS my_bid_id, b.status AS my_bid_status,
+              a.id AS my_application_id, a.status AS my_application_status,
               EXISTS (SELECT 1 FROM contractor_job_invitations i WHERE i.job_post_id = p.id AND i.contractor_id = $2 AND i.status = 'invited') AS invited
-         FROM contractor_job_posts p
+         FROM job_posts p
          JOIN companies c ON c.id = p.company_id
          LEFT JOIN contractor_job_bids b ON b.job_post_id = p.id AND b.contractor_id = $2 AND b.status <> 'withdrawn'
+         LEFT JOIN employment_applications a ON a.job_post_id = p.id AND a.applicant_user_id = $3 AND a.status <> 'withdrawn'
         WHERE p.company_id = $1 AND p.status = 'published'
-        ORDER BY p.submission_deadline NULLS LAST, p.published_at DESC LIMIT 500`,
-      [who.companyId, who.workerId],
+          AND ($4::text IS NULL OR p.opportunity_type = $4)
+          AND ($5::text IS NULL OR p.schedule_type = $5)
+          AND ($6::text IS NULL OR p.worker_classification = $6)
+          AND ($7::text IS NULL OR p.work_location_type = $7)
+          AND ($8::text IS NULL OR p.compensation_type = $8)
+        ORDER BY p.application_deadline NULLS LAST, p.published_at DESC LIMIT 500`,
+      [who.companyId, who.workerId, actor.userId, f(filters.opportunityType), f(filters.scheduleType), f(filters.classification),
+        f(filters.workLocationType), f(filters.compensationType)],
     );
     const now = deps.now?.() ?? new Date();
     const rows = [];
     for (const p of r.rows) {
       if (p.tenant_id && (await deps.tenantIdForCompany(p.company_id)) !== p.tenant_id) continue;
-      if (!contractorEligibleForPost(p, who, p.invited)) continue;
+      if (!workerEligibleForPost(p, who, p.invited)) continue;
       const open = submissionsOpen(p, now).ok;
-      if (!open && !p.my_bid_id) continue;
-      rows.push({ ...projectPostForContractor(p), acceptingBids: open, myBidId: p.my_bid_id, myBidStatus: p.my_bid_status, invited: p.invited });
+      const mineId = p.worker_classification === "employee" ? p.my_application_id : p.my_bid_id;
+      if (!open && !mineId) continue;
+      rows.push({
+        ...projectPostForWorker(p), acceptingSubmissions: open, invited: p.worker_classification === "contractor" ? p.invited : false,
+        myBidId: p.worker_classification === "contractor" ? p.my_bid_id : null,
+        myBidStatus: p.worker_classification === "contractor" ? p.my_bid_status : null,
+        myApplicationId: p.worker_classification === "employee" ? p.my_application_id : null,
+        myApplicationStatus: p.worker_classification === "employee" ? p.my_application_status : null,
+      });
     }
     return { body: rows };
   });
 }
 
+// ── Contractor proposals (bids) ─────────────────────────────────────────────
 export function listMyBids(deps: JobBoardDeps, actor: JobBoardActor) {
   return run(async () => {
     const who = requireContractor(actor);
     const r = await deps.pool.query(
       `SELECT b.*, p.title AS job_title, p.status AS job_status
-         FROM contractor_job_bids b JOIN contractor_job_posts p ON p.id = b.job_post_id AND p.company_id = b.company_id
+         FROM contractor_job_bids b JOIN job_posts p ON p.id = b.job_post_id AND p.company_id = b.company_id
         WHERE b.contractor_id = $1 AND b.company_id = $2
         ORDER BY b.updated_at DESC NULLS LAST LIMIT 500`,
       [who.workerId, who.companyId],
@@ -502,10 +676,11 @@ export function listMyBids(deps: JobBoardDeps, actor: JobBoardActor) {
   });
 }
 
-async function assertContractorMayBid(deps: JobBoardDeps, c: PoolClient, post: any, who: ContractorIdentity) {
+async function assertContractorMayBid(deps: JobBoardDeps, c: PoolClient, post: any, who: WorkerIdentity) {
   if (who.companyId !== post.company_id) fail(404, NOT_FOUND_POST);
+  requireContractorPost(post);
   const invited = await isInvited(c, post.id, who.workerId);
-  if (!contractorEligibleForPost({ ...post, status: "published" }, who, invited)) fail(404, NOT_FOUND_POST);
+  if (!workerEligibleForPost({ ...post, status: "published" }, who, invited)) fail(404, NOT_FOUND_POST);
   const open = submissionsOpen(post, deps.now?.());
   if (!open.ok) fail(open.status, open.message);
   await requireGate(deps, post.company_id);
@@ -611,7 +786,7 @@ export function submitBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: strin
     });
     await notifyCompanyAdmins(deps.pool, {
       companyId: out.post.company_id, type: out.resubmitted ? "job_bid_revised" : "job_bid_submitted",
-      title: `${out.resubmitted ? "Revised bid" : "New bid"}: ${out.post.title}`, body: "A contractor submitted a bid for review.",
+      title: `${out.resubmitted ? "Revised bid" : "New bid"}: ${out.post.title}`, body: "A contractor submitted a proposal for review.",
       entityType: "job_post", entityId: out.post.id,
     });
     return { body: projectBidForContractor(out.bid) };
@@ -647,8 +822,8 @@ export function listBidVersions(deps: JobBoardDeps, actor: JobBoardActor, bidId:
   return run(async () => {
     const bid = await loadBid(deps, deps.pool, bidId);
     if (!((await canManage(actor, bid.company_id)) && bidVisibleToAdmin(bid))) {
-      if (!actor.contractor) fail(404, NOT_FOUND_BID);
-      requireOwnBid(bid, actor.contractor!);
+      if (!actor.worker) fail(404, NOT_FOUND_BID);
+      requireOwnBid(bid, actor.worker!);
     }
     const r = await deps.pool.query(
       `SELECT revision_number, snapshot, created_at FROM contractor_job_bid_versions WHERE bid_id = $1 AND company_id = $2 ORDER BY revision_number`,
@@ -664,7 +839,7 @@ export function listBidsForPost(deps: JobBoardDeps, actor: JobBoardActor, postId
     await requireManage(actor, post.company_id, NOT_FOUND_POST);
     const r = await deps.pool.query(
       `SELECT b.*, TRIM(COALESCE(w.first_name,'') || ' ' || COALESCE(w.last_name,'')) AS contractor_name,
-              (SELECT count(*)::int FROM contractor_job_attachments a WHERE a.bid_id = b.id AND a.removed_at IS NULL) AS attachment_count
+              (SELECT count(*)::int FROM job_post_attachments a WHERE a.bid_id = b.id AND a.removed_at IS NULL) AS attachment_count
          FROM contractor_job_bids b JOIN workers w ON w.id = b.contractor_id
         WHERE b.job_post_id = $1 AND b.company_id = $2 AND b.revision_number > 0
         ORDER BY b.submitted_at NULLS LAST, b.created_at`,
@@ -733,6 +908,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
       const bid = await loadBid(deps, c, bidId, "FOR UPDATE");
       if (bid.company_id !== post.company_id || bid.job_post_id !== post.id) fail(404, NOT_FOUND_BID);
       if ((bid.tenant_id ?? null) !== (post.tenant_id ?? null)) fail(404, NOT_FOUND_BID);
+      requireContractorPost(post);
 
       // Replay of this exact award.
       if (bid.award_idempotency_key === key) {
@@ -743,7 +919,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
 
       const d = decideBidTransition(bid.status, "award");
       if (!d.ok) fail(d.status, d.message);
-      const cap = decideAward(post);
+      const cap = decideFill(post);
       if (!cap.ok) fail(cap.status, cap.message);
       await requireGate(deps, post.company_id);
 
@@ -759,7 +935,9 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
       const scheduleNotes = [
         bid.estimated_start_date ? `Estimated start: ${isoDateOf(bid.estimated_start_date)}` : null,
         bid.estimated_completion_date ? `Estimated completion: ${isoDateOf(bid.estimated_completion_date)}` : null,
-        post.work_type === "recurring" ? `Recurring (${post.recurrence_frequency ?? "custom"})${bid.recurrence_terms ? ": " + bid.recurrence_terms : ""}` : null,
+        post.opportunity_type === "recurring_work" ? `Recurring (${post.recurrence_frequency ?? "custom"})${bid.recurrence_terms ? ": " + bid.recurrence_terms : ""}` : null,
+        bid.proposed_schedule ? `Proposed schedule: ${bid.proposed_schedule}` : null,
+        bid.availability ? `Availability: ${bid.availability}` : null,
       ].filter(Boolean).join("\n") || null;
       const prop = await c.query(
         `INSERT INTO contractor_proposals (
@@ -769,7 +947,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14,$15,'draft',$16,$17,$18)
          RETURNING id, proposal_number`,
         [post.company_id, bid.contractor_id, proposalNumber, post.title, post.summary,
-          bid.proposed_scope || post.scope_of_work, bid.assumptions, bid.exclusions, scheduleNotes,
+          bid.scope_and_deliverables || post.scope_of_work, bid.assumptions, bid.exclusions, scheduleNotes,
           isoDate(deps.now?.() ?? new Date()), amount, post.currency || "USD", post.payment_terms, post.cost_job_id,
           bid.estimated_hours, `Generated from job board award (posting ${post.id}, bid revision ${bid.revision_number}).`,
           post.id, bid.id],
@@ -787,7 +965,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
         [bid.id, actor.userId, key, proposalId]);
       const close = (cap as any).closeAfter as boolean;
       const updPost = await c.query(
-        `UPDATE contractor_job_posts SET awards_made = awards_made + 1,
+        `UPDATE job_posts SET filled_count = filled_count + 1,
             status = CASE WHEN $2 THEN 'closed' ELSE status END,
             closed_at = CASE WHEN $2 THEN now() ELSE closed_at END,
             close_reason = CASE WHEN $2 THEN 'award_capacity_reached' ELSE close_reason END,
@@ -795,7 +973,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
           WHERE id = $1 RETURNING *`,
         [post.id, close]);
 
-      await event(c, { post, bidId: bid.id, type: "bid_awarded", oldStatus: bid.status, newStatus: "awarded", actorUserId: actor.userId, details: { awardsMade: updPost.rows[0].awards_made } });
+      await event(c, { post, bidId: bid.id, type: "bid_awarded", oldStatus: bid.status, newStatus: "awarded", actorUserId: actor.userId, details: { filledCount: updPost.rows[0].filled_count, workerClassification: post.worker_classification } });
       await event(c, { post, bidId: bid.id, type: "bid_converted_to_proposal", oldStatus: "awarded", newStatus: "converted_to_proposal", actorUserId: actor.userId, details: { proposalId, proposalNumber: prop.rows[0].proposal_number } });
       if (close) await event(c, { post, type: "post_closed", oldStatus: post.status, newStatus: "closed", actorUserId: actor.userId, details: { reason: "award_capacity_reached" } });
       return { replayed: false, post: updPost.rows[0], bid: updBid.rows[0], closed: close };
@@ -805,7 +983,7 @@ export function awardBid(deps: JobBoardDeps, actor: JobBoardActor, bidId: string
       await notifyWorkers(deps.pool, [out.bid.contractor_id], {
         companyId: out.post.company_id, type: "job_bid_awarded", title: `You were awarded: ${out.post.title}`,
         body: "Review the generated proposal in Contractor Hub to continue.", entityType: "contractor_proposal",
-        entityId: out.bid.converted_proposal_id, actionUrl: "/contractor-hub?section=proposals",
+        entityId: out.bid.converted_proposal_id, actionUrl: "/app/contractor-hub?section=proposals",
       });
       if (out.closed) {
         const others = (await activeBidderIds(deps.pool, out.post.id)).filter((id) => id !== out.bid.contractor_id);
@@ -831,6 +1009,7 @@ export function inviteContractors(deps: JobBoardDeps, actor: JobBoardActor, post
     const out = await tx(deps.pool, async (c) => {
       const post = await loadPost(deps, c, postId, "FOR UPDATE");
       await requireManage(actor, post.company_id, NOT_FOUND_POST);
+      requireContractorPost(post);
       if (!["draft", "published", "paused"].includes(post.status)) fail(409, `Cannot invite contractors to a ${post.status} posting`);
       await requireGate(deps, post.company_id);
       const w = await c.query(`SELECT id FROM workers WHERE id = ANY($1::varchar[]) AND company_id = $2 AND worker_type = 'contractor'`, [ids, post.company_id]);
@@ -900,7 +1079,8 @@ export function askQuestion(deps: JobBoardDeps, actor: JobBoardActor, postId: st
     if (!text || text.length > 4000) fail(400, "Enter a question (up to 4,000 characters)");
     const out = await tx(deps.pool, async (c) => {
       const post = await loadPost(deps, c, postId, "FOR SHARE");
-      const vis = await contractorCanSeePost(c, post, who);
+      requireContractorPost(post);
+      const vis = await workerCanSeePost(c, post, who, actor.userId);
       if (!vis.eligible && !vis.hasBid) fail(404, NOT_FOUND_POST);
       if (!["published", "paused"].includes(post.status)) fail(409, `Questions are closed for a ${post.status} posting`);
       await requireGate(deps, post.company_id);
@@ -936,9 +1116,9 @@ export function listQuestions(deps: JobBoardDeps, actor: JobBoardActor, postId: 
           WHERE q.job_post_id = $1 AND q.company_id = $2 ORDER BY q.created_at`, [post.id, post.company_id]);
       return { body: r.rows.map((q: any) => projectQuestion(q, true)) };
     }
-    const who = actor.contractor;
+    const who = actor.worker;
     if (!who) fail(404, NOT_FOUND_POST);
-    const vis = await contractorCanSeePost(deps.pool, post, who!);
+    const vis = await workerCanSeePost(deps.pool, post, who!, actor.userId);
     if (!vis.eligible && !vis.hasBid) fail(404, NOT_FOUND_POST);
     const r = await deps.pool.query(
       `SELECT * FROM contractor_job_questions
@@ -1023,7 +1203,7 @@ export function addPostAttachment(deps: JobBoardDeps, actor: JobBoardActor, post
     const key = await writePrivateFile(post.company_id, file!.originalname, file!.buffer);
     return tx(deps.pool, async (c) => {
       const ins = await c.query(
-        `INSERT INTO contractor_job_attachments (tenant_id, company_id, job_post_id, bid_id, storage_key, file_name, content_type, file_size, uploaded_by_user_id)
+        `INSERT INTO job_post_attachments (tenant_id, company_id, job_post_id, bid_id, storage_key, file_name, content_type, file_size, uploaded_by_user_id)
          VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8) RETURNING *`,
         [post.tenant_id, post.company_id, post.id, key, safeName(file!.originalname), file!.mimetype ?? null, file!.size, actor.userId]);
       await event(c, { post, type: "post_attachment_added", actorUserId: actor.userId, details: { attachmentId: ins.rows[0].id, fileName: ins.rows[0].file_name } });
@@ -1040,11 +1220,12 @@ export function addBidAttachment(deps: JobBoardDeps, actor: JobBoardActor, bidId
     requireOwnBid(bid, who);
     if (!bidIsContractorEditable(bid.status)) fail(409, `Cannot attach files to a ${bid.status.replace(/_/g, " ")} bid`);
     const post = await loadPost(deps, deps.pool, bid.job_post_id);
+    requireContractorPost(post);
     await requireGate(deps, post.company_id);
     const key = await writePrivateFile(bid.company_id, file!.originalname, file!.buffer);
     return tx(deps.pool, async (c) => {
       const ins = await c.query(
-        `INSERT INTO contractor_job_attachments (tenant_id, company_id, job_post_id, bid_id, storage_key, file_name, content_type, file_size, uploaded_by_user_id, uploaded_by_worker_id)
+        `INSERT INTO job_post_attachments (tenant_id, company_id, job_post_id, bid_id, storage_key, file_name, content_type, file_size, uploaded_by_user_id, uploaded_by_worker_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [bid.tenant_id, bid.company_id, bid.job_post_id, bid.id, key, safeName(file!.originalname), file!.mimetype ?? null, file!.size, actor.userId, who.workerId]);
       await event(c, { post, bidId: bid.id, type: "bid_attachment_added", actorUserId: actor.userId, actorWorkerId: who.workerId, details: { attachmentId: ins.rows[0].id } });
@@ -1057,10 +1238,10 @@ export function listBidAttachments(deps: JobBoardDeps, actor: JobBoardActor, bid
   return run(async () => {
     const bid = await loadBid(deps, deps.pool, bidId);
     if (!((await canManage(actor, bid.company_id)) && bidVisibleToAdmin(bid))) {
-      if (!actor.contractor) fail(404, NOT_FOUND_BID);
-      requireOwnBid(bid, actor.contractor!);
+      if (!actor.worker) fail(404, NOT_FOUND_BID);
+      requireOwnBid(bid, actor.worker!);
     }
-    const r = await deps.pool.query(`SELECT * FROM contractor_job_attachments WHERE bid_id = $1 AND company_id = $2 AND removed_at IS NULL ORDER BY created_at`, [bid.id, bid.company_id]);
+    const r = await deps.pool.query(`SELECT * FROM job_post_attachments WHERE bid_id = $1 AND company_id = $2 AND removed_at IS NULL ORDER BY created_at`, [bid.id, bid.company_id]);
     return { body: r.rows.map(projectAttachment) };
   });
 }
@@ -1069,7 +1250,7 @@ export function listBidAttachments(deps: JobBoardDeps, actor: JobBoardActor, bid
 export function authorizeAttachmentDownload(deps: JobBoardDeps, actor: JobBoardActor, attachmentId: string) {
   return run(async () => {
     if (!UUID_RE.test(String(attachmentId))) fail(404, "Attachment not found");
-    const r = await deps.pool.query(`SELECT * FROM contractor_job_attachments WHERE id = $1 AND removed_at IS NULL`, [attachmentId]);
+    const r = await deps.pool.query(`SELECT * FROM job_post_attachments WHERE id = $1 AND removed_at IS NULL`, [attachmentId]);
     const a = r.rows[0];
     if (!a) fail(404, "Attachment not found");
     await assertTenantConsistent(deps, a);
@@ -1077,13 +1258,13 @@ export function authorizeAttachmentDownload(deps: JobBoardDeps, actor: JobBoardA
     if (a.bid_id) {
       const bid = await loadBid(deps, deps.pool, a.bid_id);
       if (!(admin && bidVisibleToAdmin(bid))) {
-        if (!actor.contractor) fail(404, "Attachment not found");
-        if (bid.contractor_id !== actor.contractor!.workerId || bid.company_id !== actor.contractor!.companyId) fail(404, "Attachment not found");
+        if (!actor.worker) fail(404, "Attachment not found");
+        if (bid.contractor_id !== actor.worker!.workerId || bid.company_id !== actor.worker!.companyId) fail(404, "Attachment not found");
       }
     } else if (!admin) {
       const post = await loadPost(deps, deps.pool, a.job_post_id);
-      if (!actor.contractor) fail(404, "Attachment not found");
-      const vis = await contractorCanSeePost(deps.pool, post, actor.contractor!);
+      if (!actor.worker) fail(404, "Attachment not found");
+      const vis = await workerCanSeePost(deps.pool, post, actor.worker!, actor.userId);
       if (!vis.eligible && !vis.hasBid) fail(404, "Attachment not found");
     }
     const abs = resolveStorageKey(a.storage_key);
@@ -1096,21 +1277,21 @@ export function removeAttachment(deps: JobBoardDeps, actor: JobBoardActor, attac
   return run(async () => {
     if (!UUID_RE.test(String(attachmentId))) fail(404, "Attachment not found");
     return tx(deps.pool, async (c) => {
-      const r = await c.query(`SELECT * FROM contractor_job_attachments WHERE id = $1 AND removed_at IS NULL FOR UPDATE`, [attachmentId]);
+      const r = await c.query(`SELECT * FROM job_post_attachments WHERE id = $1 AND removed_at IS NULL FOR UPDATE`, [attachmentId]);
       const a = r.rows[0];
       if (!a) fail(404, "Attachment not found");
       const post = await loadPost(deps, c, a.job_post_id);
       if (a.bid_id) {
         const bid = await loadBid(deps, c, a.bid_id);
-        if (!actor.contractor) fail(404, "Attachment not found");
-        requireOwnBid(bid, actor.contractor!);
+        if (!actor.worker) fail(404, "Attachment not found");
+        requireOwnBid(bid, actor.worker!);
         if (!bidIsContractorEditable(bid.status)) fail(409, "This bid can no longer be changed");
       } else {
         await requireManage(actor, a.company_id, "Attachment not found");
       }
       // Soft removal only — the file and row are retained for audit.
-      await c.query(`UPDATE contractor_job_attachments SET removed_at = now(), removed_by_user_id = $2 WHERE id = $1`, [a.id, actor.userId]);
-      await event(c, { post, bidId: a.bid_id, type: "attachment_removed", actorUserId: actor.userId, actorWorkerId: actor.contractor?.workerId ?? null, details: { attachmentId: a.id } });
+      await c.query(`UPDATE job_post_attachments SET removed_at = now(), removed_by_user_id = $2 WHERE id = $1`, [a.id, actor.userId]);
+      await event(c, { post, bidId: a.bid_id, type: "attachment_removed", actorUserId: actor.userId, actorWorkerId: actor.worker?.workerId ?? null, details: { attachmentId: a.id } });
       return { body: { id: a.id, removed: true } };
     });
   });
@@ -1122,28 +1303,40 @@ export function adminSummary(deps: JobBoardDeps, actor: JobBoardActor, companyId
     await requireManage(actor, companyId, "Company not found");
     const r = await deps.pool.query(
       `SELECT
-         (SELECT count(*)::int FROM contractor_job_posts WHERE company_id = $1 AND status = 'published') AS published,
+         (SELECT count(*)::int FROM job_posts WHERE company_id = $1 AND status = 'published') AS published,
          (SELECT count(*)::int FROM contractor_job_bids WHERE company_id = $1 AND status IN ('submitted','under_review')) AS awaiting_review,
-         (SELECT count(*)::int FROM contractor_job_posts WHERE company_id = $1 AND status = 'published'
-             AND submission_deadline BETWEEN now() AND now() + interval '3 days') AS closing_soon,
+         (SELECT count(*)::int FROM employment_applications WHERE company_id = $1 AND status IN ('submitted','under_review')) AS applications_awaiting_review,
+         (SELECT count(*)::int FROM employment_applications WHERE company_id = $1 AND hired_at >= date_trunc('month', now())) AS hires_this_month,
+         (SELECT count(*)::int FROM job_posts WHERE company_id = $1 AND status = 'published'
+             AND application_deadline BETWEEN now() AND now() + interval '3 days') AS closing_soon,
          (SELECT count(*)::int FROM contractor_job_bids WHERE company_id = $1 AND awarded_at >= date_trunc('month', now())) AS awards_this_month`,
       [companyId]);
     const s = r.rows[0];
-    return { body: { publishedJobs: s.published, bidsAwaitingReview: s.awaiting_review, closingSoon: s.closing_soon, awardsThisMonth: s.awards_this_month } };
+    return { body: {
+      publishedJobs: s.published, proposalsAwaitingReview: s.awaiting_review, applicationsAwaitingReview: s.applications_awaiting_review,
+      closingSoon: s.closing_soon, awardsThisMonth: s.awards_this_month, hiresThisMonth: s.hires_this_month,
+    } };
   });
 }
 
-export function contractorSummary(deps: JobBoardDeps, actor: JobBoardActor) {
+export function workerSummary(deps: JobBoardDeps, actor: JobBoardActor) {
   return run(async () => {
-    const who = requireContractor(actor);
+    const who = requireWorker(actor);
     const available = await listAvailablePosts(deps, actor);
     const r = await deps.pool.query(
       `SELECT count(*) FILTER (WHERE status IN ('draft','submitted','under_review','shortlisted','revision_requested'))::int AS active,
               count(*) FILTER (WHERE status = 'revision_requested')::int AS revision_requested,
               count(*) FILTER (WHERE status IN ('awarded','converted_to_proposal','converted_to_contract'))::int AS awarded
          FROM contractor_job_bids WHERE contractor_id = $1 AND company_id = $2`, [who.workerId, who.companyId]);
-    const openJobs = available.ok ? (available.body as any[]).filter((p) => p.acceptingBids && !p.myBidId).length : 0;
-    return { body: { availableJobs: openJobs, activeBids: r.rows[0].active, revisionRequested: r.rows[0].revision_requested, awardedBids: r.rows[0].awarded } };
+    const a = await deps.pool.query(
+      `SELECT count(*) FILTER (WHERE status IN ('draft','submitted','under_review','interviewing','offer_extended'))::int AS active
+         FROM employment_applications WHERE applicant_user_id = $1 AND company_id = $2`, [actor.userId, who.companyId]);
+    const rows = available.ok ? (available.body as any[]) : [];
+    return { body: {
+      availableJobs: rows.filter((p) => p.acceptingSubmissions && !p.myBidId && !p.myApplicationId).length,
+      activeProposals: r.rows[0].active, revisionRequested: r.rows[0].revision_requested, awardedProposals: r.rows[0].awarded,
+      activeApplications: a.rows[0].active,
+    } };
   });
 }
 
@@ -1155,20 +1348,20 @@ export async function runJobBoardMaintenance(pool: Pool, now: Date = new Date())
 
   // 1. Fixed-term recurring postings whose end date has passed → closed.
   const toClose = await pool.query(
-    `SELECT id FROM contractor_job_posts WHERE status IN ('published','paused') AND work_type = 'recurring'
-        AND estimated_end_date IS NOT NULL AND estimated_end_date < $1::date LIMIT 500`, [today]);
+    `SELECT id FROM job_posts WHERE status IN ('published','paused') AND opportunity_type = 'recurring_work'
+        AND end_date IS NOT NULL AND end_date < $1::date LIMIT 500`, [today]);
   for (const { id } of toClose.rows) {
     const closed = await tx(pool, async (c) => {
-      const r = await c.query(`SELECT * FROM contractor_job_posts WHERE id = $1 FOR UPDATE SKIP LOCKED`, [id]);
+      const r = await c.query(`SELECT * FROM job_posts WHERE id = $1 FOR UPDATE SKIP LOCKED`, [id]);
       const post = r.rows[0];
       if (!post || post.status === "closed" || post.status === "archived") return null; // raced / already handled
-      await c.query(`UPDATE contractor_job_posts SET status = 'closed', closed_at = now(), close_reason = 'end_date_passed', updated_at = now() WHERE id = $1`, [post.id]);
+      await c.query(`UPDATE job_posts SET status = 'closed', closed_at = now(), close_reason = 'end_date_passed', updated_at = now() WHERE id = $1`, [post.id]);
       await event(c, { post, type: "post_closed", oldStatus: post.status, newStatus: "closed", details: { reason: "end_date_passed", automatic: true } });
       return post;
     });
     if (closed) {
       expired++;
-      await notifyWorkers(pool, await activeBidderIds(pool, closed.id), {
+      await notifyWorkers(pool, await activeCandidateWorkerIds(pool, closed), {
         companyId: closed.company_id, type: "job_closed", title: `Job posting closed: ${closed.title}`,
         body: "This posting reached its end date.", entityType: "job_post", entityId: closed.id,
       });
@@ -1197,8 +1390,8 @@ export async function runJobBoardMaintenance(pool: Pool, now: Date = new Date())
   // 3. Deadline within 24h → remind contractors with an unsubmitted bid (once per bid).
   const due = await pool.query(
     `SELECT b.id AS bid_id, b.contractor_id, b.tenant_id, b.company_id, p.id AS post_id, p.title
-       FROM contractor_job_bids b JOIN contractor_job_posts p ON p.id = b.job_post_id AND p.company_id = b.company_id
-      WHERE p.status = 'published' AND p.submission_deadline BETWEEN $1::timestamp AND $1::timestamp + interval '24 hours'
+       FROM contractor_job_bids b JOIN job_posts p ON p.id = b.job_post_id AND p.company_id = b.company_id
+      WHERE p.status = 'published' AND p.application_deadline BETWEEN $1::timestamp AND $1::timestamp + interval '24 hours'
         AND b.status IN ('draft','revision_requested')
         AND NOT EXISTS (SELECT 1 FROM contractor_job_bid_events e WHERE e.bid_id = b.id AND e.event_type = 'deadline_reminder_sent')
       LIMIT 500`, [now.toISOString()]);

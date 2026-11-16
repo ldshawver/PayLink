@@ -19,7 +19,7 @@ import {
 } from "./demo-cleanup";
 import { purgeExpiredDemoCompanyInTransaction } from "./demo-tenant-purge";
 import { mapSubscriptionStatusToTenantStatus } from "../tenant-context";
-import { runJobBoardMaintenance } from "../contractor-jobs/service";
+import { runJobBoardMaintenance } from "../job-board/service";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
 const HOUR_MS  = 60 * 60 * 1000;
