@@ -33,6 +33,7 @@ import {
   submissionCta, submissionsOpen, validateBidForSubmit, validatePostShape, workerEligibleForPost,
   type BidAction, type PostAction, type PostField, type WorkerIdentity,
 } from "./rules";
+import { APPLICANT_VISIBLE_SQL, applicantCanSeePost, type ApplicantIdentity } from "./applicant-visibility";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 type Q = Pool | PoolClient;
@@ -43,6 +44,12 @@ export interface JobBoardActor {
   canManageCompany(companyId: string): Promise<boolean>;
   /** The caller's worker identity (users.worker_id → workers), any worker type, or null. */
   worker: WorkerIdentity | null;
+  /**
+   * Limited applicant identity (users.role = 'applicant', migration 0030), or
+   * null. An applicant is never a worker: it can browse employee postings made
+   * available to it and manage only its own applications.
+   */
+  applicant?: ApplicantIdentity | null;
 }
 
 export interface JobBoardDeps {
@@ -379,6 +386,21 @@ export function getPost(deps: JobBoardDeps, actor: JobBoardActor, id: string) {
     if (await canManage(actor, post.company_id)) {
       return { body: { ...projectPostForAdmin(post), attachments: att, screeningQuestions: screening, viewer: "admin" } };
     }
+    if (!actor.worker && actor.applicant) {
+      const mine = await deps.pool.query(
+        `SELECT * FROM employment_applications WHERE job_post_id = $1 AND applicant_user_id = $2 ORDER BY (status = 'withdrawn'), updated_at DESC LIMIT 1`,
+        [post.id, actor.userId]);
+      const visible = await applicantCanSeePost(deps.pool, post, actor.applicant);
+      if (!visible && !mine.rows[0]) fail(404, NOT_FOUND_POST);
+      const g = await deps.tenantGate(post.company_id).catch(() => ({ allowed: false }));
+      if (!g.allowed && !mine.rows[0]) fail(404, NOT_FOUND_POST);
+      const company = await deps.pool.query(`SELECT name FROM companies WHERE id = $1`, [post.company_id]);
+      return { body: {
+        ...projectPostForWorker({ ...post, company_name: company.rows[0]?.name }), attachments: att, screeningQuestions: screening,
+        acceptingSubmissions: visible && g.allowed && submissionsOpen(post, deps.now?.()).ok, viewer: "worker",
+        myApplication: mine.rows[0] ? projectApplicationForApplicant(mine.rows[0]) : null, myBid: null,
+      } };
+    }
     const who = actor.worker;
     if (!who) fail(404, NOT_FOUND_POST);
     const vis = await workerCanSeePost(deps.pool, post, who!, actor.userId);
@@ -618,6 +640,7 @@ export interface AvailableFilters {
  */
 export function listAvailablePosts(deps: JobBoardDeps, actor: JobBoardActor, filters: AvailableFilters = {}) {
   return run(async () => {
+    if (!actor.worker && actor.applicant) return { body: await listApplicantPosts(deps, actor, actor.applicant, filters) };
     const who = requireWorker(actor);
     const g = await deps.tenantGate(who.companyId!).catch(() => ({ allowed: false }));
     if (!g.allowed) return { body: [] };
@@ -659,6 +682,33 @@ export function listAvailablePosts(deps: JobBoardDeps, actor: JobBoardActor, fil
     }
     return { body: rows };
   });
+}
+
+/** Employee postings visible to an applicant identity (never contractor work). */
+async function listApplicantPosts(deps: JobBoardDeps, actor: JobBoardActor, a: ApplicantIdentity, filters: AvailableFilters) {
+  const g = await deps.tenantGate(a.companyId).catch(() => ({ allowed: false }));
+  if (!g.allowed) return [];
+  if (filters.classification && filters.classification !== "all" && filters.classification !== "employee") return [];
+  const f = (v: unknown) => (typeof v === "string" && v && v !== "all" ? v.slice(0, 40) : null);
+  const r = await deps.pool.query(
+    `SELECT p.*, c.name AS company_name, ap.id AS my_application_id, ap.status AS my_application_status
+       FROM job_posts p JOIN companies c ON c.id = p.company_id
+       LEFT JOIN employment_applications ap ON ap.job_post_id = p.id AND ap.applicant_user_id = $3 AND ap.status <> 'withdrawn'
+      WHERE ${APPLICANT_VISIBLE_SQL}
+        AND ($4::text IS NULL OR p.opportunity_type = $4) AND ($5::text IS NULL OR p.schedule_type = $5)
+        AND ($6::text IS NULL OR p.work_location_type = $6) AND ($7::text IS NULL OR p.compensation_type = $7)
+      ORDER BY p.application_deadline NULLS LAST, p.published_at DESC LIMIT 500`,
+    [a.companyId, a.applicantId, actor.userId, f(filters.opportunityType), f(filters.scheduleType), f(filters.workLocationType), f(filters.compensationType)]);
+  const now = deps.now?.() ?? new Date();
+  const rows = [];
+  for (const p of r.rows) {
+    if (p.tenant_id && p.tenant_id !== a.tenantId) continue;
+    const open = submissionsOpen(p, now).ok;
+    if (!open && !p.my_application_id) continue;
+    rows.push({ ...projectPostForWorker(p), acceptingSubmissions: open, invited: false, myBidId: null, myBidStatus: null,
+      myApplicationId: p.my_application_id, myApplicationStatus: p.my_application_status });
+  }
+  return rows;
 }
 
 // ── Contractor proposals (bids) ─────────────────────────────────────────────
@@ -1263,6 +1313,12 @@ export function authorizeAttachmentDownload(deps: JobBoardDeps, actor: JobBoardA
       }
     } else if (!admin) {
       const post = await loadPost(deps, deps.pool, a.job_post_id);
+      if (!actor.worker && actor.applicant) {
+        if (!(await applicantCanSeePost(deps.pool, post, actor.applicant))) fail(404, "Attachment not found");
+        const abs0 = resolveStorageKey(a.storage_key);
+        if (!fs.existsSync(abs0)) fail(404, "Attachment not found");
+        return { body: { absPath: abs0, fileName: a.file_name as string, contentType: (a.content_type as string) || "application/octet-stream" } };
+      }
       if (!actor.worker) fail(404, "Attachment not found");
       const vis = await workerCanSeePost(deps.pool, post, actor.worker!, actor.userId);
       if (!vis.eligible && !vis.hasBid) fail(404, "Attachment not found");
@@ -1321,6 +1377,14 @@ export function adminSummary(deps: JobBoardDeps, actor: JobBoardActor, companyId
 
 export function workerSummary(deps: JobBoardDeps, actor: JobBoardActor) {
   return run(async () => {
+    if (!actor.worker && actor.applicant) {
+      const rows = await listApplicantPosts(deps, actor, actor.applicant, {});
+      const a = await deps.pool.query(
+        `SELECT count(*) FILTER (WHERE status IN ('draft','submitted','under_review','interviewing','offer_extended'))::int AS active
+           FROM employment_applications WHERE applicant_user_id = $1 AND company_id = $2`, [actor.userId, actor.applicant.companyId]);
+      return { body: { availableJobs: rows.filter((p) => p.acceptingSubmissions && !p.myApplicationId).length,
+        activeProposals: 0, revisionRequested: 0, awardedProposals: 0, activeApplications: a.rows[0].active } };
+    }
     const who = requireWorker(actor);
     const available = await listAvailablePosts(deps, actor);
     const r = await deps.pool.query(

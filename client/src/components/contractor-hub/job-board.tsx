@@ -38,20 +38,20 @@ import {
   Briefcase, Plus, Search, Paperclip, Download, X, Loader2, Send, Pause, Play, Lock, Archive,
   Award, Star, RotateCcw, Ban, MessageCircle, UserPlus, History, Clock, AlertCircle, FileText, Edit,
   ChevronLeft, ChevronRight, Upload, Eye, CheckCircle, ShieldAlert, UserCheck, HardHat, BadgeCheck,
-  CalendarClock, ListChecks, Trash2,
+  CalendarClock, ListChecks, Trash2, Globe, KeyRound, Copy, Inbox,
 } from "lucide-react";
 import {
   ACTIVE_APPLICATION_STATUSES, ACTIVE_BID_STATUSES, APPLICANT_EDITABLE, APPLICANT_WITHDRAWABLE,
   APPLICATION_ACKNOWLEDGEMENTS, APPLICATION_STATUS_LABEL, AWARDED_STATUSES, BID_STATUS_LABEL, CLASSIFICATION_NOTICE,
   COMPENSATION_LABEL, CONTRACTOR_EDITABLE, CONTRACTOR_WITHDRAWABLE, EMPLOYMENT_INDICATOR_LABELS, EMPTY_FILTERS,
-  FREQUENCY_LABEL, LOCATION_LABEL, OPPORTUNITY_LABEL, POST_ACTIONS, POST_STATUS_LABEL, SCHEDULE_LABEL,
+  FREQUENCY_LABEL, LOCATION_LABEL, OPPORTUNITY_LABEL, POST_ACTIONS, POST_STATUS_LABEL, PUBLIC_VISIBILITY_LABEL, SCHEDULE_LABEL,
   applicationFormFrom, applicationPayload, applicationSubmitProblem, applyJobFilters, bidFormFrom, bidPayload,
   bidSubmitProblem, canDo, canDoApplication, classificationBadge, clientEmploymentIndicators, compensationLabel,
   compensationTypesFor, defaultOpportunity, formFromPost, hoursLabel, jobBoardViewsFor, money, opportunityChoicesFor,
   postBadges, postPayload, schedulesFor, unacknowledgedIndicators,
   type ApplicationDocument, type ApplicationForm, type ApplicationStatus, type BidForm, type BidStatus,
   type JobApplication, type JobAttachment, type JobBid, type JobBoardNavigate, type JobEvent, type JobFilters,
-  type JobInvitation, type JobPost, type JobQuestion, type PostForm, type PostStatus, type ScheduleType,
+  type JobInvitation, type JobPost, type JobQuestion, type PostForm, type PostStatus, type PublicVisibility, type ScheduleType,
   type ScreeningQuestion, type WorkerClassification,
 } from "@/lib/job-board";
 export { jobBoardViewsFor } from "@/lib/job-board";
@@ -509,6 +509,7 @@ function AdminJobBoard({ initialJobId, onNavigate }: { initialJobId?: string | n
   const [filters, setFilters] = useState<JobFilters>(EMPTY_FILTERS);
   const [openId, setOpenId] = useState<string | null>(initialJobId ?? null);
   const [editor, setEditor] = useState<{ post: JobPost | null } | null>(null);
+  const [publicBoardOpen, setPublicBoardOpen] = useState(false);
   useEffect(() => { if (initialJobId) setOpenId(initialJobId); }, [initialJobId]);
 
   // Every status in one request so tab counts are accurate; the server excludes
@@ -555,9 +556,14 @@ function AdminJobBoard({ initialJobId, onNavigate }: { initialJobId?: string | n
             </TabsList>
           </Tabs>
         </div>
-        <Button onClick={() => setEditor({ post: null })} disabled={needsCompany && !companyId} data-testid="btn-new-job">
-          <Plus className="h-4 w-4 mr-1" />Create Posting
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setPublicBoardOpen(true)} disabled={needsCompany && !companyId} data-testid="btn-public-board">
+            <Globe className="h-4 w-4 mr-1" />Public board
+          </Button>
+          <Button onClick={() => setEditor({ post: null })} disabled={needsCompany && !companyId} data-testid="btn-new-job">
+            <Plus className="h-4 w-4 mr-1" />Create Posting
+          </Button>
+        </div>
       </div>
       <FilterBar value={filters} onChange={setFilters} />
 
@@ -602,6 +608,7 @@ function AdminJobBoard({ initialJobId, onNavigate }: { initialJobId?: string | n
       {openId && (
         <AdminPostSheet postId={openId} onClose={() => setOpenId(null)} onEdit={(p) => setEditor({ post: p })} onNavigate={onNavigate} />
       )}
+      {publicBoardOpen && <PublicBoardSheet companyId={companyId} posts={list.data ?? []} onClose={() => setPublicBoardOpen(false)} />}
       {editor && (
         <PostEditorDialog
           post={editor.post}
@@ -874,6 +881,24 @@ function PostEditorDialog({ post, companyId, onClose, onSaved }: {
               </div>
             )}
             {employee && <p className="text-xs text-muted-foreground">Add screening questions from the posting's Screening tab after saving.</p>}
+            <div className="rounded-md border p-3 space-y-2" data-testid="section-job-public-board">
+              <p className="text-sm font-medium flex items-center gap-1.5"><Globe className="h-4 w-4" />Public job board</p>
+              <div>
+                <Label>Who can see this posting on the public board</Label>
+                <Select value={form.publicVisibility} onValueChange={(v) => set("publicVisibility", v as PublicVisibility)}>
+                  <SelectTrigger data-testid="select-job-public-visibility"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(PUBLIC_VISIBILITY_LABEL) as PublicVisibility[]).map((v) => <SelectItem key={v} value={v}>{PUBLIC_VISIBILITY_LABEL[v]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Public description</Label>
+                <Textarea rows={3} value={form.publicDescription} onChange={(e) => set("publicDescription", e.target.value)} placeholder="Only this text is shown publicly — never the internal description" data-testid="input-job-public-description" />
+              </div>
+              <label className="flex items-center gap-2 text-xs"><Switch checked={form.publicShowCompensation} onCheckedChange={(v) => set("publicShowCompensation", v)} data-testid="switch-job-public-compensation" />Show compensation publicly</label>
+              <p className="text-xs text-muted-foreground">Publicly visible: title, public description, classification, schedule, location type, deadline, skills{form.publicShowCompensation ? ", compensation" : ""}. Never shown: internal details, submissions, files or company settings.</p>
+            </div>
             <ClassificationWarning indicators={indicators} />
             {newOnLive && (
               <label className="flex items-start gap-2 text-xs rounded-md border p-2.5">
@@ -990,6 +1015,7 @@ function AdminPostSheet({ postId, onClose, onEdit, onNavigate }: {
                   {employee ? "Applications" : "Proposals"}{p.submissionCounts?.total ? ` (${p.submissionCounts.total})` : ""}
                 </TabsTrigger>
                 {employee && <TabsTrigger value="screening" data-testid="tab-job-admin-screening">Screening</TabsTrigger>}
+                {employee && <TabsTrigger value="applicant-access" data-testid="tab-job-admin-applicant-access">Applicant access</TabsTrigger>}
                 <TabsTrigger value="details">Details</TabsTrigger>
                 {!employee && <TabsTrigger value="questions" data-testid="tab-job-admin-questions">Questions</TabsTrigger>}
                 {!employee && <TabsTrigger value="invitations" data-testid="tab-job-admin-invitations">Invitations</TabsTrigger>}
@@ -999,6 +1025,7 @@ function AdminPostSheet({ postId, onClose, onEdit, onNavigate }: {
                 {employee ? <AdminApplicationsPanel post={p} /> : <AdminBidsPanel post={p} onNavigate={onNavigate} />}
               </TabsContent>
               {employee && <TabsContent value="screening"><ScreeningQuestionsPanel post={p} /></TabsContent>}
+              {employee && <TabsContent value="applicant-access"><ApplicantAccessPanel post={p} /></TabsContent>}
               <TabsContent value="details" className="space-y-3">
                 <PostDetailBody post={p} />
                 <div className="space-y-2">
@@ -1623,6 +1650,256 @@ function ScreeningQuestionsPanel({ post }: { post: JobPost }) {
             <Button size="sm" disabled={!prompt.trim() || add.isPending} onClick={() => add.mutate()} data-testid="btn-screening-add"><Plus className="h-3.5 w-3.5 mr-1" />Add</Button>
           </div>
         </CardContent></Card>
+      )}
+    </div>
+  );
+}
+
+// ─── Public board (administrator) ────────────────────────────────────────────
+
+interface BoardSettings {
+  boardEnabled: boolean; codeHint: string | null; codeRotatedAt: string | null; displayName: string | null; tagline: string | null;
+  brandColor: string | null; acceptContractorRequests: boolean; acceptApplicantRequests: boolean;
+}
+interface AccessRequestRow {
+  id: string; kind: "contractor" | "applicant"; status: string; firstName: string; lastName: string; email: string; phone?: string | null;
+  message?: string | null; jobPostId?: string | null; jobTitle?: string | null; createdAt: string; decisionNote?: string | null;
+}
+interface ApplicantRow { id: string; email: string; firstName?: string | null; lastName?: string | null; status: string; activatedAt?: string | null; activeGrants?: number }
+
+function OneTimeSecret({ label, value, notice, testId }: { label: string; value: string; notice: string; testId: string }) {
+  const { toast } = useToast();
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2" data-testid={testId}>
+      <p className="text-xs font-medium flex items-center gap-1"><KeyRound className="h-3.5 w-3.5" />{label}</p>
+      <div className="flex gap-2">
+        <Input readOnly value={value} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} data-testid={`${testId}-value`} />
+        <Button size="sm" variant="outline" onClick={() => { navigator.clipboard?.writeText(value).then(() => toast({ title: "Copied" }), () => {}); }}><Copy className="h-3.5 w-3.5" /></Button>
+      </div>
+      <p className="text-xs text-muted-foreground">{notice}</p>
+    </div>
+  );
+}
+
+function PublicBoardSheet({ companyId, posts, onClose }: { companyId: string | null; posts: JobPost[]; onClose: () => void }) {
+  const { toast } = useToast();
+  const qs = companyQs(companyId);
+  const settings = useQuery<BoardSettings, JobBoardError>({ queryKey: ["job-board", "public-settings", companyId], queryFn: () => jobGet(`/api/job-board/settings${qs}`) });
+  const requests = useQuery<AccessRequestRow[], JobBoardError>({ queryKey: ["job-board", "access-requests", companyId], queryFn: () => jobGet(`/api/job-board/access-requests${qs}`) });
+  const applicants = useQuery<ApplicantRow[], JobBoardError>({ queryKey: ["job-board", "applicants", companyId], queryFn: () => jobGet(`/api/job-board/applicants${qs}`) });
+  const [draft, setDraft] = useState<Partial<BoardSettings>>({});
+  const [newCode, setNewCode] = useState<string | null>(null);
+  const [secret, setSecret] = useState<{ url: string; notice: string } | null>(null);
+  const [approveFor, setApproveFor] = useState<AccessRequestRow | null>(null);
+  const [denyFor, setDenyFor] = useState<AccessRequestRow | null>(null);
+  const s = { ...(settings.data ?? {}), ...draft } as BoardSettings;
+  const withCo = (b: Record<string, unknown>) => (companyId ? { ...b, companyId } : b);
+
+  const save = useMutation({
+    mutationFn: (b: Partial<BoardSettings>) => jobSend<BoardSettings>("PATCH", "/api/job-board/settings", { json: withCo(b) }),
+    onSuccess: () => { refreshJobBoard(); setDraft({}); toast({ title: "Board settings saved" }); },
+    onError: (e: any) => toast({ title: e?.message || "Could not save", variant: "destructive" }),
+  });
+  const rotate = useMutation({
+    mutationFn: () => jobSend<{ code: string }>("POST", "/api/job-board/settings/rotate-code", { json: withCo({}) }),
+    onSuccess: (r) => { refreshJobBoard(); setNewCode(r.code); },
+    onError: (e: any) => toast({ title: e?.message || "Could not generate a code", variant: "destructive" }),
+  });
+  const approve = useMutation({
+    mutationFn: ({ req, postingIds }: { req: AccessRequestRow; postingIds: string[] }) =>
+      jobSend<{ kind: string; activationUrl?: string | null; deliveryNotice?: string | null; nextStep?: string }>("POST", `/api/job-board/access-requests/${req.id}/approve`, { json: { postingIds } }),
+    onSuccess: (r) => {
+      refreshJobBoard(); setApproveFor(null);
+      if (r.activationUrl) setSecret({ url: r.activationUrl, notice: r.deliveryNotice || "" });
+      toast({ title: "Request approved", description: r.kind === "contractor" ? r.nextStep : undefined });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Could not approve", variant: "destructive" }),
+  });
+  const deny = useMutation({
+    mutationFn: ({ req, note }: { req: AccessRequestRow; note: string }) => jobSend("POST", `/api/job-board/access-requests/${req.id}/deny`, { json: { note } }),
+    onSuccess: () => { refreshJobBoard(); setDenyFor(null); toast({ title: "Request denied" }); },
+    onError: (e: any) => toast({ title: e?.message || "Could not deny", variant: "destructive" }),
+  });
+  const applicantAction = useMutation({
+    mutationFn: ({ a, action }: { a: ApplicantRow; action: "disable" | "reissue-activation" }) =>
+      jobSend<{ activationUrl?: string; deliveryNotice?: string }>("POST", `/api/job-board/applicants/${a.id}/${action}`, { json: {} }),
+    onSuccess: (r, v) => {
+      refreshJobBoard();
+      if (r.activationUrl) setSecret({ url: r.activationUrl, notice: r.deliveryNotice || "" });
+      toast({ title: v.action === "disable" ? "Applicant access disabled" : "New activation link created" });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" }),
+  });
+  const pending = (requests.data ?? []).filter((r) => r.status === "pending");
+  const decided = (requests.data ?? []).filter((r) => r.status !== "pending").slice(0, 20);
+  const dirty = Object.keys(draft).length > 0;
+
+  return (
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent side="right" className="w-full sm:max-w-3xl overflow-y-auto" data-testid="sheet-public-board">
+        <SheetHeader className="text-left"><SheetTitle className="flex items-center gap-2"><Globe className="h-5 w-5" />Public job board</SheetTitle></SheetHeader>
+        {settings.error ? <div className="mt-4"><LoadProblem error={settings.error} /></div> : (
+          <Tabs defaultValue="requests" className="mt-4">
+            <TabsList>
+              <TabsTrigger value="requests" data-testid="tab-public-requests"><Inbox className="h-3.5 w-3.5 mr-1" />Access requests{pending.length ? ` (${pending.length})` : ""}</TabsTrigger>
+              <TabsTrigger value="applicants" data-testid="tab-public-applicants">Applicants</TabsTrigger>
+              <TabsTrigger value="settings" data-testid="tab-public-settings">Settings</TabsTrigger>
+            </TabsList>
+
+            {secret && <div className="mt-3"><OneTimeSecret label="One-time activation link" value={secret.url} notice={secret.notice} testId="secret-activation-link" /></div>}
+
+            <TabsContent value="settings" className="space-y-4">
+              <div className="rounded-md border p-3 space-y-2">
+                <p className="text-sm font-medium">Board code</p>
+                <p className="text-xs text-muted-foreground">The code only helps people find your board — it never signs anyone in or lets them submit. Rotating it immediately retires the old one.</p>
+                <p className="text-sm">{s.codeHint ? <>Current code ends in <span className="font-mono">…{s.codeHint}</span> · set {dateLabel(s.codeRotatedAt)}</> : "No code yet."}</p>
+                <Button size="sm" variant="outline" disabled={rotate.isPending} onClick={() => rotate.mutate()} data-testid="btn-rotate-board-code"><KeyRound className="h-3.5 w-3.5 mr-1" />{s.codeHint ? "Rotate code" : "Generate code"}</Button>
+                {newCode && <OneTimeSecret label="New board code" value={newCode} notice="Copy this code now — it is shown only once. Share it with people you want to find your board at /jobs." testId="secret-board-code" />}
+              </div>
+              <div className="rounded-md border p-3 space-y-3">
+                <label className="flex items-center gap-2 text-sm"><Switch checked={!!s.boardEnabled} onCheckedChange={(v) => setDraft({ ...draft, boardEnabled: v })} data-testid="switch-board-enabled" />Board enabled</label>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div><Label>Display name</Label><Input value={s.displayName ?? ""} onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} data-testid="input-board-display-name" /></div>
+                  <div><Label>Brand colour</Label><Input value={s.brandColor ?? ""} placeholder="#1A2B3C" onChange={(e) => setDraft({ ...draft, brandColor: e.target.value })} /></div>
+                </div>
+                <div><Label>Tagline</Label><Input value={s.tagline ?? ""} onChange={(e) => setDraft({ ...draft, tagline: e.target.value })} /></div>
+                <label className="flex items-center gap-2 text-sm"><Switch checked={!!s.acceptApplicantRequests} onCheckedChange={(v) => setDraft({ ...draft, acceptApplicantRequests: v })} data-testid="switch-accept-applicants" />Accept employment access requests</label>
+                <label className="flex items-center gap-2 text-sm"><Switch checked={!!s.acceptContractorRequests} onCheckedChange={(v) => setDraft({ ...draft, acceptContractorRequests: v })} data-testid="switch-accept-contractors" />Accept contractor access requests</label>
+                <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate(draft)} data-testid="btn-save-board-settings">Save settings</Button>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="requests" className="space-y-3">
+              {requests.isLoading ? <Skeleton className="h-20 w-full" /> : pending.length === 0 ? <p className="text-sm text-muted-foreground py-4 text-center">No pending requests.</p> : (
+                <div className="rounded-md border overflow-x-auto">
+                  <Table data-testid="table-access-requests">
+                    <TableHeader><TableRow><TableHead>Person</TableHead><TableHead>Wants</TableHead><TableHead>Posting</TableHead><TableHead>Received</TableHead><TableHead className="text-right">Decision</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {pending.map((r) => (
+                        <TableRow key={r.id} data-testid={`row-access-request-${r.id}`}>
+                          <TableCell><p className="font-medium">{r.firstName} {r.lastName}</p><p className="text-xs text-muted-foreground">{r.email}</p>{r.message && <p className="text-xs mt-1 line-clamp-2">“{r.message}”</p>}</TableCell>
+                          <TableCell><ClassificationBadge post={{ workerClassification: r.kind === "contractor" ? "contractor" : "employee" }} /></TableCell>
+                          <TableCell className="text-xs">{r.jobTitle ?? "—"}</TableCell>
+                          <TableCell className="text-xs">{dateLabel(r.createdAt)}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button size="sm" variant="outline" className="text-destructive" onClick={() => setDenyFor(r)} data-testid={`btn-deny-request-${r.id}`}><Ban className="h-3.5 w-3.5 mr-1" />Deny</Button>
+                              <Button size="sm" onClick={() => setApproveFor(r)} data-testid={`btn-approve-request-${r.id}`}><CheckCircle className="h-3.5 w-3.5 mr-1" />Approve</Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+              {decided.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Recent decisions</p>
+                  <ul className="divide-y rounded-md border text-sm">
+                    {decided.map((r) => <li key={r.id} className="px-3 py-1.5 flex justify-between gap-2"><span>{r.firstName} {r.lastName} · {r.kind}</span><span className="text-xs text-muted-foreground">{r.status}</span></li>)}
+                  </ul>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="applicants">
+              {applicants.isLoading ? <Skeleton className="h-20 w-full" /> : !(applicants.data ?? []).length ? <p className="text-sm text-muted-foreground py-4 text-center">No applicant accounts yet.</p> : (
+                <ul className="divide-y rounded-md border" data-testid="list-applicants">
+                  {applicants.data!.map((a) => (
+                    <li key={a.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                      <div className="min-w-0 flex-1"><p className="font-medium">{`${a.firstName ?? ""} ${a.lastName ?? ""}`.trim() || a.email}</p><p className="text-xs text-muted-foreground">{a.email} · {a.status.replace(/_/g, " ")}{a.activeGrants ? ` · ${a.activeGrants} granted posting${a.activeGrants > 1 ? "s" : ""}` : ""}</p></div>
+                      {a.status === "pending_activation" && <Button size="sm" variant="outline" disabled={applicantAction.isPending} onClick={() => applicantAction.mutate({ a, action: "reissue-activation" })}>New activation link</Button>}
+                      {a.status !== "disabled" && <Button size="sm" variant="ghost" className="text-destructive" disabled={applicantAction.isPending} onClick={() => applicantAction.mutate({ a, action: "disable" })} data-testid={`btn-disable-applicant-${a.id}`}>Disable</Button>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-muted-foreground mt-2">Applicant accounts can only see postings you make available and their own applications. They are not workers; a worker record is created only when you hire and explicitly convert an applicant.</p>
+            </TabsContent>
+          </Tabs>
+        )}
+      </SheetContent>
+      {approveFor && (
+        <ApproveRequestDialog req={approveFor} posts={posts} pending={approve.isPending} onCancel={() => setApproveFor(null)}
+          onConfirm={(postingIds) => approve.mutate({ req: approveFor, postingIds })} />
+      )}
+      {denyFor && (
+        <NoteDialog title="Deny this request?" description="The person is not told the reason. Your note stays internal." required={false} confirmLabel="Deny" pending={deny.isPending}
+          placeholder="Internal note (optional)" onCancel={() => setDenyFor(null)} onConfirm={(note) => deny.mutate({ req: denyFor, note })} />
+      )}
+    </Sheet>
+  );
+}
+
+function ApproveRequestDialog({ req, posts, pending, onCancel, onConfirm }: { req: AccessRequestRow; posts: JobPost[]; pending: boolean; onCancel: () => void; onConfirm: (postingIds: string[]) => void }) {
+  const employeePosts = posts.filter((p) => p.workerClassification === "employee" && p.status === "published");
+  const [selected, setSelected] = useState<Set<string>>(new Set(req.jobPostId ? [req.jobPostId] : []));
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onCancel(); }}>
+      <DialogContent data-testid="dialog-approve-request">
+        <DialogHeader>
+          <DialogTitle>Approve {req.firstName} {req.lastName}?</DialogTitle>
+          <DialogDescription>
+            {req.kind === "applicant"
+              ? "Creates a limited applicant account (no worker record). You'll get a one-time activation link to send to their email address. They can see public and access-required positions, plus any invite-only positions you select."
+              : "Forwards this contractor into Access Requests, where approving them sends their contractor account invitation. Nothing is created yet."}
+          </DialogDescription>
+        </DialogHeader>
+        {req.kind === "applicant" && employeePosts.length > 0 && (
+          <div className="max-h-48 overflow-y-auto rounded-md border divide-y">
+            {employeePosts.map((p) => (
+              <label key={p.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={selected.has(p.id)} onChange={(e) => { const n = new Set(selected); if (e.target.checked) n.add(p.id); else n.delete(p.id); setSelected(n); }} />
+                {p.title}<span className="text-xs text-muted-foreground ml-auto">{(p.publicVisibility ?? "access_required").replace(/_/g, " ")}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button disabled={pending} onClick={() => onConfirm(Array.from(selected))} data-testid="btn-approve-request-confirm">{pending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Approve</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ApplicantAccessPanel({ post }: { post: JobPost }) {
+  const { toast } = useToast();
+  const grants = useQuery<{ id: string; applicantId: string; name: string; email: string; source: string; grantedAt: string }[], JobBoardError>({
+    queryKey: ["job-board", "grants", post.id], queryFn: () => jobGet(`/api/job-posts/${post.id}/applicant-grants`),
+  });
+  const applicants = useQuery<ApplicantRow[]>({ queryKey: ["job-board", "applicants", post.companyId], queryFn: () => jobGet(`/api/job-board/applicants?companyId=${encodeURIComponent(post.companyId)}`) });
+  const [pick, setPick] = useState("");
+  const grant = useMutation({
+    mutationFn: () => jobSend("POST", `/api/job-posts/${post.id}/applicant-grants`, { json: { applicantId: pick } }),
+    onSuccess: () => { refreshJobBoard(); setPick(""); toast({ title: "Access granted" }); },
+    onError: (e: any) => toast({ title: e?.message || "Could not grant access", variant: "destructive" }),
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => jobSend("POST", `/api/job-post-access-grants/${id}/revoke`, { json: {} }),
+    onSuccess: () => { refreshJobBoard(); toast({ title: "Access revoked" }); },
+    onError: (e: any) => toast({ title: e?.message || "Could not revoke", variant: "destructive" }),
+  });
+  const granted = new Set((grants.data ?? []).map((g) => g.applicantId));
+  const candidates = (applicants.data ?? []).filter((a) => a.status !== "disabled" && !granted.has(a.id));
+  return (
+    <div className="space-y-3 mt-3">
+      <p className="text-xs text-muted-foreground">Public board visibility: <strong>{(post.publicVisibility ?? "access_required").replace(/_/g, " ")}</strong>. Grants matter for invite-only positions; approved applicants already see public and access-required positions.</p>
+      {grants.isLoading ? <Skeleton className="h-10 w-full" /> : grants.error ? <LoadProblem error={grants.error} /> : (grants.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground">No applicant has been granted this posting.</p> : (
+        <ul className="divide-y rounded-md border">
+          {grants.data!.map((g) => <li key={g.id} className="flex items-center justify-between px-3 py-2 text-sm"><span>{g.name || g.email} <span className="text-xs text-muted-foreground">· {dateLabel(g.grantedAt)}</span></span><Button size="sm" variant="ghost" disabled={revoke.isPending} onClick={() => revoke.mutate(g.id)}>Revoke</Button></li>)}
+        </ul>
+      )}
+      {candidates.length > 0 && (
+        <div className="flex gap-2">
+          <Select value={pick} onValueChange={setPick}>
+            <SelectTrigger className="h-9" data-testid="select-grant-applicant"><SelectValue placeholder="Choose an applicant" /></SelectTrigger>
+            <SelectContent>{candidates.map((a) => <SelectItem key={a.id} value={a.id}>{`${a.firstName ?? ""} ${a.lastName ?? ""}`.trim() || a.email}</SelectItem>)}</SelectContent>
+          </Select>
+          <Button size="sm" disabled={!pick || grant.isPending} onClick={() => grant.mutate()} data-testid="btn-grant-applicant"><UserPlus className="h-3.5 w-3.5 mr-1" />Grant</Button>
+        </div>
       )}
     </div>
   );

@@ -114,6 +114,13 @@ import {
   transitionApplication, convertApplicationToWorker, addApplicationDocument, authorizeApplicationDocumentDownload,
   removeApplicationDocument,
 } from "./job-board/employment";
+import {
+  publicAccessSchemaReady, publicBoard, publicPosting, submitPublicAccessRequest, activateApplicant, responseFloor, hashIp,
+  PUBLIC_NOT_AVAILABLE, ACCESS_REQUEST_ACK, getBoardSettings, updateBoardSettings, rotateBoardCode, listAccessRequests,
+  approveAccessRequest as approveJobBoardAccessRequest, denyAccessRequest, listApplicants, disableApplicant, reissueActivation,
+  revokeInvitationToken, grantApplicantPosting, revokeApplicantGrant, listPostingGrants, loadApplicantIdentity,
+  validateAccessRequestInput,
+} from "./job-board/public-access";
 import { fetchRemoteImageBytesSafe } from "./remote-image-fetch";
 
 // This module is ESM ("type": "module" in package.json) and has no native
@@ -2650,7 +2657,14 @@ function hashSigningToken(token: string): string {
       // the global requireAuth gate 401s an external signer's return/status page before its
       // handler runs — exact prefixes only, never the broader /public/ or /signing/ namespace.
       || req.path.startsWith("/signing/contracts/")
-      || req.path.startsWith("/public/sign/contracts/")) {
+      || req.path.startsWith("/public/sign/contracts/")
+      // Public job board (migration 0030): discovery code / one-time activation token
+      // handlers with their own generic 404s, rate limits and response floor.
+      // Exact paths only — nothing else under /public/job-board/ is anonymous.
+      || req.path === "/public/job-board/board"
+      || req.path === "/public/job-board/posting"
+      || req.path === "/public/job-board/access-requests"
+      || req.path === "/public/job-board/activate") {
       return next();
     }
     requireAuth(req, res, next);
@@ -2687,6 +2701,37 @@ function hashSigningToken(token: string): string {
       return next();
     }
     return res.status(403).json({ message: "Vendor portal accounts can only access the vendor portal." });
+  });
+
+  // ── Job-board applicant session confinement (migration 0030) ─────────────
+  // An `applicant`-role account is a limited identity for ONE company's job
+  // board: it may browse employee postings made available to it and manage its
+  // own applications/documents — nothing else. Like vendors it has a
+  // company_id but no worker_id, so every other requireAuth-only /api route
+  // would otherwise reach company data. Explicit method+path allowlist; all
+  // else is 403. Other roles are unaffected.
+  const ID = "[0-9a-fA-F-]{36}";
+  const APPLICANT_ALLOWED_API: [string, RegExp][] = [
+    ["*", /^\/auth\//],
+    ["*", /^\/public\/job-board\//],
+    ["GET", /^\/job-posts\/available$/],
+    ["GET", /^\/job-posts\/summary$/],
+    ["GET", new RegExp(`^/job-posts/${ID}$`)],
+    ["POST", new RegExp(`^/job-posts/${ID}/applications$`)],
+    ["GET", /^\/employment-applications\/mine$/],
+    ["GET", new RegExp(`^/employment-applications/${ID}$`)],
+    ["PATCH", new RegExp(`^/employment-applications/${ID}$`)],
+    ["POST", new RegExp(`^/employment-applications/${ID}/(submit|withdraw|documents)$`)],
+    ["GET", new RegExp(`^/employment-application-documents/${ID}/download$`)],
+    ["POST", new RegExp(`^/employment-application-documents/${ID}/remove$`)],
+    ["GET", new RegExp(`^/job-post-attachments/${ID}/download$`)],
+  ];
+  app.use("/api", (req, res, next) => {
+    const role = (req as any).user?.role;
+    if (role !== "applicant") return next();
+    const p = req.path.split("?")[0];
+    if (APPLICANT_ALLOWED_API.some(([m, re]) => (m === "*" || m === req.method) && re.test(p))) return next();
+    return res.status(403).json({ message: "Applicant accounts can only access their job applications." });
   });
 
   // ── Supplied-companyId gate (SaaS PR 2B) ─────────────────────────────────
@@ -13802,13 +13847,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     tenantGate: (companyId: string) => checkTenantGate(companyId),
     tenantIdForCompany: (companyId: string) => getTenantIdForCompany(companyId),
   };
-  let jobBoardReadyAt = 0;
-  let jobBoardReady = false;
+  /**
+   * Schema-readiness memo: true is cached for good; false is re-checked at most
+   * once a minute. Concurrent callers share the in-flight check (no request
+   * sees a stale "not ready" while the first check is still running).
+   */
+  function readinessMemo(check: () => Promise<boolean>) {
+    let ready = false, checkedAt = 0;
+    let inflight: Promise<boolean> | null = null;
+    return async (): Promise<boolean> => {
+      if (ready) return true;
+      if (inflight) return inflight;
+      if (checkedAt && Date.now() - checkedAt < 60_000) return false;
+      inflight = check().catch(() => false).then((r) => { ready = r; checkedAt = Date.now(); inflight = null; return r; });
+      return inflight;
+    };
+  }
+  const jobBoardIsReady = readinessMemo(() => jobBoardSchemaReady(jobBoardDeps.pool));
   async function jobBoardActor(req: Request<any, any, any, any>, res: Response): Promise<JobBoardActor | null> {
-    if (!jobBoardReady && Date.now() - jobBoardReadyAt > 60_000) {
-      jobBoardReadyAt = Date.now();
-      jobBoardReady = await jobBoardSchemaReady(jobBoardDeps.pool).catch(() => false);
-    }
+    const jobBoardReady = await jobBoardIsReady();
     if (!jobBoardReady) { res.status(503).json({ message: "The job board is not enabled yet." }); return null; }
     const user = req.session?.userId ? await storage.getUser(req.session.userId) : undefined;
     if (!user) { res.status(401).json({ message: "Not authenticated" }); return null; }
@@ -13817,12 +13874,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const w = await storage.getWorker(user.workerId);
       if (w) worker = { workerId: w.id, companyId: w.companyId ?? null, workerType: w.workerType ?? null, workerGroup: (w as any).workerGroup ?? null, status: w.status ?? null };
     }
+    // Limited applicant identity (role 'applicant', active job_applicants row only).
+    const applicant = user.role === "applicant" && !user.workerId
+      ? await loadApplicantIdentity(jobBoardDeps.pool, user.id).catch(() => null)
+      : null;
     // Administrator/manager role (platform_support/_implementation get no alias — fail closed) AND company access.
     const effective = expandRoleForGuard(user.role || "");
-    const isManager = effective.includes("admin") || effective.includes("manager");
+    const isManager = user.role !== "applicant" && (effective.includes("admin") || effective.includes("manager"));
     return {
       userId: user.id,
       worker,
+      applicant,
       canManageCompany: async (companyId: string) => isManager && await canAccessCompany(user, companyId),
     };
   }
@@ -14034,6 +14096,127 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   }));
   app.post("/api/employment-application-documents/:documentId/remove", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("remove application document", async (req, res, actor) => {
     sendJobBoard(res, await removeApplicationDocument(jobBoardDeps, actor, req.params.documentId));
+  }));
+
+
+  // ── JOB BOARD: public discovery, access requests, applicant identities (migration 0030) ──
+  // Company code = discovery only (never authentication). Every public failure
+  // (unknown/disabled/suspended/private board, missing schema) answers ONE
+  // generic 404 body after a fixed response-time floor; access requests always
+  // answer the same acknowledgement. Rate-limited per IP. No email/SMS is sent:
+  // activation links are returned once to the approving administrator.
+  const publicAccessIsReady = readinessMemo(async () =>
+    (await jobBoardSchemaReady(jobBoardDeps.pool)) && (await publicAccessSchemaReady(jobBoardDeps.pool)));
+  const PUBLIC_FLOOR_MS = 350;
+  const publicBoardRateLimit = createRateLimiter("job-board-public", { windowMs: 10 * 60 * 1000, max: 60, message: "Too many requests. Please wait a few minutes and try again." });
+  const publicAccessRequestRateLimit = createRateLimiter("job-board-access-request", { windowMs: 60 * 60 * 1000, max: 5, message: "Too many requests. Please wait and try again later." });
+  const publicActivationRateLimit = createRateLimiter("job-board-activation", { windowMs: 15 * 60 * 1000, max: 10, message: "Too many attempts. Please wait 15 minutes and try again." });
+  const ipSalt = () => process.env.SESSION_SECRET || "job-board";
+  function publicRoute(label: string, fn: (req: Request, res: Response) => Promise<void>) {
+    return async (req: Request, res: Response) => {
+      const started = Date.now();
+      res.setHeader("Cache-Control", "no-store");
+      try {
+        if (!(await publicAccessIsReady())) { await responseFloor(started, PUBLIC_FLOOR_MS); res.status(404).json({ message: PUBLIC_NOT_AVAILABLE }); return; }
+        await fn(req, res);
+      } catch (e) {
+        console.error(`[job-board-public] ${label} failed:`, (e as Error)?.message);
+        await responseFloor(started, PUBLIC_FLOOR_MS);
+        if (!res.headersSent) res.status(404).json({ message: PUBLIC_NOT_AVAILABLE });
+      }
+    };
+  }
+  app.post("/api/public/job-board/board", publicBoardRateLimit, publicRoute("board", async (req, res) => {
+    const started = Date.now();
+    const out = await publicBoard(jobBoardDeps, req.body?.code);
+    await responseFloor(started, PUBLIC_FLOOR_MS);
+    if (!out) { res.status(404).json({ message: PUBLIC_NOT_AVAILABLE }); return; }
+    res.json(out);
+  }));
+  app.post("/api/public/job-board/posting", publicBoardRateLimit, publicRoute("posting", async (req, res) => {
+    const started = Date.now();
+    const out = await publicPosting(jobBoardDeps, req.body?.code, req.body?.ref);
+    await responseFloor(started, PUBLIC_FLOOR_MS);
+    if (!out) { res.status(404).json({ message: PUBLIC_NOT_AVAILABLE }); return; }
+    res.json(out);
+  }));
+  app.post("/api/public/job-board/access-requests", publicAccessRequestRateLimit, publicRoute("access request", async (req, res) => {
+    const started = Date.now();
+    const b = req.body ?? {};
+    // Only the caller's own field problems are reported; board state never is.
+    const v = validateAccessRequestInput(b);
+    if (!v.ok) { await responseFloor(started, PUBLIC_FLOOR_MS); res.status(400).json({ message: v.message }); return; }
+    await submitPublicAccessRequest(jobBoardDeps, b, { ipHash: hashIp(req.ip, ipSalt()), userAgent: req.get("user-agent") ?? null })
+      .catch((e) => console.error("[job-board-public] access request write failed:", (e as Error)?.message));
+    await responseFloor(started, PUBLIC_FLOOR_MS);
+    res.status(202).json({ message: ACCESS_REQUEST_ACK });
+  }));
+  app.post("/api/public/job-board/activate", publicActivationRateLimit, publicRoute("activate", async (req, res) => {
+    const started = Date.now();
+    const out = await activateApplicant(jobBoardDeps, { token: req.body?.token, username: req.body?.username, password: req.body?.password }, (pw) => bcrypt.hash(pw, 10));
+    await responseFloor(started, PUBLIC_FLOOR_MS);
+    if (!out.ok) { res.status(out.status).json({ message: out.message }); return; }
+    res.status(201).json({ message: "Your account is ready. Sign in with your new username.", username: out.username });
+  }));
+
+  // Administrator: board settings, access requests, applicants, grants.
+  function boardScope(req: Request<any, any, any, any>, res: Response, raw: unknown) {
+    return resolveListScope(req, res, raw, { allowPlatformAll: false }).then((scope) => {
+      if (!scope || !scope.companyId) { if (!res.headersSent) res.status(400).json({ message: "Choose a company" }); return null; }
+      return scope.companyId as string;
+    });
+  }
+  const publicAdminRoute = (label: string, fn: (req: Request<any, any, any, any>, res: Response, actor: JobBoardActor) => Promise<unknown>) =>
+    jobBoardRoute(label, async (req, res, actor) => {
+      if (!(await publicAccessIsReady())) { res.status(503).json({ message: "The public job board is not enabled yet." }); return; }
+      await fn(req, res, actor);
+    });
+  app.get("/api/job-board/settings", requireAuth, JOB_FEATURE, JOB_ADMIN, publicAdminRoute("board settings", async (req, res, actor) => {
+    const co = await boardScope(req, res, req.query.companyId); if (!co) return;
+    sendJobBoard(res, await getBoardSettings(jobBoardDeps, actor, co));
+  }));
+  app.patch("/api/job-board/settings", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("update board settings", async (req, res, actor) => {
+    const co = await boardScope(req, res, req.body?.companyId); if (!co) return;
+    sendJobBoard(res, await updateBoardSettings(jobBoardDeps, actor, co, req.body ?? {}));
+  }));
+  app.post("/api/job-board/settings/rotate-code", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("rotate board code", async (req, res, actor) => {
+    const co = await boardScope(req, res, req.body?.companyId); if (!co) return;
+    res.setHeader("Cache-Control", "no-store");
+    sendJobBoard(res, await rotateBoardCode(jobBoardDeps, actor, co));
+  }));
+  app.get("/api/job-board/access-requests", requireAuth, JOB_FEATURE, JOB_ADMIN, publicAdminRoute("list access requests", async (req, res, actor) => {
+    const co = await boardScope(req, res, req.query.companyId); if (!co) return;
+    sendJobBoard(res, await listAccessRequests(jobBoardDeps, actor, co, queryStr(req.query.status)));
+  }));
+  app.post("/api/job-board/access-requests/:requestId/approve", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("approve access request", async (req, res, actor) => {
+    res.setHeader("Cache-Control", "no-store");
+    sendJobBoard(res, await approveJobBoardAccessRequest(jobBoardDeps, actor, req.params.requestId, req.body ?? {}, getAppBaseUrl(req)));
+  }));
+  app.post("/api/job-board/access-requests/:requestId/deny", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("deny access request", async (req, res, actor) => {
+    sendJobBoard(res, await denyAccessRequest(jobBoardDeps, actor, req.params.requestId, req.body ?? {}));
+  }));
+  app.get("/api/job-board/applicants", requireAuth, JOB_FEATURE, JOB_ADMIN, publicAdminRoute("list applicants", async (req, res, actor) => {
+    const co = await boardScope(req, res, req.query.companyId); if (!co) return;
+    sendJobBoard(res, await listApplicants(jobBoardDeps, actor, co));
+  }));
+  app.post("/api/job-board/applicants/:applicantId/disable", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("disable applicant", async (req, res, actor) => {
+    sendJobBoard(res, await disableApplicant(jobBoardDeps, actor, req.params.applicantId, req.body ?? {}));
+  }));
+  app.post("/api/job-board/applicants/:applicantId/reissue-activation", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("reissue activation", async (req, res, actor) => {
+    res.setHeader("Cache-Control", "no-store");
+    sendJobBoard(res, await reissueActivation(jobBoardDeps, actor, req.params.applicantId, getAppBaseUrl(req)));
+  }));
+  app.post("/api/job-board/invitations/:invitationId/revoke", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("revoke invitation token", async (req, res, actor) => {
+    sendJobBoard(res, await revokeInvitationToken(jobBoardDeps, actor, req.params.invitationId));
+  }));
+  app.get("/api/job-posts/:id/applicant-grants", requireAuth, JOB_FEATURE, JOB_ADMIN, publicAdminRoute("list applicant grants", async (req, res, actor) => {
+    sendJobBoard(res, await listPostingGrants(jobBoardDeps, actor, req.params.id));
+  }));
+  app.post("/api/job-posts/:id/applicant-grants", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("grant applicant", async (req, res, actor) => {
+    sendJobBoard(res, await grantApplicantPosting(jobBoardDeps, actor, req.params.id, req.body?.applicantId));
+  }));
+  app.post("/api/job-post-access-grants/:grantId/revoke", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, publicAdminRoute("revoke applicant grant", async (req, res, actor) => {
+    sendJobBoard(res, await revokeApplicantGrant(jobBoardDeps, actor, req.params.grantId));
   }));
 
   // ── CONTRACTOR PROPOSALS ──────────────────────────────────────────────────

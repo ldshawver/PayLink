@@ -31,6 +31,8 @@ export const WORK_LOCATION_TYPES = ["onsite", "remote", "hybrid"] as const;
 export const RECURRENCE_FREQUENCIES = ["weekly", "biweekly", "monthly", "quarterly", "custom"] as const;
 export const VISIBILITIES = ["all_eligible", "invited_only", "selected_groups"] as const;
 export const RATE_TYPES = ["fixed", "hourly", "recurring", "custom"] as const;
+/** Public-board visibility (migration 0030). NULL in the DB = never chosen (fail closed). */
+export const PUBLIC_VISIBILITIES = ["public", "access_required", "invite_only"] as const;
 
 export const BID_STATUSES = [
   "draft", "submitted", "under_review", "shortlisted", "revision_requested",
@@ -419,6 +421,9 @@ export const POST_FIELD_COLUMNS = {
   visibility: "visibility",
   eligibleGroups: "eligible_groups",
   costJobId: "cost_job_id",
+  publicVisibility: "public_visibility",
+  publicDescription: "public_description",
+  publicShowCompensation: "public_show_compensation",
 } as const;
 export type PostField = keyof typeof POST_FIELD_COLUMNS;
 export const JSON_POST_COLUMNS: ReadonlySet<string> = new Set(["eligible_groups", "required_skills"]);
@@ -488,10 +493,13 @@ export function normalizePostInput(body: Fields, opts: { partial: boolean }):
       case "eligibleGroups": v = stringList(raw, 50, 100); break;
       case "requiredSkills": v = stringList(raw, 50, 100); break;
       case "costJobId": v = str(raw, 64); break;
+      case "publicVisibility": v = oneOf(raw, PUBLIC_VISIBILITIES); break;
+      case "publicDescription": v = str(raw, 8000); break;
+      case "publicShowCompensation": v = raw === null || raw === undefined ? null : typeof raw === "boolean" ? raw : "invalid"; break;
       default: v = str(raw);
     }
     if (v === "invalid") return bad(`Invalid ${key}`);
-    if (v === null && REQUIRED_ENUM_FIELDS.has(key)) return bad(`${key} cannot be empty`);
+    if (v === null && (REQUIRED_ENUM_FIELDS.has(key) || key === "publicVisibility")) return bad(`${key} cannot be empty`);
     out[POST_FIELD_COLUMNS[key]] = v;
     fields.push(key);
   }
@@ -514,6 +522,9 @@ export function derivePostDefaults(v: NormalizedPost): NormalizedPost {
   const cls = v.worker_classification as string;
   const sched = v.schedule_type as string;
   const out: NormalizedPost = { ...v };
+  // Public board: explicit, fail-closed default (never "public" by default).
+  if (out.public_visibility == null) out.public_visibility = "access_required";
+  if (out.public_show_compensation == null) out.public_show_compensation = false;
   if (cls === "employee") {
     out.opportunity_type = "position";
     out.employment_type = sched;
@@ -785,6 +796,9 @@ export function projectPostForAdmin(p: Record<string, any>) {
     visibility: p.visibility,
     eligibleGroups: Array.isArray(p.eligible_groups) ? p.eligible_groups : [],
     costJobId: p.cost_job_id,
+    publicVisibility: p.public_visibility ?? null,
+    publicDescription: p.public_description ?? null,
+    publicShowCompensation: p.public_show_compensation === true,
     classificationDeclaredByUserId: p.classification_declared_by_user_id,
     classificationDeclaredAt: p.classification_declared_at,
     classificationIndicators: employmentIndicators(p),

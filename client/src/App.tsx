@@ -59,6 +59,8 @@ const LoginPage = lazy(() => import("@/pages/login"));
 const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
 const VerifyEmailPage = lazy(() => import("@/pages/verify-email"));
 const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
+const JobBoardPublicRoute = lazy(() => import("@/pages/job-board-public"));
+const ApplicantPortalPage = lazy(() => import("@/pages/applicant-portal"));
 const ContractorAccessRequestsPage = lazy(() => import("@/pages/contractor-access-requests"));
 const VendorManagementPage = lazy(() => import("@/pages/vendor-management"));
 const VendorPortalPage = lazy(() => import("@/pages/vendor-portal"));
@@ -755,6 +757,16 @@ function AppContent() {
     );
   }
 
+  // Public job board (migration 0030). No session; the board code is
+  // discovery only and nothing here can submit a proposal or application.
+  if (location === "/jobs" || location === "/jobs/activate") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <JobBoardPublicRoute />
+      </Suspense>
+    );
+  }
+
   if (isLoading) {
     return <PageLoader />;
   }
@@ -779,6 +791,16 @@ function AppContent() {
   // Platform users (no companyId) always pass through
   if (user.companyId && user.tenantGate && !user.tenantGate.allowed) {
     return <AccountBlocked gate={user.tenantGate} />;
+  }
+
+  // Limited applicant accounts get only the applicant portal — never the app
+  // shell (sidebar, dashboard, push registration), whose APIs they cannot use.
+  if (user.role === "applicant") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ApplicantPortalPage />
+      </Suspense>
+    );
   }
 
   if (location.startsWith("/platform")) {
