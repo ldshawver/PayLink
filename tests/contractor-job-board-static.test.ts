@@ -28,7 +28,7 @@ const fnBody = (src: string, name: string) => {
 };
 
 const start = routes.indexOf("// ── JOB BOARD (migration 0029)");
-const end = routes.indexOf("// ── CONTRACTOR PROPOSALS ──");
+const end = routes.indexOf("// ── JOB BOARD: public discovery, access requests, applicant identities (migration 0030)");
 const block = routes.slice(start, end);
 
 // Every app.<verb>(...) registration in the block, with its middleware list (up to the handler).

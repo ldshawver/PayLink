@@ -34,6 +34,7 @@ import {
   notifyWorkers, requireGate, requireManage, requireWorker, run, tx, UUID_RE,
   type JobBoardActor, type JobBoardDeps, type UploadedFile,
 } from "./service";
+import { applicantCanSeePost } from "./applicant-visibility";
 
 type Q = import("pg").Pool | PoolClient;
 const NOT_FOUND_APP = "Application not found";
@@ -55,9 +56,14 @@ function requireEmployeePost(post: any) {
 }
 
 /** The applicant must own the application AND still be a worker of its company. */
+/** Company the caller belongs to as a submitter: its worker's company, else its applicant identity's. */
+function submitterCompany(actor: JobBoardActor): string | null {
+  return actor.worker?.companyId ?? actor.applicant?.companyId ?? null;
+}
+
+/** The applicant must own the application AND still belong to its company (worker or applicant identity). */
 function requireOwnApplication(a: any, actor: JobBoardActor) {
-  const w = actor.worker;
-  if (a.applicant_user_id !== actor.userId || !w || w.companyId !== a.company_id) fail(404, NOT_FOUND_APP);
+  if (a.applicant_user_id !== actor.userId || submitterCompany(actor) !== a.company_id) fail(404, NOT_FOUND_APP);
 }
 
 async function appEvent(q: Q, e: {
@@ -72,7 +78,19 @@ async function appEvent(q: Q, e: {
   );
 }
 
-async function assertMayApply(deps: JobBoardDeps, post: any, actor: JobBoardActor) {
+async function assertMayApply(deps: JobBoardDeps, post: any, actor: JobBoardActor): Promise<{ workerId: string | null; applicantId: string | null }> {
+  if (!actor.worker && actor.applicant) {
+    // Limited applicant identity: only employee postings explicitly made available to it.
+    if (actor.applicant.companyId !== post.company_id) fail(404, NOT_FOUND_POST);
+    if (!(await applicantCanSeePost(deps.pool, { ...post, status: "published" }, actor.applicant))) {
+      if (post.worker_classification !== "employee") fail(404, NOT_FOUND_POST);
+      fail(404, NOT_FOUND_POST);
+    }
+    const open0 = submissionsOpen(post, deps.now?.());
+    if (!open0.ok) fail(open0.status, open0.message);
+    await requireGate(deps, post.company_id);
+    return { workerId: null, applicantId: actor.applicant.applicantId };
+  }
   const who = requireWorker(actor);
   if (who.companyId !== post.company_id) fail(404, NOT_FOUND_POST);
   // Visibility first (a posting the caller cannot see stays a 404), then the path check.
@@ -81,7 +99,7 @@ async function assertMayApply(deps: JobBoardDeps, post: any, actor: JobBoardActo
   const open = submissionsOpen(post, deps.now?.());
   if (!open.ok) fail(open.status, open.message);
   await requireGate(deps, post.company_id);
-  return who;
+  return { workerId: who.workerId, applicantId: null };
 }
 
 async function activeQuestions(q: Q, postId: string) {
@@ -169,7 +187,7 @@ export function archiveScreeningQuestion(deps: JobBoardDeps, actor: JobBoardActo
 // ── Applicant ───────────────────────────────────────────────────────────────
 export function listMyApplications(deps: JobBoardDeps, actor: JobBoardActor) {
   return run(async () => {
-    const who = requireWorker(actor);
+    const who = actor.worker || !actor.applicant ? requireWorker(actor) : { companyId: actor.applicant.companyId };
     const r = await deps.pool.query(
       `SELECT a.*, p.title AS job_title, p.status AS job_status
          FROM employment_applications a JOIN job_posts p ON p.id = a.job_post_id AND p.company_id = a.company_id
@@ -193,9 +211,9 @@ export function createApplication(deps: JobBoardDeps, actor: JobBoardActor, post
       if (existing.rows.length) fail(409, "You already have an application for this position");
       const cols = Object.keys(values);
       const ins = await c.query(
-        `INSERT INTO employment_applications (tenant_id, company_id, job_post_id, applicant_user_id, applicant_worker_id, status${cols.map((k) => ", " + k).join("")})
-         VALUES ($1,$2,$3,$4,$5,'draft'${cols.map((_, i) => `, $${i + 6}`).join("")}) RETURNING *`,
-        [post.tenant_id, post.company_id, post.id, actor.userId, who.workerId, ...cols.map((k) => values[k])]);
+        `INSERT INTO employment_applications (tenant_id, company_id, job_post_id, applicant_user_id, applicant_worker_id, applicant_id, status${cols.map((k) => ", " + k).join("")})
+         VALUES ($1,$2,$3,$4,$5,$6,'draft'${cols.map((_, i) => `, $${i + 7}`).join("")}) RETURNING *`,
+        [post.tenant_id, post.company_id, post.id, actor.userId, who.workerId, who.applicantId, ...cols.map((k) => values[k])]);
       const app = ins.rows[0];
       if (body?.answers) await saveAnswers(c, app, body.answers, { enforceRequired: false });
       await appEvent(c, { app, type: "application_created", newStatus: "draft", actorUserId: actor.userId });
@@ -533,7 +551,7 @@ export function authorizeApplicationDocumentDownload(deps: JobBoardDeps, actor: 
     const app = await loadApplication(deps, deps.pool, d.application_id);
     if (app.company_id !== d.company_id) fail(404, NOT_FOUND_DOC);
     const admin = (await canManage(actor, app.company_id)) && applicationVisibleToAdmin(app);
-    const own = app.applicant_user_id === actor.userId && actor.worker?.companyId === app.company_id;
+    const own = app.applicant_user_id === actor.userId && submitterCompany(actor) === app.company_id;
     if (!admin && !own) fail(404, NOT_FOUND_DOC);
     const abs = resolveHrKey(d.storage_key);
     if (!fs.existsSync(abs)) fail(404, NOT_FOUND_DOC);

@@ -14,6 +14,13 @@
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type PostStatus = "draft" | "published" | "paused" | "closed" | "archived";
+/** Public-board visibility (migration 0030). NULL = never chosen → behaves as access_required. */
+export type PublicVisibility = "public" | "access_required" | "invite_only";
+export const PUBLIC_VISIBILITY_LABEL: Record<PublicVisibility, string> = {
+  public: "Public — anyone with the board code sees the public summary",
+  access_required: "Access required — approved people only (default)",
+  invite_only: "Invite only — only people you grant",
+};
 export type WorkerClassification = "contractor" | "employee";
 export type OpportunityType = "project" | "recurring_work" | "position";
 export type ScheduleType = "one_time" | "recurring" | "part_time" | "full_time";
@@ -77,6 +84,10 @@ export interface JobPost {
   closeReason?: string | null;
   updatedAt?: string | null;
   submissionCounts?: { kind: "proposals" | "applications"; total: number; awaitingReview: number; shortlisted: number; filled: number };
+  // public board (migration 0030; administrator projection)
+  publicVisibility?: PublicVisibility | null;
+  publicDescription?: string | null;
+  publicShowCompensation?: boolean;
   // detail
   attachments?: JobAttachment[];
   screeningQuestions?: ScreeningQuestion[];
@@ -178,8 +189,10 @@ export const JOB_ADMIN_ROLES = new Set([
 export function jobBoardViewsFor(user: { role?: string | null; workerId?: string | null; workerType?: string | null } | null | undefined) {
   const canManage = !!user?.role && JOB_ADMIN_ROLES.has(user.role);
   const isWorker = !!user?.workerId && (user?.workerType === "contractor" || user?.workerType === "employee");
+  // Limited applicant identity (role 'applicant', no worker): may apply to employee positions only.
+  const isApplicant = user?.role === "applicant" && !user?.workerId;
   const canPropose = isWorker && user?.workerType === "contractor";
-  const canApply = isWorker;
+  const canApply = isWorker || isApplicant;
   return { canManage, canPropose, canApply, canBrowse: canPropose || canApply, canBid: canPropose };
 }
 
@@ -349,6 +362,7 @@ export interface PostForm {
   startDate: string; endDate: string; applicationDeadline: string;
   compensationType: string; compensationMin: string; compensationMax: string; currency: string; paymentTerms: string;
   numberOfOpenings: string; visibility: string; eligibleGroups: string;
+  publicVisibility: PublicVisibility; publicDescription: string; publicShowCompensation: boolean;
 }
 
 /** Schedules offered after the first choice. Employee positions are part-time or full-time only. */
@@ -400,6 +414,9 @@ export function formFromPost(p: JobPost | null): PostForm {
     currency: p?.currency ?? "USD", paymentTerms: p?.paymentTerms ?? "",
     numberOfOpenings: p ? (p.numberOfOpeningsSetting != null ? String(p.numberOfOpeningsSetting) : "") : "1",
     visibility: p?.visibility ?? "all_eligible", eligibleGroups: (p?.eligibleGroups ?? []).join(", "),
+    publicVisibility: (p?.publicVisibility as PublicVisibility | null | undefined) ?? "access_required",
+    publicDescription: p?.publicDescription ?? "",
+    publicShowCompensation: p?.publicShowCompensation === true,
   };
 }
 
@@ -432,6 +449,9 @@ export function postPayload(form: PostForm, initial: PostForm | null, opts: { st
     numberOfOpenings: f.numberOfOpenings ? Number(f.numberOfOpenings) : null,
     visibility: f.visibility,
     eligibleGroups: f.visibility === "selected_groups" ? splitList(f.eligibleGroups) : [],
+    publicVisibility: f.publicVisibility || "access_required",
+    publicDescription: f.publicDescription,
+    publicShowCompensation: f.publicShowCompensation === true,
   };
   for (const k of Object.keys(full)) if (full[k] === undefined) delete full[k];
   if (!initial) return full;
