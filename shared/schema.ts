@@ -5546,6 +5546,10 @@ export const jobPosts = pgTable("job_posts", {
   visibility: text("visibility").notNull().default("all_eligible"), // all_eligible | invited_only | selected_groups
   eligibleGroups: jsonb("eligible_groups").notNull().default(sql`'[]'::jsonb`),
   costJobId: varchar("cost_job_id"), // optional cost-accounting jobs.id, copied to the awarded proposal's job_id
+  // Public board (migration 0030). NULL public_visibility = access_required (fail closed).
+  publicVisibility: text("public_visibility"), // public | access_required | invite_only
+  publicDescription: text("public_description"),
+  publicShowCompensation: boolean("public_show_compensation"),
   status: text("status").notNull().default("draft"), // draft | published | paused | closed | archived
   closeReason: text("close_reason"),
   publishedAt: timestamp("published_at"),
@@ -5725,6 +5729,7 @@ export const employmentApplications = pgTable("employment_applications", {
   convertedWorkerType: text("converted_worker_type"), // always 'employee' when set
   convertedAt: timestamp("converted_at"),
   convertedByUserId: varchar("converted_by_user_id"),
+  applicantId: varchar("applicant_id").references(() => jobApplicants.id), // migration 0030
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -5771,5 +5776,114 @@ export const employmentApplicationDocuments = pgTable("employment_application_do
   uploadedByUserId: varchar("uploaded_by_user_id").notNull(),
   removedAt: timestamp("removed_at"),
   removedByUserId: varchar("removed_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Job board public discovery + applicant access (migration 0030) ─────────
+// Columns mirror migrations/0030_job_board_public_access.sql; CHECKs, partial
+// unique indexes and triggers live in that SQL file only. The discovery code
+// is stored only as a SHA-256 lookup hash; invitation tokens only as hashes.
+export const jobBoardSettings = pgTable("job_board_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  boardEnabled: boolean("board_enabled").notNull().default(false),
+  codeLookupHash: text("code_lookup_hash"),
+  codeHint: text("code_hint"),
+  codeRotatedAt: timestamp("code_rotated_at"),
+  displayName: text("display_name"),
+  tagline: text("tagline"),
+  brandColor: text("brand_color"),
+  acceptContractorRequests: boolean("accept_contractor_requests").notNull().default(false),
+  acceptApplicantRequests: boolean("accept_applicant_requests").notNull().default(false),
+  updatedByUserId: varchar("updated_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+/** Limited applicant identity (users.role = 'applicant'). Never a worker, contractor or employee record. */
+export const jobApplicants = pgTable("job_applicants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  userId: varchar("user_id"),
+  emailNormalized: text("email_normalized").notNull(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  status: text("status").notNull().default("pending_activation"), // pending_activation | active | disabled
+  emailVerifiedAt: timestamp("email_verified_at"),
+  activatedAt: timestamp("activated_at"),
+  disabledAt: timestamp("disabled_at"),
+  disabledReason: text("disabled_reason"),
+  createdFromRequestId: varchar("created_from_request_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const jobBoardAccessRequests = pgTable("job_board_access_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  requestKind: text("request_kind").notNull(), // contractor | applicant
+  jobPostId: varchar("job_post_id").references(() => jobPosts.id),
+  emailNormalized: text("email_normalized").notNull(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  phone: text("phone"),
+  message: text("message"),
+  status: text("status").notNull().default("pending"), // pending | approved | denied | withdrawn | expired
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  decisionNote: text("decision_note"),
+  applicantId: varchar("applicant_id").references(() => jobApplicants.id),
+  contractorAccessRequestId: varchar("contractor_access_request_id"),
+  sourceIpHash: text("source_ip_hash"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const jobBoardInvitations = pgTable("job_board_invitations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  purpose: text("purpose").notNull(), // applicant_activation | posting_invitation
+  accessRequestId: varchar("access_request_id").references(() => jobBoardAccessRequests.id),
+  applicantId: varchar("applicant_id").references(() => jobApplicants.id),
+  jobPostId: varchar("job_post_id").references(() => jobPosts.id),
+  emailNormalized: text("email_normalized").notNull(),
+  tokenHash: text("token_hash").notNull(), // sha256 hex; plaintext never stored
+  expiresAt: timestamp("expires_at").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  revokedAt: timestamp("revoked_at"),
+  revokedByUserId: varchar("revoked_by_user_id"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const jobPostAccessGrants = pgTable("job_post_access_grants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  jobPostId: varchar("job_post_id").notNull().references(() => jobPosts.id),
+  applicantId: varchar("applicant_id").notNull().references(() => jobApplicants.id),
+  grantSource: text("grant_source").notNull(), // access_approval | invitation
+  grantedByUserId: varchar("granted_by_user_id"),
+  grantedAt: timestamp("granted_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+  revokedByUserId: varchar("revoked_by_user_id"),
+});
+
+export const jobBoardAccessEvents = pgTable("job_board_access_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  eventType: text("event_type").notNull(),
+  accessRequestId: varchar("access_request_id").references(() => jobBoardAccessRequests.id),
+  applicantId: varchar("applicant_id").references(() => jobApplicants.id),
+  invitationId: varchar("invitation_id").references(() => jobBoardInvitations.id),
+  jobPostId: varchar("job_post_id").references(() => jobPosts.id),
+  actorUserId: varchar("actor_user_id"),
+  details: jsonb("details"),
   createdAt: timestamp("created_at").defaultNow(),
 });
