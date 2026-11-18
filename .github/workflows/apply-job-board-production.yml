@@ -87,20 +87,7 @@ jobs:
             sha256sum "${BACKUP_FILE}.gz" > "${BACKUP_FILE}.gz.sha256"
             echo "backup: ${BACKUP_FILE}.gz $(cut -c1-64 "${BACKUP_FILE}.gz.sha256")"
 
-            COUNTS_SQL="SELECT string_agg(t || '=' || n, ' ' ORDER BY t) FROM (
-              SELECT 'companies' t, count(*) n FROM companies UNION ALL
-              SELECT 'tenants', count(*) FROM tenants UNION ALL
-              SELECT 'tenant_companies', count(*) FROM tenant_companies UNION ALL
-              SELECT 'users', count(*) FROM users UNION ALL
-              SELECT 'workers', count(*) FROM workers UNION ALL
-              SELECT 'contractor_proposals', count(*) FROM contractor_proposals UNION ALL
-              SELECT 'contractor_contracts', count(*) FROM contractor_contracts UNION ALL
-              SELECT 'invoices', count(*) FROM invoices UNION ALL
-              SELECT 'payments', count(*) FROM payments UNION ALL
-              SELECT 'contractor_payments', count(*) FROM contractor_payments UNION ALL
-              SELECT 'expense_payments', count(*) FROM expense_payments UNION ALL
-              SELECT 'payroll_runs', count(*) FROM payroll_runs UNION ALL
-              SELECT 'account_invites', count(*) FROM account_invites) s"
+            COUNTS_SQL="SELECT string_agg(t || '=' || n, ' ' ORDER BY t) FROM ( SELECT 'companies' t, count(*) n FROM companies UNION ALL SELECT 'tenants', count(*) FROM tenants UNION ALL SELECT 'tenant_companies', count(*) FROM tenant_companies UNION ALL SELECT 'users', count(*) FROM users UNION ALL SELECT 'workers', count(*) FROM workers UNION ALL SELECT 'contractor_proposals', count(*) FROM contractor_proposals UNION ALL SELECT 'contractor_contracts', count(*) FROM contractor_contracts UNION ALL SELECT 'invoices', count(*) FROM invoices UNION ALL SELECT 'payments', count(*) FROM payments UNION ALL SELECT 'contractor_payments', count(*) FROM contractor_payments UNION ALL SELECT 'expense_payments', count(*) FROM expense_payments UNION ALL SELECT 'payroll_runs', count(*) FROM payroll_runs UNION ALL SELECT 'account_invites', count(*) FROM account_invites) s"
             BEFORE_COUNTS="$(PSQL -c "$COUNTS_SQL")"
             echo "before: $BEFORE_COUNTS"
 
