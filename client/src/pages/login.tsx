@@ -30,6 +30,7 @@ import {
   ChevronUp,
   Shield,
 } from "lucide-react";
+import { CompanySigninCodeField, useSigninContext, needsCompanyCode, SIGNIN_CONTEXT_KEY } from "@/components/company-signin-code";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
 function LiveClock() {
@@ -99,6 +100,7 @@ function PunchButton({
   companyId,
   employeeNumber,
   pin,
+  companyCode,
 }: {
   type: string;
   icon: any;
@@ -108,6 +110,7 @@ function PunchButton({
   companyId: string;
   employeeNumber?: string;
   pin?: string;
+  companyCode?: string;
 }) {
   const { toast } = useToast();
 
@@ -118,6 +121,7 @@ function PunchButton({
       if (employeeNumber && pin) {
         body.employeeNumber = employeeNumber;
         body.pin = pin;
+        if (companyCode) body.companyCode = companyCode;
       }
       await apiRequest("POST", endpoint, body);
     },
@@ -475,6 +479,8 @@ function AdminLoginForm() {
 
 function EmployeePinLoginForm() {
   const { pinLogin } = useAuth();
+  const { data: signinCtx } = useSigninContext();
+  const [companyCode, setCompanyCode] = useState("");
   const [employeeNumber, setEmployeeNumber] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
@@ -502,15 +508,19 @@ function EmployeePinLoginForm() {
   async function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
     setError("");
-    if (!employeeNumber || !pin) {
-      setError("Please enter both employee number and PIN");
+    const codeRequired = needsCompanyCode(signinCtx);
+    if ((codeRequired && !companyCode) || !employeeNumber || !pin) {
+      setError(codeRequired ? "Please enter your company sign-in code, employee number and PIN" : "Please enter both employee number and PIN");
       return;
     }
     setLoading(true);
     try {
-      await pinLogin(employeeNumber, pin);
-    } catch {
-      setError("Invalid employee number or PIN");
+      await pinLogin(employeeNumber, pin, codeRequired ? companyCode : undefined);
+      queryClient.invalidateQueries({ queryKey: SIGNIN_CONTEXT_KEY });
+    } catch (err) {
+      // Same message for a wrong code, number or PIN (the server never says which).
+      const msg = err instanceof Error && /^429/.test(err.message) ? "Too many sign-in attempts. Please wait 15 minutes and try again." : "Invalid company code, employee number, or PIN";
+      setError(msg);
       setPin("");
     } finally {
       setLoading(false);
@@ -519,6 +529,7 @@ function EmployeePinLoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <CompanySigninCodeField idPrefix="pin-login" value={companyCode} onChange={setCompanyCode} />
       <div className="space-y-2">
         <Label htmlFor="empNumLogin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
           <Hash className="h-3.5 w-3.5" /> Employee Number
@@ -568,7 +579,7 @@ function EmployeePinLoginForm() {
         type="submit"
         size="lg"
         className="w-full"
-        disabled={loading || !employeeNumber || !pin}
+        disabled={loading || !employeeNumber || !pin || (needsCompanyCode(signinCtx) && !companyCode)}
         data-testid="button-pin-login"
       >
         <Fingerprint className="h-5 w-5 mr-2" />
@@ -586,19 +597,32 @@ function TimeClockPanel() {
   const [pin, setPin] = useState("");
   const [authedEmpNum, setAuthedEmpNum] = useState("");
   const [authedPin, setAuthedPin] = useState("");
+  const [companyCode, setCompanyCode] = useState("");
+  const [authedCode, setAuthedCode] = useState("");
+  const { data: signinCtx } = useSigninContext();
   const [activeField, setActiveField] = useState<"empNum" | "pin">("empNum");
   const [authError, setAuthError] = useState("");
 
+  // POST so the PIN never appears in a URL; company from the code / remembered device / kiosk.
   const { data: punches } = useQuery<TimePunch[]>({
-    queryKey: ["/api/time-clock/punches", authenticatedWorker ? `?workerId=${authenticatedWorker.id}&employeeNumber=${authedEmpNum}&pin=${authedPin}` : ""],
+    queryKey: ["/api/time-clock/punches", authenticatedWorker?.id ?? ""],
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/time-clock/punches", {
+        workerId: authenticatedWorker!.id, employeeNumber: authedEmpNum, pin: authedPin,
+        ...(authedCode ? { companyCode: authedCode } : {}),
+      });
+      return res.json();
+    },
     enabled: !!authenticatedWorker && !!authedEmpNum && !!authedPin,
   });
 
   const authMutation = useMutation({
     mutationFn: async () => {
+      const codeRequired = needsCompanyCode(signinCtx);
       const res = await apiRequest("POST", "/api/time-clock/auth", {
         employeeNumber,
         pin,
+        ...(codeRequired && companyCode ? { companyCode } : {}),
       });
       return res.json();
     },
@@ -608,11 +632,13 @@ function TimeClockPanel() {
       setAuthError("");
       setAuthedEmpNum(employeeNumber);
       setAuthedPin(pin);
+      setAuthedCode(needsCompanyCode(signinCtx) ? companyCode : "");
+      queryClient.invalidateQueries({ queryKey: SIGNIN_CONTEXT_KEY });
       setEmployeeNumber("");
       setPin("");
     },
-    onError: () => {
-      setAuthError("Invalid employee number or PIN");
+    onError: (err: Error) => {
+      setAuthError(/^429/.test(err?.message || "") ? "Too many sign-in attempts. Please wait 15 minutes and try again." : "Invalid company code, employee number, or PIN");
       setPin("");
     },
   });
@@ -645,8 +671,8 @@ function TimeClockPanel() {
 
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!employeeNumber || !pin) {
-      setAuthError("Please enter both employee number and PIN");
+    if (!employeeNumber || !pin || (needsCompanyCode(signinCtx) && !companyCode)) {
+      setAuthError(needsCompanyCode(signinCtx) ? "Please enter your company sign-in code, employee number and PIN" : "Please enter both employee number and PIN");
       return;
     }
     authMutation.mutate();
@@ -659,6 +685,7 @@ function TimeClockPanel() {
     setPin("");
     setAuthedEmpNum("");
     setAuthedPin("");
+    setAuthedCode("");
     setAuthError("");
   }
 
@@ -733,6 +760,7 @@ function TimeClockPanel() {
               companyId={authenticatedWorker.companyId}
               employeeNumber={authedEmpNum}
               pin={authedPin}
+              companyCode={authedCode}
             />
           ) : (
             <>
@@ -746,6 +774,7 @@ function TimeClockPanel() {
                   companyId={authenticatedWorker.companyId}
                   employeeNumber={authedEmpNum}
                   pin={authedPin}
+              companyCode={authedCode}
                 />
               )}
               {isOnBreak && (
@@ -758,6 +787,7 @@ function TimeClockPanel() {
                   companyId={authenticatedWorker.companyId}
                   employeeNumber={authedEmpNum}
                   pin={authedPin}
+              companyCode={authedCode}
                 />
               )}
               <PunchButton
@@ -769,6 +799,7 @@ function TimeClockPanel() {
                 companyId={authenticatedWorker.companyId}
                 employeeNumber={authedEmpNum}
                 pin={authedPin}
+              companyCode={authedCode}
               />
             </>
           )}
@@ -824,6 +855,7 @@ function TimeClockPanel() {
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        <CompanySigninCodeField idPrefix="time-clock-panel" value={companyCode} onChange={setCompanyCode} />
         <div className="space-y-2">
           <Label htmlFor="empNum" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
             <Hash className="h-3.5 w-3.5" /> Employee Number

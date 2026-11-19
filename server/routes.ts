@@ -54,6 +54,12 @@ import {
 import type { User } from "@shared/schema";
 import { db } from "./db";
 import { createUploadsHandler, findUploadOwners } from "./uploads-access";
+import {
+  authenticateWorkerByPin, verifyWorkerSignin, applySigninSuccess, resolveSigninCompany, describeSigninContext, clearRememberCookie, GENERIC_SIGNIN_FAILURE,
+  pinAccountUsername, verifyWorkerPin, burnDummyCompare, PIN_FORMAT, companySigninReady, getOrCreateSigninCode, rotateSigninCode,
+  formatSigninCode, createKioskBinding, setKioskCookie, clearKioskCookie, listKioskBindings, revokeKioskBinding,
+  allocateEmployeeNumber, createWorkerAllocatingNumber, isEmployeeNumberConflict, EMPLOYEE_NUMBER_CONFLICT_MESSAGE, EmployeeNumberExhaustedError,
+} from "./employee-signin";
 import { isApplicantApiAllowed } from "./job-board/applicant-api-allowlist";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
@@ -624,6 +630,32 @@ const loginRateLimit = createRateLimiter("auth-login", {
   max: 20,
   message: "Too many login attempts. Please wait 15 minutes and try again.",
 });
+// Company-scoped employee sign-in (migration 0031). Per-IP spray limit; the
+// per-(company, employee number) lockout in employee-signin.ts stops targeted
+// guessing. Time-clock routes are keyed per kiosk binding when present (a busy
+// shared kiosk serves many employees from one IP).
+const envInt = (name: string, dflt: number) => {
+  const n = Number.parseInt(process.env[name] || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+};
+const pinSigninRateLimit = createRateLimiter("auth-pin-login", {
+  windowMs: 15 * 60 * 1000,
+  max: envInt("PIN_SIGNIN_RATE_LIMIT_MAX", 30),
+  message: "Too many sign-in attempts. Please wait 15 minutes and try again.",
+});
+const timeClockRateLimit = createRateLimiter("time-clock", {
+  windowMs: 15 * 60 * 1000,
+  max: envInt("TIME_CLOCK_RATE_LIMIT_MAX", 300),
+  keyFn: (req) => {
+    const m = /(?:^|;\s*)pl_time_clock_kiosk=([^;]+)/.exec(req.headers.cookie || "");
+    return m ? `kiosk:${crypto.createHash("sha256").update(m[1]).digest("hex").slice(0, 24)}` : (req.ip || "unknown");
+  },
+  message: "Too many time-clock requests. Please wait a few minutes and try again.",
+});
+const signinContextRateLimit = createRateLimiter("signin-context", {
+  windowMs: 15 * 60 * 1000,
+  max: envInt("SIGNIN_CONTEXT_RATE_LIMIT_MAX", 300),
+});
 const trialSignupRateLimit = createRateLimiter("trial-signup", {
   windowMs: 60 * 60 * 1000,
   max: 10,
@@ -1150,6 +1182,35 @@ function enforceCompanyScope(source: "query" | "body" = "query") {
     (req as any)._companyId = sessionCompanyId;
     next();
   };
+}
+
+/**
+ * The users row for a PIN-authenticated worker. New accounts get a username
+ * that is unique across companies and an unusable random password (a PIN is
+ * never a password). A legacy account whose password still equals its PIN —
+ * created by the old PIN flow — has that password replaced so it can no longer
+ * bypass company-scoped sign-in through username/password login. Returns null
+ * (caller answers generically) when the account is disabled or bound to a
+ * different company than the worker.
+ */
+async function getOrCreatePinUser(worker: any, pin: string) {
+  let user = await storage.getUserByWorkerId(worker.id);
+  if (!user) {
+    user = await storage.createUser({
+      username: pinAccountUsername(String(worker.employeeNumber || "")),
+      password: await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10),
+      role: "employee",
+      companyId: worker.companyId,
+      workerId: worker.id,
+      isActive: true,
+    });
+  } else if (user.password && await bcrypt.compare(pin, user.password).catch(() => false)) {
+    await storage.updateUser(user.id, { password: await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10) } as any);
+  }
+  if (user.isActive === false) return null;
+  // The account must belong to the worker's company (identity binding, not a list scope).
+  if (worker.companyId && !(await canAccessStoredCompany(user as any, worker.companyId))) return null;
+  return user;
 }
 
 async function writeAuditLog(opts: {
@@ -2277,6 +2338,10 @@ export async function registerRoutes(
   // imported by integration tests without duplicating the guard logic.
   { const { applyApiJsonGuard } = await import("./middleware/api-json-guard.js"); applyApiJsonGuard(app); }
 
+  // ── PIN scrubbing ─────────────────────────────────────────────────────────
+  // No /api response ever carries a PIN or PIN hash (server/middleware/strip-credential-fields.ts).
+  { const { applyStripCredentialFields } = await import("./middleware/strip-credential-fields.js"); applyStripCredentialFields(app); }
+
   // ── Feature gate middleware — applied to entire path groups ──────────────────
   // requireFeature() is a hoisted function declaration defined later in this file.
   // Using app.use() ensures ALL methods/routes under each prefix are gated.
@@ -2597,43 +2662,32 @@ function hashSigningToken(token: string): string {
     } catch (e: any) { res.status(500).json({ message: "Failed to resolve effective access: " + e.message }); }
   });
 
-  app.post("/api/auth/pin-login", async (req, res) => {
+  // Employee PIN sign-in — company sign-in code + employee number + PIN
+  // (server/employee-signin.ts). Generic failure for every wrong part.
+  app.post("/api/auth/pin-login", pinSigninRateLimit, async (req, res) => {
     try {
-      const { employeeNumber, pin } = req.body;
-      if (!employeeNumber || !pin) {
-        return res.status(400).json({ message: "Employee number and PIN are required" });
-      }
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) {
-        return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
-      }
-      if (!worker.isActive) {
-        return res.status(403).json({ message: "This employee account is inactive" });
-      }
-      let user = await storage.getUserByWorkerId(worker.id);
-      if (!user) {
-        const hashedPassword = await bcrypt.hash(pin, 10);
-        user = await storage.createUser({
-          username: employeeNumber,
-          password: hashedPassword,
-          role: "employee",
-          companyId: worker.companyId,
-          workerId: worker.id,
-          isActive: true,
-        });
-      }
-      if (user.isActive === false) {
-        return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
-      }
-      req.session.userId = user.id;
-      req.session.username = user.username;
-      const workerInfo = { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, companyId: worker.companyId };
-      req.session.save((err: Error | null) => {
-        if (err) {
-          console.error("Session save error (pin-login):", err);
+      const auth = await authenticateWorkerByPin(req, res, {
+        companyCode: req.body?.companyCode, employeeNumber: req.body?.employeeNumber, pin: req.body?.pin, channel: "pin_login",
+      });
+      if (!auth) return;
+      const { worker } = auth;
+      const user = await getOrCreatePinUser(worker, String(req.body.pin));
+      if (!user) return res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
+      req.session.regenerate((regenErr) => {
+        if (regenErr) {
+          console.error("Session regenerate error (pin-login):", regenErr);
           return res.status(500).json({ message: "Login failed" });
         }
-        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+        req.session.userId = user.id;
+        req.session.username = user.username;
+        const workerInfo = { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, companyId: worker.companyId };
+        req.session.save((err: Error | null) => {
+          if (err) {
+            console.error("Session save error (pin-login):", err);
+            return res.status(500).json({ message: "Login failed" });
+          }
+          res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+        });
       });
     } catch (error) {
       console.error(error);
@@ -2641,8 +2695,124 @@ function hashSigningToken(token: string): string {
     }
   });
 
+  // ── Company sign-in code + time-clock kiosks (administrators) ────────────
+  // The company is the admin's own; a platform admin may name one it can
+  // access. A browser-supplied companyId is only a selector, authorized here.
+  async function signinAdminCompany(req: Request, res: Response): Promise<{ companyId: string; actorId: string } | null> {
+    if (!(await companySigninReady())) { res.status(503).json({ message: "Company sign-in codes are not enabled yet." }); return null; }
+    const actor = await storage.getUser(req.session.userId!);
+    if (!actor || actor.isActive === false) { res.status(401).json({ message: "Not authenticated" }); return null; }
+    const requested = String((req.method === "GET" ? req.query.companyId : req.body?.companyId) || "") || null;
+    const companyId = requested || actor.companyId || null;
+    if (!companyId) { res.status(400).json({ message: "Company is required" }); return null; }
+    const allowed = isPlatformUser(actor.role)
+      ? await canAccessCompany(actor, companyId)
+      : companyId === actor.companyId;
+    if (!allowed) { res.status(404).json({ message: "Company not found" }); return null; }
+    return { companyId, actorId: actor.id };
+  }
+
+  app.get("/api/company-signin/code", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const ctx = await signinAdminCompany(req, res);
+      if (!ctx) return;
+      const c = await getOrCreateSigninCode(ctx.companyId);
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ code: formatSigninCode(c.code), codeVersion: c.codeVersion, rotatedAt: c.rotatedAt });
+    } catch (e) {
+      console.error("[company-signin] view failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not load the sign-in code" });
+    }
+  });
+
+  app.post("/api/company-signin/code/rotate", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const ctx = await signinAdminCompany(req, res);
+      if (!ctx) return;
+      const r = await rotateSigninCode(ctx.companyId, ctx.actorId, {
+        revokeKiosks: req.body?.revokeKiosks === true,
+        endEmployeeSessions: req.body?.endEmployeeSessions === true,
+      });
+      await writeAuditLog({
+        actorUserId: ctx.actorId, targetResource: "company_signin_codes", changeType: "company_signin_code_rotated",
+        afterValue: `version ${r.codeVersion}`, companyId: ctx.companyId,
+        note: `Remembered devices invalidated; kiosks revoked: ${r.kiosksRevoked}; employee sessions ended: ${r.sessionsEnded}`,
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ code: formatSigninCode(r.code), codeVersion: r.codeVersion, kiosksRevoked: r.kiosksRevoked, sessionsEnded: r.sessionsEnded });
+    } catch (e) {
+      console.error("[company-signin] rotate failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not regenerate the sign-in code" });
+    }
+  });
+
+  app.get("/api/time-clock/kiosks", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const ctx = await signinAdminCompany(req, res);
+      if (!ctx) return;
+      res.json(await listKioskBindings(ctx.companyId));
+    } catch {
+      res.status(500).json({ message: "Could not load time-clock devices" });
+    }
+  });
+
+  // Bind THIS browser as a time-clock kiosk for the company (sets an HttpOnly
+  // device cookie; only the token hash is stored).
+  app.post("/api/time-clock/kiosks", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const ctx = await signinAdminCompany(req, res);
+      if (!ctx) return;
+      const label = typeof req.body?.label === "string" ? req.body.label.trim().slice(0, 80) : "";
+      if (!label) return res.status(400).json({ message: "A device name is required" });
+      const { token, binding } = await createKioskBinding(ctx.companyId, label, ctx.actorId);
+      await writeAuditLog({
+        actorUserId: ctx.actorId, targetResource: "time_clock_kiosk_bindings", changeType: "time_clock_kiosk_bound",
+        afterValue: binding.id, companyId: ctx.companyId, note: `Device: ${label}`,
+      });
+      setKioskCookie(res, token);
+      res.status(201).json({ id: binding.id, label: binding.label, createdAt: binding.created_at });
+    } catch (e) {
+      console.error("[time-clock] bind failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not set up this device" });
+    }
+  });
+
+  app.post("/api/time-clock/kiosks/:id/revoke", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const ctx = await signinAdminCompany(req, res);
+      if (!ctx) return;
+      const revoked = await revokeKioskBinding(ctx.companyId, String(req.params.id), ctx.actorId);
+      if (!revoked) return res.status(404).json({ message: "Device not found" });
+      await writeAuditLog({
+        actorUserId: ctx.actorId, targetResource: "time_clock_kiosk_bindings", changeType: "time_clock_kiosk_revoked",
+        afterValue: String(req.params.id), companyId: ctx.companyId,
+      });
+      if (req.body?.thisDevice === true) clearKioskCookie(res);
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Could not remove the device" });
+    }
+  });
+
+  // What the employee / time-clock sign-in screen may show (never the code).
+  app.get("/api/auth/signin-context", signinContextRateLimit, async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await describeSigninContext(req));
+    } catch {
+      res.json({ companyScoped: true, kiosk: false, remembered: false, companyName: null });
+    }
+  });
+
+  // "Not your company?" — forget the remembered company on this device. A
+  // kiosk binding cannot be cleared from the device (admin only).
+  app.post("/api/auth/signin-context/forget", signinContextRateLimit, (_req, res) => {
+    clearRememberCookie(res);
+    res.json({ ok: true });
+  });
+
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/signin-context" || req.path === "/auth/signin-context/forget" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -3249,19 +3419,17 @@ function hashSigningToken(token: string): string {
         return res.status(400).json({ message: payRateResult.message });
       }
       req.body.payRate = payRateResult.payRate;
-      // Auto-generate employee number if not provided. Scoped to the target
-      // company (companyId is required above) — never load every tenant's
-      // workers; reduce (not a Math.max variadic spread) avoids a RangeError.
-      if (!req.body.employeeNumber) {
-        const companyWorkers = await storage.getWorkers(req.body.companyId);
-        const highest = companyWorkers.reduce((max: number, w: any) => {
-          const n = parseInt(w.employeeNumber || "0", 10);
-          return !isNaN(n) && n > max ? n : max;
-        }, 0);
-        const nextNum = highest > 0 ? highest + 1 : 1001;
-        req.body.employeeNumber = String(nextNum);
+      // Employee number: allocated atomically per company (YYNN) inside the same
+      // transaction as the insert when not supplied; a supplied number must be
+      // unique within the company (DB constraint uq_workers_company_employee_number).
+      let worker: any;
+      try {
+        worker = await createWorkerAllocatingNumber(req.body);
+      } catch (e) {
+        if (isEmployeeNumberConflict(e)) return res.status(409).json({ message: EMPLOYEE_NUMBER_CONFLICT_MESSAGE });
+        if (e instanceof EmployeeNumberExhaustedError) return res.status(409).json({ message: e.message });
+        throw e;
       }
-      const worker = await storage.createWorker(req.body);
       await writeAuditLog({
         actorUserId: req.session.userId!, targetResource: "workers", changeType: "worker_created",
         afterValue: `${worker.firstName} ${worker.lastName} (${worker.employeeNumber})`,
@@ -3885,6 +4053,7 @@ function hashSigningToken(token: string): string {
       });
       res.json(worker);
     } catch (error) {
+      if (isEmployeeNumberConflict(error)) return res.status(409).json({ message: EMPLOYEE_NUMBER_CONFLICT_MESSAGE });
       console.error(error);
       res.status(500).json({ message: "Failed to update worker" });
     }
@@ -3917,31 +4086,15 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.post("/api/time-clock/auth", async (req, res) => {
+  app.post("/api/time-clock/auth", timeClockRateLimit, async (req, res) => {
     try {
-      const { employeeNumber, pin } = req.body;
-      if (!employeeNumber || !pin) {
-        return res.status(400).json({ message: "Employee number and PIN are required" });
-      }
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) {
-        return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
-      }
-      if (!worker.isActive) {
-        return res.status(403).json({ message: "This employee account is inactive" });
-      }
-      let user = await storage.getUserByWorkerId(worker.id);
-      if (!user) {
-        const hashedPassword = await bcrypt.hash(pin, 10);
-        user = await storage.createUser({
-          username: employeeNumber,
-          password: hashedPassword,
-          role: "employee",
-          companyId: worker.companyId,
-          workerId: worker.id,
-          isActive: true,
-        });
-      }
+      const auth = await authenticateWorkerByPin(req, res, {
+        companyCode: req.body?.companyCode, employeeNumber: req.body?.employeeNumber, pin: req.body?.pin, channel: "time_clock_auth",
+      });
+      if (!auth) return;
+      const { worker } = auth;
+      const user = await getOrCreatePinUser(worker, String(req.body.pin));
+      if (!user) return res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
       req.session.userId = user.id;
       req.session.username = user.username;
       const company = await storage.getCompany(worker.companyId);
@@ -3950,7 +4103,10 @@ function hashSigningToken(token: string): string {
           console.error("Session save error:", err);
           return res.status(500).json({ message: "Authentication failed" });
         }
-        res.json({ worker, company });
+        res.json({
+          worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, employeeNumber: worker.employeeNumber, companyId: worker.companyId, workerType: worker.workerType },
+          company: company ? { id: company.id, name: company.name } : null,
+        });
       });
     } catch (error) {
       console.error(error);
@@ -3958,19 +4114,20 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.get("/api/time-clock/punches", async (req, res) => {
+  // Recent punches for the authenticated worker. POST so the PIN is never in a
+  // URL (GET kept for older clients; same company-scoped verification).
+  const recentPunchesHandler = async (req: Request, res: Response) => {
     try {
-      const { workerId, employeeNumber, pin } = req.query;
-      if (!workerId || !employeeNumber || !pin) {
-        return res.status(400).json({ message: "workerId, employeeNumber, and pin are required" });
-      }
-      const worker = await storage.getWorker(workerId as string);
-      if (!worker || worker.employeeNumber !== employeeNumber || worker.pin !== pin) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
+      const src = req.method === "GET" ? req.query : req.body;
+      const auth = await authenticateWorkerByPin(req, res, {
+        companyCode: (src as any)?.companyCode, employeeNumber: (src as any)?.employeeNumber, pin: (src as any)?.pin, channel: "time_clock_punches",
+      });
+      if (!auth) return;
+      const { worker } = auth;
+      if ((src as any)?.workerId && (src as any).workerId !== worker.id) return res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches
-        .filter(p => p.workerId === workerId)
+        .filter(p => p.workerId === worker.id)
         .sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime())
         .slice(0, 20);
       res.json(workerPunches);
@@ -3978,23 +4135,42 @@ function hashSigningToken(token: string): string {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch punches" });
     }
-  });
+  };
+  app.get("/api/time-clock/punches", timeClockRateLimit, recentPunchesHandler);
+  app.post("/api/time-clock/punches", timeClockRateLimit, recentPunchesHandler);
 
-  app.post("/api/time-clock/punch", async (req, res) => {
+  app.post("/api/time-clock/punch", timeClockRateLimit, async (req, res) => {
     try {
-      const { workerId, punchType, employeeNumber, pin } = req.body;
-      if (!workerId || !punchType) {
-        return res.status(400).json({ message: "workerId and punchType are required" });
+      const { workerId: requestedWorkerId, punchType, employeeNumber, pin } = req.body;
+      if (!punchType) {
+        return res.status(400).json({ message: "punchType is required" });
       }
-      const worker = await storage.getWorker(workerId);
-      if (!worker) return res.status(404).json({ message: "Worker not found" });
-      if (employeeNumber && pin) {
-        if (worker.employeeNumber !== employeeNumber || worker.pin !== pin) {
-          return res.status(401).json({ message: "Invalid credentials" });
-        }
-      } else if (!req.session.userId) {
-        return res.status(401).json({ message: "Not authenticated" });
+      // Two ways to identify the worker, both company-scoped:
+      //  (1) company code / kiosk / remembered company + employee number + PIN
+      //      (self-service; a supplied workerId must match the authenticated worker);
+      //  (2) a session: the session user's OWN worker, or an admin/manager with
+      //      access to the worker's company punching on someone's behalf.
+      let worker: any;
+      if (employeeNumber || pin) {
+        const auth = await authenticateWorkerByPin(req, res, {
+          companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_punch",
+        });
+        if (!auth) return;
+        worker = auth.worker;
+        if (requestedWorkerId && requestedWorkerId !== worker.id) return res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
+      } else {
+        if (!req.session.userId) return res.status(401).json({ message: "Not authenticated" });
+        if (!requestedWorkerId) return res.status(400).json({ message: "workerId and punchType are required" });
+        const sessionUser = await storage.getUser(req.session.userId);
+        if (!sessionUser || sessionUser.isActive === false) return res.status(401).json({ message: "Not authenticated" });
+        worker = await storage.getWorker(requestedWorkerId);
+        if (!worker) return res.status(404).json({ message: "Worker not found" });
+        const own = sessionUser.workerId === worker.id;
+        const effective = expandRoleForGuard(sessionUser.role || "");
+        const manages = (effective.includes("admin") || effective.includes("manager")) && await canAccessCompany(sessionUser, worker.companyId);
+        if (!own && !manages) return res.status(404).json({ message: "Worker not found" });
       }
+      const workerId: string = worker.id;
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out." });
       }
@@ -4193,81 +4369,94 @@ function hashSigningToken(token: string): string {
   });
 
   // Sign in without punch — auth + session only
-  // Supports: (1) employee number + PIN, (2) username + password for admin/manager
-  app.post("/api/time-clock/sign-in", async (req, res) => {
+  // Supports: (1) company code + employee number + PIN, (2) username + password
+  // for an admin/manager at the kiosk. Path 2 applies the main login's checks
+  // (rate limit, platform accounts, email verification, MFA → use the main
+  // sign-in) and, on a bound kiosk, the account's company must be the kiosk's.
+  app.post("/api/time-clock/sign-in", timeClockRateLimit, async (req, res) => {
     try {
       const { employeeNumber, pin } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
 
-      // ── Path 1: Employee number + PIN ────────────────────────────────────
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (worker) {
-        if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
-        let user = await storage.getUserByWorkerId(worker.id);
-        if (!user) {
-          const hashedPassword = await bcrypt.hash(pin, 10);
-          user = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
-        }
-        if (user.isActive === false) return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
-        req.session.userId = user.id;
-        req.session.username = user.username;
-        req.session.save((err: Error | null) => {
-          if (err) return res.status(500).json({ message: "Authentication failed" });
-          res.json({ id: user!.id, username: user!.username, role: user!.role, workerId: user!.workerId, companyId: user!.companyId, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
-        });
-        return;
-      }
+      // ── Path 2 first only when the identifier is clearly not an employee number ──
+      const looksLikeEmployeeNumber = /^[A-Za-z0-9-]{1,16}$/.test(String(employeeNumber)) && !/[@._]/.test(String(employeeNumber));
+      if (!looksLikeEmployeeNumber) return kioskPasswordSignIn(req, res);
 
-      // ── Path 2: Username + password fallback for admin/manager users ──────
-      const matchUserRaw = await storage.getUserByUsername(employeeNumber);
-      const matchUser = (matchUserRaw && matchUserRaw.isActive !== false) ? matchUserRaw : undefined;
-      if (matchUser) {
-        const passwordMatch = await bcrypt.compare(pin, matchUser.password);
-        if (passwordMatch) {
-          req.session.userId = matchUser.id;
-          req.session.username = matchUser.username;
-          const workerRecord = matchUser.workerId ? await storage.getWorker(matchUser.workerId) : null;
-          req.session.save((err: Error | null) => {
-            if (err) return res.status(500).json({ message: "Authentication failed" });
-            res.json({
-              id: matchUser.id,
-              username: matchUser.username,
-              role: matchUser.role,
-              workerId: matchUser.workerId,
-              companyId: matchUser.companyId,
-              worker: workerRecord ? { id: workerRecord.id, firstName: workerRecord.firstName, lastName: workerRecord.lastName } : null,
-            });
-          });
-          return;
-        }
+      // ── Path 1: company-scoped employee number + PIN ──────────────────────
+      const auth = await verifyWorkerSignin(req, { companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_sign_in" });
+      if (!auth.ok) {
+        if (auth.status === 401) return kioskPasswordSignIn(req, res);
+        return res.status(auth.status).json({ message: auth.message });
       }
-
-      return res.status(401).json({ message: "Invalid employee number or PIN" });
+      applySigninSuccess(res, auth);
+      const { worker } = auth;
+      const user = await getOrCreatePinUser(worker, String(pin));
+      if (!user) return res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      req.session.save((err: Error | null) => {
+        if (err) return res.status(500).json({ message: "Authentication failed" });
+        res.json({ id: user.id, username: user.username, role: user.role, workerId: user.workerId, companyId: user.companyId, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
+      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Sign in failed" });
     }
   });
 
-  // Clock in + session — auth + clock_in punch + session creation
-  app.post("/api/time-clock/clock-in-session", async (req, res) => {
+  async function kioskPasswordSignIn(req: Request, res: Response) {
+    // Same budget as the main /api/auth/login.
+    const retryAfter = loginRateLimit.hit(req);
+    if (retryAfter > 0) {
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({ message: loginRateLimit.message });
+    }
+    const generic = () => res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
+    const username = String(req.body.employeeNumber || "");
+    const matchUser = await storage.getUserByUsername(username);
+    if (!matchUser || matchUser.isActive === false) { await burnDummyCompare(String(req.body.pin)); return generic(); }
+    const passwordMatch = await bcrypt.compare(String(req.body.pin), matchUser.password).catch(() => false);
+    if (!passwordMatch) return generic();
+    const effective = expandRoleForGuard(matchUser.role || "");
+    if (isPlatformUser(matchUser.role) || !(effective.includes("admin") || effective.includes("manager"))) return generic();
+    if (matchUser.emailVerificationRequired && !matchUser.emailVerifiedAt) return generic();
+    const mfaRow = firstRow<any>(await db.execute(sql`SELECT mfa_enabled, mfa_enforced_at FROM users WHERE id = ${matchUser.id}`));
+    if (mfaRow?.mfa_enabled || mfaRow?.mfa_enforced_at) {
+      return res.status(403).json({ message: "This account uses two-step verification. Please sign in from the main sign-in page." });
+    }
+    if (await companySigninReady()) {
+      const ctx = await resolveSigninCompany(req, undefined);
+      if (ctx?.source === "kiosk" && !(await canAccessCompany(matchUser, ctx.companyId))) return generic();
+    }
+    req.session.regenerate((regenErr) => {
+      if (regenErr) return res.status(500).json({ message: "Authentication failed" });
+      req.session.userId = matchUser.id;
+      req.session.username = matchUser.username;
+      req.session.save(async (err: Error | null) => {
+        if (err) return res.status(500).json({ message: "Authentication failed" });
+        const workerRecord = matchUser.workerId ? await storage.getWorker(matchUser.workerId) : null;
+        res.json({
+          id: matchUser.id, username: matchUser.username, role: matchUser.role,
+          workerId: matchUser.workerId, companyId: matchUser.companyId,
+          worker: workerRecord ? { id: workerRecord.id, firstName: workerRecord.firstName, lastName: workerRecord.lastName } : null,
+        });
+      });
+    });
+  }
+
+  app.post("/api/time-clock/clock-in-session", timeClockRateLimit, async (req, res) => {
     try {
       const { employeeNumber, pin, wageGroupId } = req.body;
-      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
-      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const auth = await authenticateWorkerByPin(req, res, { companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_session" });
+      if (!auth) return;
+      const worker = auth.worker;
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in." });
       }
 
       // ── Create / restore session so the employee lands on their dashboard ──
-      let clockInUser = await storage.getUserByWorkerId(worker.id);
-      if (!clockInUser) {
-        const hashedPassword = await bcrypt.hash(pin, 10);
-        clockInUser = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
-      }
-      if (clockInUser.isActive === false) return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
+      const clockInUser = await getOrCreatePinUser(worker, String(pin));
+      if (!clockInUser) return res.status(401).json({ message: GENERIC_SIGNIN_FAILURE });
       await new Promise<void>((resolve, reject) => {
         req.session.userId = clockInUser!.id;
         req.session.username = clockInUser!.username;
@@ -4448,13 +4637,12 @@ function hashSigningToken(token: string): string {
   // Clock out — auth + clock_out punch (no session needed after clock out)
   // Returns position flags for the worker's active session — used by the clock-out UI
   // to decide which prompt to show (commission entry, tips entry, or neither).
-  app.post("/api/time-clock/session-info", async (req, res) => {
+  app.post("/api/time-clock/session-info", timeClockRateLimit, async (req, res) => {
     try {
       const { employeeNumber, pin } = req.body;
-      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN." });
-      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const auth = await authenticateWorkerByPin(req, res, { companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_session" });
+      if (!auth) return;
+      const worker = auth.worker;
 
       // Find the worker's open time entry to get their schedule's positionId
       const sessionEntries = await storage.getTimeEntriesByWorkerId(worker.id);
@@ -4502,13 +4690,12 @@ function hashSigningToken(token: string): string {
     }
   });
 
-  app.post("/api/time-clock/clock-out-session", async (req, res) => {
+  app.post("/api/time-clock/clock-out-session", timeClockRateLimit, async (req, res) => {
     try {
       const { employeeNumber, pin, tipsAmount, commissionAmount } = req.body;
-      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
-      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const auth = await authenticateWorkerByPin(req, res, { companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_session" });
+      if (!auth) return;
+      const worker = auth.worker;
       // Must have an open shift
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
@@ -4650,13 +4837,12 @@ function hashSigningToken(token: string): string {
   });
 
   // Break start — auth + break_start punch (starting a break)
-  app.post("/api/time-clock/break-start", async (req, res) => {
+  app.post("/api/time-clock/break-start", timeClockRateLimit, async (req, res) => {
     try {
       const { employeeNumber, pin } = req.body;
-      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
-      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const auth = await authenticateWorkerByPin(req, res, { companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_break" });
+      if (!auth) return;
+      const worker = auth.worker;
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
       const lastPunch = workerPunches[0];
@@ -4672,13 +4858,12 @@ function hashSigningToken(token: string): string {
   });
 
   // Break end — auth + break_end punch (returning from break)
-  app.post("/api/time-clock/break-end", async (req, res) => {
+  app.post("/api/time-clock/break-end", timeClockRateLimit, async (req, res) => {
     try {
       const { employeeNumber, pin } = req.body;
-      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
-      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const auth = await authenticateWorkerByPin(req, res, { companyCode: req.body?.companyCode, employeeNumber, pin, channel: "time_clock_break" });
+      if (!auth) return;
+      const worker = auth.worker;
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
       const lastPunch = workerPunches[0];
@@ -21428,10 +21613,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       let imported = 0;
       const errors: string[] = [];
+      // Worker rows: each row's company must be one the actor administers (the
+      // POST /api/workers rule) — a nested companyId is not covered by the
+      // global supplied-companyId gate.
+      const importActor = type === "workers" ? await storage.getUser(req.session.userId!) : undefined;
+      const importCompanies = importActor && !isPlatformUser(importActor.role)
+        ? (isEmployeeAdminRole(importActor.role) ? await resolveEmployeeAdminCompanyIds(importActor) : [])
+        : null;
       for (let i = 0; i < records.length; i++) {
         try {
           if (type === "workers") {
-            await storage.createWorker(records[i]);
+            if (importCompanies && !importCompanies.includes(records[i]?.companyId)) {
+              throw new Error("Forbidden: cannot create a worker in a different company");
+            }
+            await createWorkerAllocatingNumber(records[i]);
           } else if (type === "departments") {
             await storage.createDepartment(records[i]);
           } else if (type === "jobs") {
@@ -21441,7 +21636,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }
           imported++;
         } catch (err: any) {
-          errors.push(`Row ${i + 1}: ${err.message}`);
+          errors.push(`Row ${i + 1}: ${isEmployeeNumberConflict(err) ? EMPLOYEE_NUMBER_CONFLICT_MESSAGE : err instanceof EmployeeNumberExhaustedError ? err.message : err.message}`);
         }
       }
       res.json({ imported, errors, total: records.length });
@@ -27091,9 +27286,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       const worker = await storage.getWorker(user.workerId);
       if (!worker) return res.status(404).json({ message: "Worker record not found" });
-      if (worker.pin !== currentPin) {
+      if (!(await verifyWorkerPin(worker, String(currentPin)))) {
         return res.status(401).json({ message: "Current PIN is incorrect" });
       }
+      // storage.updateWorker stores only the bcrypt hash (plaintext column cleared).
       await storage.updateWorker(user.workerId, { pin: newPin });
       res.json({ message: "PIN updated successfully" });
     } catch (e) {
@@ -28234,7 +28430,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           isActive: true,
         };
         if (emp.pin && emp.pin.trim()) workerData.pin = emp.pin.trim();
-        const worker = await storage.createWorker(workerData);
+        const worker = await createWorkerAllocatingNumber(workerData);
         created.push(worker);
       }
 

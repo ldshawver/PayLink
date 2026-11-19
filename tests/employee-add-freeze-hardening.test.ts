@@ -83,13 +83,19 @@ ok("the boundary exposes a working Close control", /data-testid="button-employee
 console.log("\nserver wiring (server/routes.ts — POST /api/workers)");
 const routes = fs.readFileSync("server/routes.ts", "utf8");
 const postWorkers = routes.slice(routes.indexOf('app.post("/api/workers"'), routes.indexOf('app.patch("/api/workers/:id"'));
-ok("employee-number generation scopes getWorkers to the target company",
-  /storage\.getWorkers\(req\.body\.companyId\)/.test(postWorkers));
+// v2.2.22 (migration 0031): numbers are allocated atomically per company in the
+// insert's transaction (server/employee-signin.ts) — never by loading workers.
+const signinSrc = fs.readFileSync("server/employee-signin.ts", "utf8");
+ok("employee-number allocation is scoped to the target company, in the insert's transaction",
+  /createWorkerAllocatingNumber\(req\.body\)/.test(postWorkers) &&
+  /allocateEmployeeNumber\(tx, values\.companyId, now\)/.test(signinSrc));
 ok("no unbounded storage.getWorkers() in the create path",
   !/storage\.getWorkers\(\)\s*;/.test(postWorkers) && !/await storage\.getWorkers\(\)\s*\n/.test(postWorkers));
-ok("uses reduce (not a variadic Math.max spread) for the highest number",
-  /companyWorkers\.reduce\(/.test(postWorkers) && !/Math\.max\(\.\.\.\w/.test(postWorkers));
-ok("still falls back to 1001 for the first employee", /1001/.test(postWorkers));
+ok("allocation reads only the company's max via SQL (no worker list loaded, no variadic Math.max)",
+  !/companyWorkers\.reduce\(/.test(postWorkers) && !/Math\.max\(\.\.\.\w/.test(postWorkers) &&
+  /SELECT max\(substr\(employee_number, 3, 2\)::int\) AS m FROM workers\s+WHERE company_id = \$\{companyId\}/.test(signinSrc));
+ok("first employee of a year gets YY01 (per-company YYNN format; replaces the old 1001 default)",
+  /let next = Math\.max\(counter\?\.last_value \?\? 0, maxExisting \?\? 0\) \+ 1;/.test(signinSrc));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -23,7 +23,7 @@ type AuthContextType = {
   user: AuthUser | null;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  pinLogin: (employeeNumber: string, pin: string) => Promise<void>;
+  pinLogin: (employeeNumber: string, pin: string, companyCode?: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -81,8 +81,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   const pinLoginMutation = useMutation({
-    mutationFn: async ({ employeeNumber, pin }: { employeeNumber: string; pin: string }) => {
-      const res = await apiRequest("POST", "/api/auth/pin-login", { employeeNumber, pin });
+    mutationFn: async ({ employeeNumber, pin, companyCode }: { employeeNumber: string; pin: string; companyCode?: string }) => {
+      const res = await apiRequest("POST", "/api/auth/pin-login", { employeeNumber, pin, ...(companyCode ? { companyCode } : {}) });
       return res.json();
     },
     onSuccess: async (data: AuthUser) => {
@@ -112,8 +112,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loginMutation.mutateAsync({ username, password });
   }
 
-  async function pinLogin(employeeNumber: string, pin: string) {
-    await pinLoginMutation.mutateAsync({ employeeNumber, pin });
+  async function pinLogin(employeeNumber: string, pin: string, companyCode?: string) {
+    await pinLoginMutation.mutateAsync({ employeeNumber, pin, companyCode });
   }
 
   async function logout() {

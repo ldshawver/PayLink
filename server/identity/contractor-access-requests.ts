@@ -12,6 +12,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "../db";
+import { createWorkerAllocatingNumber } from "../employee-signin";
 import {
   createOrRefreshInvite,
   findLinkableUserByEmail,
@@ -285,18 +286,14 @@ export async function approveAccessRequest(
       LIMIT 1
     `));
     if (!worker?.id) {
-      // Employee number: contractor-scoped, reduce not spread (matches POST /api/workers).
-      const nums = (await db.execute(sql`SELECT employee_number FROM workers WHERE company_id = ${companyId}`)).rows || [];
-      const highest = nums.reduce((m: number, w: any) => {
-        const n = parseInt(w.employee_number || "0", 10);
-        return !isNaN(n) && n > m ? n : m;
-      }, 0);
-      worker = firstRow<{ id: string }>(await db.execute(sql`
-        INSERT INTO workers (company_id, first_name, last_name, email, phone, worker_type, contractor_type, worker_group, employee_number, pay_rate, status, is_active)
-        VALUES (${companyId}, ${row.first_name}, ${row.last_name}, ${email}, ${row.phone ?? null},
-                'contractor', 'invoice', 'invoiced_contractor', ${String(highest > 0 ? highest + 1 : 1001)}, '0', 'active', TRUE)
-        RETURNING id
-      `));
+      // Employee number: allocated atomically per company (YYNN) in the same
+      // real transaction as the worker insert (server/employee-signin.ts).
+      const created = await createWorkerAllocatingNumber({
+        companyId, firstName: row.first_name, lastName: row.last_name, email, phone: row.phone ?? null,
+        workerType: "contractor", contractorType: "invoice", workerGroup: "invoiced_contractor",
+        payRate: "0", status: "active", isActive: true,
+      });
+      worker = { id: created.id };
     }
     const workerId = worker!.id;
 

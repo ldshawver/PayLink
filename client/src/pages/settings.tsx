@@ -1,3 +1,4 @@
+import { EmployeeSigninSettings } from "@/components/employee-signin-settings";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -831,6 +832,8 @@ export default function SettingsPage() {
       </div>
 
       <SaasPlatformSection />
+
+      <EmployeeSigninSettings />
 
       <div>
         <div className="flex items-center gap-2 mb-4">

@@ -1,5 +1,6 @@
 import { eq, and, desc, sql, gte, lte, isNull, or, inArray, ne, notInArray } from "drizzle-orm";
 import { db } from "./db";
+import { preparePinFields, verifyWorkerPin } from "./employee-signin";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
@@ -1158,17 +1159,24 @@ export class DatabaseStorage implements IStorage {
     return worker;
   }
   async getWorkerByEmployeeNumberAndPin(employeeNumber: string, pin: string): Promise<Worker | undefined> {
-    const matches = await db.select().from(workers).where(
-      and(eq(workers.employeeNumber, employeeNumber), eq(workers.pin, pin))
-    );
-    return matches[0];
+    // Legacy global lookup, PIN verified against the bcrypt hash (never a
+    // plaintext column compare). Request handlers use authenticateWorkerByPin
+    // (company-scoped); this remains only for non-HTTP callers.
+    const candidates = await db.select().from(workers).where(eq(workers.employeeNumber, employeeNumber)).limit(25);
+    for (const w of candidates) {
+      if (await verifyWorkerPin(w, pin)) return w;
+    }
+    return undefined;
   }
   async createWorker(data: InsertWorker): Promise<Worker> {
-    const [worker] = await db.insert(workers).values(data).returning();
+    // PINs are stored only as bcrypt hashes (see server/employee-signin.ts).
+    const values = await preparePinFields(data as Record<string, any>);
+    const [worker] = await db.insert(workers).values(values as InsertWorker).returning();
     return worker;
   }
   async updateWorker(id: string, data: Partial<Worker>): Promise<Worker | undefined> {
-    const [worker] = await db.update(workers).set(data).where(eq(workers.id, id)).returning();
+    const values = await preparePinFields(data as Record<string, any>);
+    const [worker] = await db.update(workers).set(values as Partial<Worker>).where(eq(workers.id, id)).returning();
     return worker;
   }
   async deleteWorker(id: string): Promise<void> {

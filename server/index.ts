@@ -534,6 +534,8 @@ app.use(createRequestLogger(log));
     )`);
 
     await run("workers.worker_group", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS worker_group TEXT DEFAULT 'hourly_employee'`);
+    // Hashed PIN (company-scoped sign-in). Nullable, additive; backfill is gated in migration 0031.
+    await run("workers.pin_hash", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS pin_hash TEXT`);
 
     await run("schedule_preferences table", sql`CREATE TABLE IF NOT EXISTS schedule_preferences (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

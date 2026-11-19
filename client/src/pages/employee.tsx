@@ -358,7 +358,8 @@ function EmployeeTab() {
       ssn: worker.ssn || "",
       ethnicity: worker.ethnicity || "",
       employeeNumber: worker.employeeNumber || "",
-      pin: worker.pin || "",
+      // PINs are never sent to the browser (hashed server-side); blank = keep the current PIN.
+      pin: "",
       currency: worker.currency || "USD",
       workPhone: worker.workPhone || "",
       workPhoneExt: worker.workPhoneExt || "",
@@ -465,8 +466,12 @@ function EmployeeTab() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>PIN (Time Clock)</Label>
-              <Input data-testid="input-pin" type="password" placeholder="4-digit PIN" value={form.pin}
-                onChange={e => setForm(f => ({ ...f, pin: e.target.value }))} />
+              <Input data-testid="input-pin" type="password" inputMode="numeric" autoComplete="new-password"
+                placeholder={(editOpen ? (editWorker as any) : null)?.hasPin ? "PIN set — enter a new PIN to change it" : "4–8 digit PIN"} value={form.pin}
+                onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, "").slice(0, 8) }))} />
+              <p className="text-xs text-muted-foreground" data-testid="text-pin-status">
+                {(editOpen ? (editWorker as any) : null)?.hasPin ? "A PIN is set. Leave blank to keep it." : "No PIN set yet."}
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Hire Date</Label>
