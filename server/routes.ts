@@ -54,6 +54,7 @@ import {
 import type { User } from "@shared/schema";
 import { db } from "./db";
 import { createUploadsHandler, findUploadOwners } from "./uploads-access";
+import { isApplicantApiAllowed } from "./job-board/applicant-api-allowlist";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, scheduleAuditLogs, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems, contractorTradeCompensation, insertContractorTradeCompensationSchema, insertEmployeeManagerRelationSchema, normalizeContractorDocumentType } from "@shared/schema";
@@ -2704,33 +2705,12 @@ function hashSigningToken(token: string): string {
   });
 
   // ── Job-board applicant session confinement (migration 0030) ─────────────
-  // An `applicant`-role account is a limited identity for ONE company's job
-  // board: it may browse employee postings made available to it and manage its
-  // own applications/documents — nothing else. Like vendors it has a
-  // company_id but no worker_id, so every other requireAuth-only /api route
-  // would otherwise reach company data. Explicit method+path allowlist; all
-  // else is 403. Other roles are unaffected.
-  const ID = "[0-9a-fA-F-]{36}";
-  const APPLICANT_ALLOWED_API: [string, RegExp][] = [
-    ["*", /^\/auth\//],
-    ["*", /^\/public\/job-board\//],
-    ["GET", /^\/job-posts\/available$/],
-    ["GET", /^\/job-posts\/summary$/],
-    ["GET", new RegExp(`^/job-posts/${ID}$`)],
-    ["POST", new RegExp(`^/job-posts/${ID}/applications$`)],
-    ["GET", /^\/employment-applications\/mine$/],
-    ["GET", new RegExp(`^/employment-applications/${ID}$`)],
-    ["PATCH", new RegExp(`^/employment-applications/${ID}$`)],
-    ["POST", new RegExp(`^/employment-applications/${ID}/(submit|withdraw|documents)$`)],
-    ["GET", new RegExp(`^/employment-application-documents/${ID}/download$`)],
-    ["POST", new RegExp(`^/employment-application-documents/${ID}/remove$`)],
-    ["GET", new RegExp(`^/job-post-attachments/${ID}/download$`)],
-  ];
+  // Explicit method + exact-path allowlist in server/job-board/applicant-api-allowlist.ts
+  // (job board + the applicant's own feedback); all else is 403. Other roles are unaffected.
   app.use("/api", (req, res, next) => {
     const role = (req as any).user?.role;
     if (role !== "applicant") return next();
-    const p = req.path.split("?")[0];
-    if (APPLICANT_ALLOWED_API.some(([m, re]) => (m === "*" || m === req.method) && re.test(p))) return next();
+    if (isApplicantApiAllowed(req.method, req.path)) return next();
     return res.status(403).json({ message: "Applicant accounts can only access their job applications." });
   });
 

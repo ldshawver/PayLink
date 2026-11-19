@@ -93,7 +93,7 @@ export default function MyFeedbackPage() {
           <CardContent className="py-12 text-center text-muted-foreground">
             <MessageSquare className="h-8 w-8 mx-auto mb-3 opacity-30" />
             <p>You haven't submitted any feedback yet.</p>
-            <p className="text-sm mt-1">Use the <strong>Feedback</strong> button in the bottom-left corner to submit a report.</p>
+            <p className="text-sm mt-1">Use the <strong>Feedback</strong> button in the bottom-right corner to submit a report.</p>
           </CardContent>
         </Card>
       ) : (

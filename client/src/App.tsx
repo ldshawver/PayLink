@@ -388,7 +388,7 @@ function AuthenticatedLayout() {
             <TrialBanner />
             <LicenseStatusBanner />
             <MobileHeader />
-            <main className="flex-1 overflow-y-auto overflow-x-hidden">
+            <main className="flex-1 overflow-y-auto overflow-x-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]">
               <div ref={containerRef} className="page-transition-container">
                 <AppErrorBoundary area="tenant_app">
                   <AuthenticatedRouter />
@@ -551,13 +551,14 @@ function PlatformLayout() {
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <ApiHealthBanner />
           <PlatformHeader />
-          <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <main className="flex-1 overflow-y-auto overflow-x-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]">
             <AppErrorBoundary area="platform_console">
               <PlatformRouter />
             </AppErrorBoundary>
           </main>
         </div>
       </div>
+      <FeedbackButton />
     </SidebarProvider>
   );
 }
