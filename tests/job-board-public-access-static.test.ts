@@ -66,12 +66,14 @@ t("global auth backstop allowlists exactly the four public endpoints (no prefix)
 
 console.log("applicant confinement");
 const conf = routes.slice(routes.indexOf("// ── Job-board applicant session confinement"), routes.indexOf("// ── Supplied-companyId gate"));
-t("confinement middleware exists after the vendor one and before the companyId gate", () => assert.ok(conf.length > 500 && conf.includes('if (role !== "applicant") return next();')));
+const allowlistSrc = fs.readFileSync("server/job-board/applicant-api-allowlist.ts", "utf8");
+t("confinement middleware exists after the vendor one and before the companyId gate", () => assert.ok(conf.includes('if (role !== "applicant") return next();') && conf.includes("if (isApplicantApiAllowed(req.method, req.path)) return next();")));
 t("everything not allowlisted is 403", () => assert.ok(conf.includes('return res.status(403).json({ message: "Applicant accounts can only access their job applications." });')));
-t("allowlist is narrow: only job-posts reads/apply, own applications, own documents, auth, public", () => {
-  const entries = Array.from(conf.matchAll(/\["(\*|GET|POST|PATCH)", (\/[^\]]+\/|new RegExp\(`[^`]+`\))\]/g)).map((m) => `${m[1]} ${m[2]}`);
-  assert.equal(entries.length, 13, entries.join("\n"));
-  for (const e of entries) assert.ok(/auth|public|job-posts|employment-application|job-post-attachments/.test(e), e);
+t("allowlist is narrow: only job-posts reads/apply, own applications, own documents, own feedback, auth, public", () => {
+  const entries = Array.from(allowlistSrc.matchAll(/\["(\*|GET|POST|PATCH)", (\/[^\]]+\/|new RegExp\(`[^`]+`\))\]/g)).map((m) => `${m[1]} ${m[2]}`);
+  // 13 job-board/auth/public entries + 4 own-feedback entries (v2.2.21; see feedback-button-placement-static).
+  assert.equal(entries.length, 17, entries.join("\n"));
+  for (const e of entries) assert.ok(/auth|public|job-posts|employment-application|job-post-attachments|feedback/.test(e), e);
   for (const bad of ["workers", "payroll", "invoice", "contractor-hub", "contractor-job-bids", "time", "schedule", "documents/", "admin", "companies"]) {
     assert.ok(!entries.some((e) => e.includes(bad) && !e.includes("employment-application")), `allowlist mentions ${bad}`);
   }

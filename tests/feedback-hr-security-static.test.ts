@@ -17,8 +17,10 @@ assert.match(routes, /comments\.filter\(c => !c\.is_internal\)/, "submitters do 
 assert.match(button, /function scrubSensitiveText/, "captured client errors are scrubbed before submission");
 assert.match(button, /redacted-ssn/, "captured client errors redact SSN-like values");
 assert.match(button, /password\|passwd\|pwd\|token\|secret\|api\[-_ \]\?key\|authorization\|bearer/, "captured client errors redact credential-like values");
-assert.match(button, /fixed bottom-5 left-5 sm:bottom-6 sm:left-6/, "floating feedback button keeps mobile-safe margins away from the corner");
-assert.match(button, /z-\[2147483647\]/, "feedback launcher remains above overlays");
+// Placement (v2.2.21): fixed bottom-right with safe-area-aware margins, above
+// page content but below dialogs/menus — detailed in feedback-button-placement-static.
+assert.match(button, /fixed right-\[max\(1rem,env\(safe-area-inset-right\)\)\] bottom-\[max\(1rem,env\(safe-area-inset-bottom\)\)\]/, "floating feedback button keeps mobile-safe margins away from the bottom-right corner");
+assert.match(button, / z-40 /, "feedback launcher sits above page content but below overlays (z-50+)");
 
 assert.match(admin, /value: "hr"/, "Feedback Admin can filter HR feedback for authorized reviewers");
 assert.match(mine, /hr: "🛡️"/, "My Feedback shows the HR feedback icon for submitters");

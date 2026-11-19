@@ -21,6 +21,7 @@ import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
 import { sendGenericNotificationEmail } from "./notifications";
+import { requireCsrfToken } from "./security-middleware";
 
 const ALLOWED_TYPES = new Set(["bug", "ux", "feature", "change_request", "hr", "general"]);
 const ALLOWED_SEVERITIES = new Set(["low", "medium", "high", "critical"]);
@@ -94,6 +95,32 @@ function isAdminRole(role: string | undefined | null): boolean {
   );
 }
 
+function isApplicantRole(role: string | undefined | null): boolean {
+  return role === "applicant";
+}
+
+/** A disabled applicant (users.is_active = false) keeps no feedback access, even on a live session. */
+function isDisabledApplicant(user: { role?: string | null; isActive?: boolean | null }): boolean {
+  return isApplicantRole(user.role) && user.isActive === false;
+}
+
+// What a limited applicant may see of its own ticket / comments: the fields the
+// My Feedback view renders — never assignment, reviewer ids, company id,
+// captured browser/IP info or console diagnostics.
+function applicantTicketView(t: FeedbackTicketRow) {
+  return {
+    id: t.id, type: t.type, severity: t.severity, status: t.status, priority_fix: false,
+    title: t.title, description: t.description, page_url: t.page_url, error_code: t.error_code,
+    steps_to_reproduce: t.steps_to_reproduce, expected_behavior: t.expected_behavior,
+    actual_behavior: t.actual_behavior, screenshot_path: t.screenshot_path,
+    screenshot_paths: t.screenshot_paths, created_at: t.created_at, updated_at: t.updated_at,
+  };
+}
+
+function applicantCommentView(c: FeedbackCommentRow) {
+  return { id: c.id, ticket_id: c.ticket_id, author_name: c.author_name, body: c.body, is_internal: false, created_at: c.created_at };
+}
+
 function hasBuiltInHrFeedbackAccess(role: string | undefined | null): boolean {
   if (!role) return false;
   return (
@@ -135,6 +162,9 @@ async function assertFeedbackTicketAccess(
   const admin = isAdminRole(user.role);
   const submitter = ticket.submitter_user_id === user.id;
 
+  // Limited job-board applicants: their OWN tickets only, read + comment, never
+  // update — no reviewer/HR-permission path applies to them.
+  if (isApplicantRole(user.role)) return submitter && action !== "update";
   if (submitter && action !== "update") return true;
   if (!platform && admin && ticket.company_id !== user.companyId) return false;
   if (ticket.type === "hr") return canReviewHrFeedback(user);
@@ -174,12 +204,14 @@ export function registerFeedbackRoutes(
   app.post(
     "/api/feedback",
     requireAuth,
+    requireCsrfToken, // before multer: a rejected request never writes a file
     upload.array("screenshots", 3),
     async (req: SessionRequest, res: Response) => {
       try {
         const userId = req.session.userId!;
         const user = await storage.getUser(userId);
         if (!user) return res.status(401).json({ message: "User not found" });
+        if (isDisabledApplicant(user)) return res.status(403).json({ message: "Access denied" });
 
         const {
           type, severity, title, description, pageUrl,
@@ -301,7 +333,7 @@ export function registerFeedbackRoutes(
           console.warn("[Feedback] Admin notification error:", notifyErr instanceof Error ? notifyErr.message : String(notifyErr));
         }
 
-        res.status(201).json(ticket);
+        res.status(201).json(isApplicantRole(user.role) ? applicantTicketView(ticket) : ticket);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         res.status(500).json({ message: "Failed to create feedback ticket: " + msg });
@@ -314,13 +346,15 @@ export function registerFeedbackRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
+      if (isDisabledApplicant(user)) return res.status(403).json({ message: "Access denied" });
       const result = await db.execute(sql`
         SELECT * FROM feedback_tickets
         WHERE submitter_user_id = ${user.id}
         ORDER BY created_at DESC
         LIMIT 200
       `);
-      res.json(allRows<FeedbackTicketRow>(result));
+      const rows = allRows<FeedbackTicketRow>(result);
+      res.json(isApplicantRole(user.role) ? rows.map(applicantTicketView) : rows);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ message: "Failed to load submissions: " + msg });
@@ -417,7 +451,7 @@ export function registerFeedbackRoutes(
   });
 
   // PATCH /api/feedback/:id — admin-only updates
-  app.patch("/api/feedback/:id", requireAuth, async (req: SessionRequest, res: Response) => {
+  app.patch("/api/feedback/:id", requireAuth, requireCsrfToken, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user || !isAdminRole(user.role)) {
@@ -494,9 +528,12 @@ export function registerFeedbackRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
+      if (isDisabledApplicant(user)) return res.status(403).json({ message: "Access denied" });
       const ticketRes = await db.execute(sql`SELECT * FROM feedback_tickets WHERE id = ${req.params.id}`);
       const ticket = firstRow<FeedbackTicketRow>(ticketRes);
       if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+      // Applicants learn nothing about tickets they did not submit (same 404 as missing).
+      if (isApplicantRole(user.role) && ticket.submitter_user_id !== user.id) return res.status(404).json({ message: "Ticket not found" });
       if (!(await assertFeedbackTicketAccess(user, ticket, "view"))) {
         return res.status(403).json({ message: "Access denied" });
       }
@@ -508,6 +545,7 @@ export function registerFeedbackRoutes(
       const admin = isAdminRole(user.role);
       const platform = isPlatformRole(user.role);
       const comments = allRows<FeedbackCommentRow>(result);
+      if (isApplicantRole(user.role)) return res.json(comments.filter(c => !c.is_internal).map(applicantCommentView));
       res.json(admin || platform ? comments : comments.filter(c => !c.is_internal));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -516,13 +554,16 @@ export function registerFeedbackRoutes(
   });
 
   // POST /api/feedback/:id/comments
-  app.post("/api/feedback/:id/comments", requireAuth, async (req: SessionRequest, res: Response) => {
+  app.post("/api/feedback/:id/comments", requireAuth, requireCsrfToken, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) return res.status(401).json({ message: "User not found" });
+      if (isDisabledApplicant(user)) return res.status(403).json({ message: "Access denied" });
       const ticketRes = await db.execute(sql`SELECT * FROM feedback_tickets WHERE id = ${req.params.id}`);
       const ticket = firstRow<FeedbackTicketRow>(ticketRes);
       if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+      // Applicants learn nothing about tickets they did not submit (same 404 as missing).
+      if (isApplicantRole(user.role) && ticket.submitter_user_id !== user.id) return res.status(404).json({ message: "Ticket not found" });
       if (!(await assertFeedbackTicketAccess(user, ticket, "view"))) {
         return res.status(403).json({ message: "Access denied" });
       }
@@ -539,7 +580,8 @@ export function registerFeedbackRoutes(
         VALUES (${req.params.id}, ${user.id}, ${authorName}, ${body.trim()}, ${internalFlag})
         RETURNING *
       `);
-      res.status(201).json(firstRow<FeedbackCommentRow>(inserted));
+      const comment = firstRow<FeedbackCommentRow>(inserted);
+      res.status(201).json(isApplicantRole(user.role) && comment ? applicantCommentView(comment) : comment);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ message: "Failed to add comment: " + msg });

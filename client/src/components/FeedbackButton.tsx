@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { MessageSquarePlus, Loader2, Camera, Info, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { getCsrfToken } from "@/lib/queryClient";
 
 // ── Global console-error capture buffer (set up once at module load) ──────────
 const _errBuf: Array<{ msg: string; source?: string; ts: string; stack?: string }> = [];
@@ -150,7 +151,14 @@ export function FeedbackButton() {
       fd.append("consoleErrors", JSON.stringify({ recentErrors: sanitizedErrorBuffer(), clientContext: buildClientContext() }));
       screenshots.forEach(f => fd.append("screenshots", f));
 
-      const r = await fetch("/api/feedback", { method: "POST", body: fd, credentials: "include" });
+      // Multipart, so not apiRequest(); the double-submit CSRF header is still required.
+      const csrfToken = getCsrfToken();
+      const r = await fetch("/api/feedback", {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+        headers: csrfToken ? { "x-csrf-token": csrfToken } : undefined,
+      });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         throw new Error(err.message || `Request failed (${r.status})`);
@@ -174,18 +182,32 @@ export function FeedbackButton() {
 
   return (
     <>
-      <Button
-        type="button"
-        onClick={openFeedbackForm}
-        data-testid="button-feedback-open"
-        className="fixed bottom-5 left-5 sm:bottom-6 sm:left-6 z-[2147483647] shadow-xl rounded-full h-12 w-12 p-0 sm:h-auto sm:w-auto sm:px-4 sm:py-2 sm:rounded-full bg-gradient-to-br from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white"
-        aria-label="Send feedback"
-      >
-        <MessageSquarePlus className="h-5 w-5 sm:mr-2" />
-        <span className="hidden sm:inline">Feedback</span>
-      </Button>
-
       <Dialog open={open} onOpenChange={v => { if (!v) setOpen(false); }}>
+        {/* DialogTrigger: Radix returns focus here when the dialog closes and
+            exposes aria-haspopup/aria-expanded to screen readers. */}
+        <DialogTrigger asChild>
+          <Button
+            type="button"
+            onClick={openFeedbackForm}
+            data-testid="button-feedback-open"
+            // Fixed bottom-right on every authenticated shell. Icon-sized on mobile,
+            // compact icon+label from `sm` up. Offsets include the device safe-area
+            // inset (home indicator / notch). z-40 keeps it above page content but
+            // BELOW dialogs, sheets, popovers, menus and toasts (z-50+), so it never
+            // covers an open overlay. The app shells add bottom padding to <main>
+            // (pb-[calc(5rem+env(safe-area-inset-bottom))]) so page content can
+            // always scroll clear of it.
+            // no-default-*-elevate: the Button base adds hover-elevate/active-elevate-2,
+            // whose index.css rule (higher specificity than `.fixed`) forces
+            // `position: relative; z-index: 0` — that silently un-fixed this launcher
+            // and pushed it below the full-height app shell. The opt-out keeps it fixed.
+            className="no-default-hover-elevate no-default-active-elevate fixed right-[max(1rem,env(safe-area-inset-right))] bottom-[max(1rem,env(safe-area-inset-bottom))] sm:right-[max(1.5rem,env(safe-area-inset-right))] sm:bottom-[max(1.5rem,env(safe-area-inset-bottom))] z-40 print:hidden shadow-md rounded-full h-10 w-10 p-0 sm:h-9 sm:w-auto sm:px-3 sm:gap-1.5 sm:text-sm bg-gradient-to-br from-teal-600 to-blue-600 hover:from-teal-700 hover:to-blue-700 text-white opacity-90 hover:opacity-100 focus-visible:opacity-100"
+            aria-label="Send feedback"
+          >
+            <MessageSquarePlus aria-hidden="true" />
+            <span className="hidden sm:inline">Feedback</span>
+          </Button>
+        </DialogTrigger>
         <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto z-[2147483647]">
           <DialogHeader>
             <DialogTitle>Submit Feedback</DialogTitle>
