@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getCsrfToken, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, Circle, FileSignature, Loader2, Upload } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type Step = { key: string; title: string; status: string };
 type Doc = { id: string; kind: string; label: string; mimeType: string; byteSize: number; uploadedAt: string };
@@ -91,6 +93,8 @@ export default function MyOnboardingPage() {
         </CardContent>
       </Card>
 
+      <EmergencyContactCard onSaved={refresh} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Government-issued ID</CardTitle>
@@ -137,5 +141,64 @@ function IdUpload({ side, label, doc, onDone }: { side: "front" | "back"; label:
         {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}{doc ? "Replace" : "Upload"}
       </Button>
     </div>
+  );
+}
+
+type Contact = { name: string; relationship: string; phone: string; email: string | null };
+function EmergencyContactCard({ onSaved }: { onSaved: () => void }) {
+  const { toast } = useToast();
+  const { data } = useQuery<{ contact: Contact | null }>({ queryKey: ["/api/my-onboarding/emergency-contact"], retry: false });
+  const [form, setForm] = useState({ name: "", relationship: "", phone: "", email: "" });
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (data?.contact) setForm({ name: data.contact.name, relationship: data.contact.relationship, phone: data.contact.phone, email: data.contact.email ?? "" });
+  }, [data]);
+  const save = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/my-onboarding/emergency-contact", {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json", "x-csrf-token": getCsrfToken() ?? "" },
+        body: JSON.stringify({ ...form, email: form.email || null }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.message || "Could not save.");
+      return body;
+    },
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/my-onboarding/emergency-contact"] });
+      onSaved();
+      toast({ title: "Emergency contact saved" });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  const field = (key: keyof typeof form, label: string, props: Record<string, unknown> = {}) => (
+    <div className="space-y-1.5">
+      <Label htmlFor={`ec-${key}`}>{label}</Label>
+      <Input id={`ec-${key}`} value={form[key]} autoComplete="off" data-testid={`input-ec-${key}`}
+        onChange={(e) => setForm({ ...form, [key]: e.target.value })} {...props} />
+    </div>
+  );
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Emergency contact</CardTitle>
+        <CardDescription>Who should we call if something happens while you're working?</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form className="grid gap-4 sm:grid-cols-2" noValidate onSubmit={(e) => { e.preventDefault(); if (!save.isPending) save.mutate(); }}>
+          {field("name", "Full name", { maxLength: 100 })}
+          {field("relationship", "Relationship", { maxLength: 50, placeholder: "e.g. Spouse, Parent" })}
+          {field("phone", "Phone", { type: "tel", maxLength: 25 })}
+          {field("email", "Email (optional)", { type: "email", maxLength: 254 })}
+          {error && <p role="alert" className="sm:col-span-2 text-sm text-destructive" data-testid="text-ec-error">{error}</p>}
+          <div className="sm:col-span-2">
+            <Button type="submit" disabled={save.isPending} data-testid="button-save-emergency-contact">
+              {save.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Save
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
