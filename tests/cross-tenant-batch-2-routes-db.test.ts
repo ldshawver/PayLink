@@ -82,6 +82,7 @@ import bcrypt from "bcrypt";
 import fs from "node:fs";
 import { startTestServer, login, apiRequest, type TestServer, type Session } from "../scripts/cross-tenant-negative-tests/server-harness";
 import { cascadeDelete, verifyZeroResidue } from "../scripts/cross-tenant-negative-tests/cascade-cleanup";
+import { markContractorOnboardingVerified } from "./__fixtures__/verified-contractor";
 
 const FORBIDDEN_PATTERNS = [/staging/i, /production/i, /^prod$/i, /apppaylinkstaging/i, /apppaylinkmain/i];
 const MANIFEST_PATH = "docs/saas-readiness/cross-tenant-batch-2-test-manifest.json";
@@ -179,6 +180,9 @@ async function main() {
        ($5,$2,'CT2','EmployeeSelfA','employee','0','9103')`,
       [workerAContractor, companyA, workerBContractor, companyB, workerAEmployeeSelf],
     );
+    // PR 8: these are ordinary, fully onboarded contractors (the marketplace gate requires verified onboarding).
+    await markContractorOnboardingVerified(pool, { companyId: companyA, workerId: workerAContractor });
+    await markContractorOnboardingVerified(pool, { companyId: companyB, workerId: workerBContractor });
 
     await pool.query(
       `INSERT INTO users (id, username, password, role, company_id, worker_id, first_name, last_name, is_active) VALUES
