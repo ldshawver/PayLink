@@ -223,7 +223,7 @@ export async function startOnboardingSignature(args: {
              sent_at = NOW(), updated_at = NOW() WHERE id = ${requestId}`);
     await tx.execute(sql`
       INSERT INTO worker_onboarding_documents (company_id, worker_id, onboarding_id, step_id, document_type, document_status, template_id, metadata_json)
-      VALUES (${o.company_id}, ${o.worker_id}, ${o.id}, ${stepId}, ${args.kind}, 'sent', ${tpl.id}, ${JSON.stringify({ signatureRequestId: requestId })})`);
+      VALUES (${o.company_id}, ${o.worker_id}, ${o.id}, ${stepId}, ${args.kind}, 'sent', ${tpl.id}, ${JSON.stringify({ signatureRequestId: requestId, templateId: tpl.template_id })})`);
     await tx.execute(sql`UPDATE onboarding_steps SET status = 'in_progress', updated_at = NOW() WHERE id = ${stepId} AND status <> 'completed'`);
     await audit(tx, o, stepId, args.actor, "esign_sent", { kind: args.kind, requestId });
   });

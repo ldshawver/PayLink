@@ -106,6 +106,34 @@ export default function ContractorOnboardingPage() {
     onError: (e: Error) => toast({ title: "Document not sent", description: e.message, variant: "destructive" }),
   });
 
+  const REFRESH_TEXT: Record<string, string> = {
+    completed: "Signed and verified. The signed copy is stored privately.",
+    already_completed: "Already signed and verified.",
+    not_completed: "Not signed yet.",
+    declined: "The contractor declined. You can send it again.",
+    verification_failed: "The signed document did not match what was sent. Send it again.",
+    pdf_unavailable: "Signed, but the signed copy isn't available yet. Try again shortly.",
+    store_unavailable: "Signed, but private storage isn't configured, so it can't be stored yet.",
+    documenso_unreachable: "Could not reach Documenso. Try again shortly.",
+    in_progress: "Already being checked.",
+  };
+  const refreshEsign = useMutation({
+    mutationFn: async ({ onboardingId, kind }: { onboardingId: string; kind: "contractor_agreement" | "w9" }) => {
+      const res = await fetch(`/api/contractor-onboarding/${encodeURIComponent(onboardingId)}/esign/${kind}/refresh`, {
+        method: "POST", credentials: "include", headers: { "x-csrf-token": getCsrfToken() ?? "" },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.message || "Could not check the document.");
+      return body as { outcome: string };
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding/esign-state"] });
+      toast({ title: r.outcome === "completed" || r.outcome === "already_completed" ? "Signed" : "Status checked", description: REFRESH_TEXT[r.outcome] ?? r.outcome });
+    },
+    onError: (e: Error) => toast({ title: "Could not check", description: e.message, variant: "destructive" }),
+  });
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (create.isPending) return;
@@ -200,7 +228,16 @@ export default function ContractorOnboardingPage() {
                                   const st = esignState?.[r.onboardingId]?.[kind];
                                   const stepDone = r.steps.some((s) => s.key === kind && s.status === "completed");
                                   if (stepDone) return <span key={kind} className="text-xs text-muted-foreground">{label}: signed</span>;
-                                  if (st) return <span key={kind} className="text-xs text-muted-foreground" data-testid={`text-esign-${kind}-${r.onboardingId}`}>{label}: {st === "creating" ? "sending…" : "sent"}</span>;
+                                  if (st) return (
+                                    <span key={kind} className="text-xs text-muted-foreground flex items-center gap-1.5" data-testid={`text-esign-${kind}-${r.onboardingId}`}>
+                                      {label}: {st === "creating" ? "sending…" : "sent"}
+                                      {st === "sent_for_signature" && (
+                                        <Button size="sm" variant="ghost" className="h-6 px-2" disabled={refreshEsign.isPending}
+                                          data-testid={`button-esign-refresh-${kind}-${r.onboardingId}`}
+                                          onClick={() => refreshEsign.mutate({ onboardingId: r.onboardingId, kind })}>Check status</Button>
+                                      )}
+                                    </span>
+                                  );
                                   return (
                                     <Button key={kind} size="sm" variant="outline" disabled={esign.isPending}
                                       data-testid={`button-esign-${kind}-${r.onboardingId}`}
