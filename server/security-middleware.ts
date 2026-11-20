@@ -60,7 +60,8 @@ export interface RateLimitOptions {
  */
 export function createRateLimiter(name: string, options: RateLimitOptions) {
   const { windowMs, max, keyFn, message } = options;
-  return function rateLimit(req: Request, res: Response, next: NextFunction) {
+  /** Count one request; returns seconds until reset when over the limit, else 0. */
+  const hit = (req: Request): number => {
     const now = Date.now();
     sweepExpired(now);
     const identity = (keyFn ? keyFn(req) : req.ip) || "unknown";
@@ -71,14 +72,19 @@ export function createRateLimiter(name: string, options: RateLimitOptions) {
       buckets.set(key, bucket);
     }
     bucket.count += 1;
-    if (bucket.count > max) {
-      res.setHeader("Retry-After", Math.ceil((bucket.resetAt - now) / 1000).toString());
+    return bucket.count > max ? Math.ceil((bucket.resetAt - now) / 1000) : 0;
+  };
+  const rateLimit = function rateLimit(req: Request, res: Response, next: NextFunction) {
+    const retryAfter = hit(req);
+    if (retryAfter > 0) {
+      res.setHeader("Retry-After", retryAfter.toString());
       return res.status(429).json({
         message: message || "Too many requests. Please wait a moment and try again.",
       });
     }
     next();
   };
+  return Object.assign(rateLimit, { hit, message: message || "Too many requests. Please wait a moment and try again." });
 }
 
 // ── CSRF (double-submit cookie) ─────────────────────────────────────────────

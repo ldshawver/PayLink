@@ -6,6 +6,7 @@
 // See: docs/marketing-homepage-lock.md for the full protection policy.
 // =============================================================================
 
+import { CompanySigninCodeField, useSigninContext, needsCompanyCode } from "@/components/company-signin-code";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -145,6 +146,9 @@ function ClockInModal({ open, onClose }: { open: boolean; onClose: () => void })
   const [, setLocation] = useLocation();
   const [employeeNumber, setEmployeeNumber] = useState("");
   const [pin, setPin] = useState("");
+  const [companyCode, setCompanyCode] = useState("");
+  const { data: signinCtx } = useSigninContext();
+  const codeRequired = needsCompanyCode(signinCtx);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -166,13 +170,14 @@ function ClockInModal({ open, onClose }: { open: boolean; onClose: () => void })
     setError("");
     if (!employeeNumber.trim()) { setError("Please enter your employee number."); return; }
     if (!pin.trim()) { setError("Please enter your PIN."); return; }
+    if (codeRequired && !companyCode) { setError("Please enter your company sign-in code."); return; }
     setLoading(true);
     try {
       const res = await fetch("/api/time-clock/punch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ employeeNumber: employeeNumber.trim(), pin: pin.trim(), punchType: "clock_in" }),
+        body: JSON.stringify({ employeeNumber: employeeNumber.trim(), pin: pin.trim(), punchType: "clock_in", ...(codeRequired && companyCode ? { companyCode } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -206,6 +211,7 @@ function ClockInModal({ open, onClose }: { open: boolean; onClose: () => void })
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
+          <CompanySigninCodeField idPrefix="marketing-clock-in" value={companyCode} onChange={setCompanyCode} />
           <div className="space-y-1.5">
             <Label htmlFor="modal-employee-number">Employee Number</Label>
             <Input

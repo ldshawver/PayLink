@@ -144,7 +144,8 @@ export const workers = pgTable("workers", {
   ssn: text("ssn"),
   ethnicity: text("ethnicity"),
   employeeNumber: text("employee_number"),
-  pin: text("pin"),
+  pin: text("pin"), // legacy plaintext — never read once pin_hash exists; cleared by migration 0032
+  pinHash: text("pin_hash"), // bcrypt; the only PIN value the application verifies or writes
   currency: text("currency").default("USD"),
   workPhone: text("work_phone"),
   workPhoneExt: text("work_phone_ext"),
@@ -1070,7 +1071,7 @@ export const insertDivisionSchema = createInsertSchema(divisions).omit({ id: tru
 export const insertPositionSchema = createInsertSchema(positions).omit({ id: true, createdAt: true });
 export const insertCostCenterSchema = createInsertSchema(costCenters).omit({ id: true, createdAt: true });
 export const insertJobSchema = createInsertSchema(jobs).omit({ id: true, createdAt: true });
-export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true });
+export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true, pinHash: true });
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
 export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: true, createdAt: true });
 export const insertScheduleSchema = createInsertSchema(schedules).omit({ id: true, createdAt: true });

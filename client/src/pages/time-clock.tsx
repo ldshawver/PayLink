@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { CompanySigninCodeField, useSigninContext, needsCompanyCode } from "@/components/company-signin-code";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 import bgVideo from "@assets/Gen-4_5_Create_a_cinematic_animated_background_video_for_a_mod_1774400668621.mp4";
 
@@ -79,6 +80,12 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   const [step, setStep] = useState<ModalStep>("credentials");
   const [employeeNumber, setEmployeeNumber] = useState("");
   const [pin, setPin] = useState("");
+  const [companyCode, setCompanyCode] = useState("");
+  const { data: signinCtx } = useSigninContext();
+  const codeRequired = needsCompanyCode(signinCtx);
+  // Company sign-in code (typed once; afterwards the device remembers the company,
+  // and an admin-bound kiosk never asks). Sent with every request from this modal.
+  const companyBody = codeRequired && companyCode ? { companyCode } : {};
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [successType, setSuccessType] = useState<SuccessType | null>(null);
@@ -150,7 +157,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   }
 
   async function doAction(endpoint: string, type: SuccessType, extraBody?: Record<string, unknown>) {
-    if (!employeeNumber || !pin) { setError("Please enter your employee number and PIN."); return; }
+    if (!employeeNumber || !pin || (codeRequired && !companyCode)) { setError(codeRequired ? "Please enter your company sign-in code, employee number and PIN." : "Please enter your employee number and PIN."); return; }
     setLoading(true);
     setError("");
     try {
@@ -158,7 +165,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ employeeNumber, pin, ...extraBody }),
+        body: JSON.stringify({ employeeNumber, pin, ...companyBody, ...extraBody }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Request failed");
@@ -209,7 +216,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   }, [step, pendingRequestId]);
 
   async function handleCredentialsContinue() {
-    if (!employeeNumber || !pin) { setError("Please enter your employee number and PIN."); return; }
+    if (!employeeNumber || !pin || (codeRequired && !companyCode)) { setError(codeRequired ? "Please enter your company sign-in code, employee number and PIN." : "Please enter your employee number and PIN."); return; }
     setError("");
     if (mode === "clock-in") {
       setStep("clock-in-choice");
@@ -220,7 +227,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ employeeNumber, pin }),
+          body: JSON.stringify({ employeeNumber, pin, ...companyBody }),
         });
         const data = await res.json();
         if (!res.ok) { setError(data.message || "Could not verify credentials."); return; }
@@ -318,11 +325,17 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {mode === "clock-in" ? "Clock In" : "Clock Out"}
               </DialogTitle>
               <DialogDescription className="text-white/50 text-sm">
-                Enter your employee number and PIN to continue.
+                {codeRequired ? "Enter your company sign-in code, employee number and PIN to continue." : "Enter your employee number and PIN to continue."}
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4 py-2">
+              <CompanySigninCodeField
+                idPrefix="kiosk"
+                value={companyCode}
+                onChange={setCompanyCode}
+                className="text-white [&_label]:text-white/60 [&_p]:text-white/50 [&_input]:bg-white/10 [&_input]:border-white/20 [&_input]:text-white"
+              />
               <div className="space-y-1.5">
                 <Label className="text-xs uppercase tracking-wider text-white/60 flex items-center gap-1.5">
                   <Hash className="h-3.5 w-3.5 text-teal-300" /> Employee Number

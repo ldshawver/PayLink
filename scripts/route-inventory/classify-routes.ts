@@ -268,6 +268,14 @@ const MANUAL_OVERRIDES: Record<string, { category: Category; justification: stri
     category: "public anonymous",
     justification: "Alternate credential-based session-establishment endpoint (employee PIN); pre-session by definition.",
   },
+  "GET /api/auth/signin-context": {
+    category: "public anonymous",
+    justification: "Pre-session sign-in screen context (migration 0031): reports only whether this device is a bound kiosk / remembers a company and that company's display name, derived from the device's own HttpOnly cookies. Never returns a sign-in code or id; rate limited.",
+  },
+  "POST /api/auth/signin-context/forget": {
+    category: "public anonymous",
+    justification: "Clears this device's own remembered-company cookie ('Not your company?'). Touches no server state; a kiosk binding cannot be cleared here.",
+  },
   "GET /api/auth/me": {
     category: "authenticated global/self-service",
     justification: "Checks req.session.userId inline (401 if absent) rather than via requireAuth middleware; functionally equivalent gating, returns the caller's own identity only.",
