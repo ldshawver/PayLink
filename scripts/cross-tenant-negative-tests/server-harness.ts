@@ -205,6 +205,8 @@ export function spawnManagedProcess(
 export interface TestServer {
   baseUrl: string;
   stop(): Promise<void>;
+  /** Everything the server wrote to stdout + stderr so far (bounded), for "nothing sensitive was logged" assertions. */
+  output(): string;
 }
 
 /**
@@ -230,10 +232,19 @@ export async function startTestServer(testDatabaseUrl: string): Promise<TestServ
   });
 
   const stderrLines: string[] = [];
+  const allOutput: string[] = [];
+  let allOutputBytes = 0;
+  const keep = (text: string) => {
+    allOutput.push(text); allOutputBytes += text.length;
+    while (allOutputBytes > 4_000_000 && allOutput.length > 1) allOutputBytes -= allOutput.shift()!.length;
+  };
   child.stderr?.on("data", (chunk: Buffer) => {
-    stderrLines.push(chunk.toString());
+    const text = chunk.toString();
+    stderrLines.push(text);
     if (stderrLines.length > 200) stderrLines.shift();
+    keep(text);
   });
+  child.stdout?.on("data", (chunk: Buffer) => keep(chunk.toString()));
 
   const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -250,7 +261,7 @@ export async function startTestServer(testDatabaseUrl: string): Promise<TestServ
     throw e;
   }
 
-  return { baseUrl, stop: managed.stop };
+  return { baseUrl, stop: managed.stop, output: () => allOutput.join("") };
 }
 
 /** Extracts just the `connect.sid=...` cookie pair from a Set-Cookie header, discarding attributes. */
