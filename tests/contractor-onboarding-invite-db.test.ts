@@ -243,6 +243,35 @@ async function main() {
     r = await adminB.req("GET", "/api/contractor-onboarding");
     check("company B's list shows none of A's contractors", r.status === 200 && r.body.length === 0, r.body?.length);
     check("SMTP sink saw 4 messages, all to example.test addresses (nothing else could be sent)", sink.messages.length === 4 && sink.messages.every((m) => m.rcpt.every((x) => /@example\.test/i.test(x))));
+
+    console.log("\n— send arriving while the post-send transaction holds the lock (deterministic) —");
+    // Regression: a SELECT … (subquery) … FOR UPDATE that waited on the lock kept the
+    // subquery's pre-wait snapshot, saw status 'invited' with last_sent_at NULL and
+    // sent a second email. Reproduced 5/5 on 43d9871 before the fix.
+    process.env.DATABASE_URL = url;
+    const { sendSetupInvite } = await import("../server/contractor-onboarding/invite");
+    const adminAId = (await pool.query(`SELECT id FROM users WHERE username=$1`, [U.adminA])).rows[0].id;
+    const raceOutcomes: string[] = []; let raceMails = 0;
+    for (let i = 0; i < 3; i++) {
+      r = await adminA.req("POST", "/api/contractor-onboarding", { firstName: "Race", lastName: `R${i}`, email: `race${i}-${sfx}@example.test` });
+      const cr = r.body as { workerId: string; onboardingId: string };
+      await sendSetupInvite({ companyId: co.A, onboardingId: cr.onboardingId, actorUserId: adminAId, baseUrl: "http://onboarding.invalid", mailer: async () => { throw new Error("held"); } });
+      // Rebuild the exact state the claim transaction leaves: 'invite_sending' + pending invite, not yet sent.
+      await pool.query(`UPDATE account_invites SET status='pending', revoked_at=NULL, last_sent_at=NULL WHERE relationship_id=$1`, [cr.workerId]);
+      await pool.query(`UPDATE worker_onboarding SET status='invite_sending', updated_at=now() WHERE id=$1`, [cr.onboardingId]);
+      const x = await pool.connect();
+      try {
+        await x.query("BEGIN");
+        await x.query(`UPDATE account_invites SET last_sent_at = NOW() WHERE relationship_id=$1 AND status='pending'`, [cr.workerId]);
+        await x.query(`UPDATE worker_onboarding SET status='invited', updated_at=NOW() WHERE id=$1`, [cr.onboardingId]);
+        const second = sendSetupInvite({ companyId: co.A, onboardingId: cr.onboardingId, actorUserId: adminAId, baseUrl: "http://onboarding.invalid", mailer: async () => { raceMails++; } });
+        await new Promise((res) => setTimeout(res, 400));
+        await x.query("COMMIT");
+        const out: any = await second;
+        raceOutcomes.push(out.outcome ?? out.code);
+      } finally { x.release(); }
+    }
+    check("3/3 sends that waited on the lock → already_sent, no second email", raceOutcomes.every((o) => o === "already_sent") && raceMails === 0, { raceOutcomes, raceMails });
   } finally {
     if (server) await server.stop();
     await sink.close();

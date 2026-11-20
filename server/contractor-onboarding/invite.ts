@@ -94,6 +94,15 @@ export async function sendSetupInvite(args: {
 
   // 1) Claim under a row lock, rotate the token, commit.
   const claim = await db.transaction(async (tx) => {
+    // Lock FIRST, then read state in a separate statement. Under READ COMMITTED a
+    // single "SELECT … (subquery) … FOR UPDATE" that waits on the lock re-reads the
+    // locked row but keeps its subqueries' old snapshot — a waiter then saw
+    // status 'invited' with a NULL last_sent_at and sent a second email.
+    const locked = firstRow<{ id: string }>(await tx.execute(sql`
+      SELECT o.id FROM worker_onboarding o
+       WHERE o.id = ${args.onboardingId} AND o.company_id = ${args.companyId} AND o.package_key = ${CONTRACTOR_ONBOARDING_PACKAGE}
+       FOR UPDATE`));
+    if (!locked) return { done: NOT_FOUND };
     const row = firstRow<any>(await tx.execute(sql`
       SELECT o.id, o.company_id, o.worker_id, o.status, o.updated_at, w.email, w.first_name, c.name AS company_name,
              (SELECT s.status FROM onboarding_steps s WHERE s.onboarding_id = o.id AND s.step_key = 'account_setup') AS setup_status,
@@ -103,8 +112,7 @@ export async function sendSetupInvite(args: {
         FROM worker_onboarding o
         JOIN workers w ON w.id = o.worker_id AND w.company_id = o.company_id
         JOIN companies c ON c.id = o.company_id
-       WHERE o.id = ${args.onboardingId} AND o.company_id = ${args.companyId} AND o.package_key = ${CONTRACTOR_ONBOARDING_PACKAGE}
-       FOR UPDATE OF o`));
+       WHERE o.id = ${locked.id}`));
     if (!row) return { done: NOT_FOUND };
     if (row.setup_status === "completed") return { done: { ok: false as const, status: 409 as const, code: "already_set_up" as const, message: "This contractor has already set up their account." } };
     if (!row.email) return { done: { ok: false as const, status: 409 as const, code: "no_email" as const, message: "Add an email address before sending an invitation." } };

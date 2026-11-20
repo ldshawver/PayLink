@@ -18,7 +18,10 @@ check("send route: requireAuth + requireRole(\"admin\") + CSRF + demo-write bloc
 check("send route: company from the session user only", /resolveTenantCompanyId\(actingUser\)/.test(send) && !/req\.body/.test(send));
 check("send route: production base URL only from APP_BASE_URL (never the Host header)", /process\.env\.NODE_ENV === "production" \? null : getAppBaseUrl\(req\)/.test(send));
 check("send route: unknown company/record → 404 (non-revealing)", /status\(404\)/.test(send));
-check("service: row lock + sending claim inside one transaction", /db\.transaction[\s\S]*FOR UPDATE OF o[\s\S]*status = 'invite_sending'/.test(svc));
+check("service: row lock + sending claim inside one transaction", /db\.transaction[\s\S]*FROM worker_onboarding o[\s\S]{0,200}FOR UPDATE`[\s\S]*status = 'invite_sending'/.test(svc));
+// The state read must be a separate statement AFTER the lock: a subquery inside a
+// waiting SELECT … FOR UPDATE keeps its pre-wait snapshot (READ COMMITTED EPQ).
+check("service: send state is read after the lock, not in the locking statement", !/max\(i\.last_sent_at\)[\s\S]{0,600}FOR UPDATE/.test(svc) && /FOR UPDATE`\)\);\s*if \(!locked\)/.test(svc));
 check("service: email sent only after the claim transaction", svc.indexOf("await mailer(email)") > svc.indexOf("if (\"done\" in claim)"));
 check("service: failed send revokes the undelivered invite", /status = 'revoked'[\s\S]{0,120}AND status = 'pending'`\);\s*\n\s*await tx\.execute\(sql`UPDATE worker_onboarding SET status = 'invite_failed'/.test(svc));
 check("service: never logs (no console.*)", !/console\./.test(svc));
