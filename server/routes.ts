@@ -89,6 +89,9 @@ import {
 import { normalizeWorkerPayRate, isValidWorkerType, isValidContractorType } from "@shared/worker-pay-rate-rules";
 import { redactDiagnosticText } from "./diagnostics-safety";
 import { registerFeedbackRoutes } from "./feedback-routes";
+import {
+  createContractorForOnboarding, listContractorOnboarding, normalizeCreateInput as normalizeContractorCreateInput,
+} from "./contractor-onboarding/create";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -3708,6 +3711,43 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/contractor-access-requests/:id/reject failed:", e);
       res.status(500).json({ message: "Failed to reject request" });
+    }
+  });
+
+  // ── Contractor onboarding (PR 1: administrator creates a pending contractor) ──
+  // The company is ALWAYS the acting administrator's own; any companyId in the
+  // body is ignored. Platform accounts without a company are refused (no
+  // implicit "all companies"). Nothing is emailed here.
+  app.post("/api/contractor-onboarding", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!actingUser || !companyId) return res.status(403).json({ message: "Sign in with a company administrator account to add contractors." });
+      const parsed = normalizeContractorCreateInput(req.body);
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const result = await createContractorForOnboarding({ companyId, actorUserId: actingUser.id, input: parsed.value });
+      if (!result.ok) {
+        if (result.code === "duplicate_email") {
+          return res.status(409).json({ code: result.code, message: result.message, workerId: result.workerId, onboardingId: result.onboardingId });
+        }
+        return res.status(409).json({ code: result.code, message: result.message });
+      }
+      res.status(201).json(result);
+    } catch (e) {
+      console.error("POST /api/contractor-onboarding failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not add the contractor. Please try again." });
+    }
+  });
+
+  app.get("/api/contractor-onboarding", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!companyId) return res.json([]);
+      res.json(await listContractorOnboarding(companyId));
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load contractor onboarding" });
     }
   });
 
