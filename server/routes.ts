@@ -105,6 +105,7 @@ import { PRIVATE_DOC_MAX_BYTES } from "./private-documents/store";
 import { normalizeEmergencyContact, getEmergencyContact, saveEmergencyContact } from "./contractor-onboarding/emergency-contact";
 import { handleOnboardingWebhook, completeOnboardingSignature, liveRequestForStep } from "./contractor-onboarding/esign-complete";
 import { assessOnboarding } from "./contractor-onboarding/adi";
+import { gateAllowsStoredContractor, makeContractorGate, GATE_ERROR_CODE } from "./contractor-onboarding/gate";
 import { isContractorOnboarding, listReviewQueue, normalizeReviewInput, reauthenticateReviewer, reviewOnboarding } from "./contractor-onboarding/review";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
@@ -2112,6 +2113,14 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // PR 8 — the ONE contractor onboarding gate for marketplace work (bids,
+  // proposals, awards, contracts, invoices, payments). See contractor-onboarding/gate.ts.
+  const contractorGate = makeContractorGate({
+    getSessionUser: async (req) => (req.session?.userId ? await storage.getUser(req.session.userId) : undefined),
+    canAccessCompany: (user, companyId) => canAccessStoredCompany(user, companyId),
+  });
+  const GATE_SELF = { self: true } as const;
 
   // ── Health / readiness endpoints (required by deploy health check) ───────────
   app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
@@ -13389,7 +13398,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to fetch invoice" }); }
   });
 
-  app.post("/api/contractor-invoices", requireAuth, async (req, res) => {
+  app.post("/api/contractor-invoices", requireAuth, contractorGate("invoice_create", GATE_SELF), async (req, res) => {
     try {
       const data = req.body;
       const user = await storage.getUser(req.session.userId!);
@@ -13400,6 +13409,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (worker.workerType !== "contractor") return res.status(403).json({ message: "Only contractors can submit invoices" });
 
       data.contractorId = user.workerId;
+      // PR 8: the invoice belongs to the contractor's own (stored) company — never
+      // a body value and never NULL (an omitted companyId used to store NULL).
+      data.companyId = worker.companyId;
 
       if (!data.amount || parseFloat(data.amount) <= 0) return res.status(400).json({ message: "Positive amount required" });
       if (!data.invoiceDate) return res.status(400).json({ message: "Invoice date required" });
@@ -13468,7 +13480,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to update invoice" }); }
   });
 
-  app.post("/api/contractor-invoices/:id/submit", requireAuth, async (req, res) => {
+  app.post("/api/contractor-invoices/:id/submit", requireAuth, contractorGate("invoice_submit", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
@@ -13542,7 +13554,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to submit invoice" }); }
   });
 
-  app.post("/api/contractor-invoices/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/:id/approve", requireAuth, requireRole("admin", "manager"), contractorGate("invoice_approve", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     try {
       const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id);
       if (!owned) return;
@@ -13702,7 +13714,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to mark duplicate: " + e.message }); }
   });
 
-  app.post("/api/contractor-invoices/:id/restore", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/:id/restore", requireAuth, requireRole("admin", "manager"), contractorGate("invoice_restore", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Invoice not found" });
@@ -13740,7 +13752,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to restore invoice: " + e.message }); }
   });
 
-  app.post("/api/contractor-invoices/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/:id/mark-paid", requireAuth, requireRole("admin", "manager"), contractorGate("invoice_mark_paid", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
@@ -13909,7 +13921,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // a company+funding-account-scoped check number, create exactly one 'check'
   // payment, reduce the invoice balance atomically, then return the rendered PDF.
   // Idempotency-Key required; a replay re-renders the already-issued check with no write.
-  app.post("/api/contractor-invoices/:id/cut-check", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/:id/cut-check", requireAuth, requireRole("admin", "manager"), contractorGate("invoice_cut_check", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     const invoiceId = String(req.params.id);
     try {
       const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
@@ -14545,7 +14557,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/job-posts/:id/bids", requireAuth, JOB_FEATURE, JOB_ADMIN, jobBoardRoute("list proposals", async (req, res, actor) => {
     sendJobBoard(res, await listBidsForPost(jobBoardDeps, actor, req.params.id));
   }));
-  app.post("/api/job-posts/:id/bids", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("create proposal", async (req, res, actor) => {
+  app.post("/api/job-posts/:id/bids", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, contractorGate("bid_create", GATE_SELF), jobBoardRoute("create proposal", async (req, res, actor) => {
     sendJobBoard(res, await createBid(jobBoardDeps, actor, req.params.id, req.body ?? {}));
   }));
   app.get("/api/job-posts/:id/invitations", requireAuth, JOB_FEATURE, JOB_ADMIN, jobBoardRoute("list invitations", async (req, res, actor) => {
@@ -14566,10 +14578,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/contractor-job-questions/:questionId/answer", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, jobBoardRoute("answer question", async (req, res, actor) => {
     sendJobBoard(res, await answerQuestion(jobBoardDeps, actor, req.params.questionId, req.body ?? {}));
   }));
-  app.patch("/api/contractor-job-bids/:bidId", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("update proposal", async (req, res, actor) => {
+  app.patch("/api/contractor-job-bids/:bidId", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, contractorGate("bid_update", { record: "contractor_job_bids", param: "bidId" }), jobBoardRoute("update proposal", async (req, res, actor) => {
     sendJobBoard(res, await updateBid(jobBoardDeps, actor, req.params.bidId, req.body ?? {}));
   }));
-  app.post("/api/contractor-job-bids/:bidId/submit", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("submit proposal", async (req, res, actor) => {
+  app.post("/api/contractor-job-bids/:bidId/submit", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, contractorGate("bid_submit", { record: "contractor_job_bids", param: "bidId" }), jobBoardRoute("submit proposal", async (req, res, actor) => {
     sendJobBoard(res, await submitBid(jobBoardDeps, actor, req.params.bidId));
   }));
   app.post("/api/contractor-job-bids/:bidId/withdraw", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, jobBoardRoute("withdraw proposal", async (req, res, actor) => {
@@ -14581,7 +14593,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/contractor-job-bids/:bidId/attachments", requireAuth, JOB_FEATURE, jobBoardRoute("list proposal attachments", async (req, res, actor) => {
     sendJobBoard(res, await listBidAttachments(jobBoardDeps, actor, req.params.bidId));
   }));
-  app.post("/api/contractor-job-bids/:bidId/attachments", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites,
+  app.post("/api/contractor-job-bids/:bidId/attachments", requireAuth, JOB_FEATURE, requireCsrfToken, blockDemoWrites, contractorGate("bid_attachment", { record: "contractor_job_bids", param: "bidId" }),
     singleFileUpload(jobAttachmentUpload, "file", { maxBytes: JOB_ATTACHMENT_MAX_BYTES }),
     jobBoardRoute("add proposal attachment", async (req, res, actor) => {
       sendJobBoard(res, await addBidAttachment(jobBoardDeps, actor, req.params.bidId, (req as any).file));
@@ -14594,7 +14606,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/contractor-job-bids/:bidId/shortlist", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, bidReview("shortlist"));
   app.post("/api/contractor-job-bids/:bidId/request-revision", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, bidReview("request_revision"));
   app.post("/api/contractor-job-bids/:bidId/reject", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, bidReview("reject"));
-  app.post("/api/contractor-job-bids/:bidId/award", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, jobBoardRoute("award", async (req, res, actor) => {
+  app.post("/api/contractor-job-bids/:bidId/award", requireAuth, JOB_FEATURE, JOB_ADMIN, requireCsrfToken, blockDemoWrites, contractorGate("bid_award", { record: "contractor_job_bids", param: "bidId" }), jobBoardRoute("award", async (req, res, actor) => {
     sendJobBoard(res, await awardBid(jobBoardDeps, actor, req.params.bidId, String(req.get("Idempotency-Key") ?? "")));
   }));
 
@@ -14905,7 +14917,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isPlatform = (user?.role || "").startsWith("platform_");
       const companyClause = isPlatform ? sql`` : sql`AND company_id = ${user?.companyId}`;
 
-      const results = { proposals: 0, contracts: 0, invoices: 0, orphanContracts: 0, orphanInvoices: 0, errors: 0 };
+      const results = { proposals: 0, contracts: 0, invoices: 0, orphanContracts: 0, orphanInvoices: 0, errors: 0, gateSkipped: 0 };
 
       // ── Repair: create missing draft contracts for approved proposals ─────────
       const orphanProps = await db.execute(sql`
@@ -14917,6 +14929,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         LIMIT 50
       `);
       for (const p of orphanProps.rows as any[]) {
+        // PR 8 gate: never create a contract for a contractor whose onboarding is not verified.
+        if (!(await gateAllowsStoredContractor("backfill_contract", p.contractor_id, p.company_id, { actorId: req.session.userId!, actor: "administrator" }))) { results.gateSkipped++; continue; }
         try {
           const contractNumber = `CON-${Date.now()}-${p.id.slice(0, 6)}`;
           const cRes = await db.execute(sql`
@@ -15034,6 +15048,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         LIMIT 20
       `);
       for (const c of orphanContracts.rows as any[]) {
+        // PR 8 gate: never create an invoice for a contractor whose onboarding is not verified.
+        if (!(await gateAllowsStoredContractor("backfill_invoice", c.contractor_id, c.company_id, { actorId: req.session.userId!, actor: "administrator" }))) { results.gateSkipped++; continue; }
         try {
           const invoice = await autoCreateContractInvoiceExactlyOnce(c.id);
           if (invoice?.id) {
@@ -15043,7 +15059,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         } catch { results.errors++; }
       }
 
-      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived, ${results.orphanContracts} orphan contracts + ${results.orphanInvoices} orphan invoices created${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
+      res.json({ ...results, message: `Backfill complete: ${results.proposals} proposals, ${results.contracts} contracts, ${results.invoices} invoices archived, ${results.orphanContracts} orphan contracts + ${results.orphanInvoices} orphan invoices created${results.gateSkipped > 0 ? `, ${results.gateSkipped} skipped (contractor onboarding incomplete)` : ""}${results.errors > 0 ? `, ${results.errors} errors skipped` : ""}` });
     } catch (e: any) {
       res.status(500).json({ message: "Backfill failed: " + (e?.message || String(e)) });
     }
@@ -15076,6 +15092,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const contractId = (existingContract.rows[0] as any).id;
           await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contractId} WHERE id = ${p.id} AND converted_to_contract_id IS NULL`).catch(() => {});
           repaired.push({ proposalId: p.id, contractId, contractNumber: "(existing, re-linked)" });
+          continue;
+        }
+        // PR 8 gate: never create a contract for a contractor whose onboarding is not verified.
+        if (!(await gateAllowsStoredContractor("proposal_repair_contracts_batch", p.contractor_id, p.company_id, { actorId: req.session.userId!, actor: "administrator" }))) {
+          skipped.push({ proposalId: p.id, reason: "contractor_onboarding_incomplete" });
           continue;
         }
         try {
@@ -15126,7 +15147,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/repair-contract — self-heal one finalized proposal missing its contract
-  app.post("/api/contractor-proposals/:id/repair-contract", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-proposals/:id/repair-contract", requireAuth, requireRole("admin", "manager"), contractorGate("proposal_repair_contract", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
@@ -15167,7 +15188,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals — contractor or admin creates a proposal
-  app.post("/api/contractor-proposals", requireAuth, async (req, res) => {
+  app.post("/api/contractor-proposals", requireAuth, contractorGate("proposal_create", GATE_SELF, { workerFromBody: "contractorId" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -15497,7 +15518,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/submit — contractor submits to company
-  app.post("/api/contractor-proposals/:id/submit", requireAuth, async (req, res) => {
+  app.post("/api/contractor-proposals/:id/submit", requireAuth, contractorGate("proposal_submit", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -15544,7 +15565,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/accept — admin/manager accepts the proposal
-  app.post("/api/contractor-proposals/:id/accept", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-proposals/:id/accept", requireAuth, requireRole("admin", "manager"), contractorGate("proposal_accept", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -15660,7 +15681,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/request-signature — admin sends approved proposal for e-signature
-  app.post("/api/contractor-proposals/:id/request-signature", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-proposals/:id/request-signature", requireAuth, requireRole("admin", "manager"), contractorGate("proposal_request_signature", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -16017,7 +16038,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/convert-to-invoice — admin accepts and creates contractor invoice
-  app.post("/api/contractor-proposals/:id/convert-to-invoice", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-proposals/:id/convert-to-invoice", requireAuth, requireRole("admin", "manager"), contractorGate("proposal_convert_to_invoice", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -16318,7 +16339,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/send — mark as sent; generates share_token if missing
-  app.post("/api/contractor-proposals/:id/send", requireAuth, async (req, res) => {
+  app.post("/api/contractor-proposals/:id/send", requireAuth, contractorGate("proposal_send", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const auth = await authorizeProposalAccess(req.params.id, (req.session as any).userId);
       if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
@@ -16595,7 +16616,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/create-revision — create a new version
-  app.post("/api/contractor-proposals/:id/create-revision", requireAuth, async (req, res) => {
+  app.post("/api/contractor-proposals/:id/create-revision", requireAuth, contractorGate("proposal_create_revision", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -16629,7 +16650,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/accept-counteroffer — contractor accepts admin's counter
-  app.post("/api/contractor-proposals/:id/accept-counteroffer", requireAuth, async (req, res) => {
+  app.post("/api/contractor-proposals/:id/accept-counteroffer", requireAuth, contractorGate("proposal_accept_counteroffer", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -16883,7 +16904,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // Atomic (SELECT ... FOR UPDATE on the invoice), idempotent (Idempotency-Key
   // required), normalized payment method, and links approved fair-market-value
   // trade compensation exactly once.
-  app.post("/api/contractor-invoices/:id/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/:id/payments", requireAuth, requireRole("admin", "manager"), contractorGate("invoice_payment", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     const invoiceId = String(req.params.id);
     try {
       const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
@@ -17097,7 +17118,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/contractor-payments/:id/reissue — void the original and create one
   // linked replacement payment, atomically. Body: { reason, amount?, paymentMethod?,
   // referenceNumber?, description? } and an Idempotency-Key for the replacement.
-  app.post("/api/contractor-payments/:id/reissue", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-payments/:id/reissue", requireAuth, requireRole("admin", "manager"), contractorGate("payment_reissue", { record: "contractor_payments", param: "id" }), async (req, res) => {
     const originalId = String(req.params.id);
     try {
       const idem = requireIdempotencyKey(req.get("Idempotency-Key") ?? (req.body as any)?.idempotencyKey);
@@ -17196,7 +17217,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-invoices/:id/stripe-checkout-session — create Stripe Checkout session for online payment
-  app.post("/api/contractor-invoices/:id/stripe-checkout-session", requireAuth, async (req, res) => {
+  app.post("/api/contractor-invoices/:id/stripe-checkout-session", requireAuth, contractorGate("invoice_checkout", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     try {
       const invOwner = (await loadOwnedResource("contractorInvoice", req.params.id)).row;
       const owned = await authorizeOwnedById(req, res, "contractorInvoice", req.params.id, { selfWorkerId: invOwner?.contractor_id });
@@ -17408,7 +17429,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ═══════════════════════════════════════════════════════════════════════════
 
   // ── Proposal: convert to contract ─────────────────────────────────────────
-  app.post("/api/contractor-proposals/:id/convert-to-contract", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-proposals/:id/convert-to-contract", requireAuth, requireRole("admin", "manager"), contractorGate("proposal_convert_to_contract", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
@@ -17476,7 +17497,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // POST /api/contractor-proposals/:id/mark-negotiated — admin marks counter as negotiated/agreed
-  app.post("/api/contractor-proposals/:id/mark-negotiated", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-proposals/:id/mark-negotiated", requireAuth, requireRole("admin", "manager"), contractorGate("proposal_mark_negotiated", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
@@ -17548,7 +17569,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch negotiations" }); }
   });
 
-  app.post("/api/contractor-proposals/:id/negotiate", requireAuth, async (req, res) => {
+  app.post("/api/contractor-proposals/:id/negotiate", requireAuth, contractorGate("proposal_negotiate", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
@@ -17590,7 +17611,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to send counter: " + e.message }); }
   });
 
-  app.patch("/api/contractor-proposals/:id/negotiations/:negId", requireAuth, async (req, res) => {
+  app.patch("/api/contractor-proposals/:id/negotiations/:negId", requireAuth, contractorGate("proposal_negotiation_respond", { record: "contractor_proposals", param: "id" }), async (req, res) => {
     try {
       // Only the opposing party can respond: admin responds to contractor counter and vice-versa
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
@@ -17704,7 +17725,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
   });
 
-  app.post("/api/contractor-contracts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts", requireAuth, requireRole("admin", "manager"), contractorGate("contract_create", { workerFromBody: "contractorId" }), async (req, res) => {
     try {
       const { companyId, contractorId, proposalId, title, description, scopeOfWork, paymentTerms, totalValue, currency, paymentType, tradeDetails, tradeValue, startDate, endDate, contractType, specialTerms, bodyHtml, bodyMarkdown, templateId } = req.body;
       if (!contractorId || !title) return res.status(400).json({ message: "contractorId and title are required" });
@@ -17964,7 +17985,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to delegate signer: " + e.message }); }
   });
 
-  app.post("/api/contractor-hub/contracts/:id/send-signing-email", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-hub/contracts/:id/send-signing-email", requireAuth, requireRole("admin", "manager"), contractorGate("contract_send_signing_email", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
@@ -18168,6 +18189,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const signer = result.rows[0] as any;
       if (!signer) return res.status(404).json({ message: "Signing link not found" });
       if (signer.signing_token_expires_at && new Date(signer.signing_token_expires_at).getTime() < Date.now()) return res.status(410).json({ message: "Signing link has expired" });
+      // PR 8 gate: a signing link may not complete a contract (and auto-create its
+      // invoice) for a contractor whose onboarding is not verified — including links
+      // issued before the gate existed. Generic answer: no step codes to the link holder.
+      const gated = firstRow<any>(await db.execute(sql`SELECT contractor_id, company_id FROM contractor_contracts WHERE id = ${signer.contract_id} AND company_id = ${signer.company_id}`));
+      if (!(await gateAllowsStoredContractor("contract_public_sign_complete", gated?.contractor_id, gated?.company_id, { actorId: `signer:${signer.id}`, actor: "portal" }))) {
+        return res.status(409).json({ code: GATE_ERROR_CODE, message: "This contract cannot be signed yet. Please contact the company." });
+      }
       if (signer.documenso_recipient_id || signer.documenso_signing_url) {
         const syncResult = await syncDocumensoContractStatus(signer.contract_id).catch(() => null);
         return res.status(409).json({ message: "This contract is Documenso-managed. Please complete signing in Documenso; MyPayLink will update after Documenso confirms signer status.", state: "documenso_managed", documensoSigningUrl: signer.documenso_signing_url || null, syncResult });
@@ -18244,7 +18272,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to update contract: " + e.message }); }
   });
 
-  app.post("/api/contractor-contracts/:id/send", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts/:id/send", requireAuth, requireRole("admin", "manager"), contractorGate("contract_send", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
@@ -18373,7 +18401,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // assertContractCompanyAccess. Does not send envelopes / rotate tokens / create anything;
   // it only reconciles signer + contract status (and converges completion the same way the
   // webhook and the periodic loop do).
-  app.post("/api/contractor-contracts/:id/reconcile-signing", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts/:id/reconcile-signing", requireAuth, requireRole("admin", "manager"), contractorGate("contract_reconcile_signing", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
@@ -18384,7 +18412,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to reconcile signing status" }); }
   });
 
-  app.post("/api/contractor-contracts/:id/sign", requireAuth, async (req, res) => {
+  app.post("/api/contractor-contracts/:id/sign", requireAuth, contractorGate("contract_sign", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const { name, signatureData, role } = req.body;
       const user = await storage.getUser(req.session.userId!);
@@ -18719,7 +18747,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Contract: Activate ────────────────────────────────────────────────────
-  app.post("/api/contractor-contracts/:id/activate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts/:id/activate", requireAuth, requireRole("admin", "manager"), contractorGate("contract_activate", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
@@ -19543,7 +19571,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(400).json({ message: e?.message || "Failed to send reminder" }); }
   });
 
-  app.post("/api/contractor-contracts/:id/resend-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts/:id/resend-signing-request", requireAuth, requireRole("admin", "manager"), contractorGate("contract_resend_signing", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     let contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
     const blockedResendStatuses = ["fully_signed", "active", "completed", "void", "terminated"];
@@ -19778,7 +19806,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     res.json({ success: true, mode: "canceled", contractStatus });
   });
 
-  app.post("/api/contractor-contracts/:contractId/signers/:signerId/resend", requireAuth, async (req, res) => {
+  app.post("/api/contractor-contracts/:contractId/signers/:signerId/resend", requireAuth, contractorGate("contract_signer_resend", { record: "contractor_contracts", param: "contractId" }), async (req, res) => {
     const contract = await assertContractSignerManageAccess(req.params.contractId, req.session.userId!);
     if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
     if (["fully_signed", "completed", "void", "terminated"].includes(contract.status)) return res.status(400).json({ message: "Cannot re-send signing requests for this contract status" });
@@ -19861,7 +19889,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Contract: Send for Signature via Documenso ────────────────────────────
-  app.post("/api/contractor-contracts/:id/send-for-signature", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts/:id/send-for-signature", requireAuth, requireRole("admin", "manager"), contractorGate("contract_send_for_signature", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const contractId = req.params.id;
       const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
@@ -20121,7 +20149,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // mutates the old Documenso envelope (no safe void operation exists in this integration); the
   // old local documenso_signature_requests row is preserved and marked 'superseded' for audit
   // history, never deleted.
-  app.post("/api/contractor-contracts/:id/replace-signing-request", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-contracts/:id/replace-signing-request", requireAuth, requireRole("admin", "manager"), contractorGate("contract_replace_signing", { record: "contractor_contracts", param: "id" }), async (req, res) => {
     try {
       const contractId = req.params.id;
       const contract = await assertContractCompanyAccess(contractId, req.session.userId!);
@@ -20424,7 +20452,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Invoice: Request Override ─────────────────────────────────────────────
-  app.post("/api/contractor-invoices/:id/request-override", requireAuth, async (req, res) => {
+  app.post("/api/contractor-invoices/:id/request-override", requireAuth, contractorGate("invoice_request_override", { record: "contractor_invoices", param: "id" }), async (req, res) => {
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
@@ -21506,7 +21534,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Contractor Invoice: create from proposal or contract with guardrail ────
-  app.post("/api/contractor-invoices/from-proposal", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/contractor-invoices/from-proposal", requireAuth, requireRole("admin", "manager"), contractorGate("invoice_from_proposal", { recordFromBody: "contractor_proposals", field: "proposalId" }, { recordFromBody: "contractor_contracts", field: "contractId" }), async (req, res) => {
     try {
       const { proposalId, contractId, invoiceType, dueDate, paymentTerms, notes } = req.body;
       if (!proposalId && !contractId) return res.status(400).json({ message: "proposalId or contractId required" });
@@ -42863,6 +42891,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
     const proposal = await validatePortalToken(req.params.id, token, res);
     if (!proposal) return;
+    // PR 8 gate: a client approval may not progress work for a contractor whose onboarding is not verified.
+    if (!(await gateAllowsStoredContractor("proposal_client_approve", proposal.contractor_id, proposal.company_id))) {
+      res.status(409).json({ code: GATE_ERROR_CODE, message: "This proposal cannot be approved yet. Please contact the company." });
+      return;
+    }
     if (!PORTAL_APPROVABLE_STATES.includes(proposal.status)) {
       res.status(409).json({ message: "This proposal cannot be approved in its current state" });
       return;

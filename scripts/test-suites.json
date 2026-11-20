@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 137,
+      "fileCount": 138,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -143,7 +143,8 @@
         "tests/private-documents-static.test.ts",
         "tests/contractor-onboarding-emergency-contact-static.test.ts",
         "tests/contractor-onboarding-esign-complete-static.test.ts",
-        "tests/contractor-onboarding-review-static.test.ts"
+        "tests/contractor-onboarding-review-static.test.ts",
+        "tests/contractor-onboarding-gate-static.test.ts"
       ]
     },
     "db": {
@@ -152,7 +153,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 56,
+      "fileCount": 57,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
@@ -166,7 +167,6 @@
         "tests/proposal-send-idempotency-db.test.ts",
         "tests/worker-create-invoiced-contractor-http.test.ts",
         "tests/cross-tenant-worker-routes-db.test.ts",
-        "tests/cross-tenant-batch-2-routes-db.test.ts",
         "tests/cross-tenant-batch-3-routes-db.test.ts",
         "tests/cross-tenant-batch-4-routes-db.test.ts",
         "tests/cross-tenant-batch-5-routes-db.test.ts",
@@ -193,7 +193,6 @@
         "tests/documenso-repair-diagnostic-db.test.ts",
         "tests/employee-create-edit-freeze-db.test.ts",
         "tests/saas-pr1-company-authz-db.test.ts",
-        "tests/saas-pr2-stored-ownership-db.test.ts",
         "tests/saas-pr2b-remaining-ownership-db.test.ts",
         "tests/provision-tenant-core-db.test.ts",
         "tests/demo-tenant-purge-db.test.ts",
@@ -209,7 +208,10 @@
         "tests/private-documents-db.test.ts",
         "tests/contractor-onboarding-emergency-contact-db.test.ts",
         "tests/contractor-onboarding-esign-complete-db.test.ts",
-        "tests/contractor-onboarding-review-db.test.ts"
+        "tests/contractor-onboarding-review-db.test.ts",
+        "tests/contractor-onboarding-gate-db.test.ts",
+        "tests/cross-tenant-batch-2-routes-db.test.ts",
+        "tests/saas-pr2-stored-ownership-db.test.ts"
       ]
     },
     "e2e": {
