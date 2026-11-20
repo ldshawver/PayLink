@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EsignTemplatesCard } from "@/components/contractor-onboarding/esign-templates-card";
 import { PrivateDocsButton } from "@/components/contractor-onboarding/private-docs-dialog";
+import { ReviewQueueCard } from "@/components/contractor-onboarding/review-queue";
 import { FileSignature, Loader2, Mail, UserPlus } from "lucide-react";
 
 type Step = { key: string; title: string; status: string; assignedToRole: string };
@@ -27,6 +28,7 @@ const STATUS_LABEL: Record<string, string> = {
   in_progress: "In progress",
   in_review: "Awaiting review",
   verified: "Verified",
+  changes_requested: "Changes requested",
 };
 
 /**
@@ -259,6 +261,8 @@ export default function ContractorOnboardingPage() {
           )}
         </CardContent>
       </Card>
+
+      <ReviewQueueCard canApprove={isAdmin} />
 
       {isAdmin && <EsignTemplatesCard />}
     </div>

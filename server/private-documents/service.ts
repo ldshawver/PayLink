@@ -166,13 +166,14 @@ export async function openPrivateDocument(args: { actor: Actor; documentId: stri
 export async function ownOnboardingSummary(companyId: string, workerId: string) {
   const o = firstRow<any>(await db.execute(sql`
     SELECT o.id, o.status, w.employee_number,
-           COALESCE((SELECT json_agg(json_build_object('key', s.step_key, 'title', s.title, 'status', s.status) ORDER BY s.sequence)
+           COALESCE((SELECT json_agg(json_build_object('key', s.step_key, 'title', s.title, 'status', s.status,
+                                                   'note', CASE WHEN s.status = 'not_started' THEN s.review_notes END) ORDER BY s.sequence)
                        FROM onboarding_steps s WHERE s.onboarding_id = o.id), '[]'::json) AS steps
       FROM worker_onboarding o JOIN workers w ON w.id = o.worker_id AND w.company_id = o.company_id
      WHERE o.company_id = ${companyId} AND o.worker_id = ${workerId} AND o.package_key = ${CONTRACTOR_ONBOARDING_PACKAGE}
      ORDER BY o.created_at DESC LIMIT 1`));
   if (!o) return null;
-  return { onboardingId: o.id as string, status: o.status as string, employeeNumber: o.employee_number as string | null, steps: o.steps as { key: string; title: string; status: string }[] };
+  return { onboardingId: o.id as string, status: o.status as string, employeeNumber: o.employee_number as string | null, steps: o.steps as { key: string; title: string; status: string; note?: string | null }[] };
 }
 
 /** Admin/manager view: is this onboarding in the actor's company? Returns the worker or null (→ 404). */

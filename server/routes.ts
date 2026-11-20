@@ -104,6 +104,8 @@ import {
 import { PRIVATE_DOC_MAX_BYTES } from "./private-documents/store";
 import { normalizeEmergencyContact, getEmergencyContact, saveEmergencyContact } from "./contractor-onboarding/emergency-contact";
 import { handleOnboardingWebhook, completeOnboardingSignature, liveRequestForStep } from "./contractor-onboarding/esign-complete";
+import { assessOnboarding } from "./contractor-onboarding/adi";
+import { isContractorOnboarding, listReviewQueue, normalizeReviewInput, reauthenticateReviewer, reviewOnboarding } from "./contractor-onboarding/review";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -3849,6 +3851,56 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/contractor-onboarding/:id/esign/:kind failed:", (e as Error)?.message);
       res.status(500).json({ message: "Could not send the document. Please try again." });
+    }
+  });
+
+  // PR 7 — ADI checklist + administrator review queue. ADI is rule-based and
+  // never calls an AI service; approval is admin-only and re-checked under lock.
+  app.get("/api/contractor-onboarding/review-queue", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      res.setHeader("Cache-Control", "no-store");
+      res.json(companyId ? await listReviewQueue(companyId) : []);
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/review-queue failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load the review queue" });
+    }
+  });
+
+  app.get("/api/contractor-onboarding/:id/assessment", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      const a = companyId ? await assessOnboarding(db, companyId, String(req.params.id)) : null;
+      if (!a) return res.status(404).json({ message: "Onboarding record not found." });
+      res.setHeader("Cache-Control", "no-store");
+      res.json(a);
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/:id/assessment failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to assess onboarding" });
+    }
+  });
+
+  app.post("/api/contractor-onboarding/:id/review", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!actingUser || !companyId) return res.status(404).json({ message: "Onboarding record not found." });
+      const parsed = normalizeReviewInput(req.body);
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      if (parsed.value.decision === "approve") {
+        // Recent authentication: approval re-checks the reviewer's password on this request.
+        const re = await reauthenticateReviewer(actingUser.id, (req.body as any)?.currentPassword);
+        if (re === "locked") return res.status(429).json({ code: "reauth_locked", message: "Too many incorrect passwords. Wait 15 minutes and try again." });
+        if (re !== "ok") return res.status(403).json({ code: "reauth_required", message: "Re-enter your password to approve." });
+      }
+      const r = await reviewOnboarding({ companyId, onboardingId: String(req.params.id), actorUserId: actingUser.id, input: parsed.value });
+      if (!r.ok) return res.status(r.status).json({ code: r.code, message: r.message, findings: r.findings });
+      res.json(r);
+    } catch (e) {
+      console.error("POST /api/contractor-onboarding/:id/review failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not record the review." });
     }
   });
 
@@ -37065,6 +37117,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
       if (!owned) return;
+      if (await isContractorOnboarding(req.params.id)) return res.status(409).json({ message: "Contractor onboarding is managed from Contractor Onboarding → Review queue." });
       const o = await storage.updateWorkerOnboarding(req.params.id, stripOwnershipFields(req.body));
       if (!o) return res.status(404).json({ message: "Onboarding not found" });
       res.json(o);
@@ -37075,6 +37128,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
       if (!owned) return;
+      if (await isContractorOnboarding(req.params.id)) return res.status(409).json({ message: "Contractor onboarding is managed from Contractor Onboarding → Review queue." });
       await storage.deleteWorkerOnboarding(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete onboarding" }); }
@@ -37085,6 +37139,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
       if (!owned) return;
+      if (await isContractorOnboarding(req.params.id)) return res.status(409).json({ message: "Contractor onboarding is managed from Contractor Onboarding → Review queue." });
       const rawToken = crypto.randomBytes(32).toString("hex");
       const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -37099,6 +37154,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
       if (!owned) return;
+      if (await isContractorOnboarding(req.params.id)) return res.status(409).json({ message: "Contractor onboarding is managed from Contractor Onboarding → Review queue." });
       const { action, notes } = req.body; // action: 'approve' | 'reject'
       if (!["approve", "reject"].includes(action)) return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
       const newStatus = action === "approve" ? "approved" : "rejected";
@@ -37196,6 +37252,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const owned = await authorizeOwnedById(req, res, "workerOnboarding", req.params.id);
       if (!owned) return;
+      if (await isContractorOnboarding(req.params.id)) return res.status(409).json({ message: "Contractor onboarding is managed from Contractor Onboarding → Review queue." });
       const stepOwner = await db.execute(sql`SELECT 1 FROM onboarding_steps WHERE id = ${req.params.stepId} AND onboarding_id = ${req.params.id}`);
       if (!(stepOwner.rows ?? []).length) return res.status(404).json({ message: "Step not found" });
       const step = await storage.updateOnboardingStep(req.params.stepId, stripOwnershipFields(req.body, ["onboardingId"]));
