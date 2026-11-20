@@ -57,6 +57,7 @@ const LicenseRequestsPage = lazy(() => import("@/pages/license-requests"));
 const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
 const LoginPage = lazy(() => import("@/pages/login"));
 const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
+const ContractorPasswordSetupPage = lazy(() => import("@/pages/contractor-password-setup"));
 const VerifyEmailPage = lazy(() => import("@/pages/verify-email"));
 const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
 const JobBoardPublicRoute = lazy(() => import("@/pages/job-board-public"));
@@ -738,6 +739,16 @@ function AppContent() {
     return (
       <Suspense fallback={<PageLoader />}>
         <AcceptInvitePage />
+      </Suspense>
+    );
+  }
+
+  // Public contractor password setup (welcome email link). No session; the raw
+  // token in the query string is the credential.
+  if (location === "/contractor-password-setup") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ContractorPasswordSetupPage />
       </Suspense>
     );
   }
