@@ -30,6 +30,21 @@ Next numbers, from verified production data (read-only, 2026-11-19): Adiken Prop
 - **0032** (`migrations/0032_clear_plaintext_pins.sql`): clears plaintext PINs.
   - **Irreversible for rollback.** Apply only after acceptance, once the rollback window has closed.
   - Refuses unless 0031 has been applied and every plaintext PIN has a hash.
+  - Re-hashes every remaining plaintext PIN inside Postgres **before** clearing it, so a PIN reset under v2.2.21 during a rollback is the one that survives.
+
+### PIN rules during the rollback window (0031 applied, 0032 not yet)
+
+The new code never writes a plaintext PIN; only v2.2.21 and older do. So while a plaintext PIN exists it is the newest one and is **authoritative**:
+
+- A sign-in compares against the plaintext in constant time and re-syncs `pin_hash` if it is stale. It never clears the plaintext.
+- Without a plaintext PIN (set by the new code, or after 0032), the hash decides.
+- An admin PIN change or `/api/my/change-pin` under the new code stores only a hash (plaintext NULL). This is the one rollback exception below.
+
+Found by the 2026-11-20 rollback rehearsal (v2.2.21 at c23b655 and this PR alternated against one disposable database). Before the fix:
+1. A worker who signed in under the new code **before** 0031 had the plaintext cleared and was locked out after a rollback.
+2. A PIN reset under v2.2.21 during a rollback left a stale hash. After rolling forward, **the new PIN was refused and the revoked PIN was accepted**.
+
+Both are fixed and covered by `tests/company-signin-db.test.ts` ("rollback window", "migration 0032").
 - `workers.pin_hash` is also added by the boot-time additive DDL, so the code never queries a column that doesn't exist.
 
 ## Backward compatibility
@@ -55,13 +70,37 @@ Next numbers, from verified production data (read-only, 2026-11-19): Adiken Prop
 
 ## Rollback
 
-| Situation | Action |
-|---|---|
-| Before 0031 | Redeploy v2.2.21. Nothing to undo. |
-| After 0031, before 0032 | Redeploy v2.2.21. Plaintext PINs are still present, so legacy PIN sign-in works again. The 0031 tables are additive and ignored by v2.2.21. **Exception:** a worker whose PIN was set or changed after the deploy has only a hash, so an admin must re-set that PIN under v2.2.21 (list: `SELECT id FROM workers WHERE pin IS NULL AND pin_hash IS NOT NULL`). |
-| After 0032 | v2.2.21 can no longer verify PINs. Roll forward only. |
+Rehearsed 2026-11-20 on a disposable database: PR code (pre-0031) → apply 0031 → PR code → **v2.2.21** → PR code again.
+
+| Situation | Action | Rehearsed result |
+|---|---|---|
+| Before 0031 | Redeploy v2.2.21. Nothing to undo: sign-ins under the new code only **added** hashes. | Worker who signed in pre-0031 → v2.2.21 PIN sign-in 200 |
+| After 0031, before 0032 | Redeploy v2.2.21. Plaintext PINs are still present, so legacy PIN sign-in works. The 0031 tables are additive and ignored by v2.2.21. **Exception:** a worker whose PIN was set or changed under the new code has only a hash; an admin re-sets that PIN under v2.2.21. List: `SELECT id, company_id, employee_number FROM workers WHERE pin IS NULL AND pin_hash IS NOT NULL`. | Untouched worker 200; worker whose PIN was set under new code 401 (expected, listed by the query) |
+| Roll forward again after a rollback | Redeploy the new code. PINs set under v2.2.21 win over the old hash. | New PIN 200, revoked PIN 401 |
+| After 0032 | v2.2.21 can no longer verify PINs. Roll forward only. | — |
+
+Remembered-company and kiosk cookies are ignored by v2.2.21 and become valid again on roll-forward unless the code was rotated or the kiosk revoked meanwhile. Sessions are shared by both versions.
 
 Never roll back by restoring the database.
+
+## Staging migration (when approved)
+
+Merging this PR deploys it to staging automatically (`deploy-app.yml` runs on every push to `main` and takes **no** database backup), so merge only after review. Staging order:
+1. Manual staging DB backup (`pg_dump`, checksum recorded), then read-only preflight: duplicate `(company_id, employee_number)` count must be 0; count plaintext PINs.
+2. Merge → staging deploy (code runs in back-compat mode; sign-in unchanged).
+3. Apply 0031 to staging as the app table owner: `psql "$STAGING_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/0031_company_scoped_signin.sql`. Verify ledger ×1, every plaintext PIN hashed, one code per company, counters, unique index.
+4. Staging acceptance with a synthetic company only: typed-code sign-in, remembered device, rotation, kiosk bind/revoke, punch isolation, 20 concurrent worker creations, rollback drill (redeploy v2.2.21 to staging, sign in, roll forward).
+5. Do **not** apply 0032 on staging until production has passed its own rollback window, so staging can keep rehearsing rollbacks.
+
+## Transition for existing employees and kiosks
+
+| Who | What changes | What they do |
+|---|---|---|
+| Employee already signed in | Nothing. Sessions survive 0031 and a code rotation (unless the admin ticks "sign out employees"). | Nothing until the next sign-in. |
+| Employee at the next sign-in on a personal device | Asked once for the company code, then remembered on that device. Same employee number, same PIN. | Gets the code from the admin (Settings → Employee sign-in), or a printed notice. |
+| Shared time-clock device | Without a binding it asks for the code like any device. | Admin opens Settings → Employee sign-in on that device and chooses **Bind this device**. After that it never asks for a code and only serves that company. |
+| Admin | Gets a code per company; can rotate it (invalidates remembered devices, optionally signs employees out) and revoke kiosks. | Before go-live: copy the code, bind kiosks. |
+| 9 production accounts whose password still equals the PIN | Username/password login still possible until the next PIN sign-in (transition gap). | Step 7 option (b) closes it on deploy day. |
 
 ## Not in this PR (later PRs)
 

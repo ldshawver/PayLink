@@ -33,6 +33,11 @@ BEGIN
   END IF;
 END $$;
 
+-- Plaintext is authoritative until now (a PIN reset under v2.2.21 during a
+-- rollback leaves a stale pin_hash). Re-hash every remaining plaintext PIN
+-- inside Postgres before clearing it, so the surviving hash is always the
+-- newest PIN and a revoked PIN never comes back.
+UPDATE workers SET pin_hash = crypt(pin, gen_salt('bf', 10)) WHERE pin IS NOT NULL AND pin <> '';
 UPDATE workers SET pin = NULL WHERE pin IS NOT NULL;
 
 INSERT INTO paylink_migrations.applied (version, name)

@@ -169,7 +169,7 @@ async function main() {
     const pins = (await pool.query(`SELECT id, pin, pin_hash FROM workers WHERE id = ANY($1) AND pin IS NOT NULL`, [workerIds])).rows;
     check("every plaintext PIN now has a bcrypt hash computed in-database", pins.length >= 8 && pins.every((p: any) => /^\$2[aby]\$/.test(p.pin_hash ?? "")), pins.length);
     const a2607 = (await pool.query(`SELECT pin, pin_hash FROM workers WHERE id=$1`, [W.A2607])).rows[0];
-    check("the worker who signed in during phase A was already upgraded lazily (hash, no plaintext)", a2607.pin === null && await bcrypt.compare("9607", a2607.pin_hash));
+    check("the worker who signed in during phase A got a hash but KEPT the plaintext (rollback to v2.2.21 still works)", a2607.pin === "9607" && await bcrypt.compare("9607", a2607.pin_hash));
     check("hashes verify with the application's bcrypt", await bcrypt.compare("1234", pins.find((p: any) => p.id === W.A2605).pin_hash));
     check("plaintext retained until 0032 (rollback window)", pins.every((p: any) => p.pin !== null));
     const codes = (await pool.query(`SELECT company_id, code, code_version FROM company_signin_codes WHERE company_id = ANY($1)`, [companyIds])).rows;
@@ -404,7 +404,7 @@ async function main() {
     r = await new Device(base).req("POST", "/api/auth/pin-login", { companyCode: code.D, employeeNumber: "2650", pin: "7777" });
     if (r.body?.id) userIds.push(r.body.id);
     const lz = (await pool.query(`SELECT pin, pin_hash FROM workers WHERE id=$1`, [lazy])).rows[0];
-    check("worker with only a legacy plaintext PIN signs in and is upgraded (hash set, plaintext cleared)", r.status === 200 && lz.pin === null && await bcrypt.compare("7777", lz.pin_hash), { status: r.status });
+    check("worker with only a legacy plaintext PIN signs in: hash added, plaintext kept until 0032", r.status === 200 && lz.pin === "7777" && await bcrypt.compare("7777", lz.pin_hash), { status: r.status });
     const empSelf = new Device(base);
     r = await empSelf.req("POST", "/api/auth/pin-login", { companyCode: codeA3, employeeNumber: "2602", pin: "4321" });
     await empSelf.primeCsrf();
@@ -415,6 +415,33 @@ async function main() {
     r = await adminA.req("GET", `/api/workers?companyId=${co.A}`);
     const w2602row = (Array.isArray(r.body) ? r.body : r.body?.workers ?? []).find((w: any) => w.id === W.A2602);
     check("worker list after a PIN change carries no PIN material (hasPin only)", r.status === 200 && !r.text.includes("pin_hash") && !r.text.includes('"pin"') && !r.text.includes("8888") && w2602row?.hasPin === true, { status: r.status, hasPin: w2602row?.hasPin });
+
+    console.log("\n— rollback window (v2.2.21 writes plaintext only) —");
+    // v2.2.21's admin "reset PIN" writes workers.pin and never touches pin_hash.
+    // Simulate exactly that write: B2612 had 5555 (plaintext + 0031 hash).
+    await pool.query(`UPDATE workers SET pin = '3141' WHERE id = $1`, [W.B2612]);
+    r = await new Device(base).req("POST", "/api/auth/pin-login", { companyCode: code.B, employeeNumber: "2612", pin: "5555" });
+    check("PIN reset under v2.2.21 → the OLD (revoked) PIN is refused despite the stale hash", r.status === 401, r.status);
+    r = await new Device(base).req("POST", "/api/auth/pin-login", { companyCode: code.B, employeeNumber: "2612", pin: "3141" });
+    if (r.body?.id) userIds.push(r.body.id);
+    check("…the NEW PIN set under v2.2.21 signs in", r.status === 200, r);
+    const b2612 = (await pool.query(`SELECT pin, pin_hash FROM workers WHERE id=$1`, [W.B2612])).rows[0];
+    check("…hash re-synced to the new PIN, plaintext kept for the rollback window", b2612.pin === "3141" && await bcrypt.compare("3141", b2612.pin_hash) && !(await bcrypt.compare("5555", b2612.pin_hash)));
+    // A second stale row that never signs in before 0032 (C1003: hash of 4242, plaintext now 2718).
+    await pool.query(`UPDATE workers SET pin = '2718' WHERE id = $1`, [W.C1003]);
+
+    console.log("\n— migration 0032 (clear plaintext) —");
+    const run0032 = () => execFileSync("psql", [url, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "migrations/0032_clear_plaintext_pins.sql"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    run0032(); run0032();
+    check("0032 applied once (ledger ×1 after a rerun)", (await pool.query(`SELECT count(*)::int n FROM paylink_migrations.applied WHERE version='0032'`)).rows[0].n === 1);
+    check("0032: no plaintext PIN remains", (await pool.query(`SELECT count(*)::int n FROM workers WHERE pin IS NOT NULL`)).rows[0].n === 0);
+    const c1003 = (await pool.query(`SELECT pin_hash FROM workers WHERE id=$1`, [W.C1003])).rows[0];
+    check("0032 re-hashed the stale row from its plaintext (new PIN verifies, old does not)", await bcrypt.compare("2718", c1003.pin_hash) && !(await bcrypt.compare("4242", c1003.pin_hash)));
+    r = await new Device(base).req("POST", "/api/auth/pin-login", { companyCode: code.C, employeeNumber: "1003", pin: "4242" });
+    check("after 0032: revoked PIN refused", r.status === 401, r.status);
+    r = await new Device(base).req("POST", "/api/auth/pin-login", { companyCode: code.C, employeeNumber: "1003", pin: "2718" });
+    if (r.body?.id) userIds.push(r.body.id);
+    check("after 0032: current PIN signs in from the hash alone", r.status === 200, r);
 
     // ════════ Phase C — per-IP rate limit ════════
     console.log("\n— phase C: per-IP rate limit —");

@@ -292,21 +292,35 @@ export async function hashPin(pin: string): Promise<string> {
 }
 
 /**
- * Verify a PIN against a worker row (snake_case or camelCase). Prefers the
- * bcrypt hash; a worker that only has a legacy plaintext PIN is verified in
- * constant time and upgraded (hash written, plaintext cleared) on success.
+ * Verify a PIN against a worker row (snake_case or camelCase).
+ *
+ * Rollback safety (until migration 0032 clears plaintext):
+ * - This code never writes a plaintext PIN; only releases <= v2.2.21 do. So a
+ *   non-empty plaintext `pin` is always the newest PIN and is AUTHORITATIVE.
+ *   If an admin reset a PIN under v2.2.21 during a rollback, the old
+ *   `pin_hash` is stale: trusting it would reject the new PIN and accept the
+ *   revoked one. The plaintext is compared in constant time and the hash is
+ *   re-synced on success.
+ * - A legacy sign-in only ADDS a hash; it never clears the plaintext, so a
+ *   rollback to v2.2.21 keeps every pre-existing PIN working. Plaintext is
+ *   cleared only by 0032, after the rollback window.
+ * - With no plaintext (PIN set by this code, or after 0032), the hash decides.
  */
 export async function verifyWorkerPin(worker: any, pin: string): Promise<boolean> {
   const hash: string | null = worker?.pin_hash ?? worker?.pinHash ?? null;
-  if (hash) return bcrypt.compare(pin, hash);
-  const legacy: string | null = worker?.pin ?? null;
-  if (!legacy) { await bcrypt.compare(pin, DUMMY_HASH); return false; }
+  const legacy: string | null = worker?.pin ? String(worker.pin) : null;
+  if (!legacy) {
+    if (hash) return bcrypt.compare(pin, hash);
+    await bcrypt.compare(pin, DUMMY_HASH);
+    return false;
+  }
   const a = Buffer.from(sha256(`pin:${pin}`)), b = Buffer.from(sha256(`pin:${legacy}`));
   const ok = crypto.timingSafeEqual(a, b);
-  await bcrypt.compare(pin, DUMMY_HASH); // keep timing comparable to the hashed path
-  if (ok && worker?.id) {
+  const hashCurrent = hash ? await bcrypt.compare(pin, hash) : (await bcrypt.compare(pin, DUMMY_HASH), false);
+  if (ok && !hashCurrent && worker?.id) {
     const h = await hashPin(pin);
-    await db.execute(sql`UPDATE workers SET pin_hash = ${h}, pin = NULL WHERE id = ${worker.id} AND pin_hash IS NULL`).catch(() => {});
+    // Only while the plaintext is still this PIN (no race with a concurrent change).
+    await db.execute(sql`UPDATE workers SET pin_hash = ${h} WHERE id = ${worker.id} AND pin = ${legacy}`).catch(() => {});
   }
   return ok;
 }
