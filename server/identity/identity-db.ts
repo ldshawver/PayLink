@@ -379,10 +379,25 @@ export type AcceptInviteResult =
   | { ok: true; userId: string; companyId: string | null; relationshipKind: string; relationshipId: string | null }
   | { ok: false; status: number; message: string };
 
+export type AcceptHook = (
+  tx: { execute: (q: any) => Promise<any> },
+  accepted: { userId: string; companyId: string | null; relationshipKind: string; relationshipId: string | null },
+) => Promise<void>;
+
+/**
+ * Accept an invite and create the user — in ONE real transaction (a pinned
+ * connection via db.transaction). The previous version issued BEGIN / FOR
+ * UPDATE / COMMIT as separate pool queries, which can run on different
+ * connections: the double-accept guard did not hold and a connection could be
+ * returned to the pool mid-transaction. `afterAccept` runs inside the same
+ * transaction (e.g. completing a contractor onboarding step), so either
+ * everything commits or nothing does.
+ */
 export async function acceptInviteWithUser(
   rawToken: string,
   username: string,
   hashedPassword: string,
+  afterAccept?: AcceptHook,
 ): Promise<AcceptInviteResult> {
   const invite = await getLiveInviteByToken(rawToken);
   if (!invite) return { ok: false, status: 400, message: "This invite link is invalid or has expired." };
@@ -393,57 +408,48 @@ export async function acceptInviteWithUser(
   if (existingUser?.id) return { ok: false, status: 409, message: "That username is already taken." };
 
   try {
-    await db.execute(sql`BEGIN`);
+    return await db.transaction(async (tx) => {
+      // Re-check inside the tx that the invite is still pending and unexpired (guards a double-accept race).
+      const stillPending = firstRow<{ id: string }>(await tx.execute(sql`
+        SELECT id FROM account_invites WHERE id = ${invite.id} AND status = 'pending' AND expires_at > NOW() FOR UPDATE
+      `));
+      if (!stillPending) return { ok: false as const, status: 409, message: "This invite has already been used." };
 
-    // Re-check inside the tx that the invite is still pending (guards a double-accept race).
-    const stillPending = firstRow<{ id: string }>(await db.execute(sql`
-      SELECT id FROM account_invites WHERE id = ${invite.id} AND status = 'pending' FOR UPDATE
-    `));
-    if (!stillPending) {
-      await db.execute(sql`ROLLBACK`);
-      return { ok: false, status: 409, message: "This invite has already been used." };
-    }
+      const created = firstRow<{ id: string }>(await tx.execute(sql`
+        INSERT INTO users (username, password, role, company_id, worker_id, is_active, invite_status, email, email_verified_at, last_login_at)
+        VALUES (
+          ${username}, ${hashedPassword}, ${invite.role}, ${invite.companyId},
+          ${invite.relationshipKind === "employee" || invite.relationshipKind === "contractor" ? invite.relationshipId : null},
+          TRUE, 'active', ${invite.email}, NOW(), NULL
+        )
+        RETURNING id
+      `));
+      const userId = created!.id;
 
-    const created = firstRow<{ id: string }>(await db.execute(sql`
-      INSERT INTO users (username, password, role, company_id, worker_id, is_active, invite_status, email, email_verified_at, last_login_at)
-      VALUES (
-        ${username}, ${hashedPassword}, ${invite.role}, ${invite.companyId},
-        ${invite.relationshipKind === "employee" || invite.relationshipKind === "contractor" ? invite.relationshipId : null},
-        TRUE, 'active', ${invite.email}, NOW(), NULL
-      )
-      RETURNING id
-    `));
-    const userId = created!.id;
-
-    await db.execute(sql`
-      UPDATE account_invites
-      SET status = 'accepted', accepted_at = NOW(), invited_user_id = ${userId}
-      WHERE id = ${invite.id}
-    `);
-
-    // Record the identity link for the relationship this invite is for.
-    // employee/contractor → a `worker` subject; vendor → a `vendor` subject.
-    const subjectType = inviteSubjectType(invite.relationshipKind);
-    if (invite.relationshipId && subjectType) {
-      await db.execute(sql`
-        INSERT INTO identity_links
-          (user_id, subject_type, subject_id, company_id, link_status, verified_email, linked_by_user_id)
-        VALUES
-          (${userId}, ${subjectType}, ${invite.relationshipId}, ${invite.companyId}, 'active', ${invite.email}, ${userId})
-        ON CONFLICT (user_id, subject_type, subject_id) DO NOTHING
+      await tx.execute(sql`
+        UPDATE account_invites
+        SET status = 'accepted', accepted_at = NOW(), invited_user_id = ${userId}
+        WHERE id = ${invite.id}
       `);
-    }
 
-    await db.execute(sql`COMMIT`);
-    return {
-      ok: true,
-      userId,
-      companyId: invite.companyId,
-      relationshipKind: invite.relationshipKind,
-      relationshipId: invite.relationshipId,
-    };
+      // Record the identity link for the relationship this invite is for.
+      // employee/contractor → a `worker` subject; vendor → a `vendor` subject.
+      const subjectType = inviteSubjectType(invite.relationshipKind);
+      if (invite.relationshipId && subjectType) {
+        await tx.execute(sql`
+          INSERT INTO identity_links
+            (user_id, subject_type, subject_id, company_id, link_status, verified_email, linked_by_user_id)
+          VALUES
+            (${userId}, ${subjectType}, ${invite.relationshipId}, ${invite.companyId}, 'active', ${invite.email}, ${userId})
+          ON CONFLICT (user_id, subject_type, subject_id) DO NOTHING
+        `);
+      }
+
+      const accepted = { userId, companyId: invite.companyId, relationshipKind: invite.relationshipKind, relationshipId: invite.relationshipId };
+      if (afterAccept) await afterAccept(tx, accepted);
+      return { ok: true as const, ...accepted };
+    });
   } catch (e: any) {
-    await db.execute(sql`ROLLBACK`).catch(() => {});
     if (e?.code === "23505") return { ok: false, status: 409, message: "That username is already taken." };
     throw e;
   }
