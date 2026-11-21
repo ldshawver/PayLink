@@ -20,6 +20,7 @@ import {
 import { purgeExpiredDemoCompanyInTransaction } from "./demo-tenant-purge";
 import { mapSubscriptionStatusToTenantStatus } from "../tenant-context";
 import { runJobBoardMaintenance } from "../job-board/service";
+import { drainWelcomeOutbox, welcomeEmailEnabled } from "../contractor-onboarding/welcome";
 
 const DAY_MS   = 24 * 60 * 60 * 1000;
 const HOUR_MS  = 60 * 60 * 1000;
@@ -71,6 +72,16 @@ function scheduleJob(
   } else {
     startJob();
   }
+}
+
+/**
+ * Contractor welcome email: deliver queued / retry failed rows of email_outbox
+ * (kind contractor_welcome) with backoff. Scheduled only when
+ * CONTRACTOR_WELCOME_EMAIL_ENABLED=true; needs APP_BASE_URL.
+ */
+async function jobContractorWelcomeEmail(): Promise<void> {
+  const r = await drainWelcomeOutbox({ baseUrl: process.env.APP_BASE_URL ?? null });
+  if (r.claimed || r.failed || r.dead) console.log(`[Orchestrator][ContractorWelcomeEmail] sent=${r.sent} failed=${r.failed} dead=${r.dead}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -319,6 +330,9 @@ export function startWorkerOrchestrator(): void {
   scheduleJob("DocumentRetentionCleanup",    jobDocumentRetentionCleanup,    DAY_MS, 20_000);
   scheduleJob("TenantStatusMirrorReconcile", jobTenantStatusMirrorReconcile, DAY_MS, 25_000);
   scheduleJob("ContractorJobBoard",          jobContractorJobBoardMaintenance, 15 * MIN_MS, 30_000);
+  // Contractor welcome email outbox (migration 0036). Off unless explicitly enabled,
+  // so no environment sends real email by accident.
+  if (welcomeEmailEnabled()) scheduleJob("ContractorWelcomeEmail", jobContractorWelcomeEmail, 2 * MIN_MS, 35_000);
 
   // ── Stub jobs (uncomment to activate) ─────────────────────────────────────
   // scheduleJob("PayrollReminders",     jobPayrollReminders,     DAY_MS,        30_000);

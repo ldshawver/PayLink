@@ -8,7 +8,8 @@
  * finding refuses approval, and the reviewer must explicitly confirm the two
  * human-only checks (government ID, W-9). Then, atomically: ID + W-9 steps
  * reviewed, admin_review completed (with the note), onboarding 'verified' with
- * approver + time, audit. Repeat → already_verified.
+ * approver + time, audit, and the single welcome email queued (welcome-queue.ts).
+ * Repeat → already_verified (nothing queued again).
  * Request changes: reopens one submitted/completed item for the contractor with
  * a short note. Repeat of the same request → already_changes_requested.
  * Notes are stored on the step (review_notes) but never written to audit
@@ -23,6 +24,7 @@ import bcrypt from "bcrypt";
 import { db } from "../db";
 import { CONTRACTOR_ONBOARDING_PACKAGE } from "./create";
 import { assessOnboarding, type Assessment, type Finding } from "./adi";
+import { queueWelcomeEmail } from "./welcome-queue";
 
 const rowsOf = <T>(r: any): T[] => (Array.isArray(r) ? r : r?.rows ?? []);
 const firstRow = <T>(r: any): T | undefined => (Array.isArray(r) ? r[0] : r?.rows?.[0]);
@@ -116,6 +118,8 @@ export async function reviewOnboarding(args: { companyId: string; onboardingId: 
                current_step_key = NULL, updated_at = NOW()
          WHERE id = ${onboardingId} AND company_id = ${companyId}`);
       await audit("onboarding_verified", { acknowledged: a.findings.filter((x) => x.severity === "review").map((x) => x.code) });
+      // Same transaction: the one welcome message is queued exactly when 'verified' commits.
+      await queueWelcomeEmail(tx, { companyId, workerId: locked.worker_id, onboardingId, actorUserId });
       return { ok: true as const, outcome: "verified" as const };
     }
 
