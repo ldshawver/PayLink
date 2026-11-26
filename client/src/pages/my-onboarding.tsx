@@ -9,7 +9,7 @@ import { CheckCircle2, Circle, FileSignature, Loader2, Upload } from "lucide-rea
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type Step = { key: string; title: string; status: string };
+type Step = { key: string; title: string; status: string; note?: string | null };
 type Doc = { id: string; kind: string; label: string; mimeType: string; byteSize: number; uploadedAt: string };
 type Mine = { onboardingId: string; status: string; employeeNumber: string | null; steps: Step[]; documents: Doc[] };
 
@@ -69,7 +69,7 @@ export default function MyOnboardingPage() {
             {data.steps.map((s) => (
               <li key={s.key} className="flex items-center gap-2 text-sm" data-testid={`step-${s.key}`}>
                 {s.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <Circle className="h-4 w-4 text-muted-foreground" />}
-                <span className="flex-1">{s.title}</span>
+                <span className="flex-1">{s.title}{s.note && <span className="block text-xs text-amber-700" data-testid={`text-step-note-${s.key}`}>Please redo: {s.note}</span>}</span>
                 <Badge variant={s.status === "completed" ? "default" : "secondary"}>{STEP_STATUS[s.status] ?? s.status}</Badge>
               </li>
             ))}
