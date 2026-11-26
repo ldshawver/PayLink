@@ -40,7 +40,7 @@ ok("loadWorkerSignerIdentity is scoped by company", /WHERE w\.id = \$\{workerId\
 ok("findLinkableUserByEmail is company-scoped and exact-email (not name)", /WHERE LOWER\(email\) = \$\{norm\} AND company_id = \$\{companyId\}/.test(findFn) && !/first_name|last_name|ILIKE|name/i.test(findFn.replace(/username|LinkableUser|by[_ ]?email|EmailByName/gi, "")));
 ok("findLinkableUserByEmail reports ambiguity instead of guessing", /outcome: "ambiguous"/.test(findFn) && /rows\.length > 1/.test(findFn));
 const acceptFn = idb.slice(idb.indexOf("export async function acceptInviteWithUser"), idb.indexOf("export async function setWorkerAccountEnabled"));
-ok("acceptInviteWithUser re-checks the invite is still pending inside the tx (FOR UPDATE)", /FROM account_invites WHERE id = \$\{invite\.id\} AND status = 'pending' FOR UPDATE/.test(acceptFn));
+ok("acceptInviteWithUser re-checks the invite is still pending (and unexpired) inside a REAL transaction (FOR UPDATE)", /FROM account_invites WHERE id = \$\{invite\.id\} AND status = 'pending'( AND expires_at > NOW\(\))? FOR UPDATE/.test(acceptFn) && /db\.transaction\(/.test(acceptFn) && !/sql`BEGIN`/.test(acceptFn));
 ok("acceptInviteWithUser sets email_verified_at + invite_status='active' on the new user",
   /INSERT INTO users \([^)]*is_active, invite_status, email, email_verified_at, last_login_at\)/.test(acceptFn)
   && /TRUE, 'active', \$\{invite\.email\}, NOW\(\), NULL/.test(acceptFn));
