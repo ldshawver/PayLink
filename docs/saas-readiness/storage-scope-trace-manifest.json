@@ -2,13 +2,13 @@
   "generatedAt": "2026-11-26",
   "version": 1,
   "sourceRouteManifestVersion": 1,
-  "targetCount": 558,
+  "targetCount": 559,
   "entries": [
     {
       "id": "DELETE /api/agreement-templates/:id",
       "method": "DELETE",
       "path": "/api/agreement-templates/:id",
-      "source": "server/routes.ts:36835",
+      "source": "server/routes.ts:36864",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -37,7 +37,7 @@
       "id": "DELETE /api/automation-rules/:id",
       "method": "DELETE",
       "path": "/api/automation-rules/:id",
-      "source": "server/routes.ts:31516",
+      "source": "server/routes.ts:31545",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -66,7 +66,7 @@
       "id": "DELETE /api/branches/:id",
       "method": "DELETE",
       "path": "/api/branches/:id",
-      "source": "server/routes.ts:10424",
+      "source": "server/routes.ts:10453",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -85,7 +85,7 @@
       "id": "DELETE /api/commissions/:id",
       "method": "DELETE",
       "path": "/api/commissions/:id",
-      "source": "server/routes.ts:22654",
+      "source": "server/routes.ts:22683",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -123,7 +123,7 @@
       "id": "DELETE /api/contractor-contracts/:contractId/signers/:signerId",
       "method": "DELETE",
       "path": "/api/contractor-contracts/:contractId/signers/:signerId",
-      "source": "server/routes.ts:19644",
+      "source": "server/routes.ts:19673",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -152,7 +152,7 @@
       "id": "DELETE /api/contractor-documents/:id",
       "method": "DELETE",
       "path": "/api/contractor-documents/:id",
-      "source": "server/routes.ts:35807",
+      "source": "server/routes.ts:35836",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -199,7 +199,7 @@
       "id": "DELETE /api/cost-centers/:id",
       "method": "DELETE",
       "path": "/api/cost-centers/:id",
-      "source": "server/routes.ts:10461",
+      "source": "server/routes.ts:10490",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -218,7 +218,7 @@
       "id": "DELETE /api/currencies/:id",
       "method": "DELETE",
       "path": "/api/currencies/:id",
-      "source": "server/routes.ts:21864",
+      "source": "server/routes.ts:21893",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -247,7 +247,7 @@
       "id": "DELETE /api/dam-documents/:id",
       "method": "DELETE",
       "path": "/api/dam-documents/:id",
-      "source": "server/routes.ts:20651",
+      "source": "server/routes.ts:20680",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -276,7 +276,7 @@
       "id": "DELETE /api/departments/:id",
       "method": "DELETE",
       "path": "/api/departments/:id",
-      "source": "server/routes.ts:10411",
+      "source": "server/routes.ts:10440",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -295,7 +295,7 @@
       "id": "DELETE /api/device-tokens",
       "method": "DELETE",
       "path": "/api/device-tokens",
-      "source": "server/routes.ts:34043",
+      "source": "server/routes.ts:34072",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -324,7 +324,7 @@
       "id": "DELETE /api/divisions/:id",
       "method": "DELETE",
       "path": "/api/divisions/:id",
-      "source": "server/routes.ts:10436",
+      "source": "server/routes.ts:10465",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -343,7 +343,7 @@
       "id": "DELETE /api/eligibility-rule-sets/:id",
       "method": "DELETE",
       "path": "/api/eligibility-rule-sets/:id",
-      "source": "server/routes.ts:28276",
+      "source": "server/routes.ts:28305",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -372,7 +372,7 @@
       "id": "DELETE /api/enterprises/:id",
       "method": "DELETE",
       "path": "/api/enterprises/:id",
-      "source": "server/routes.ts:10539",
+      "source": "server/routes.ts:10568",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -401,7 +401,7 @@
       "id": "DELETE /api/holidays/:id",
       "method": "DELETE",
       "path": "/api/holidays/:id",
-      "source": "server/routes.ts:11420",
+      "source": "server/routes.ts:11449",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -430,7 +430,7 @@
       "id": "DELETE /api/jobs/:id",
       "method": "DELETE",
       "path": "/api/jobs/:id",
-      "source": "server/routes.ts:10474",
+      "source": "server/routes.ts:10503",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -449,7 +449,7 @@
       "id": "DELETE /api/kpi-groups/:id",
       "method": "DELETE",
       "path": "/api/kpi-groups/:id",
-      "source": "server/routes.ts:11603",
+      "source": "server/routes.ts:11632",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -478,7 +478,7 @@
       "id": "DELETE /api/legal-entities/:id",
       "method": "DELETE",
       "path": "/api/legal-entities/:id",
-      "source": "server/routes.ts:10488",
+      "source": "server/routes.ts:10517",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -497,7 +497,7 @@
       "id": "DELETE /api/my/languages/:id",
       "method": "DELETE",
       "path": "/api/my/languages/:id",
-      "source": "server/routes.ts:27479",
+      "source": "server/routes.ts:27508",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -526,7 +526,7 @@
       "id": "DELETE /api/my/memberships/:id",
       "method": "DELETE",
       "path": "/api/my/memberships/:id",
-      "source": "server/routes.ts:27515",
+      "source": "server/routes.ts:27544",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -555,7 +555,7 @@
       "id": "DELETE /api/my/qualifications/:id",
       "method": "DELETE",
       "path": "/api/my/qualifications/:id",
-      "source": "server/routes.ts:27444",
+      "source": "server/routes.ts:27473",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -602,7 +602,7 @@
       "id": "DELETE /api/new-hire-defaults/:id",
       "method": "DELETE",
       "path": "/api/new-hire-defaults/:id",
-      "source": "server/routes.ts:23187",
+      "source": "server/routes.ts:23216",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -631,7 +631,7 @@
       "id": "DELETE /api/policy-groups/:id",
       "method": "DELETE",
       "path": "/api/policy-groups/:id",
-      "source": "server/routes.ts:11267",
+      "source": "server/routes.ts:11296",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -660,7 +660,7 @@
       "id": "DELETE /api/positions/:id",
       "method": "DELETE",
       "path": "/api/positions/:id",
-      "source": "server/routes.ts:10449",
+      "source": "server/routes.ts:10478",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -679,7 +679,7 @@
       "id": "DELETE /api/proposal-attachments/:id",
       "method": "DELETE",
       "path": "/api/proposal-attachments/:id",
-      "source": "server/routes.ts:16162",
+      "source": "server/routes.ts:16191",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -698,7 +698,7 @@
       "id": "DELETE /api/proposal-line-items/:id",
       "method": "DELETE",
       "path": "/api/proposal-line-items/:id",
-      "source": "server/routes.ts:16064",
+      "source": "server/routes.ts:16093",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -717,7 +717,7 @@
       "id": "DELETE /api/qualification-groups/:id",
       "method": "DELETE",
       "path": "/api/qualification-groups/:id",
-      "source": "server/routes.ts:11647",
+      "source": "server/routes.ts:11676",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -746,7 +746,7 @@
       "id": "DELETE /api/qualifications/:id",
       "method": "DELETE",
       "path": "/api/qualifications/:id",
-      "source": "server/routes.ts:11506",
+      "source": "server/routes.ts:11535",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -775,7 +775,7 @@
       "id": "DELETE /api/receipts/:id",
       "method": "DELETE",
       "path": "/api/receipts/:id",
-      "source": "server/routes.ts:11869",
+      "source": "server/routes.ts:11898",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -804,7 +804,7 @@
       "id": "DELETE /api/recurring-billing/:id",
       "method": "DELETE",
       "path": "/api/recurring-billing/:id",
-      "source": "server/routes.ts:30346",
+      "source": "server/routes.ts:30375",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -833,7 +833,7 @@
       "id": "DELETE /api/remittance-agencies/:id",
       "method": "DELETE",
       "path": "/api/remittance-agencies/:id",
-      "source": "server/routes.ts:22138",
+      "source": "server/routes.ts:22167",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -862,7 +862,7 @@
       "id": "DELETE /api/remittance-agency-events/:id",
       "method": "DELETE",
       "path": "/api/remittance-agency-events/:id",
-      "source": "server/routes.ts:22181",
+      "source": "server/routes.ts:22210",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -891,7 +891,7 @@
       "id": "DELETE /api/reviews/:id",
       "method": "DELETE",
       "path": "/api/reviews/:id",
-      "source": "server/routes.ts:11559",
+      "source": "server/routes.ts:11588",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -920,7 +920,7 @@
       "id": "DELETE /api/role-permissions/:id",
       "method": "DELETE",
       "path": "/api/role-permissions/:id",
-      "source": "server/routes.ts:24445",
+      "source": "server/routes.ts:24474",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -958,7 +958,7 @@
       "id": "DELETE /api/roles/:id",
       "method": "DELETE",
       "path": "/api/roles/:id",
-      "source": "server/routes.ts:24307",
+      "source": "server/routes.ts:24336",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1005,7 +1005,7 @@
       "id": "DELETE /api/shift-offers/:id",
       "method": "DELETE",
       "path": "/api/shift-offers/:id",
-      "source": "server/routes.ts:21633",
+      "source": "server/routes.ts:21662",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1034,7 +1034,7 @@
       "id": "DELETE /api/stations/:id",
       "method": "DELETE",
       "path": "/api/stations/:id",
-      "source": "server/routes.ts:11824",
+      "source": "server/routes.ts:11853",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1063,7 +1063,7 @@
       "id": "DELETE /api/system-documents/:id",
       "method": "DELETE",
       "path": "/api/system-documents/:id",
-      "source": "server/routes.ts:35502",
+      "source": "server/routes.ts:35531",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1092,7 +1092,7 @@
       "id": "DELETE /api/tenants/:id/companies/:companyId",
       "method": "DELETE",
       "path": "/api/tenants/:id/companies/:companyId",
-      "source": "server/routes.ts:36684",
+      "source": "server/routes.ts:36713",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1111,7 +1111,7 @@
       "id": "DELETE /api/trade-transactions/:id",
       "method": "DELETE",
       "path": "/api/trade-transactions/:id",
-      "source": "server/routes.ts:35563",
+      "source": "server/routes.ts:35592",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1149,7 +1149,7 @@
       "id": "DELETE /api/trade-transactions/:id/attachments/:attachId",
       "method": "DELETE",
       "path": "/api/trade-transactions/:id/attachments/:attachId",
-      "source": "server/routes.ts:35644",
+      "source": "server/routes.ts:35673",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1178,7 +1178,7 @@
       "id": "DELETE /api/trade-transactions/:id/items/:itemId",
       "method": "DELETE",
       "path": "/api/trade-transactions/:id/items/:itemId",
-      "source": "server/routes.ts:35619",
+      "source": "server/routes.ts:35648",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1207,7 +1207,7 @@
       "id": "DELETE /api/user-roles/:id",
       "method": "DELETE",
       "path": "/api/user-roles/:id",
-      "source": "server/routes.ts:24500",
+      "source": "server/routes.ts:24529",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1245,7 +1245,7 @@
       "id": "DELETE /api/workers/:id",
       "method": "DELETE",
       "path": "/api/workers/:id",
-      "source": "server/routes.ts:4302",
+      "source": "server/routes.ts:4331",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1292,7 +1292,7 @@
       "id": "GET /api/accrual-balances",
       "method": "GET",
       "path": "/api/accrual-balances",
-      "source": "server/routes.ts:10817",
+      "source": "server/routes.ts:10846",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1330,7 +1330,7 @@
       "id": "GET /api/accrual-policy-milestones",
       "method": "GET",
       "path": "/api/accrual-policy-milestones",
-      "source": "server/routes.ts:23903",
+      "source": "server/routes.ts:23932",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1359,7 +1359,7 @@
       "id": "GET /api/admin/license-requests",
       "method": "GET",
       "path": "/api/admin/license-requests",
-      "source": "server/routes.ts:34868",
+      "source": "server/routes.ts:34897",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1378,7 +1378,7 @@
       "id": "GET /api/admin/notification-status",
       "method": "GET",
       "path": "/api/admin/notification-status",
-      "source": "server/routes.ts:34414",
+      "source": "server/routes.ts:34443",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1416,7 +1416,7 @@
       "id": "GET /api/admin/notification-templates",
       "method": "GET",
       "path": "/api/admin/notification-templates",
-      "source": "server/routes.ts:34328",
+      "source": "server/routes.ts:34357",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1435,7 +1435,7 @@
       "id": "GET /api/admin/sms-config",
       "method": "GET",
       "path": "/api/admin/sms-config",
-      "source": "server/routes.ts:34689",
+      "source": "server/routes.ts:34718",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1473,7 +1473,7 @@
       "id": "GET /api/admin/smtp-config",
       "method": "GET",
       "path": "/api/admin/smtp-config",
-      "source": "server/routes.ts:34506",
+      "source": "server/routes.ts:34535",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1511,7 +1511,7 @@
       "id": "GET /api/agreement-templates/:id",
       "method": "GET",
       "path": "/api/agreement-templates/:id",
-      "source": "server/routes.ts:36811",
+      "source": "server/routes.ts:36840",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1540,7 +1540,7 @@
       "id": "GET /api/app-doctor/repair-tickets",
       "method": "GET",
       "path": "/api/app-doctor/repair-tickets",
-      "source": "server/routes.ts:32559",
+      "source": "server/routes.ts:32588",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1569,7 +1569,7 @@
       "id": "GET /api/app-doctor/reports",
       "method": "GET",
       "path": "/api/app-doctor/reports",
-      "source": "server/routes.ts:32129",
+      "source": "server/routes.ts:32158",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1598,7 +1598,7 @@
       "id": "GET /api/audit-log",
       "method": "GET",
       "path": "/api/audit-log",
-      "source": "server/routes.ts:36035",
+      "source": "server/routes.ts:36064",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1636,7 +1636,7 @@
       "id": "GET /api/audit-log/export-csv",
       "method": "GET",
       "path": "/api/audit-log/export-csv",
-      "source": "server/routes.ts:36080",
+      "source": "server/routes.ts:36109",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1674,7 +1674,7 @@
       "id": "GET /api/auth/mfa/status",
       "method": "GET",
       "path": "/api/auth/mfa/status",
-      "source": "server/routes.ts:41531",
+      "source": "server/routes.ts:41560",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1693,7 +1693,7 @@
       "id": "GET /api/branches",
       "method": "GET",
       "path": "/api/branches",
-      "source": "server/routes.ts:10421",
+      "source": "server/routes.ts:10450",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1712,7 +1712,7 @@
       "id": "GET /api/check-print-audit",
       "method": "GET",
       "path": "/api/check-print-audit",
-      "source": "server/routes.ts:24969",
+      "source": "server/routes.ts:24998",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1741,7 +1741,7 @@
       "id": "GET /api/client-ip",
       "method": "GET",
       "path": "/api/client-ip",
-      "source": "server/routes.ts:11778",
+      "source": "server/routes.ts:11807",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1760,7 +1760,7 @@
       "id": "GET /api/clock-in-requests/:id/status",
       "method": "GET",
       "path": "/api/clock-in-requests/:id/status",
-      "source": "server/routes.ts:8521",
+      "source": "server/routes.ts:8550",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1779,7 +1779,7 @@
       "id": "GET /api/companies",
       "method": "GET",
       "path": "/api/companies",
-      "source": "server/routes.ts:3014",
+      "source": "server/routes.ts:3015",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1817,7 +1817,7 @@
       "id": "GET /api/companies/:id",
       "method": "GET",
       "path": "/api/companies/:id",
-      "source": "server/routes.ts:3043",
+      "source": "server/routes.ts:3044",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1855,7 +1855,7 @@
       "id": "GET /api/compliance/company/:companyId",
       "method": "GET",
       "path": "/api/compliance/company/:companyId",
-      "source": "server/routes.ts:42139",
+      "source": "server/routes.ts:42168",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -1893,7 +1893,7 @@
       "id": "GET /api/compliance/jurisdictions",
       "method": "GET",
       "path": "/api/compliance/jurisdictions",
-      "source": "server/routes.ts:42106",
+      "source": "server/routes.ts:42135",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1922,7 +1922,7 @@
       "id": "GET /api/compliance/wage-orders",
       "method": "GET",
       "path": "/api/compliance/wage-orders",
-      "source": "server/routes.ts:42116",
+      "source": "server/routes.ts:42145",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1941,7 +1941,7 @@
       "id": "GET /api/contractor-access-requests",
       "method": "GET",
       "path": "/api/contractor-access-requests",
-      "source": "server/routes.ts:3608",
+      "source": "server/routes.ts:3609",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1970,7 +1970,7 @@
       "id": "GET /api/contractor-contracts/:id",
       "method": "GET",
       "path": "/api/contractor-contracts/:id",
-      "source": "server/routes.ts:17546",
+      "source": "server/routes.ts:17575",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -1999,7 +1999,7 @@
       "id": "GET /api/contractor-contracts/:id/signing-reminders",
       "method": "GET",
       "path": "/api/contractor-contracts/:id/signing-reminders",
-      "source": "server/routes.ts:19372",
+      "source": "server/routes.ts:19401",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2018,7 +2018,7 @@
       "id": "GET /api/contractor-contracts/:id/versions",
       "method": "GET",
       "path": "/api/contractor-contracts/:id/versions",
-      "source": "server/routes.ts:18566",
+      "source": "server/routes.ts:18595",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2047,7 +2047,7 @@
       "id": "GET /api/contractor-documents/:id/download",
       "method": "GET",
       "path": "/api/contractor-documents/:id/download",
-      "source": "server/routes.ts:35776",
+      "source": "server/routes.ts:35805",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2076,7 +2076,7 @@
       "id": "GET /api/contractor-hub/contracts/:id",
       "method": "GET",
       "path": "/api/contractor-hub/contracts/:id",
-      "source": "server/routes.ts:17783",
+      "source": "server/routes.ts:17812",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2105,7 +2105,7 @@
       "id": "GET /api/contractor-invoices/:id/print-check",
       "method": "GET",
       "path": "/api/contractor-invoices/:id/print-check",
-      "source": "server/routes.ts:13792",
+      "source": "server/routes.ts:13821",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2124,7 +2124,7 @@
       "id": "GET /api/contractor-job-bids/:bidId/attachments",
       "method": "GET",
       "path": "/api/contractor-job-bids/:bidId/attachments",
-      "source": "server/routes.ts:14468",
+      "source": "server/routes.ts:14497",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2143,7 +2143,7 @@
       "id": "GET /api/contractor-job-bids/:bidId/versions",
       "method": "GET",
       "path": "/api/contractor-job-bids/:bidId/versions",
-      "source": "server/routes.ts:14465",
+      "source": "server/routes.ts:14494",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2162,7 +2162,7 @@
       "id": "GET /api/contractor-job-bids/mine",
       "method": "GET",
       "path": "/api/contractor-job-bids/mine",
-      "source": "server/routes.ts:14429",
+      "source": "server/routes.ts:14458",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2181,7 +2181,7 @@
       "id": "GET /api/contractor-onboarding",
       "method": "GET",
       "path": "/api/contractor-onboarding",
-      "source": "server/routes.ts:3713",
+      "source": "server/routes.ts:3714",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2210,7 +2210,7 @@
       "id": "GET /api/contractor-onboarding/:id/emergency-contact",
       "method": "GET",
       "path": "/api/contractor-onboarding/:id/emergency-contact",
-      "source": "server/routes.ts:3888",
+      "source": "server/routes.ts:3917",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2239,7 +2239,7 @@
       "id": "GET /api/contractor-onboarding/:id/private-documents",
       "method": "GET",
       "path": "/api/contractor-onboarding/:id/private-documents",
-      "source": "server/routes.ts:3904",
+      "source": "server/routes.ts:3933",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2268,7 +2268,7 @@
       "id": "GET /api/contractor-onboarding/esign-state",
       "method": "GET",
       "path": "/api/contractor-onboarding/esign-state",
-      "source": "server/routes.ts:3759",
+      "source": "server/routes.ts:3760",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2297,7 +2297,7 @@
       "id": "GET /api/contractor-onboarding/esign-templates",
       "method": "GET",
       "path": "/api/contractor-onboarding/esign-templates",
-      "source": "server/routes.ts:3729",
+      "source": "server/routes.ts:3730",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2326,7 +2326,7 @@
       "id": "GET /api/contractor-payments/:id/document",
       "method": "GET",
       "path": "/api/contractor-payments/:id/document",
-      "source": "server/routes.ts:16702",
+      "source": "server/routes.ts:16731",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2355,7 +2355,7 @@
       "id": "GET /api/contractor-payments/:paymentId/check",
       "method": "GET",
       "path": "/api/contractor-payments/:paymentId/check",
-      "source": "server/routes.ts:13917",
+      "source": "server/routes.ts:13946",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2384,7 +2384,7 @@
       "id": "GET /api/contractor-proposals",
       "method": "GET",
       "path": "/api/contractor-proposals",
-      "source": "server/routes.ts:14667",
+      "source": "server/routes.ts:14696",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -2413,7 +2413,7 @@
       "id": "GET /api/contractor-proposals/:id/attachments",
       "method": "GET",
       "path": "/api/contractor-proposals/:id/attachments",
-      "source": "server/routes.ts:16108",
+      "source": "server/routes.ts:16137",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2432,7 +2432,7 @@
       "id": "GET /api/contractor-proposals/:id/negotiations",
       "method": "GET",
       "path": "/api/contractor-proposals/:id/negotiations",
-      "source": "server/routes.ts:17419",
+      "source": "server/routes.ts:17448",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2451,7 +2451,7 @@
       "id": "GET /api/contractor-proposals/:id/versions",
       "method": "GET",
       "path": "/api/contractor-proposals/:id/versions",
-      "source": "server/routes.ts:17391",
+      "source": "server/routes.ts:17420",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2470,7 +2470,7 @@
       "id": "GET /api/contractor-proposals/companies",
       "method": "GET",
       "path": "/api/contractor-proposals/companies",
-      "source": "server/routes.ts:15992",
+      "source": "server/routes.ts:16021",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2499,7 +2499,7 @@
       "id": "GET /api/cost-centers",
       "method": "GET",
       "path": "/api/cost-centers",
-      "source": "server/routes.ts:10458",
+      "source": "server/routes.ts:10487",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2518,7 +2518,7 @@
       "id": "GET /api/dam-documents/:id",
       "method": "GET",
       "path": "/api/dam-documents/:id",
-      "source": "server/routes.ts:20541",
+      "source": "server/routes.ts:20570",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2547,7 +2547,7 @@
       "id": "GET /api/dam-documents/:id/download",
       "method": "GET",
       "path": "/api/dam-documents/:id/download",
-      "source": "server/routes.ts:20589",
+      "source": "server/routes.ts:20618",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2576,7 +2576,7 @@
       "id": "GET /api/departments",
       "method": "GET",
       "path": "/api/departments",
-      "source": "server/routes.ts:10408",
+      "source": "server/routes.ts:10437",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2595,7 +2595,7 @@
       "id": "GET /api/device-tokens",
       "method": "GET",
       "path": "/api/device-tokens",
-      "source": "server/routes.ts:34055",
+      "source": "server/routes.ts:34084",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2624,7 +2624,7 @@
       "id": "GET /api/divisions",
       "method": "GET",
       "path": "/api/divisions",
-      "source": "server/routes.ts:10433",
+      "source": "server/routes.ts:10462",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2643,7 +2643,7 @@
       "id": "GET /api/document-hub/assets/:id",
       "method": "GET",
       "path": "/api/document-hub/assets/:id",
-      "source": "server/routes.ts:20669",
+      "source": "server/routes.ts:20698",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2672,7 +2672,7 @@
       "id": "GET /api/document-hub/assets/:id/audit",
       "method": "GET",
       "path": "/api/document-hub/assets/:id/audit",
-      "source": "server/routes.ts:20714",
+      "source": "server/routes.ts:20743",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2701,7 +2701,7 @@
       "id": "GET /api/document-hub/assets/:id/download",
       "method": "GET",
       "path": "/api/document-hub/assets/:id/download",
-      "source": "server/routes.ts:20682",
+      "source": "server/routes.ts:20711",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2720,7 +2720,7 @@
       "id": "GET /api/document-hub/assets/:id/print",
       "method": "GET",
       "path": "/api/document-hub/assets/:id/print",
-      "source": "server/routes.ts:20683",
+      "source": "server/routes.ts:20712",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2739,7 +2739,7 @@
       "id": "GET /api/document-retention/compute",
       "method": "GET",
       "path": "/api/document-retention/compute",
-      "source": "server/routes.ts:31232",
+      "source": "server/routes.ts:31261",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2758,7 +2758,7 @@
       "id": "GET /api/document-versions",
       "method": "GET",
       "path": "/api/document-versions",
-      "source": "server/routes.ts:30901",
+      "source": "server/routes.ts:30930",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2787,7 +2787,7 @@
       "id": "GET /api/employee-contacts",
       "method": "GET",
       "path": "/api/employee-contacts",
-      "source": "server/routes.ts:10873",
+      "source": "server/routes.ts:10902",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2834,7 +2834,7 @@
       "id": "GET /api/employee-group-configs",
       "method": "GET",
       "path": "/api/employee-group-configs",
-      "source": "server/routes.ts:23014",
+      "source": "server/routes.ts:23043",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2863,7 +2863,7 @@
       "id": "GET /api/employee-manager-relations",
       "method": "GET",
       "path": "/api/employee-manager-relations",
-      "source": "server/routes.ts:10551",
+      "source": "server/routes.ts:10580",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -2901,7 +2901,7 @@
       "id": "GET /api/employee-wage-groups",
       "method": "GET",
       "path": "/api/employee-wage-groups",
-      "source": "server/routes.ts:21786",
+      "source": "server/routes.ts:21815",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2930,7 +2930,7 @@
       "id": "GET /api/employment-application-documents/:documentId/download",
       "method": "GET",
       "path": "/api/employment-application-documents/:documentId/download",
-      "source": "server/routes.ts:14534",
+      "source": "server/routes.ts:14563",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2949,7 +2949,7 @@
       "id": "GET /api/employment-applications/:applicationId",
       "method": "GET",
       "path": "/api/employment-applications/:applicationId",
-      "source": "server/routes.ts:14504",
+      "source": "server/routes.ts:14533",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2968,7 +2968,7 @@
       "id": "GET /api/employment-applications/mine",
       "method": "GET",
       "path": "/api/employment-applications/mine",
-      "source": "server/routes.ts:14489",
+      "source": "server/routes.ts:14518",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -2987,7 +2987,7 @@
       "id": "GET /api/enterprises",
       "method": "GET",
       "path": "/api/enterprises",
-      "source": "server/routes.ts:10493",
+      "source": "server/routes.ts:10522",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3034,7 +3034,7 @@
       "id": "GET /api/esign/providers",
       "method": "GET",
       "path": "/api/esign/providers",
-      "source": "server/routes.ts:33594",
+      "source": "server/routes.ts:33623",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3053,7 +3053,7 @@
       "id": "GET /api/expense-categories",
       "method": "GET",
       "path": "/api/expense-categories",
-      "source": "server/routes.ts:12154",
+      "source": "server/routes.ts:12183",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3082,7 +3082,7 @@
       "id": "GET /api/expense-payments/:id/document",
       "method": "GET",
       "path": "/api/expense-payments/:id/document",
-      "source": "server/routes.ts:13193",
+      "source": "server/routes.ts:13222",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3111,7 +3111,7 @@
       "id": "GET /api/expense-payments/:paymentId/check",
       "method": "GET",
       "path": "/api/expense-payments/:paymentId/check",
-      "source": "server/routes.ts:12807",
+      "source": "server/routes.ts:12836",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3140,7 +3140,7 @@
       "id": "GET /api/expenses/:id/payments",
       "method": "GET",
       "path": "/api/expenses/:id/payments",
-      "source": "server/routes.ts:13026",
+      "source": "server/routes.ts:13055",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3169,7 +3169,7 @@
       "id": "GET /api/feature-registry/log",
       "method": "GET",
       "path": "/api/feature-registry/log",
-      "source": "server/routes.ts:41140",
+      "source": "server/routes.ts:41169",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -3188,7 +3188,7 @@
       "id": "GET /api/feature-registry/tenant/:companyId",
       "method": "GET",
       "path": "/api/feature-registry/tenant/:companyId",
-      "source": "server/routes.ts:41072",
+      "source": "server/routes.ts:41101",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -3323,7 +3323,7 @@
       "id": "GET /api/job-board/access-requests",
       "method": "GET",
       "path": "/api/job-board/access-requests",
-      "source": "server/routes.ts:14629",
+      "source": "server/routes.ts:14658",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3342,7 +3342,7 @@
       "id": "GET /api/job-board/applicants",
       "method": "GET",
       "path": "/api/job-board/applicants",
-      "source": "server/routes.ts:14640",
+      "source": "server/routes.ts:14669",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3361,7 +3361,7 @@
       "id": "GET /api/job-board/settings",
       "method": "GET",
       "path": "/api/job-board/settings",
-      "source": "server/routes.ts:14616",
+      "source": "server/routes.ts:14645",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3380,7 +3380,7 @@
       "id": "GET /api/job-post-attachments/:attachmentId/download",
       "method": "GET",
       "path": "/api/job-post-attachments/:attachmentId/download",
-      "source": "server/routes.ts:14419",
+      "source": "server/routes.ts:14448",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3399,7 +3399,7 @@
       "id": "GET /api/job-posts",
       "method": "GET",
       "path": "/api/job-posts",
-      "source": "server/routes.ts:14362",
+      "source": "server/routes.ts:14391",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3418,7 +3418,7 @@
       "id": "GET /api/job-posts/:id",
       "method": "GET",
       "path": "/api/job-posts/:id",
-      "source": "server/routes.ts:14391",
+      "source": "server/routes.ts:14420",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3437,7 +3437,7 @@
       "id": "GET /api/job-posts/:id/applicant-grants",
       "method": "GET",
       "path": "/api/job-posts/:id/applicant-grants",
-      "source": "server/routes.ts:14654",
+      "source": "server/routes.ts:14683",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3456,7 +3456,7 @@
       "id": "GET /api/job-posts/:id/applications",
       "method": "GET",
       "path": "/api/job-posts/:id/applications",
-      "source": "server/routes.ts:14492",
+      "source": "server/routes.ts:14521",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3475,7 +3475,7 @@
       "id": "GET /api/job-posts/:id/bids",
       "method": "GET",
       "path": "/api/job-posts/:id/bids",
-      "source": "server/routes.ts:14432",
+      "source": "server/routes.ts:14461",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3494,7 +3494,7 @@
       "id": "GET /api/job-posts/:id/events",
       "method": "GET",
       "path": "/api/job-posts/:id/events",
-      "source": "server/routes.ts:14409",
+      "source": "server/routes.ts:14438",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3513,7 +3513,7 @@
       "id": "GET /api/job-posts/:id/invitations",
       "method": "GET",
       "path": "/api/job-posts/:id/invitations",
-      "source": "server/routes.ts:14438",
+      "source": "server/routes.ts:14467",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3532,7 +3532,7 @@
       "id": "GET /api/job-posts/:id/questions",
       "method": "GET",
       "path": "/api/job-posts/:id/questions",
-      "source": "server/routes.ts:14447",
+      "source": "server/routes.ts:14476",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3551,7 +3551,7 @@
       "id": "GET /api/job-posts/available",
       "method": "GET",
       "path": "/api/job-posts/available",
-      "source": "server/routes.ts:14374",
+      "source": "server/routes.ts:14403",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3570,7 +3570,7 @@
       "id": "GET /api/job-posts/summary",
       "method": "GET",
       "path": "/api/job-posts/summary",
-      "source": "server/routes.ts:14381",
+      "source": "server/routes.ts:14410",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3589,7 +3589,7 @@
       "id": "GET /api/jobs",
       "method": "GET",
       "path": "/api/jobs",
-      "source": "server/routes.ts:10471",
+      "source": "server/routes.ts:10500",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3608,7 +3608,7 @@
       "id": "GET /api/legal-entities",
       "method": "GET",
       "path": "/api/legal-entities",
-      "source": "server/routes.ts:10485",
+      "source": "server/routes.ts:10514",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3627,7 +3627,7 @@
       "id": "GET /api/marketplace/listings/:id",
       "method": "GET",
       "path": "/api/marketplace/listings/:id",
-      "source": "server/routes.ts:27876",
+      "source": "server/routes.ts:27905",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3656,7 +3656,7 @@
       "id": "GET /api/marketplace/requests",
       "method": "GET",
       "path": "/api/marketplace/requests",
-      "source": "server/routes.ts:27966",
+      "source": "server/routes.ts:27995",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3685,7 +3685,7 @@
       "id": "GET /api/messages",
       "method": "GET",
       "path": "/api/messages",
-      "source": "server/routes.ts:34900",
+      "source": "server/routes.ts:34929",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3714,7 +3714,7 @@
       "id": "GET /api/messages/:id",
       "method": "GET",
       "path": "/api/messages/:id",
-      "source": "server/routes.ts:35063",
+      "source": "server/routes.ts:35092",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3743,7 +3743,7 @@
       "id": "GET /api/messages/unread-count",
       "method": "GET",
       "path": "/api/messages/unread-count",
-      "source": "server/routes.ts:34971",
+      "source": "server/routes.ts:35000",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3772,7 +3772,7 @@
       "id": "GET /api/my-onboarding",
       "method": "GET",
       "path": "/api/my-onboarding",
-      "source": "server/routes.ts:3814",
+      "source": "server/routes.ts:3843",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3791,7 +3791,7 @@
       "id": "GET /api/my-onboarding/emergency-contact",
       "method": "GET",
       "path": "/api/my-onboarding/emergency-contact",
-      "source": "server/routes.ts:3857",
+      "source": "server/routes.ts:3886",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3810,7 +3810,7 @@
       "id": "GET /api/my-onboarding/esign/:kind/link",
       "method": "GET",
       "path": "/api/my-onboarding/esign/:kind/link",
-      "source": "server/routes.ts:3940",
+      "source": "server/routes.ts:3969",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3829,7 +3829,7 @@
       "id": "GET /api/my/documents",
       "method": "GET",
       "path": "/api/my/documents",
-      "source": "server/routes.ts:27396",
+      "source": "server/routes.ts:27425",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3867,7 +3867,7 @@
       "id": "GET /api/my/languages",
       "method": "GET",
       "path": "/api/my/languages",
-      "source": "server/routes.ts:27455",
+      "source": "server/routes.ts:27484",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3896,7 +3896,7 @@
       "id": "GET /api/my/memberships",
       "method": "GET",
       "path": "/api/my/memberships",
-      "source": "server/routes.ts:27491",
+      "source": "server/routes.ts:27520",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3925,7 +3925,7 @@
       "id": "GET /api/my/paystubs",
       "method": "GET",
       "path": "/api/my/paystubs",
-      "source": "server/routes.ts:27301",
+      "source": "server/routes.ts:27330",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -3963,7 +3963,7 @@
       "id": "GET /api/my/qualifications",
       "method": "GET",
       "path": "/api/my/qualifications",
-      "source": "server/routes.ts:27414",
+      "source": "server/routes.ts:27443",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4001,7 +4001,7 @@
       "id": "GET /api/my/reviews",
       "method": "GET",
       "path": "/api/my/reviews",
-      "source": "server/routes.ts:27405",
+      "source": "server/routes.ts:27434",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4039,7 +4039,7 @@
       "id": "GET /api/my/worker",
       "method": "GET",
       "path": "/api/my/worker",
-      "source": "server/routes.ts:27230",
+      "source": "server/routes.ts:27259",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4077,7 +4077,7 @@
       "id": "GET /api/notification-preferences",
       "method": "GET",
       "path": "/api/notification-preferences",
-      "source": "server/routes.ts:34066",
+      "source": "server/routes.ts:34095",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4115,7 +4115,7 @@
       "id": "GET /api/onboarding-packet-steps",
       "method": "GET",
       "path": "/api/onboarding-packet-steps",
-      "source": "server/routes.ts:31326",
+      "source": "server/routes.ts:31355",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4144,7 +4144,7 @@
       "id": "GET /api/onboarding-packets/:id",
       "method": "GET",
       "path": "/api/onboarding-packets/:id",
-      "source": "server/routes.ts:31308",
+      "source": "server/routes.ts:31337",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4182,7 +4182,7 @@
       "id": "GET /api/onboarding/portal/:token",
       "method": "GET",
       "path": "/api/onboarding/portal/:token",
-      "source": "server/routes.ts:37146",
+      "source": "server/routes.ts:37175",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4238,7 +4238,7 @@
       "id": "GET /api/pay-methods",
       "method": "GET",
       "path": "/api/pay-methods",
-      "source": "server/routes.ts:10982",
+      "source": "server/routes.ts:11011",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4276,7 +4276,7 @@
       "id": "GET /api/payroll-reimbursements",
       "method": "GET",
       "path": "/api/payroll-reimbursements",
-      "source": "server/routes.ts:14036",
+      "source": "server/routes.ts:14065",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4314,7 +4314,7 @@
       "id": "GET /api/payroll-runs/:id/nacha",
       "method": "GET",
       "path": "/api/payroll-runs/:id/nacha",
-      "source": "server/routes.ts:7160",
+      "source": "server/routes.ts:7189",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4370,7 +4370,7 @@
       "id": "GET /api/permissions/audit-log",
       "method": "GET",
       "path": "/api/permissions/audit-log",
-      "source": "server/routes.ts:36027",
+      "source": "server/routes.ts:36056",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4399,7 +4399,7 @@
       "id": "GET /api/permissions/export-csv",
       "method": "GET",
       "path": "/api/permissions/export-csv",
-      "source": "server/routes.ts:36269",
+      "source": "server/routes.ts:36298",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4437,7 +4437,7 @@
       "id": "GET /api/permissions/matrix",
       "method": "GET",
       "path": "/api/permissions/matrix",
-      "source": "server/routes.ts:35953",
+      "source": "server/routes.ts:35982",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4493,7 +4493,7 @@
       "id": "GET /api/platform/audit/billing",
       "method": "GET",
       "path": "/api/platform/audit/billing",
-      "source": "server/routes.ts:38503",
+      "source": "server/routes.ts:38532",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4512,7 +4512,7 @@
       "id": "GET /api/platform/audit/contracts",
       "method": "GET",
       "path": "/api/platform/audit/contracts",
-      "source": "server/routes.ts:38422",
+      "source": "server/routes.ts:38451",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4531,7 +4531,7 @@
       "id": "GET /api/platform/audit/deploy",
       "method": "GET",
       "path": "/api/platform/audit/deploy",
-      "source": "server/routes.ts:38339",
+      "source": "server/routes.ts:38368",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4550,7 +4550,7 @@
       "id": "GET /api/platform/audit/export",
       "method": "GET",
       "path": "/api/platform/audit/export",
-      "source": "server/routes.ts:38683",
+      "source": "server/routes.ts:38712",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4569,7 +4569,7 @@
       "id": "GET /api/platform/audit/features",
       "method": "GET",
       "path": "/api/platform/audit/features",
-      "source": "server/routes.ts:38380",
+      "source": "server/routes.ts:38409",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4588,7 +4588,7 @@
       "id": "GET /api/platform/audit/integrations",
       "method": "GET",
       "path": "/api/platform/audit/integrations",
-      "source": "server/routes.ts:38184",
+      "source": "server/routes.ts:38213",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4607,7 +4607,7 @@
       "id": "GET /api/platform/audit/licensing",
       "method": "GET",
       "path": "/api/platform/audit/licensing",
-      "source": "server/routes.ts:38458",
+      "source": "server/routes.ts:38487",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4626,7 +4626,7 @@
       "id": "GET /api/platform/audit/logs/app",
       "method": "GET",
       "path": "/api/platform/audit/logs/app",
-      "source": "server/routes.ts:38557",
+      "source": "server/routes.ts:38586",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4645,7 +4645,7 @@
       "id": "GET /api/platform/audit/logs/deploy",
       "method": "GET",
       "path": "/api/platform/audit/logs/deploy",
-      "source": "server/routes.ts:38610",
+      "source": "server/routes.ts:38639",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4664,7 +4664,7 @@
       "id": "GET /api/platform/audit/migrations",
       "method": "GET",
       "path": "/api/platform/audit/migrations",
-      "source": "server/routes.ts:38306",
+      "source": "server/routes.ts:38335",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4683,7 +4683,7 @@
       "id": "GET /api/platform/audit/npm-audit",
       "method": "GET",
       "path": "/api/platform/audit/npm-audit",
-      "source": "server/routes.ts:38852",
+      "source": "server/routes.ts:38881",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4702,7 +4702,7 @@
       "id": "GET /api/platform/audit/permissions",
       "method": "GET",
       "path": "/api/platform/audit/permissions",
-      "source": "server/routes.ts:38324",
+      "source": "server/routes.ts:38353",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4721,7 +4721,7 @@
       "id": "GET /api/platform/audit/readiness",
       "method": "GET",
       "path": "/api/platform/audit/readiness",
-      "source": "server/routes.ts:38927",
+      "source": "server/routes.ts:38956",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4740,7 +4740,7 @@
       "id": "GET /api/platform/audit/roles",
       "method": "GET",
       "path": "/api/platform/audit/roles",
-      "source": "server/routes.ts:38241",
+      "source": "server/routes.ts:38270",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4759,7 +4759,7 @@
       "id": "GET /api/platform/audit/routes",
       "method": "GET",
       "path": "/api/platform/audit/routes",
-      "source": "server/routes.ts:38273",
+      "source": "server/routes.ts:38302",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4778,7 +4778,7 @@
       "id": "GET /api/platform/audit/security",
       "method": "GET",
       "path": "/api/platform/audit/security",
-      "source": "server/routes.ts:38897",
+      "source": "server/routes.ts:38926",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4797,7 +4797,7 @@
       "id": "GET /api/platform/audit/system",
       "method": "GET",
       "path": "/api/platform/audit/system",
-      "source": "server/routes.ts:38168",
+      "source": "server/routes.ts:38197",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4816,7 +4816,7 @@
       "id": "GET /api/platform/audit/tenants",
       "method": "GET",
       "path": "/api/platform/audit/tenants",
-      "source": "server/routes.ts:38292",
+      "source": "server/routes.ts:38321",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4835,7 +4835,7 @@
       "id": "GET /api/platform/companies/:companyId/license",
       "method": "GET",
       "path": "/api/platform/companies/:companyId/license",
-      "source": "server/routes.ts:36222",
+      "source": "server/routes.ts:36251",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -4854,7 +4854,7 @@
       "id": "GET /api/platform/licenses",
       "method": "GET",
       "path": "/api/platform/licenses",
-      "source": "server/routes.ts:36202",
+      "source": "server/routes.ts:36231",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4873,7 +4873,7 @@
       "id": "GET /api/platform/support-sessions",
       "method": "GET",
       "path": "/api/platform/support-sessions",
-      "source": "server/routes.ts:36482",
+      "source": "server/routes.ts:36511",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -4892,7 +4892,7 @@
       "id": "GET /api/positions",
       "method": "GET",
       "path": "/api/positions",
-      "source": "server/routes.ts:10446",
+      "source": "server/routes.ts:10475",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4911,7 +4911,7 @@
       "id": "GET /api/private-documents/:docId",
       "method": "GET",
       "path": "/api/private-documents/:docId",
-      "source": "server/routes.ts:3921",
+      "source": "server/routes.ts:3950",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -4940,7 +4940,7 @@
       "id": "GET /api/provisioning/tenants/:companyId",
       "method": "GET",
       "path": "/api/provisioning/tenants/:companyId",
-      "source": "server/routes.ts:36722",
+      "source": "server/routes.ts:36751",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -4959,7 +4959,7 @@
       "id": "GET /api/provisioning/tenants/:companyId/audit",
       "method": "GET",
       "path": "/api/provisioning/tenants/:companyId/audit",
-      "source": "server/routes.ts:36729",
+      "source": "server/routes.ts:36758",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -4988,7 +4988,7 @@
       "id": "GET /api/remittance-agency-events",
       "method": "GET",
       "path": "/api/remittance-agency-events",
-      "source": "server/routes.ts:22148",
+      "source": "server/routes.ts:22177",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5017,7 +5017,7 @@
       "id": "GET /api/reports/contractor-invoice-payments",
       "method": "GET",
       "path": "/api/reports/contractor-invoice-payments",
-      "source": "server/routes.ts:14229",
+      "source": "server/routes.ts:14258",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5036,7 +5036,7 @@
       "id": "GET /api/reports/expense-by-category",
       "method": "GET",
       "path": "/api/reports/expense-by-category",
-      "source": "server/routes.ts:14152",
+      "source": "server/routes.ts:14181",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5055,7 +5055,7 @@
       "id": "GET /api/reports/expense-payment-status",
       "method": "GET",
       "path": "/api/reports/expense-payment-status",
-      "source": "server/routes.ts:14205",
+      "source": "server/routes.ts:14234",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5074,7 +5074,7 @@
       "id": "GET /api/reports/vendor-checks",
       "method": "GET",
       "path": "/api/reports/vendor-checks",
-      "source": "server/routes.ts:14256",
+      "source": "server/routes.ts:14285",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5093,7 +5093,7 @@
       "id": "GET /api/reports/vendor-payments",
       "method": "GET",
       "path": "/api/reports/vendor-payments",
-      "source": "server/routes.ts:14178",
+      "source": "server/routes.ts:14207",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5112,7 +5112,7 @@
       "id": "GET /api/role-permissions",
       "method": "GET",
       "path": "/api/role-permissions",
-      "source": "server/routes.ts:24404",
+      "source": "server/routes.ts:24433",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5150,7 +5150,7 @@
       "id": "GET /api/roles",
       "method": "GET",
       "path": "/api/roles",
-      "source": "server/routes.ts:24257",
+      "source": "server/routes.ts:24286",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5179,7 +5179,7 @@
       "id": "GET /api/schedules",
       "method": "GET",
       "path": "/api/schedules",
-      "source": "server/routes.ts:9069",
+      "source": "server/routes.ts:9098",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5235,7 +5235,7 @@
       "id": "GET /api/signing-documents/:id/audit-trail",
       "method": "GET",
       "path": "/api/signing-documents/:id/audit-trail",
-      "source": "server/routes.ts:30602",
+      "source": "server/routes.ts:30631",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5273,7 +5273,7 @@
       "id": "GET /api/signing-documents/:id/download-signed",
       "method": "GET",
       "path": "/api/signing-documents/:id/download-signed",
-      "source": "server/routes.ts:30583",
+      "source": "server/routes.ts:30612",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5329,7 +5329,7 @@
       "id": "GET /api/system-documents",
       "method": "GET",
       "path": "/api/system-documents",
-      "source": "server/routes.ts:35472",
+      "source": "server/routes.ts:35501",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5358,7 +5358,7 @@
       "id": "GET /api/system-documents/:id",
       "method": "GET",
       "path": "/api/system-documents/:id",
-      "source": "server/routes.ts:35479",
+      "source": "server/routes.ts:35508",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5387,7 +5387,7 @@
       "id": "GET /api/time-entries",
       "method": "GET",
       "path": "/api/time-entries",
-      "source": "server/routes.ts:8771",
+      "source": "server/routes.ts:8800",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5443,7 +5443,7 @@
       "id": "GET /api/time-punches",
       "method": "GET",
       "path": "/api/time-punches",
-      "source": "server/routes.ts:8117",
+      "source": "server/routes.ts:8146",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5499,7 +5499,7 @@
       "id": "GET /api/trade-transactions/:id",
       "method": "GET",
       "path": "/api/trade-transactions/:id",
-      "source": "server/routes.ts:35534",
+      "source": "server/routes.ts:35563",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5528,7 +5528,7 @@
       "id": "GET /api/trade-transactions/:id/attachments",
       "method": "GET",
       "path": "/api/trade-transactions/:id/attachments",
-      "source": "server/routes.ts:35627",
+      "source": "server/routes.ts:35656",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5557,7 +5557,7 @@
       "id": "GET /api/trade-transactions/:id/audit-logs",
       "method": "GET",
       "path": "/api/trade-transactions/:id/audit-logs",
-      "source": "server/routes.ts:35652",
+      "source": "server/routes.ts:35681",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5586,7 +5586,7 @@
       "id": "GET /api/trade-transactions/:id/items",
       "method": "GET",
       "path": "/api/trade-transactions/:id/items",
-      "source": "server/routes.ts:35607",
+      "source": "server/routes.ts:35636",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5615,7 +5615,7 @@
       "id": "GET /api/treasury/status",
       "method": "GET",
       "path": "/api/treasury/status",
-      "source": "server/routes.ts:7367",
+      "source": "server/routes.ts:7396",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5644,7 +5644,7 @@
       "id": "GET /api/treasury/transactions",
       "method": "GET",
       "path": "/api/treasury/transactions",
-      "source": "server/routes.ts:7433",
+      "source": "server/routes.ts:7462",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5673,7 +5673,7 @@
       "id": "GET /api/user-roles",
       "method": "GET",
       "path": "/api/user-roles",
-      "source": "server/routes.ts:24477",
+      "source": "server/routes.ts:24506",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5702,7 +5702,7 @@
       "id": "GET /api/vendor-portal/profile",
       "method": "GET",
       "path": "/api/vendor-portal/profile",
-      "source": "server/routes.ts:4138",
+      "source": "server/routes.ts:4167",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5731,7 +5731,7 @@
       "id": "GET /api/vendor-portal/submissions",
       "method": "GET",
       "path": "/api/vendor-portal/submissions",
-      "source": "server/routes.ts:4168",
+      "source": "server/routes.ts:4197",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5750,7 +5750,7 @@
       "id": "GET /api/vendor-submissions",
       "method": "GET",
       "path": "/api/vendor-submissions",
-      "source": "server/routes.ts:4085",
+      "source": "server/routes.ts:4114",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5769,7 +5769,7 @@
       "id": "GET /api/vendors",
       "method": "GET",
       "path": "/api/vendors",
-      "source": "server/routes.ts:3982",
+      "source": "server/routes.ts:4011",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5788,7 +5788,7 @@
       "id": "GET /api/vendors/:id",
       "method": "GET",
       "path": "/api/vendors/:id",
-      "source": "server/routes.ts:3993",
+      "source": "server/routes.ts:4022",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5807,7 +5807,7 @@
       "id": "GET /api/workers",
       "method": "GET",
       "path": "/api/workers",
-      "source": "server/routes.ts:3155",
+      "source": "server/routes.ts:3156",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5854,7 +5854,7 @@
       "id": "GET /api/workers/:id",
       "method": "GET",
       "path": "/api/workers/:id",
-      "source": "server/routes.ts:3273",
+      "source": "server/routes.ts:3274",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5892,7 +5892,7 @@
       "id": "GET /api/workers/:id/account",
       "method": "GET",
       "path": "/api/workers/:id/account",
-      "source": "server/routes.ts:3466",
+      "source": "server/routes.ts:3467",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5911,7 +5911,7 @@
       "id": "GET /api/workers/accounts",
       "method": "GET",
       "path": "/api/workers/accounts",
-      "source": "server/routes.ts:3226",
+      "source": "server/routes.ts:3227",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -5940,7 +5940,7 @@
       "id": "GET /api/workers/admin-companies",
       "method": "GET",
       "path": "/api/workers/admin-companies",
-      "source": "server/routes.ts:3260",
+      "source": "server/routes.ts:3261",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5969,7 +5969,7 @@
       "id": "PATCH /api/accrual-balances/:id",
       "method": "PATCH",
       "path": "/api/accrual-balances/:id",
-      "source": "server/routes.ts:10843",
+      "source": "server/routes.ts:10872",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -5998,7 +5998,7 @@
       "id": "PATCH /api/admin/license-requests/:id/status",
       "method": "PATCH",
       "path": "/api/admin/license-requests/:id/status",
-      "source": "server/routes.ts:34880",
+      "source": "server/routes.ts:34909",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6017,7 +6017,7 @@
       "id": "PATCH /api/agreement-templates/:id",
       "method": "PATCH",
       "path": "/api/agreement-templates/:id",
-      "source": "server/routes.ts:36827",
+      "source": "server/routes.ts:36856",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6046,7 +6046,7 @@
       "id": "PATCH /api/automation-rules/:id",
       "method": "PATCH",
       "path": "/api/automation-rules/:id",
-      "source": "server/routes.ts:31508",
+      "source": "server/routes.ts:31537",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6075,7 +6075,7 @@
       "id": "PATCH /api/branches/:id",
       "method": "PATCH",
       "path": "/api/branches/:id",
-      "source": "server/routes.ts:10423",
+      "source": "server/routes.ts:10452",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6094,7 +6094,7 @@
       "id": "PATCH /api/commissions/:id",
       "method": "PATCH",
       "path": "/api/commissions/:id",
-      "source": "server/routes.ts:22646",
+      "source": "server/routes.ts:22675",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6123,7 +6123,7 @@
       "id": "PATCH /api/companies/:id",
       "method": "PATCH",
       "path": "/api/companies/:id",
-      "source": "server/routes.ts:3089",
+      "source": "server/routes.ts:3090",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6170,7 +6170,7 @@
       "id": "PATCH /api/compliance/company/:companyId/profile",
       "method": "PATCH",
       "path": "/api/compliance/company/:companyId/profile",
-      "source": "server/routes.ts:42156",
+      "source": "server/routes.ts:42185",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -6199,7 +6199,7 @@
       "id": "PATCH /api/contractor-contracts/:contractId/signers/:signerId",
       "method": "PATCH",
       "path": "/api/contractor-contracts/:contractId/signers/:signerId",
-      "source": "server/routes.ts:19606",
+      "source": "server/routes.ts:19635",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6228,7 +6228,7 @@
       "id": "PATCH /api/contractor-contracts/:id",
       "method": "PATCH",
       "path": "/api/contractor-contracts/:id",
-      "source": "server/routes.ts:18076",
+      "source": "server/routes.ts:18105",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6247,7 +6247,7 @@
       "id": "PATCH /api/contractor-contracts/:id/signing-reminders",
       "method": "PATCH",
       "path": "/api/contractor-contracts/:id/signing-reminders",
-      "source": "server/routes.ts:19394",
+      "source": "server/routes.ts:19423",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6276,7 +6276,7 @@
       "id": "PATCH /api/contractor-job-bids/:bidId",
       "method": "PATCH",
       "path": "/api/contractor-job-bids/:bidId",
-      "source": "server/routes.ts:14456",
+      "source": "server/routes.ts:14485",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6295,7 +6295,7 @@
       "id": "PATCH /api/contractor-notifications/:id/read",
       "method": "PATCH",
       "path": "/api/contractor-notifications/:id/read",
-      "source": "server/routes.ts:20965",
+      "source": "server/routes.ts:20994",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6324,7 +6324,7 @@
       "id": "PATCH /api/contractor-proposals/:id/negotiations/:negId",
       "method": "PATCH",
       "path": "/api/contractor-proposals/:id/negotiations/:negId",
-      "source": "server/routes.ts:17470",
+      "source": "server/routes.ts:17499",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6343,7 +6343,7 @@
       "id": "PATCH /api/contractor-reminders/:id",
       "method": "PATCH",
       "path": "/api/contractor-reminders/:id",
-      "source": "server/routes.ts:21044",
+      "source": "server/routes.ts:21073",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6362,7 +6362,7 @@
       "id": "PATCH /api/cost-centers/:id",
       "method": "PATCH",
       "path": "/api/cost-centers/:id",
-      "source": "server/routes.ts:10460",
+      "source": "server/routes.ts:10489",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6381,7 +6381,7 @@
       "id": "PATCH /api/currencies/:id",
       "method": "PATCH",
       "path": "/api/currencies/:id",
-      "source": "server/routes.ts:21851",
+      "source": "server/routes.ts:21880",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6410,7 +6410,7 @@
       "id": "PATCH /api/dam-documents/:id",
       "method": "PATCH",
       "path": "/api/dam-documents/:id",
-      "source": "server/routes.ts:20619",
+      "source": "server/routes.ts:20648",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6439,7 +6439,7 @@
       "id": "PATCH /api/departments/:id",
       "method": "PATCH",
       "path": "/api/departments/:id",
-      "source": "server/routes.ts:10410",
+      "source": "server/routes.ts:10439",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6458,7 +6458,7 @@
       "id": "PATCH /api/divisions/:id",
       "method": "PATCH",
       "path": "/api/divisions/:id",
-      "source": "server/routes.ts:10435",
+      "source": "server/routes.ts:10464",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6477,7 +6477,7 @@
       "id": "PATCH /api/document-hub/assets/:id/metadata",
       "method": "PATCH",
       "path": "/api/document-hub/assets/:id/metadata",
-      "source": "server/routes.ts:20684",
+      "source": "server/routes.ts:20713",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6506,7 +6506,7 @@
       "id": "PATCH /api/eligibility-rule-sets/:id",
       "method": "PATCH",
       "path": "/api/eligibility-rule-sets/:id",
-      "source": "server/routes.ts:28268",
+      "source": "server/routes.ts:28297",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6535,7 +6535,7 @@
       "id": "PATCH /api/employment-applications/:applicationId",
       "method": "PATCH",
       "path": "/api/employment-applications/:applicationId",
-      "source": "server/routes.ts:14507",
+      "source": "server/routes.ts:14536",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6554,7 +6554,7 @@
       "id": "PATCH /api/enterprises/:id",
       "method": "PATCH",
       "path": "/api/enterprises/:id",
-      "source": "server/routes.ts:10525",
+      "source": "server/routes.ts:10554",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6583,7 +6583,7 @@
       "id": "PATCH /api/expense-categories/:id",
       "method": "PATCH",
       "path": "/api/expense-categories/:id",
-      "source": "server/routes.ts:12167",
+      "source": "server/routes.ts:12196",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6650,7 +6650,7 @@
       "id": "PATCH /api/holidays/:id",
       "method": "PATCH",
       "path": "/api/holidays/:id",
-      "source": "server/routes.ts:11407",
+      "source": "server/routes.ts:11436",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6679,7 +6679,7 @@
       "id": "PATCH /api/job-board/settings",
       "method": "PATCH",
       "path": "/api/job-board/settings",
-      "source": "server/routes.ts:14620",
+      "source": "server/routes.ts:14649",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6698,7 +6698,7 @@
       "id": "PATCH /api/job-posts/:id",
       "method": "PATCH",
       "path": "/api/job-posts/:id",
-      "source": "server/routes.ts:14394",
+      "source": "server/routes.ts:14423",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6717,7 +6717,7 @@
       "id": "PATCH /api/jobs/:id",
       "method": "PATCH",
       "path": "/api/jobs/:id",
-      "source": "server/routes.ts:10473",
+      "source": "server/routes.ts:10502",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6736,7 +6736,7 @@
       "id": "PATCH /api/kpi-groups/:id",
       "method": "PATCH",
       "path": "/api/kpi-groups/:id",
-      "source": "server/routes.ts:11592",
+      "source": "server/routes.ts:11621",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6765,7 +6765,7 @@
       "id": "PATCH /api/legal-entities/:id",
       "method": "PATCH",
       "path": "/api/legal-entities/:id",
-      "source": "server/routes.ts:10487",
+      "source": "server/routes.ts:10516",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6784,7 +6784,7 @@
       "id": "PATCH /api/marketplace/listings/:id",
       "method": "PATCH",
       "path": "/api/marketplace/listings/:id",
-      "source": "server/routes.ts:27941",
+      "source": "server/routes.ts:27970",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6840,7 +6840,7 @@
       "id": "PATCH /api/marketplace/requests/:id/review",
       "method": "PATCH",
       "path": "/api/marketplace/requests/:id/review",
-      "source": "server/routes.ts:28105",
+      "source": "server/routes.ts:28134",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6932,7 +6932,7 @@
       "id": "PATCH /api/messages/:id/read",
       "method": "PATCH",
       "path": "/api/messages/:id/read",
-      "source": "server/routes.ts:35450",
+      "source": "server/routes.ts:35479",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -6961,7 +6961,7 @@
       "id": "PATCH /api/my/preferences",
       "method": "PATCH",
       "path": "/api/my/preferences",
-      "source": "server/routes.ts:27278",
+      "source": "server/routes.ts:27307",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7008,7 +7008,7 @@
       "id": "PATCH /api/my/qualifications/:id",
       "method": "PATCH",
       "path": "/api/my/qualifications/:id",
-      "source": "server/routes.ts:27433",
+      "source": "server/routes.ts:27462",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7055,7 +7055,7 @@
       "id": "PATCH /api/new-hire-defaults/:id",
       "method": "PATCH",
       "path": "/api/new-hire-defaults/:id",
-      "source": "server/routes.ts:23176",
+      "source": "server/routes.ts:23205",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7084,7 +7084,7 @@
       "id": "PATCH /api/notifications/:id",
       "method": "PATCH",
       "path": "/api/notifications/:id",
-      "source": "server/routes.ts:31540",
+      "source": "server/routes.ts:31569",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7113,7 +7113,7 @@
       "id": "PATCH /api/onboarding-packets/:id",
       "method": "PATCH",
       "path": "/api/onboarding-packets/:id",
-      "source": "server/routes.ts:31317",
+      "source": "server/routes.ts:31346",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7142,7 +7142,7 @@
       "id": "PATCH /api/policy-groups/:id",
       "method": "PATCH",
       "path": "/api/policy-groups/:id",
-      "source": "server/routes.ts:11254",
+      "source": "server/routes.ts:11283",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7171,7 +7171,7 @@
       "id": "PATCH /api/positions/:id",
       "method": "PATCH",
       "path": "/api/positions/:id",
-      "source": "server/routes.ts:10448",
+      "source": "server/routes.ts:10477",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7190,7 +7190,7 @@
       "id": "PATCH /api/proposal-line-items/:id",
       "method": "PATCH",
       "path": "/api/proposal-line-items/:id",
-      "source": "server/routes.ts:16041",
+      "source": "server/routes.ts:16070",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7209,7 +7209,7 @@
       "id": "PATCH /api/provisioning/tenants/:companyId/gates",
       "method": "PATCH",
       "path": "/api/provisioning/tenants/:companyId/gates",
-      "source": "server/routes.ts:36782",
+      "source": "server/routes.ts:36811",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -7247,7 +7247,7 @@
       "id": "PATCH /api/qualification-groups/:id",
       "method": "PATCH",
       "path": "/api/qualification-groups/:id",
-      "source": "server/routes.ts:11636",
+      "source": "server/routes.ts:11665",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7276,7 +7276,7 @@
       "id": "PATCH /api/qualifications/:id",
       "method": "PATCH",
       "path": "/api/qualifications/:id",
-      "source": "server/routes.ts:11493",
+      "source": "server/routes.ts:11522",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7305,7 +7305,7 @@
       "id": "PATCH /api/receipts/:id",
       "method": "PATCH",
       "path": "/api/receipts/:id",
-      "source": "server/routes.ts:11858",
+      "source": "server/routes.ts:11887",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7334,7 +7334,7 @@
       "id": "PATCH /api/recurring-billing/:id",
       "method": "PATCH",
       "path": "/api/recurring-billing/:id",
-      "source": "server/routes.ts:30338",
+      "source": "server/routes.ts:30367",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7363,7 +7363,7 @@
       "id": "PATCH /api/remittance-agencies/:id",
       "method": "PATCH",
       "path": "/api/remittance-agencies/:id",
-      "source": "server/routes.ts:22127",
+      "source": "server/routes.ts:22156",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7392,7 +7392,7 @@
       "id": "PATCH /api/remittance-agency-events/:id",
       "method": "PATCH",
       "path": "/api/remittance-agency-events/:id",
-      "source": "server/routes.ts:22170",
+      "source": "server/routes.ts:22199",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7421,7 +7421,7 @@
       "id": "PATCH /api/reviews/:id",
       "method": "PATCH",
       "path": "/api/reviews/:id",
-      "source": "server/routes.ts:11546",
+      "source": "server/routes.ts:11575",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7450,7 +7450,7 @@
       "id": "PATCH /api/role-permissions/:id",
       "method": "PATCH",
       "path": "/api/role-permissions/:id",
-      "source": "server/routes.ts:24432",
+      "source": "server/routes.ts:24461",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7488,7 +7488,7 @@
       "id": "PATCH /api/roles/:id",
       "method": "PATCH",
       "path": "/api/roles/:id",
-      "source": "server/routes.ts:24293",
+      "source": "server/routes.ts:24322",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7526,7 +7526,7 @@
       "id": "PATCH /api/shift-offers/:id",
       "method": "PATCH",
       "path": "/api/shift-offers/:id",
-      "source": "server/routes.ts:21527",
+      "source": "server/routes.ts:21556",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7600,7 +7600,7 @@
       "id": "PATCH /api/stations/:id",
       "method": "PATCH",
       "path": "/api/stations/:id",
-      "source": "server/routes.ts:11810",
+      "source": "server/routes.ts:11839",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7629,7 +7629,7 @@
       "id": "PATCH /api/system-documents/:id",
       "method": "PATCH",
       "path": "/api/system-documents/:id",
-      "source": "server/routes.ts:35494",
+      "source": "server/routes.ts:35523",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7658,7 +7658,7 @@
       "id": "PATCH /api/tenants/:id",
       "method": "PATCH",
       "path": "/api/tenants/:id",
-      "source": "server/routes.ts:36454",
+      "source": "server/routes.ts:36483",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7687,7 +7687,7 @@
       "id": "PATCH /api/trade-transactions/:id",
       "method": "PATCH",
       "path": "/api/trade-transactions/:id",
-      "source": "server/routes.ts:35552",
+      "source": "server/routes.ts:35581",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7734,7 +7734,7 @@
       "id": "PATCH /api/vendor-portal/profile",
       "method": "PATCH",
       "path": "/api/vendor-portal/profile",
-      "source": "server/routes.ts:4152",
+      "source": "server/routes.ts:4181",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7753,7 +7753,7 @@
       "id": "PATCH /api/vendors/:id",
       "method": "PATCH",
       "path": "/api/vendors/:id",
-      "source": "server/routes.ts:4026",
+      "source": "server/routes.ts:4055",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7772,7 +7772,7 @@
       "id": "PATCH /api/workers/:id",
       "method": "PATCH",
       "path": "/api/workers/:id",
-      "source": "server/routes.ts:4239",
+      "source": "server/routes.ts:4268",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -7819,7 +7819,7 @@
       "id": "POST /api/absence-policies",
       "method": "POST",
       "path": "/api/absence-policies",
-      "source": "server/routes.ts:23949",
+      "source": "server/routes.ts:23978",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7848,7 +7848,7 @@
       "id": "POST /api/absence-policies/quick-setup",
       "method": "POST",
       "path": "/api/absence-policies/quick-setup",
-      "source": "server/routes.ts:24207",
+      "source": "server/routes.ts:24236",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -7886,7 +7886,7 @@
       "id": "POST /api/accrual-accounts",
       "method": "POST",
       "path": "/api/accrual-accounts",
-      "source": "server/routes.ts:10747",
+      "source": "server/routes.ts:10776",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7915,7 +7915,7 @@
       "id": "POST /api/accrual-accounts/quick-setup",
       "method": "POST",
       "path": "/api/accrual-accounts/quick-setup",
-      "source": "server/routes.ts:10787",
+      "source": "server/routes.ts:10816",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -7953,7 +7953,7 @@
       "id": "POST /api/accrual-balances",
       "method": "POST",
       "path": "/api/accrual-balances",
-      "source": "server/routes.ts:10833",
+      "source": "server/routes.ts:10862",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -7982,7 +7982,7 @@
       "id": "POST /api/accrual-policies",
       "method": "POST",
       "path": "/api/accrual-policies",
-      "source": "server/routes.ts:23867",
+      "source": "server/routes.ts:23896",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8011,7 +8011,7 @@
       "id": "POST /api/accrual-policies/quick-setup",
       "method": "POST",
       "path": "/api/accrual-policies/quick-setup",
-      "source": "server/routes.ts:24181",
+      "source": "server/routes.ts:24210",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -8049,7 +8049,7 @@
       "id": "POST /api/accrual-policy-milestones",
       "method": "POST",
       "path": "/api/accrual-policy-milestones",
-      "source": "server/routes.ts:23915",
+      "source": "server/routes.ts:23944",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8078,7 +8078,7 @@
       "id": "POST /api/admin/provision-demo",
       "method": "POST",
       "path": "/api/admin/provision-demo",
-      "source": "server/routes.ts:28907",
+      "source": "server/routes.ts:28936",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8097,7 +8097,7 @@
       "id": "POST /api/admin/test-notification",
       "method": "POST",
       "path": "/api/admin/test-notification",
-      "source": "server/routes.ts:34360",
+      "source": "server/routes.ts:34389",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8116,7 +8116,7 @@
       "id": "POST /api/admin/test-sms",
       "method": "POST",
       "path": "/api/admin/test-sms",
-      "source": "server/routes.ts:34302",
+      "source": "server/routes.ts:34331",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8135,7 +8135,7 @@
       "id": "POST /api/agreement-templates",
       "method": "POST",
       "path": "/api/agreement-templates",
-      "source": "server/routes.ts:36819",
+      "source": "server/routes.ts:36848",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8164,7 +8164,7 @@
       "id": "POST /api/approval-reminders/send",
       "method": "POST",
       "path": "/api/approval-reminders/send",
-      "source": "server/routes.ts:12009",
+      "source": "server/routes.ts:12038",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -8247,7 +8247,7 @@
       "id": "POST /api/auth/issue-restore-token",
       "method": "POST",
       "path": "/api/auth/issue-restore-token",
-      "source": "server/routes.ts:34143",
+      "source": "server/routes.ts:34172",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8266,7 +8266,7 @@
       "id": "POST /api/auth/mfa/enroll",
       "method": "POST",
       "path": "/api/auth/mfa/enroll",
-      "source": "server/routes.ts:41408",
+      "source": "server/routes.ts:41437",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8295,7 +8295,7 @@
       "id": "POST /api/auth/mfa/verify",
       "method": "POST",
       "path": "/api/auth/mfa/verify",
-      "source": "server/routes.ts:41548",
+      "source": "server/routes.ts:41577",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8314,7 +8314,7 @@
       "id": "POST /api/automation-rules",
       "method": "POST",
       "path": "/api/automation-rules",
-      "source": "server/routes.ts:31501",
+      "source": "server/routes.ts:31530",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8343,7 +8343,7 @@
       "id": "POST /api/billing/activate",
       "method": "POST",
       "path": "/api/billing/activate",
-      "source": "server/routes.ts:29295",
+      "source": "server/routes.ts:29324",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -8372,7 +8372,7 @@
       "id": "POST /api/branches",
       "method": "POST",
       "path": "/api/branches",
-      "source": "server/routes.ts:10422",
+      "source": "server/routes.ts:10451",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8391,7 +8391,7 @@
       "id": "POST /api/break-policies",
       "method": "POST",
       "path": "/api/break-policies",
-      "source": "server/routes.ts:23702",
+      "source": "server/routes.ts:23731",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8420,7 +8420,7 @@
       "id": "POST /api/break-policies/quick-setup",
       "method": "POST",
       "path": "/api/break-policies/quick-setup",
-      "source": "server/routes.ts:23737",
+      "source": "server/routes.ts:23766",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -8458,7 +8458,7 @@
       "id": "POST /api/check-print-audit",
       "method": "POST",
       "path": "/api/check-print-audit",
-      "source": "server/routes.ts:25003",
+      "source": "server/routes.ts:25032",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -8477,7 +8477,7 @@
       "id": "POST /api/companies",
       "method": "POST",
       "path": "/api/companies",
-      "source": "server/routes.ts:3066",
+      "source": "server/routes.ts:3067",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8515,7 +8515,7 @@
       "id": "POST /api/contractor-access-requests/:id/approve",
       "method": "POST",
       "path": "/api/contractor-access-requests/:id/approve",
-      "source": "server/routes.ts:3624",
+      "source": "server/routes.ts:3625",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8544,7 +8544,7 @@
       "id": "POST /api/contractor-access-requests/:id/reject",
       "method": "POST",
       "path": "/api/contractor-access-requests/:id/reject",
-      "source": "server/routes.ts:3648",
+      "source": "server/routes.ts:3649",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8573,7 +8573,7 @@
       "id": "POST /api/contractor-contracts",
       "method": "POST",
       "path": "/api/contractor-contracts",
-      "source": "server/routes.ts:17584",
+      "source": "server/routes.ts:17613",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -8602,7 +8602,7 @@
       "id": "POST /api/contractor-contracts/:contractId/signers",
       "method": "POST",
       "path": "/api/contractor-contracts/:contractId/signers",
-      "source": "server/routes.ts:18732",
+      "source": "server/routes.ts:18761",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8621,7 +8621,7 @@
       "id": "POST /api/contractor-contracts/:contractId/signers/:signerId/replace",
       "method": "POST",
       "path": "/api/contractor-contracts/:contractId/signers/:signerId/replace",
-      "source": "server/routes.ts:19703",
+      "source": "server/routes.ts:19732",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8650,7 +8650,7 @@
       "id": "POST /api/contractor-contracts/:contractId/signers/:signerId/resend",
       "method": "POST",
       "path": "/api/contractor-contracts/:contractId/signers/:signerId/resend",
-      "source": "server/routes.ts:19658",
+      "source": "server/routes.ts:19687",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8679,7 +8679,7 @@
       "id": "POST /api/contractor-contracts/:id/activate",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/activate",
-      "source": "server/routes.ts:18599",
+      "source": "server/routes.ts:18628",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8708,7 +8708,7 @@
       "id": "POST /api/contractor-contracts/:id/add-signer",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/add-signer",
-      "source": "server/routes.ts:18728",
+      "source": "server/routes.ts:18757",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8727,7 +8727,7 @@
       "id": "POST /api/contractor-contracts/:id/reconcile-signing",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/reconcile-signing",
-      "source": "server/routes.ts:18253",
+      "source": "server/routes.ts:18282",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8746,7 +8746,7 @@
       "id": "POST /api/contractor-contracts/:id/replace-signing-request",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/replace-signing-request",
-      "source": "server/routes.ts:20001",
+      "source": "server/routes.ts:20030",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8775,7 +8775,7 @@
       "id": "POST /api/contractor-contracts/:id/resend-signing-request",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/resend-signing-request",
-      "source": "server/routes.ts:19423",
+      "source": "server/routes.ts:19452",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8804,7 +8804,7 @@
       "id": "POST /api/contractor-contracts/:id/send",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/send",
-      "source": "server/routes.ts:18124",
+      "source": "server/routes.ts:18153",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8833,7 +8833,7 @@
       "id": "POST /api/contractor-contracts/:id/send-for-signature",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/send-for-signature",
-      "source": "server/routes.ts:19741",
+      "source": "server/routes.ts:19770",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8880,7 +8880,7 @@
       "id": "POST /api/contractor-contracts/:id/signing-reminders/send-now",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/signing-reminders/send-now",
-      "source": "server/routes.ts:19410",
+      "source": "server/routes.ts:19439",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8899,7 +8899,7 @@
       "id": "POST /api/contractor-contracts/:id/snapshot",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/snapshot",
-      "source": "server/routes.ts:18583",
+      "source": "server/routes.ts:18612",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8918,7 +8918,7 @@
       "id": "POST /api/contractor-contracts/:id/void",
       "method": "POST",
       "path": "/api/contractor-contracts/:id/void",
-      "source": "server/routes.ts:18499",
+      "source": "server/routes.ts:18528",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -8947,7 +8947,7 @@
       "id": "POST /api/contractor-documents/upload",
       "method": "POST",
       "path": "/api/contractor-documents/upload",
-      "source": "server/routes.ts:35687",
+      "source": "server/routes.ts:35716",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -9003,7 +9003,7 @@
       "id": "POST /api/contractor-hub/contracts/:id/delegate-signer",
       "method": "POST",
       "path": "/api/contractor-hub/contracts/:id/delegate-signer",
-      "source": "server/routes.ts:17819",
+      "source": "server/routes.ts:17848",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9032,7 +9032,7 @@
       "id": "POST /api/contractor-hub/contracts/:id/documenso/create",
       "method": "POST",
       "path": "/api/contractor-hub/contracts/:id/documenso/create",
-      "source": "server/routes.ts:17863",
+      "source": "server/routes.ts:17892",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9051,7 +9051,7 @@
       "id": "POST /api/contractor-hub/contracts/:id/send-signing-email",
       "method": "POST",
       "path": "/api/contractor-hub/contracts/:id/send-signing-email",
-      "source": "server/routes.ts:17844",
+      "source": "server/routes.ts:17873",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9070,7 +9070,7 @@
       "id": "POST /api/contractor-hub/contracts/:id/signers",
       "method": "POST",
       "path": "/api/contractor-hub/contracts/:id/signers",
-      "source": "server/routes.ts:17815",
+      "source": "server/routes.ts:17844",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9089,7 +9089,7 @@
       "id": "POST /api/contractor-invoices",
       "method": "POST",
       "path": "/api/contractor-invoices",
-      "source": "server/routes.ts:13279",
+      "source": "server/routes.ts:13308",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9145,7 +9145,7 @@
       "id": "POST /api/contractor-invoices/:id/print-check",
       "method": "POST",
       "path": "/api/contractor-invoices/:id/print-check",
-      "source": "server/routes.ts:13793",
+      "source": "server/routes.ts:13822",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9164,7 +9164,7 @@
       "id": "POST /api/contractor-invoices/:id/request-override",
       "method": "POST",
       "path": "/api/contractor-invoices/:id/request-override",
-      "source": "server/routes.ts:20304",
+      "source": "server/routes.ts:20333",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9211,7 +9211,7 @@
       "id": "POST /api/contractor-invoices/:id/submit",
       "method": "POST",
       "path": "/api/contractor-invoices/:id/submit",
-      "source": "server/routes.ts:13358",
+      "source": "server/routes.ts:13387",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9267,7 +9267,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/attachments",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/attachments",
-      "source": "server/routes.ts:14471",
+      "source": "server/routes.ts:14500",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9286,7 +9286,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/award",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/award",
-      "source": "server/routes.ts:14484",
+      "source": "server/routes.ts:14513",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9305,7 +9305,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/reject",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/reject",
-      "source": "server/routes.ts:14483",
+      "source": "server/routes.ts:14512",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9324,7 +9324,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/request-revision",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/request-revision",
-      "source": "server/routes.ts:14482",
+      "source": "server/routes.ts:14511",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9343,7 +9343,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/review",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/review",
-      "source": "server/routes.ts:14480",
+      "source": "server/routes.ts:14509",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9362,7 +9362,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/shortlist",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/shortlist",
-      "source": "server/routes.ts:14481",
+      "source": "server/routes.ts:14510",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9381,7 +9381,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/submit",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/submit",
-      "source": "server/routes.ts:14459",
+      "source": "server/routes.ts:14488",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9400,7 +9400,7 @@
       "id": "POST /api/contractor-job-bids/:bidId/withdraw",
       "method": "POST",
       "path": "/api/contractor-job-bids/:bidId/withdraw",
-      "source": "server/routes.ts:14462",
+      "source": "server/routes.ts:14491",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9419,7 +9419,7 @@
       "id": "POST /api/contractor-job-invitations/:invitationId/revoke",
       "method": "POST",
       "path": "/api/contractor-job-invitations/:invitationId/revoke",
-      "source": "server/routes.ts:14444",
+      "source": "server/routes.ts:14473",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9438,7 +9438,7 @@
       "id": "POST /api/contractor-job-questions/:questionId/answer",
       "method": "POST",
       "path": "/api/contractor-job-questions/:questionId/answer",
-      "source": "server/routes.ts:14453",
+      "source": "server/routes.ts:14482",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9457,7 +9457,7 @@
       "id": "POST /api/contractor-onboarding",
       "method": "POST",
       "path": "/api/contractor-onboarding",
-      "source": "server/routes.ts:3671",
+      "source": "server/routes.ts:3672",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9486,7 +9486,36 @@
       "id": "POST /api/contractor-onboarding/:id/esign/:kind",
       "method": "POST",
       "path": "/api/contractor-onboarding/:id/esign/:kind",
-      "source": "server/routes.ts:3770",
+      "source": "server/routes.ts:3771",
+      "targetReasons": [
+        "low-confidence-global-self-service"
+      ],
+      "storageCalls": [
+        {
+          "name": "getUser",
+          "resolved": true,
+          "hasCompanyIdParam": false,
+          "filtersByCompanyIdInBody": false,
+          "hasIdOnlyPrimaryLookup": true,
+          "evidence": "const [user] = await db.select().from(users).where(eq(users.id, id));",
+          "source": "server/storage.ts:2020"
+        }
+      ],
+      "inlineDbQuery": {
+        "present": false,
+        "filtersByCompanyId": false,
+        "idOnly": false,
+        "evidence": ""
+      },
+      "disposition": "needs-runtime-hardening",
+      "reason": "storage/query layer performs an id-only lookup with no companyId/tenantId filter (evidence: const [user] = await db.select().from(users).where(eq(users.id, id));), and no membership check or enforceCompanyScope middleware was detected on the route. No tenant-scoping mechanism was found at either layer.",
+      "confidence": "high"
+    },
+    {
+      "id": "POST /api/contractor-onboarding/:id/esign/:kind/refresh",
+      "method": "POST",
+      "path": "/api/contractor-onboarding/:id/esign/:kind/refresh",
+      "source": "server/routes.ts:3800",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9515,7 +9544,7 @@
       "id": "POST /api/contractor-onboarding/:id/invite",
       "method": "POST",
       "path": "/api/contractor-onboarding/:id/invite",
-      "source": "server/routes.ts:3696",
+      "source": "server/routes.ts:3697",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9544,7 +9573,7 @@
       "id": "POST /api/contractor-payments/:id/reissue",
       "method": "POST",
       "path": "/api/contractor-payments/:id/reissue",
-      "source": "server/routes.ts:16987",
+      "source": "server/routes.ts:17016",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9573,7 +9602,7 @@
       "id": "POST /api/contractor-payments/:id/void",
       "method": "POST",
       "path": "/api/contractor-payments/:id/void",
-      "source": "server/routes.ts:16912",
+      "source": "server/routes.ts:16941",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9602,7 +9631,7 @@
       "id": "POST /api/contractor-proposals/:id/accept-counteroffer",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/accept-counteroffer",
-      "source": "server/routes.ts:16519",
+      "source": "server/routes.ts:16548",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9631,7 +9660,7 @@
       "id": "POST /api/contractor-proposals/:id/ai-assist",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/ai-assist",
-      "source": "server/routes.ts:17200",
+      "source": "server/routes.ts:17229",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9650,7 +9679,7 @@
       "id": "POST /api/contractor-proposals/:id/client-approve",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/client-approve",
-      "source": "server/routes.ts:16478",
+      "source": "server/routes.ts:16507",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9669,7 +9698,7 @@
       "id": "POST /api/contractor-proposals/:id/convert-to-contract",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/convert-to-contract",
-      "source": "server/routes.ts:17288",
+      "source": "server/routes.ts:17317",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9688,7 +9717,7 @@
       "id": "POST /api/contractor-proposals/:id/counter",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/counter",
-      "source": "server/routes.ts:17450",
+      "source": "server/routes.ts:17479",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9717,7 +9746,7 @@
       "id": "POST /api/contractor-proposals/:id/mark-negotiated",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/mark-negotiated",
-      "source": "server/routes.ts:17356",
+      "source": "server/routes.ts:17385",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9746,7 +9775,7 @@
       "id": "POST /api/contractor-proposals/:id/negotiate",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/negotiate",
-      "source": "server/routes.ts:17428",
+      "source": "server/routes.ts:17457",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9775,7 +9804,7 @@
       "id": "POST /api/contractor-proposals/:id/purge",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/purge",
-      "source": "server/routes.ts:15334",
+      "source": "server/routes.ts:15363",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9804,7 +9833,7 @@
       "id": "POST /api/contractor-proposals/:id/reject-counteroffer",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/reject-counteroffer",
-      "source": "server/routes.ts:16538",
+      "source": "server/routes.ts:16567",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9833,7 +9862,7 @@
       "id": "POST /api/contractor-proposals/:id/repair-contract",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/repair-contract",
-      "source": "server/routes.ts:15016",
+      "source": "server/routes.ts:15045",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9852,7 +9881,7 @@
       "id": "POST /api/contractor-proposals/:id/reply",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/reply",
-      "source": "server/routes.ts:16373",
+      "source": "server/routes.ts:16402",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9871,7 +9900,7 @@
       "id": "POST /api/contractor-proposals/:id/resend-email",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/resend-email",
-      "source": "server/routes.ts:16303",
+      "source": "server/routes.ts:16332",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9890,7 +9919,7 @@
       "id": "POST /api/contractor-proposals/:id/send",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/send",
-      "source": "server/routes.ts:16208",
+      "source": "server/routes.ts:16237",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9909,7 +9938,7 @@
       "id": "POST /api/contractor-proposals/:id/snapshot",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/snapshot",
-      "source": "server/routes.ts:17400",
+      "source": "server/routes.ts:17429",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9928,7 +9957,7 @@
       "id": "POST /api/contractor-proposals/:id/submit",
       "method": "POST",
       "path": "/api/contractor-proposals/:id/submit",
-      "source": "server/routes.ts:15387",
+      "source": "server/routes.ts:15416",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9957,7 +9986,7 @@
       "id": "POST /api/contractor-trade-compensation/:id/approve",
       "method": "POST",
       "path": "/api/contractor-trade-compensation/:id/approve",
-      "source": "server/routes.ts:26983",
+      "source": "server/routes.ts:27012",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -9995,7 +10024,7 @@
       "id": "POST /api/contributing-pay-codes",
       "method": "POST",
       "path": "/api/contributing-pay-codes",
-      "source": "server/routes.ts:23286",
+      "source": "server/routes.ts:23315",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10024,7 +10053,7 @@
       "id": "POST /api/contributing-pay-codes/quick-setup",
       "method": "POST",
       "path": "/api/contributing-pay-codes/quick-setup",
-      "source": "server/routes.ts:23321",
+      "source": "server/routes.ts:23350",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -10071,7 +10100,7 @@
       "id": "POST /api/contributing-shifts",
       "method": "POST",
       "path": "/api/contributing-shifts",
-      "source": "server/routes.ts:23364",
+      "source": "server/routes.ts:23393",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10100,7 +10129,7 @@
       "id": "POST /api/contributing-shifts/quick-setup",
       "method": "POST",
       "path": "/api/contributing-shifts/quick-setup",
-      "source": "server/routes.ts:23399",
+      "source": "server/routes.ts:23428",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -10138,7 +10167,7 @@
       "id": "POST /api/cost-centers",
       "method": "POST",
       "path": "/api/cost-centers",
-      "source": "server/routes.ts:10459",
+      "source": "server/routes.ts:10488",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10157,7 +10186,7 @@
       "id": "POST /api/currencies",
       "method": "POST",
       "path": "/api/currencies",
-      "source": "server/routes.ts:21837",
+      "source": "server/routes.ts:21866",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10186,7 +10215,7 @@
       "id": "POST /api/demo/login",
       "method": "POST",
       "path": "/api/demo/login",
-      "source": "server/routes.ts:28853",
+      "source": "server/routes.ts:28882",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10205,7 +10234,7 @@
       "id": "POST /api/departments",
       "method": "POST",
       "path": "/api/departments",
-      "source": "server/routes.ts:10409",
+      "source": "server/routes.ts:10438",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10224,7 +10253,7 @@
       "id": "POST /api/device-tokens",
       "method": "POST",
       "path": "/api/device-tokens",
-      "source": "server/routes.ts:34026",
+      "source": "server/routes.ts:34055",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10253,7 +10282,7 @@
       "id": "POST /api/divisions",
       "method": "POST",
       "path": "/api/divisions",
-      "source": "server/routes.ts:10434",
+      "source": "server/routes.ts:10463",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10272,7 +10301,7 @@
       "id": "POST /api/document-hub/assets",
       "method": "POST",
       "path": "/api/document-hub/assets",
-      "source": "server/routes.ts:20356",
+      "source": "server/routes.ts:20385",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10291,7 +10320,7 @@
       "id": "POST /api/document-hub/assets/:id/archive",
       "method": "POST",
       "path": "/api/document-hub/assets/:id/archive",
-      "source": "server/routes.ts:20705",
+      "source": "server/routes.ts:20734",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10320,7 +10349,7 @@
       "id": "POST /api/document-hub/assets/:id/versions",
       "method": "POST",
       "path": "/api/document-hub/assets/:id/versions",
-      "source": "server/routes.ts:20695",
+      "source": "server/routes.ts:20724",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10349,7 +10378,7 @@
       "id": "POST /api/document-versions",
       "method": "POST",
       "path": "/api/document-versions",
-      "source": "server/routes.ts:30910",
+      "source": "server/routes.ts:30939",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10405,7 +10434,7 @@
       "id": "POST /api/documents/:id/send-for-signature",
       "method": "POST",
       "path": "/api/documents/:id/send-for-signature",
-      "source": "server/routes.ts:30437",
+      "source": "server/routes.ts:30466",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10497,7 +10526,7 @@
       "id": "POST /api/earning-types",
       "method": "POST",
       "path": "/api/earning-types",
-      "source": "server/routes.ts:22605",
+      "source": "server/routes.ts:22634",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10526,7 +10555,7 @@
       "id": "POST /api/eligibility-rule-sets",
       "method": "POST",
       "path": "/api/eligibility-rule-sets",
-      "source": "server/routes.ts:28261",
+      "source": "server/routes.ts:28290",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10555,7 +10584,7 @@
       "id": "POST /api/employee-groups",
       "method": "POST",
       "path": "/api/employee-groups",
-      "source": "server/routes.ts:22979",
+      "source": "server/routes.ts:23008",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10584,7 +10613,7 @@
       "id": "POST /api/employee-titles",
       "method": "POST",
       "path": "/api/employee-titles",
-      "source": "server/routes.ts:22916",
+      "source": "server/routes.ts:22945",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10622,7 +10651,7 @@
       "id": "POST /api/employee-wage-groups",
       "method": "POST",
       "path": "/api/employee-wage-groups",
-      "source": "server/routes.ts:21796",
+      "source": "server/routes.ts:21825",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10660,7 +10689,7 @@
       "id": "POST /api/employment-application-documents/:documentId/remove",
       "method": "POST",
       "path": "/api/employment-application-documents/:documentId/remove",
-      "source": "server/routes.ts:14539",
+      "source": "server/routes.ts:14568",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10679,7 +10708,7 @@
       "id": "POST /api/employment-applications/:applicationId/convert-to-worker",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/convert-to-worker",
-      "source": "server/routes.ts:14525",
+      "source": "server/routes.ts:14554",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10698,7 +10727,7 @@
       "id": "POST /api/employment-applications/:applicationId/documents",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/documents",
-      "source": "server/routes.ts:14529",
+      "source": "server/routes.ts:14558",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10717,7 +10746,7 @@
       "id": "POST /api/employment-applications/:applicationId/hire",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/hire",
-      "source": "server/routes.ts:14523",
+      "source": "server/routes.ts:14552",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10736,7 +10765,7 @@
       "id": "POST /api/employment-applications/:applicationId/interview",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/interview",
-      "source": "server/routes.ts:14521",
+      "source": "server/routes.ts:14550",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10755,7 +10784,7 @@
       "id": "POST /api/employment-applications/:applicationId/offer",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/offer",
-      "source": "server/routes.ts:14522",
+      "source": "server/routes.ts:14551",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10774,7 +10803,7 @@
       "id": "POST /api/employment-applications/:applicationId/reject",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/reject",
-      "source": "server/routes.ts:14524",
+      "source": "server/routes.ts:14553",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10793,7 +10822,7 @@
       "id": "POST /api/employment-applications/:applicationId/review",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/review",
-      "source": "server/routes.ts:14520",
+      "source": "server/routes.ts:14549",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10812,7 +10841,7 @@
       "id": "POST /api/employment-applications/:applicationId/submit",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/submit",
-      "source": "server/routes.ts:14510",
+      "source": "server/routes.ts:14539",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10831,7 +10860,7 @@
       "id": "POST /api/employment-applications/:applicationId/withdraw",
       "method": "POST",
       "path": "/api/employment-applications/:applicationId/withdraw",
-      "source": "server/routes.ts:14513",
+      "source": "server/routes.ts:14542",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10850,7 +10879,7 @@
       "id": "POST /api/enterprises",
       "method": "POST",
       "path": "/api/enterprises",
-      "source": "server/routes.ts:10512",
+      "source": "server/routes.ts:10541",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10879,7 +10908,7 @@
       "id": "POST /api/exception-policies",
       "method": "POST",
       "path": "/api/exception-policies",
-      "source": "server/routes.ts:23820",
+      "source": "server/routes.ts:23849",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10908,7 +10937,7 @@
       "id": "POST /api/exception-policies/quick-setup",
       "method": "POST",
       "path": "/api/exception-policies/quick-setup",
-      "source": "server/routes.ts:24104",
+      "source": "server/routes.ts:24133",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -10946,7 +10975,7 @@
       "id": "POST /api/expense-categories",
       "method": "POST",
       "path": "/api/expense-categories",
-      "source": "server/routes.ts:12159",
+      "source": "server/routes.ts:12188",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -10984,7 +11013,7 @@
       "id": "POST /api/expense-payments/:id/reissue",
       "method": "POST",
       "path": "/api/expense-payments/:id/reissue",
-      "source": "server/routes.ts:12888",
+      "source": "server/routes.ts:12917",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11013,7 +11042,7 @@
       "id": "POST /api/expense-payments/:id/void",
       "method": "POST",
       "path": "/api/expense-payments/:id/void",
-      "source": "server/routes.ts:12827",
+      "source": "server/routes.ts:12856",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11042,7 +11071,7 @@
       "id": "POST /api/expenses/ai-scan",
       "method": "POST",
       "path": "/api/expenses/ai-scan",
-      "source": "server/routes.ts:12422",
+      "source": "server/routes.ts:12451",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11080,7 +11109,7 @@
       "id": "POST /api/feature-registry/activate",
       "method": "POST",
       "path": "/api/feature-registry/activate",
-      "source": "server/routes.ts:41173",
+      "source": "server/routes.ts:41202",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -11118,7 +11147,7 @@
       "id": "POST /api/feature-registry/bulk-activate",
       "method": "POST",
       "path": "/api/feature-registry/bulk-activate",
-      "source": "server/routes.ts:41228",
+      "source": "server/routes.ts:41257",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -11185,7 +11214,7 @@
       "id": "POST /api/funding-accounts",
       "method": "POST",
       "path": "/api/funding-accounts",
-      "source": "server/routes.ts:27087",
+      "source": "server/routes.ts:27116",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11214,7 +11243,7 @@
       "id": "POST /api/funding-accounts/quick-setup",
       "method": "POST",
       "path": "/api/funding-accounts/quick-setup",
-      "source": "server/routes.ts:27116",
+      "source": "server/routes.ts:27145",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -11252,7 +11281,7 @@
       "id": "POST /api/holiday-policies",
       "method": "POST",
       "path": "/api/holiday-policies",
-      "source": "server/routes.ts:23996",
+      "source": "server/routes.ts:24025",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11281,7 +11310,7 @@
       "id": "POST /api/holiday-policies/quick-setup",
       "method": "POST",
       "path": "/api/holiday-policies/quick-setup",
-      "source": "server/routes.ts:24156",
+      "source": "server/routes.ts:24185",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -11319,7 +11348,7 @@
       "id": "POST /api/holidays",
       "method": "POST",
       "path": "/api/holidays",
-      "source": "server/routes.ts:11397",
+      "source": "server/routes.ts:11426",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11348,7 +11377,7 @@
       "id": "POST /api/holidays/quick-setup",
       "method": "POST",
       "path": "/api/holidays/quick-setup",
-      "source": "server/routes.ts:11430",
+      "source": "server/routes.ts:11459",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -11386,7 +11415,7 @@
       "id": "POST /api/import/:type",
       "method": "POST",
       "path": "/api/import/:type",
-      "source": "server/routes.ts:21874",
+      "source": "server/routes.ts:21903",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11433,7 +11462,7 @@
       "id": "POST /api/invoice-approval-workflows",
       "method": "POST",
       "path": "/api/invoice-approval-workflows",
-      "source": "server/routes.ts:31443",
+      "source": "server/routes.ts:31472",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -11471,7 +11500,7 @@
       "id": "POST /api/invoice-templates",
       "method": "POST",
       "path": "/api/invoice-templates",
-      "source": "server/routes.ts:29502",
+      "source": "server/routes.ts:29531",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11500,7 +11529,7 @@
       "id": "POST /api/invoices",
       "method": "POST",
       "path": "/api/invoices",
-      "source": "server/routes.ts:29553",
+      "source": "server/routes.ts:29582",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11547,7 +11576,7 @@
       "id": "POST /api/job-board/access-requests/:requestId/approve",
       "method": "POST",
       "path": "/api/job-board/access-requests/:requestId/approve",
-      "source": "server/routes.ts:14633",
+      "source": "server/routes.ts:14662",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11566,7 +11595,7 @@
       "id": "POST /api/job-board/access-requests/:requestId/deny",
       "method": "POST",
       "path": "/api/job-board/access-requests/:requestId/deny",
-      "source": "server/routes.ts:14637",
+      "source": "server/routes.ts:14666",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11585,7 +11614,7 @@
       "id": "POST /api/job-board/applicants/:applicantId/disable",
       "method": "POST",
       "path": "/api/job-board/applicants/:applicantId/disable",
-      "source": "server/routes.ts:14644",
+      "source": "server/routes.ts:14673",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11604,7 +11633,7 @@
       "id": "POST /api/job-board/applicants/:applicantId/reissue-activation",
       "method": "POST",
       "path": "/api/job-board/applicants/:applicantId/reissue-activation",
-      "source": "server/routes.ts:14647",
+      "source": "server/routes.ts:14676",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11623,7 +11652,7 @@
       "id": "POST /api/job-board/invitations/:invitationId/revoke",
       "method": "POST",
       "path": "/api/job-board/invitations/:invitationId/revoke",
-      "source": "server/routes.ts:14651",
+      "source": "server/routes.ts:14680",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11642,7 +11671,7 @@
       "id": "POST /api/job-board/settings/rotate-code",
       "method": "POST",
       "path": "/api/job-board/settings/rotate-code",
-      "source": "server/routes.ts:14624",
+      "source": "server/routes.ts:14653",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11661,7 +11690,7 @@
       "id": "POST /api/job-post-access-grants/:grantId/revoke",
       "method": "POST",
       "path": "/api/job-post-access-grants/:grantId/revoke",
-      "source": "server/routes.ts:14660",
+      "source": "server/routes.ts:14689",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11680,7 +11709,7 @@
       "id": "POST /api/job-post-attachments/:attachmentId/remove",
       "method": "POST",
       "path": "/api/job-post-attachments/:attachmentId/remove",
-      "source": "server/routes.ts:14424",
+      "source": "server/routes.ts:14453",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11699,7 +11728,7 @@
       "id": "POST /api/job-posts",
       "method": "POST",
       "path": "/api/job-posts",
-      "source": "server/routes.ts:14367",
+      "source": "server/routes.ts:14396",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11718,7 +11747,7 @@
       "id": "POST /api/job-posts/:id/applicant-grants",
       "method": "POST",
       "path": "/api/job-posts/:id/applicant-grants",
-      "source": "server/routes.ts:14657",
+      "source": "server/routes.ts:14686",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11737,7 +11766,7 @@
       "id": "POST /api/job-posts/:id/applications",
       "method": "POST",
       "path": "/api/job-posts/:id/applications",
-      "source": "server/routes.ts:14495",
+      "source": "server/routes.ts:14524",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11756,7 +11785,7 @@
       "id": "POST /api/job-posts/:id/archive",
       "method": "POST",
       "path": "/api/job-posts/:id/archive",
-      "source": "server/routes.ts:14408",
+      "source": "server/routes.ts:14437",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11775,7 +11804,7 @@
       "id": "POST /api/job-posts/:id/attachments",
       "method": "POST",
       "path": "/api/job-posts/:id/attachments",
-      "source": "server/routes.ts:14414",
+      "source": "server/routes.ts:14443",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11794,7 +11823,7 @@
       "id": "POST /api/job-posts/:id/bids",
       "method": "POST",
       "path": "/api/job-posts/:id/bids",
-      "source": "server/routes.ts:14435",
+      "source": "server/routes.ts:14464",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11813,7 +11842,7 @@
       "id": "POST /api/job-posts/:id/close",
       "method": "POST",
       "path": "/api/job-posts/:id/close",
-      "source": "server/routes.ts:14407",
+      "source": "server/routes.ts:14436",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11832,7 +11861,7 @@
       "id": "POST /api/job-posts/:id/invitations",
       "method": "POST",
       "path": "/api/job-posts/:id/invitations",
-      "source": "server/routes.ts:14441",
+      "source": "server/routes.ts:14470",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11851,7 +11880,7 @@
       "id": "POST /api/job-posts/:id/pause",
       "method": "POST",
       "path": "/api/job-posts/:id/pause",
-      "source": "server/routes.ts:14405",
+      "source": "server/routes.ts:14434",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11870,7 +11899,7 @@
       "id": "POST /api/job-posts/:id/publish",
       "method": "POST",
       "path": "/api/job-posts/:id/publish",
-      "source": "server/routes.ts:14404",
+      "source": "server/routes.ts:14433",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11889,7 +11918,7 @@
       "id": "POST /api/job-posts/:id/questions",
       "method": "POST",
       "path": "/api/job-posts/:id/questions",
-      "source": "server/routes.ts:14450",
+      "source": "server/routes.ts:14479",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11908,7 +11937,7 @@
       "id": "POST /api/job-posts/:id/reopen",
       "method": "POST",
       "path": "/api/job-posts/:id/reopen",
-      "source": "server/routes.ts:14406",
+      "source": "server/routes.ts:14435",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11927,7 +11956,7 @@
       "id": "POST /api/job-posts/:id/screening-questions",
       "method": "POST",
       "path": "/api/job-posts/:id/screening-questions",
-      "source": "server/routes.ts:14498",
+      "source": "server/routes.ts:14527",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11946,7 +11975,7 @@
       "id": "POST /api/job-screening-questions/:questionId/archive",
       "method": "POST",
       "path": "/api/job-screening-questions/:questionId/archive",
-      "source": "server/routes.ts:14501",
+      "source": "server/routes.ts:14530",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11965,7 +11994,7 @@
       "id": "POST /api/jobs",
       "method": "POST",
       "path": "/api/jobs",
-      "source": "server/routes.ts:10472",
+      "source": "server/routes.ts:10501",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -11984,7 +12013,7 @@
       "id": "POST /api/kpi-groups",
       "method": "POST",
       "path": "/api/kpi-groups",
-      "source": "server/routes.ts:11582",
+      "source": "server/routes.ts:11611",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12013,7 +12042,7 @@
       "id": "POST /api/legal-entities",
       "method": "POST",
       "path": "/api/legal-entities",
-      "source": "server/routes.ts:10486",
+      "source": "server/routes.ts:10515",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12032,7 +12061,7 @@
       "id": "POST /api/marketplace/eligibility-check",
       "method": "POST",
       "path": "/api/marketplace/eligibility-check",
-      "source": "server/routes.ts:28201",
+      "source": "server/routes.ts:28230",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12106,7 +12135,7 @@
       "id": "POST /api/marketplace/listings",
       "method": "POST",
       "path": "/api/marketplace/listings",
-      "source": "server/routes.ts:27884",
+      "source": "server/routes.ts:27913",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12180,7 +12209,7 @@
       "id": "POST /api/marketplace/requests",
       "method": "POST",
       "path": "/api/marketplace/requests",
-      "source": "server/routes.ts:27975",
+      "source": "server/routes.ts:28004",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12290,7 +12319,7 @@
       "id": "POST /api/meal-policies",
       "method": "POST",
       "path": "/api/meal-policies",
-      "source": "server/routes.ts:23631",
+      "source": "server/routes.ts:23660",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12319,7 +12348,7 @@
       "id": "POST /api/meal-policies/quick-setup",
       "method": "POST",
       "path": "/api/meal-policies/quick-setup",
-      "source": "server/routes.ts:23666",
+      "source": "server/routes.ts:23695",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -12357,7 +12386,7 @@
       "id": "POST /api/messages/:id/reply",
       "method": "POST",
       "path": "/api/messages/:id/reply",
-      "source": "server/routes.ts:35380",
+      "source": "server/routes.ts:35409",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12395,7 +12424,7 @@
       "id": "POST /api/my-onboarding/esign/:kind",
       "method": "POST",
       "path": "/api/my-onboarding/esign/:kind",
-      "source": "server/routes.ts:3793",
+      "source": "server/routes.ts:3822",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12414,7 +12443,7 @@
       "id": "POST /api/my-onboarding/government-id/:side",
       "method": "POST",
       "path": "/api/my-onboarding/government-id/:side",
-      "source": "server/routes.ts:3828",
+      "source": "server/routes.ts:3857",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12443,7 +12472,7 @@
       "id": "POST /api/my/change-password",
       "method": "POST",
       "path": "/api/my/change-password",
-      "source": "server/routes.ts:27557",
+      "source": "server/routes.ts:27586",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12481,7 +12510,7 @@
       "id": "POST /api/my/change-pin",
       "method": "POST",
       "path": "/api/my/change-pin",
-      "source": "server/routes.ts:27528",
+      "source": "server/routes.ts:27557",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12528,7 +12557,7 @@
       "id": "POST /api/my/languages",
       "method": "POST",
       "path": "/api/my/languages",
-      "source": "server/routes.ts:27467",
+      "source": "server/routes.ts:27496",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12557,7 +12586,7 @@
       "id": "POST /api/my/memberships",
       "method": "POST",
       "path": "/api/my/memberships",
-      "source": "server/routes.ts:27503",
+      "source": "server/routes.ts:27532",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12586,7 +12615,7 @@
       "id": "POST /api/my/qualifications",
       "method": "POST",
       "path": "/api/my/qualifications",
-      "source": "server/routes.ts:27423",
+      "source": "server/routes.ts:27452",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12624,7 +12653,7 @@
       "id": "POST /api/new-hire-defaults",
       "method": "POST",
       "path": "/api/new-hire-defaults",
-      "source": "server/routes.ts:23166",
+      "source": "server/routes.ts:23195",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12653,7 +12682,7 @@
       "id": "POST /api/notification-preferences",
       "method": "POST",
       "path": "/api/notification-preferences",
-      "source": "server/routes.ts:28305",
+      "source": "server/routes.ts:28334",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12682,7 +12711,7 @@
       "id": "POST /api/onboarding/portal/:token/sign",
       "method": "POST",
       "path": "/api/onboarding/portal/:token/sign",
-      "source": "server/routes.ts:37215",
+      "source": "server/routes.ts:37244",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12729,7 +12758,7 @@
       "id": "POST /api/onboarding/portal/:token/steps/:stepId/complete",
       "method": "POST",
       "path": "/api/onboarding/portal/:token/steps/:stepId/complete",
-      "source": "server/routes.ts:37176",
+      "source": "server/routes.ts:37205",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12794,7 +12823,7 @@
       "id": "POST /api/overtime-policies",
       "method": "POST",
       "path": "/api/overtime-policies",
-      "source": "server/routes.ts:23512",
+      "source": "server/routes.ts:23541",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12823,7 +12852,7 @@
       "id": "POST /api/overtime-policies/quick-setup",
       "method": "POST",
       "path": "/api/overtime-policies/quick-setup",
-      "source": "server/routes.ts:23547",
+      "source": "server/routes.ts:23576",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -12861,7 +12890,7 @@
       "id": "POST /api/pay-codes",
       "method": "POST",
       "path": "/api/pay-codes",
-      "source": "server/routes.ts:11316",
+      "source": "server/routes.ts:11345",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12890,7 +12919,7 @@
       "id": "POST /api/pay-codes/quick-setup",
       "method": "POST",
       "path": "/api/pay-codes/quick-setup",
-      "source": "server/routes.ts:11353",
+      "source": "server/routes.ts:11382",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -12928,7 +12957,7 @@
       "id": "POST /api/pay-formulas",
       "method": "POST",
       "path": "/api/pay-formulas",
-      "source": "server/routes.ts:23209",
+      "source": "server/routes.ts:23238",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -12957,7 +12986,7 @@
       "id": "POST /api/pay-formulas/quick-setup",
       "method": "POST",
       "path": "/api/pay-formulas/quick-setup",
-      "source": "server/routes.ts:23244",
+      "source": "server/routes.ts:23273",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -12995,7 +13024,7 @@
       "id": "POST /api/pay-period-schedules",
       "method": "POST",
       "path": "/api/pay-period-schedules",
-      "source": "server/routes.ts:22815",
+      "source": "server/routes.ts:22844",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13042,7 +13071,7 @@
       "id": "POST /api/pay-periods",
       "method": "POST",
       "path": "/api/pay-periods",
-      "source": "server/routes.ts:11101",
+      "source": "server/routes.ts:11130",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13071,7 +13100,7 @@
       "id": "POST /api/pay-stub-accounts",
       "method": "POST",
       "path": "/api/pay-stub-accounts",
-      "source": "server/routes.ts:22396",
+      "source": "server/routes.ts:22425",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13100,7 +13129,7 @@
       "id": "POST /api/pay-stub-accounts/quick-setup",
       "method": "POST",
       "path": "/api/pay-stub-accounts/quick-setup",
-      "source": "server/routes.ts:22431",
+      "source": "server/routes.ts:22460",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13138,7 +13167,7 @@
       "id": "POST /api/pay-stub-amendments",
       "method": "POST",
       "path": "/api/pay-stub-amendments",
-      "source": "server/routes.ts:22486",
+      "source": "server/routes.ts:22515",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13176,7 +13205,7 @@
       "id": "POST /api/pay-stub-transactions",
       "method": "POST",
       "path": "/api/pay-stub-transactions",
-      "source": "server/routes.ts:22549",
+      "source": "server/routes.ts:22578",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13214,7 +13243,7 @@
       "id": "POST /api/payment-method-configs",
       "method": "POST",
       "path": "/api/payment-method-configs",
-      "source": "server/routes.ts:29963",
+      "source": "server/routes.ts:29992",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13243,7 +13272,7 @@
       "id": "POST /api/payments",
       "method": "POST",
       "path": "/api/payments",
-      "source": "server/routes.ts:29910",
+      "source": "server/routes.ts:29939",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13299,7 +13328,7 @@
       "id": "POST /api/payments/calculate-fee",
       "method": "POST",
       "path": "/api/payments/calculate-fee",
-      "source": "server/routes.ts:29979",
+      "source": "server/routes.ts:30008",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13328,7 +13357,7 @@
       "id": "POST /api/payroll-payment-methods",
       "method": "POST",
       "path": "/api/payroll-payment-methods",
-      "source": "server/routes.ts:27007",
+      "source": "server/routes.ts:27036",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13357,7 +13386,7 @@
       "id": "POST /api/payroll-payment-methods/quick-setup",
       "method": "POST",
       "path": "/api/payroll-payment-methods/quick-setup",
-      "source": "server/routes.ts:27050",
+      "source": "server/routes.ts:27079",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13395,7 +13424,7 @@
       "id": "POST /api/payroll-payment-records",
       "method": "POST",
       "path": "/api/payroll-payment-records",
-      "source": "server/routes.ts:27184",
+      "source": "server/routes.ts:27213",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13424,7 +13453,7 @@
       "id": "POST /api/payroll-runs",
       "method": "POST",
       "path": "/api/payroll-runs",
-      "source": "server/routes.ts:9857",
+      "source": "server/routes.ts:9886",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13561,7 +13590,7 @@
       "id": "POST /api/payroll-runs/:id/disburse-stripe",
       "method": "POST",
       "path": "/api/payroll-runs/:id/disburse-stripe",
-      "source": "server/routes.ts:7479",
+      "source": "server/routes.ts:7508",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13635,7 +13664,7 @@
       "id": "POST /api/payroll-runs/bulk-lock",
       "method": "POST",
       "path": "/api/payroll-runs/bulk-lock",
-      "source": "server/routes.ts:7121",
+      "source": "server/routes.ts:7150",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13682,7 +13711,7 @@
       "id": "POST /api/payroll/recalculate-ytd",
       "method": "POST",
       "path": "/api/payroll/recalculate-ytd",
-      "source": "server/routes.ts:8063",
+      "source": "server/routes.ts:8092",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13729,7 +13758,7 @@
       "id": "POST /api/permission-groups/quick-setup",
       "method": "POST",
       "path": "/api/permission-groups/quick-setup",
-      "source": "server/routes.ts:24321",
+      "source": "server/routes.ts:24350",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13794,7 +13823,7 @@
       "id": "POST /api/permissions/check",
       "method": "POST",
       "path": "/api/permissions/check",
-      "source": "server/routes.ts:36302",
+      "source": "server/routes.ts:36331",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13813,7 +13842,7 @@
       "id": "POST /api/platform/audit/contracts/:companyId/sign",
       "method": "POST",
       "path": "/api/platform/audit/contracts/:companyId/sign",
-      "source": "server/routes.ts:38643",
+      "source": "server/routes.ts:38672",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13832,7 +13861,7 @@
       "id": "POST /api/platform/audit/licensing/:companyId/gate-override",
       "method": "POST",
       "path": "/api/platform/audit/licensing/:companyId/gate-override",
-      "source": "server/routes.ts:38670",
+      "source": "server/routes.ts:38699",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13851,7 +13880,7 @@
       "id": "POST /api/platform/support-sessions",
       "method": "POST",
       "path": "/api/platform/support-sessions",
-      "source": "server/routes.ts:36522",
+      "source": "server/routes.ts:36551",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -13880,7 +13909,7 @@
       "id": "POST /api/platform/support-sessions/:id/end",
       "method": "POST",
       "path": "/api/platform/support-sessions/:id/end",
-      "source": "server/routes.ts:36558",
+      "source": "server/routes.ts:36587",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13909,7 +13938,7 @@
       "id": "POST /api/policy-groups",
       "method": "POST",
       "path": "/api/policy-groups",
-      "source": "server/routes.ts:11244",
+      "source": "server/routes.ts:11273",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13938,7 +13967,7 @@
       "id": "POST /api/policy-groups/quick-setup",
       "method": "POST",
       "path": "/api/policy-groups/quick-setup",
-      "source": "server/routes.ts:11277",
+      "source": "server/routes.ts:11306",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -13976,7 +14005,7 @@
       "id": "POST /api/portal/generate-token",
       "method": "POST",
       "path": "/api/portal/generate-token",
-      "source": "server/routes.ts:32845",
+      "source": "server/routes.ts:32874",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14005,7 +14034,7 @@
       "id": "POST /api/positions",
       "method": "POST",
       "path": "/api/positions",
-      "source": "server/routes.ts:10447",
+      "source": "server/routes.ts:10476",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14024,7 +14053,7 @@
       "id": "POST /api/premium-policies",
       "method": "POST",
       "path": "/api/premium-policies",
-      "source": "server/routes.ts:23584",
+      "source": "server/routes.ts:23613",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14053,7 +14082,7 @@
       "id": "POST /api/premium-policies/quick-setup",
       "method": "POST",
       "path": "/api/premium-policies/quick-setup",
-      "source": "server/routes.ts:24078",
+      "source": "server/routes.ts:24107",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14091,7 +14120,7 @@
       "id": "POST /api/provisioning/event",
       "method": "POST",
       "path": "/api/provisioning/event",
-      "source": "server/routes.ts:36746",
+      "source": "server/routes.ts:36775",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14129,7 +14158,7 @@
       "id": "POST /api/provisioning/tenants/:companyId/retry",
       "method": "POST",
       "path": "/api/provisioning/tenants/:companyId/retry",
-      "source": "server/routes.ts:36765",
+      "source": "server/routes.ts:36794",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14158,7 +14187,7 @@
       "id": "POST /api/qualification-groups",
       "method": "POST",
       "path": "/api/qualification-groups",
-      "source": "server/routes.ts:11626",
+      "source": "server/routes.ts:11655",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14187,7 +14216,7 @@
       "id": "POST /api/qualifications",
       "method": "POST",
       "path": "/api/qualifications",
-      "source": "server/routes.ts:11483",
+      "source": "server/routes.ts:11512",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14216,7 +14245,7 @@
       "id": "POST /api/receipts",
       "method": "POST",
       "path": "/api/receipts",
-      "source": "server/routes.ts:11848",
+      "source": "server/routes.ts:11877",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14245,7 +14274,7 @@
       "id": "POST /api/receipts/ai-scan",
       "method": "POST",
       "path": "/api/receipts/ai-scan",
-      "source": "server/routes.ts:11947",
+      "source": "server/routes.ts:11976",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14274,7 +14303,7 @@
       "id": "POST /api/receipts/upload",
       "method": "POST",
       "path": "/api/receipts/upload",
-      "source": "server/routes.ts:11879",
+      "source": "server/routes.ts:11908",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14293,7 +14322,7 @@
       "id": "POST /api/recurring-billing",
       "method": "POST",
       "path": "/api/recurring-billing",
-      "source": "server/routes.ts:30331",
+      "source": "server/routes.ts:30360",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14322,7 +14351,7 @@
       "id": "POST /api/recurring-expenses",
       "method": "POST",
       "path": "/api/recurring-expenses",
-      "source": "server/routes.ts:14016",
+      "source": "server/routes.ts:14045",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14360,7 +14389,7 @@
       "id": "POST /api/recurring-schedules",
       "method": "POST",
       "path": "/api/recurring-schedules",
-      "source": "server/routes.ts:21920",
+      "source": "server/routes.ts:21949",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14398,7 +14427,7 @@
       "id": "POST /api/regular-time-policies",
       "method": "POST",
       "path": "/api/regular-time-policies",
-      "source": "server/routes.ts:23441",
+      "source": "server/routes.ts:23470",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14427,7 +14456,7 @@
       "id": "POST /api/regular-time-policies/quick-setup",
       "method": "POST",
       "path": "/api/regular-time-policies/quick-setup",
-      "source": "server/routes.ts:23476",
+      "source": "server/routes.ts:23505",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14465,7 +14494,7 @@
       "id": "POST /api/remittance-agencies",
       "method": "POST",
       "path": "/api/remittance-agencies",
-      "source": "server/routes.ts:22117",
+      "source": "server/routes.ts:22146",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14494,7 +14523,7 @@
       "id": "POST /api/remittance-agencies/quick-setup",
       "method": "POST",
       "path": "/api/remittance-agencies/quick-setup",
-      "source": "server/routes.ts:22214",
+      "source": "server/routes.ts:22243",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14541,7 +14570,7 @@
       "id": "POST /api/remittance-agency-events",
       "method": "POST",
       "path": "/api/remittance-agency-events",
-      "source": "server/routes.ts:22160",
+      "source": "server/routes.ts:22189",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14570,7 +14599,7 @@
       "id": "POST /api/remittance-sources/quick-setup",
       "method": "POST",
       "path": "/api/remittance-sources/quick-setup",
-      "source": "server/routes.ts:22191",
+      "source": "server/routes.ts:22220",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14608,7 +14637,7 @@
       "id": "POST /api/reviews",
       "method": "POST",
       "path": "/api/reviews",
-      "source": "server/routes.ts:11536",
+      "source": "server/routes.ts:11565",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14637,7 +14666,7 @@
       "id": "POST /api/role-permissions",
       "method": "POST",
       "path": "/api/role-permissions",
-      "source": "server/routes.ts:24420",
+      "source": "server/routes.ts:24449",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14675,7 +14704,7 @@
       "id": "POST /api/role-permissions/bulk",
       "method": "POST",
       "path": "/api/role-permissions/bulk",
-      "source": "server/routes.ts:24457",
+      "source": "server/routes.ts:24486",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14722,7 +14751,7 @@
       "id": "POST /api/roles",
       "method": "POST",
       "path": "/api/roles",
-      "source": "server/routes.ts:24280",
+      "source": "server/routes.ts:24309",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14760,7 +14789,7 @@
       "id": "POST /api/rounding-policies",
       "method": "POST",
       "path": "/api/rounding-policies",
-      "source": "server/routes.ts:24043",
+      "source": "server/routes.ts:24072",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14789,7 +14818,7 @@
       "id": "POST /api/rounding-policies/quick-setup",
       "method": "POST",
       "path": "/api/rounding-policies/quick-setup",
-      "source": "server/routes.ts:24233",
+      "source": "server/routes.ts:24262",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14827,7 +14856,7 @@
       "id": "POST /api/saved-reports",
       "method": "POST",
       "path": "/api/saved-reports",
-      "source": "server/routes.ts:22347",
+      "source": "server/routes.ts:22376",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14865,7 +14894,7 @@
       "id": "POST /api/schedule-policies",
       "method": "POST",
       "path": "/api/schedule-policies",
-      "source": "server/routes.ts:23773",
+      "source": "server/routes.ts:23802",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14894,7 +14923,7 @@
       "id": "POST /api/schedule-policies/quick-setup",
       "method": "POST",
       "path": "/api/schedule-policies/quick-setup",
-      "source": "server/routes.ts:24132",
+      "source": "server/routes.ts:24161",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -14932,7 +14961,7 @@
       "id": "POST /api/schedule-preferences",
       "method": "POST",
       "path": "/api/schedule-preferences",
-      "source": "server/routes.ts:27758",
+      "source": "server/routes.ts:27787",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -14961,7 +14990,7 @@
       "id": "POST /api/schedules",
       "method": "POST",
       "path": "/api/schedules",
-      "source": "server/routes.ts:9105",
+      "source": "server/routes.ts:9134",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15008,7 +15037,7 @@
       "id": "POST /api/schedules/copy-week",
       "method": "POST",
       "path": "/api/schedules/copy-week",
-      "source": "server/routes.ts:9281",
+      "source": "server/routes.ts:9310",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15064,7 +15093,7 @@
       "id": "POST /api/schedules/generate",
       "method": "POST",
       "path": "/api/schedules/generate",
-      "source": "server/routes.ts:9193",
+      "source": "server/routes.ts:9222",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15120,7 +15149,7 @@
       "id": "POST /api/schedules/publish",
       "method": "POST",
       "path": "/api/schedules/publish",
-      "source": "server/routes.ts:9306",
+      "source": "server/routes.ts:9335",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15230,7 +15259,7 @@
       "id": "POST /api/secondary-wage-groups",
       "method": "POST",
       "path": "/api/secondary-wage-groups",
-      "source": "server/routes.ts:21743",
+      "source": "server/routes.ts:21772",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15259,7 +15288,7 @@
       "id": "POST /api/shift-offers",
       "method": "POST",
       "path": "/api/shift-offers",
-      "source": "server/routes.ts:21476",
+      "source": "server/routes.ts:21505",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15324,7 +15353,7 @@
       "id": "POST /api/signing-documents/:id/resend",
       "method": "POST",
       "path": "/api/signing-documents/:id/resend",
-      "source": "server/routes.ts:30553",
+      "source": "server/routes.ts:30582",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15380,7 +15409,7 @@
       "id": "POST /api/signing-documents/:id/void",
       "method": "POST",
       "path": "/api/signing-documents/:id/void",
-      "source": "server/routes.ts:30568",
+      "source": "server/routes.ts:30597",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15445,7 +15474,7 @@
       "id": "POST /api/stations",
       "method": "POST",
       "path": "/api/stations",
-      "source": "server/routes.ts:11795",
+      "source": "server/routes.ts:11824",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15474,7 +15503,7 @@
       "id": "POST /api/system-documents",
       "method": "POST",
       "path": "/api/system-documents",
-      "source": "server/routes.ts:35487",
+      "source": "server/routes.ts:35516",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15503,7 +15532,7 @@
       "id": "POST /api/tax-wizard/calculate",
       "method": "POST",
       "path": "/api/tax-wizard/calculate",
-      "source": "server/routes.ts:24699",
+      "source": "server/routes.ts:24728",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15577,7 +15606,7 @@
       "id": "POST /api/taxes-deductions",
       "method": "POST",
       "path": "/api/taxes-deductions",
-      "source": "server/routes.ts:11140",
+      "source": "server/routes.ts:11169",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15606,7 +15635,7 @@
       "id": "POST /api/taxes-deductions/quick-setup",
       "method": "POST",
       "path": "/api/taxes-deductions/quick-setup",
-      "source": "server/routes.ts:11177",
+      "source": "server/routes.ts:11206",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15644,7 +15673,7 @@
       "id": "POST /api/tenants",
       "method": "POST",
       "path": "/api/tenants",
-      "source": "server/routes.ts:36382",
+      "source": "server/routes.ts:36411",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15663,7 +15692,7 @@
       "id": "POST /api/tenants/:id/companies",
       "method": "POST",
       "path": "/api/tenants/:id/companies",
-      "source": "server/routes.ts:36652",
+      "source": "server/routes.ts:36681",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15682,7 +15711,7 @@
       "id": "POST /api/time-entries/convert-from-punches",
       "method": "POST",
       "path": "/api/time-entries/convert-from-punches",
-      "source": "server/routes.ts:8671",
+      "source": "server/routes.ts:8700",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -15711,7 +15740,7 @@
       "id": "POST /api/time-off-requests",
       "method": "POST",
       "path": "/api/time-off-requests",
-      "source": "server/routes.ts:27614",
+      "source": "server/routes.ts:27643",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15740,7 +15769,7 @@
       "id": "POST /api/time-punches",
       "method": "POST",
       "path": "/api/time-punches",
-      "source": "server/routes.ts:8147",
+      "source": "server/routes.ts:8176",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15859,7 +15888,7 @@
       "id": "POST /api/trade-transactions",
       "method": "POST",
       "path": "/api/trade-transactions",
-      "source": "server/routes.ts:35542",
+      "source": "server/routes.ts:35571",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15897,7 +15926,7 @@
       "id": "POST /api/trade-transactions/:id/approve",
       "method": "POST",
       "path": "/api/trade-transactions/:id/approve",
-      "source": "server/routes.ts:35601",
+      "source": "server/routes.ts:35630",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15916,7 +15945,7 @@
       "id": "POST /api/trade-transactions/:id/attachments",
       "method": "POST",
       "path": "/api/trade-transactions/:id/attachments",
-      "source": "server/routes.ts:35632",
+      "source": "server/routes.ts:35661",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15963,7 +15992,7 @@
       "id": "POST /api/trade-transactions/:id/cancel",
       "method": "POST",
       "path": "/api/trade-transactions/:id/cancel",
-      "source": "server/routes.ts:35604",
+      "source": "server/routes.ts:35633",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -15982,7 +16011,7 @@
       "id": "POST /api/trade-transactions/:id/complete",
       "method": "POST",
       "path": "/api/trade-transactions/:id/complete",
-      "source": "server/routes.ts:35603",
+      "source": "server/routes.ts:35632",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16001,7 +16030,7 @@
       "id": "POST /api/trade-transactions/:id/items",
       "method": "POST",
       "path": "/api/trade-transactions/:id/items",
-      "source": "server/routes.ts:35612",
+      "source": "server/routes.ts:35641",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16030,7 +16059,7 @@
       "id": "POST /api/trade-transactions/:id/reject",
       "method": "POST",
       "path": "/api/trade-transactions/:id/reject",
-      "source": "server/routes.ts:35602",
+      "source": "server/routes.ts:35631",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16049,7 +16078,7 @@
       "id": "POST /api/trade-transactions/:id/submit",
       "method": "POST",
       "path": "/api/trade-transactions/:id/submit",
-      "source": "server/routes.ts:35600",
+      "source": "server/routes.ts:35629",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16068,7 +16097,7 @@
       "id": "POST /api/treasury/setup",
       "method": "POST",
       "path": "/api/treasury/setup",
-      "source": "server/routes.ts:7389",
+      "source": "server/routes.ts:7418",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16106,7 +16135,7 @@
       "id": "POST /api/treasury/sync",
       "method": "POST",
       "path": "/api/treasury/sync",
-      "source": "server/routes.ts:7446",
+      "source": "server/routes.ts:7475",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16153,7 +16182,7 @@
       "id": "POST /api/upload",
       "method": "POST",
       "path": "/api/upload",
-      "source": "server/routes.ts:24681",
+      "source": "server/routes.ts:24710",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16172,7 +16201,7 @@
       "id": "POST /api/user-roles",
       "method": "POST",
       "path": "/api/user-roles",
-      "source": "server/routes.ts:24488",
+      "source": "server/routes.ts:24517",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16210,7 +16239,7 @@
       "id": "POST /api/vendor-documents/:id/review",
       "method": "POST",
       "path": "/api/vendor-documents/:id/review",
-      "source": "server/routes.ts:4117",
+      "source": "server/routes.ts:4146",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16229,7 +16258,7 @@
       "id": "POST /api/vendor-invoices/:id/review",
       "method": "POST",
       "path": "/api/vendor-invoices/:id/review",
-      "source": "server/routes.ts:4096",
+      "source": "server/routes.ts:4125",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16248,7 +16277,7 @@
       "id": "POST /api/vendor-portal/documents",
       "method": "POST",
       "path": "/api/vendor-portal/documents",
-      "source": "server/routes.ts:4209",
+      "source": "server/routes.ts:4238",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16267,7 +16296,7 @@
       "id": "POST /api/vendor-portal/invoices",
       "method": "POST",
       "path": "/api/vendor-portal/invoices",
-      "source": "server/routes.ts:4179",
+      "source": "server/routes.ts:4208",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16286,7 +16315,7 @@
       "id": "POST /api/vendors",
       "method": "POST",
       "path": "/api/vendors",
-      "source": "server/routes.ts:4008",
+      "source": "server/routes.ts:4037",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16305,7 +16334,7 @@
       "id": "POST /api/vendors/:id/invite",
       "method": "POST",
       "path": "/api/vendors/:id/invite",
-      "source": "server/routes.ts:4064",
+      "source": "server/routes.ts:4093",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16324,7 +16353,7 @@
       "id": "POST /api/vendors/:id/status",
       "method": "POST",
       "path": "/api/vendors/:id/status",
-      "source": "server/routes.ts:4045",
+      "source": "server/routes.ts:4074",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16343,7 +16372,7 @@
       "id": "POST /api/wage-history",
       "method": "POST",
       "path": "/api/wage-history",
-      "source": "server/routes.ts:23066",
+      "source": "server/routes.ts:23095",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -16390,7 +16419,7 @@
       "id": "POST /api/worker-agreements",
       "method": "POST",
       "path": "/api/worker-agreements",
-      "source": "server/routes.ts:36865",
+      "source": "server/routes.ts:36894",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16419,7 +16448,7 @@
       "id": "POST /api/worker-languages",
       "method": "POST",
       "path": "/api/worker-languages",
-      "source": "server/routes.ts:11670",
+      "source": "server/routes.ts:11699",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16448,7 +16477,7 @@
       "id": "POST /api/worker-onboarding",
       "method": "POST",
       "path": "/api/worker-onboarding",
-      "source": "server/routes.ts:36936",
+      "source": "server/routes.ts:36965",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16495,7 +16524,7 @@
       "id": "POST /api/workers",
       "method": "POST",
       "path": "/api/workers",
-      "source": "server/routes.ts:3326",
+      "source": "server/routes.ts:3327",
       "targetReasons": [
         "client-supplied-companyId"
       ],
@@ -16524,7 +16553,7 @@
       "id": "POST /api/workers/:id/account/:action",
       "method": "POST",
       "path": "/api/workers/:id/account/:action",
-      "source": "server/routes.ts:3513",
+      "source": "server/routes.ts:3514",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16543,7 +16572,7 @@
       "id": "POST /api/workers/:id/resend-invite",
       "method": "POST",
       "path": "/api/workers/:id/resend-invite",
-      "source": "server/routes.ts:3486",
+      "source": "server/routes.ts:3487",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16562,7 +16591,7 @@
       "id": "PUT /api/admin/notification-templates/:eventType",
       "method": "PUT",
       "path": "/api/admin/notification-templates/:eventType",
-      "source": "server/routes.ts:34337",
+      "source": "server/routes.ts:34366",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16581,7 +16610,7 @@
       "id": "PUT /api/contractor-onboarding/esign-templates/:kind",
       "method": "PUT",
       "path": "/api/contractor-onboarding/esign-templates/:kind",
-      "source": "server/routes.ts:3741",
+      "source": "server/routes.ts:3742",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16610,7 +16639,7 @@
       "id": "PUT /api/my-onboarding/emergency-contact",
       "method": "PUT",
       "path": "/api/my-onboarding/emergency-contact",
-      "source": "server/routes.ts:3869",
+      "source": "server/routes.ts:3898",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16629,7 +16658,7 @@
       "id": "PUT /api/notification-preferences",
       "method": "PUT",
       "path": "/api/notification-preferences",
-      "source": "server/routes.ts:34078",
+      "source": "server/routes.ts:34107",
       "targetReasons": [
         "low-confidence-global-self-service"
       ],
@@ -16667,7 +16696,7 @@
       "id": "PUT /api/platform/companies/:companyId/license",
       "method": "PUT",
       "path": "/api/platform/companies/:companyId/license",
-      "source": "server/routes.ts:36240",
+      "source": "server/routes.ts:36269",
       "targetReasons": [
         "client-supplied-companyId"
       ],

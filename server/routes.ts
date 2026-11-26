@@ -123,6 +123,7 @@ import {
 } from "./private-documents/service";
 import { PRIVATE_DOC_MAX_BYTES } from "./private-documents/store";
 import { normalizeEmergencyContact, getEmergencyContact, saveEmergencyContact } from "./contractor-onboarding/emergency-contact";
+import { handleOnboardingWebhook, completeOnboardingSignature, liveRequestForStep } from "./contractor-onboarding/esign-complete";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -2751,7 +2752,7 @@ function hashSigningToken(token: string): string {
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/session-policy" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/auth/forgot-password" || req.path === "/auth/reset-password" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
-      || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
+      || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path === "/webhooks/documenso/onboarding" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
       || req.path === "/analytics/event"
@@ -3780,6 +3781,34 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/contractor-onboarding/:id/esign/:kind failed:", (e as Error)?.message);
       res.status(500).json({ message: "Could not send the document. Please try again." });
+    }
+  });
+
+  // PR 6 — verified completion. The webhook is only a trigger (secret, fresh,
+  // not seen before); completion always re-reads the document from Documenso.
+  app.post("/api/webhooks/documenso/onboarding", async (req, res) => {
+    try {
+      const raw = Buffer.isBuffer((req as any).rawBody) ? (req as any).rawBody : Buffer.from(typeof (req as any).rawBody === "string" ? (req as any).rawBody : "");
+      const r = await handleOnboardingWebhook({ headers: req.headers as any, rawBody: raw });
+      res.status(r.status).json(r.body);
+    } catch (e) {
+      console.error("POST /api/webhooks/documenso/onboarding failed:", (e as Error)?.message);
+      res.status(500).json({ error: "processing failed" });
+    }
+  });
+
+  app.post("/api/contractor-onboarding/:id/esign/:kind/refresh", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const kind = String(req.params.kind);
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      const requestId = companyId && isEsignKind(kind) ? await liveRequestForStep(companyId, String(req.params.id), kind) : null;
+      if (!requestId) return res.status(404).json({ message: "No document is waiting for a signature." });
+      const r = await completeOnboardingSignature({ requestId });
+      res.json(r);
+    } catch (e) {
+      console.error("POST /api/contractor-onboarding/:id/esign/:kind/refresh failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not check the document status." });
     }
   });
 
