@@ -12,6 +12,7 @@
  */
 import { sql } from "drizzle-orm";
 import { db } from "../db";
+import { allocateEmployeeNumber, EmployeeNumberExhaustedError, isEmployeeNumberConflict, EMPLOYEE_NUMBER_CONFLICT_MESSAGE } from "../employee-numbers";
 import {
   createOrRefreshInvite,
   findLinkableUserByEmail,
@@ -285,16 +286,14 @@ export async function approveAccessRequest(
       LIMIT 1
     `));
     if (!worker?.id) {
-      // Employee number: contractor-scoped, reduce not spread (matches POST /api/workers).
-      const nums = (await db.execute(sql`SELECT employee_number FROM workers WHERE company_id = ${companyId}`)).rows || [];
-      const highest = nums.reduce((m: number, w: any) => {
-        const n = parseInt(w.employee_number || "0", 10);
-        return !isNaN(n) && n > m ? n : m;
-      }, 0);
+      // Same per-company YYNN allocator as POST /api/workers. The counter
+      // update commits in its own transaction; the insert below stays in
+      // this approve flow.
+      const employeeNumber = await db.transaction(async (tx) => allocateEmployeeNumber(tx as any, companyId));
       worker = firstRow<{ id: string }>(await db.execute(sql`
         INSERT INTO workers (company_id, first_name, last_name, email, phone, worker_type, contractor_type, worker_group, employee_number, pay_rate, status, is_active)
         VALUES (${companyId}, ${row.first_name}, ${row.last_name}, ${email}, ${row.phone ?? null},
-                'contractor', 'invoice', 'invoiced_contractor', ${String(highest > 0 ? highest + 1 : 1001)}, '0', 'active', TRUE)
+                'contractor', 'invoice', 'invoiced_contractor', ${employeeNumber}, '0', 'active', TRUE)
         RETURNING id
       `));
     }
@@ -347,6 +346,8 @@ export async function approveAccessRequest(
     return { ok: true, outcome, workerId, email, reviewNote, invite: inviteResult };
   } catch (e) {
     await db.execute(sql`ROLLBACK`).catch(() => {});
+    if (e instanceof EmployeeNumberExhaustedError) return { ok: false, status: 409, message: e.message };
+    if (isEmployeeNumberConflict(e)) return { ok: false, status: 409, message: EMPLOYEE_NUMBER_CONFLICT_MESSAGE };
     throw e;
   }
 }
