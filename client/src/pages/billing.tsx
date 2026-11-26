@@ -1,12 +1,14 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useTrial } from "@/hooks/use-trial";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
-  Mail, Zap, Users, Calendar, CheckCircle,
+  Zap, Users, Calendar, CheckCircle,
   AlertTriangle, Clock, Shield, TrendingUp, Loader2,
 } from "lucide-react";
 
@@ -32,19 +34,12 @@ function StatusBadge({ status }: { status: string }) {
 // instead of flipping their own subscription status.
 export default function BillingPage() {
   const { trialStatus, isTrial, isTrialExpired, daysRemaining, subscriptionStatus } = useTrial();
+  const search = useSearch();
 
   const { data: billingData, isLoading: billingLoading } = useQuery<any>({
     queryKey: ["/api/billing/summary"],
     staleTime: 30000,
   });
-
-  function trackContactClick() {
-    fetch("/api/analytics/event", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ eventName: "billing_setup_started", pageSource: "billing" }),
-    }).catch(() => {});
-  }
 
   useEffect(() => {
     fetch("/api/analytics/event", {
@@ -53,6 +48,26 @@ export default function BillingPage() {
       body: JSON.stringify({ eventName: "billing_page_view", pageSource: "billing" }),
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const subscriptionId = params.get("subscription_id");
+    if (params.get("paypal") !== "return" || !subscriptionId) return;
+    apiRequest("POST", "/api/billing/paypal/confirm", { subscriptionId })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["/api/billing/summary"] }))
+      .catch(() => {});
+  }, [search]);
+
+  async function startPaypal() {
+    const res = await apiRequest("POST", "/api/billing/paypal/subscribe");
+    const body = await res.json();
+    if (body.approveUrl) window.location.href = body.approveUrl;
+  }
+
+  async function cancelPaypal() {
+    await apiRequest("POST", "/api/billing/paypal/cancel");
+    await queryClient.invalidateQueries({ queryKey: ["/api/billing/summary"] });
+  }
 
   const billableCount = billingData?.billableEmployeeCount || 0;
   const basePrice = 29;
@@ -80,15 +95,12 @@ export default function BillingPage() {
                 </p>
               </div>
               <Button
-                asChild
                 size="lg"
                 className="bg-gradient-to-r from-teal-600 to-blue-600 hover:opacity-90 shrink-0"
-                onClick={trackContactClick}
+                onClick={startPaypal}
+                data-testid="button-activate-expired"
               >
-                <a href="mailto:support@mypaylink.app?subject=Activate%20my%20PayLink%20subscription" data-testid="button-activate-expired">
-                  <Mail className="h-4 w-4 mr-2" />
-                  Contact Us to Activate
-                </a>
+                Subscribe with PayPal
               </Button>
             </div>
           </CardContent>
@@ -139,6 +151,20 @@ export default function BillingPage() {
               <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
                 <CheckCircle className="h-4 w-4" />
                 <span data-testid="text-subscription-active">Subscription is active</span>
+              </div>
+            )}
+            {billingData?.paypal?.subscriptionId && (
+              <div className="space-y-2 text-sm" data-testid="card-paypal-subscription">
+                <p data-testid="text-next-bill">
+                  Next bill: {billingData.paypal.nextBillingAt
+                    ? new Date(billingData.paypal.nextBillingAt).toLocaleDateString()
+                    : "shown after PayPal confirms the subscription"}
+                  {" "}· ${billingData.paypal.monthlyTotal}/mo
+                  {billingData.paypal.sandbox ? " (PayPal sandbox)" : ""}
+                </p>
+                <Button type="button" variant="outline" onClick={cancelPaypal} data-testid="button-cancel-paypal">
+                  Cancel PayPal subscription
+                </Button>
               </div>
             )}
           </CardContent>
@@ -244,15 +270,12 @@ export default function BillingPage() {
                 : "Subscribe now to ensure uninterrupted access when your trial ends. Your data is safe either way."}
             </p>
             <Button
-              asChild
               size="lg"
               className="bg-gradient-to-r from-teal-600 to-blue-600 hover:opacity-90"
-              onClick={trackContactClick}
+              onClick={startPaypal}
+              data-testid="button-activate-subscription"
             >
-              <a href="mailto:support@mypaylink.app?subject=Activate%20my%20PayLink%20subscription" data-testid="button-activate-subscription">
-                <Mail className="h-4 w-4 mr-2" />
-                {"Contact Us to Activate — $" + projectedMonthly + "/mo"}
-              </a>
+              {"Subscribe with PayPal — $" + projectedMonthly + "/mo"}
             </Button>
             <p className="text-xs text-muted-foreground">
               Cancel anytime. No long-term commitment required.

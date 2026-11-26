@@ -65,6 +65,11 @@ export const companies = pgTable("companies", {
   clockInGraceMinutes: integer("clock_in_grace_minutes").default(10),
   notifyMgrOnViolations: boolean("notify_mgr_on_violations").default(true),
   stripeFinancialAccountId: text("stripe_financial_account_id"),
+  /** PayPal tenant subscription (migration 0041). Nullable. Stripe invoice columns are unchanged. */
+  paypalSubscriptionId: text("paypal_subscription_id"),
+  paypalPlanId: text("paypal_plan_id"),
+  paypalQuantity: integer("paypal_quantity"),
+  paypalNextBillingAt: timestamp("paypal_next_billing_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

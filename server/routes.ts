@@ -8,6 +8,10 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone, sendGenericNotificationEmail } from "./notifications";
 import { createEmailVerification, getLiveVerificationByToken, consumeEmailVerification } from "./email-verification";
+import { readPaypalConfig, paypalRequest } from "./paypal-client";
+import { ensurePaypalCatalog } from "./paypal-catalog";
+import { processPaypalWebhook } from "./paypal-webhooks";
+import { mapPaypalEvent, monthlyTotalCents, paypalQuantity, PAYPAL_BASE_CENTS, PAYPAL_SEAT_CENTS } from "./paypal-pricing";
 import {
   FORGOT_PASSWORD_MESSAGE,
   chooseResetUser,
@@ -42,7 +46,7 @@ import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, a
 import { applyTenantPatch } from "./tenant-status-admin";
 import { applyGateOverride } from "./tenant-gate-override";
 import { applyBillingActivation } from "./tenant-billing-activation";
-import { suspendExpiredGracePeriod } from "./billingLifecycle";
+import { applyExternalBillingSignal, suspendExpiredGracePeriod } from "./billingLifecycle";
 import {
   resolveCompanyLicense,
   listCompanyLicenses,
@@ -2154,7 +2158,7 @@ export async function registerRoutes(
   // mount-relative — so entries must NOT carry the `/api` prefix (`/webhooks/documenso`,
   // not `/api/webhooks/documenso`). The stray `/api/...` form here previously meant the
   // Documenso webhook was silently rejected with 401 before its handler ran.
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/webhooks/documenso", "/portal/", "/time-clock/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/provision", "/analytics/event", "/app-doctor/", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/webhooks/documenso", "/webhooks/paypal", "/portal/", "/time-clock/"];
   // ── Demo read-only guard — per-domain explicit coverage + global catch-all ───
   // Demo sessions (req.session.isDemo) are GET-only. Exceptions: provisioning,
   // auth, analytics, and webhook paths listed in publicWritePaths.
@@ -2736,6 +2740,7 @@ function hashSigningToken(token: string): string {
       || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
+      || req.path === "/webhooks/paypal"
       || req.path === "/analytics/event"
       || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
@@ -28967,20 +28972,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const billableEmployeeCount = parseInt(countResult.rows[0]?.count as string) || 0;
 
       const companyResult = await db.execute(sql`
-        SELECT subscription_status, plan_name, trial_start, trial_end, billing_active, payment_method_on_file
+        SELECT subscription_status, plan_name, trial_start, trial_end, billing_active, payment_method_on_file,
+               paypal_subscription_id, paypal_quantity, paypal_next_billing_at
         FROM companies WHERE id = ${user.companyId}
       `);
       const company = companyResult.rows[0] as any;
 
-      const basePrice = 29;
-      const perEmployeePrice = 4;
-      const projectedMonthly = basePrice + (billableEmployeeCount * perEmployeePrice);
+      const basePrice = PAYPAL_BASE_CENTS / 100;
+      const perEmployeePrice = PAYPAL_SEAT_CENTS / 100;
+      const projectedMonthly = monthlyTotalCents(billableEmployeeCount) / 100;
+      const paypal = company as any;
 
       res.json({
         billableEmployeeCount,
         basePrice,
         perEmployeePrice,
         projectedMonthly,
+        paypal: {
+          configured: !!readPaypalConfig(),
+          sandbox: readPaypalConfig()?.live !== true,
+          subscriptionId: paypal?.paypal_subscription_id || null,
+          quantity: paypal?.paypal_quantity || null,
+          nextBillingAt: paypal?.paypal_next_billing_at || null,
+          monthlyTotal: projectedMonthly,
+        },
         subscriptionStatus: company?.subscription_status || "active_paid",
         planName: company?.plan_name || "starter",
         billingActive: company?.billing_active || false,
@@ -28990,6 +29005,103 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch billing summary") });
     }
+  });
+
+  app.post("/api/billing/paypal/subscribe", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company is associated with this account" });
+      const config = readPaypalConfig();
+      if (!config) return res.status(503).json({ message: "PayPal is not configured. Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET. Sandbox is used unless PAYPAL_ENV=live." });
+      if (!config.planId) return res.status(503).json({ message: "PAYPAL_PLAN_ID is not set. Run scripts/paypal-setup-catalog.ts and save the printed plan id." });
+      const countResult = await db.execute(sql`SELECT COUNT(*) as count FROM workers WHERE company_id = ${user.companyId} AND status = 'active'`);
+      const employees = parseInt(countResult.rows[0]?.count as string) || 0;
+      const quantity = paypalQuantity(employees);
+      const subscription = await paypalRequest<{ id: string; links?: Array<{ rel: string; href: string }> }>("/v1/billing/subscriptions", {
+        method: "POST",
+        body: {
+          plan_id: config.planId,
+          quantity,
+          custom_id: user.companyId,
+          application_context: {
+            brand_name: "MyPayLink",
+            user_action: "SUBSCRIBE_NOW",
+            return_url: `${getAppBaseUrl(req)}/app/billing?paypal=return`,
+            cancel_url: `${getAppBaseUrl(req)}/app/billing?paypal=cancel`,
+          },
+        },
+      });
+      const approveUrl = subscription.links?.find((link) => link.rel === "approve")?.href;
+      if (!approveUrl) return res.status(502).json({ message: "PayPal did not return an approval link." });
+      await db.execute(sql`
+        UPDATE companies SET paypal_plan_id = ${config.planId}, paypal_quantity = ${Number(quantity)}
+        WHERE id = ${user.companyId}
+      `);
+      res.json({ approveUrl, quantity: Number(quantity), monthlyTotal: monthlyTotalCents(employees) / 100, subscriptionId: subscription.id });
+    } catch (e) {
+      res.status(502).json({ message: safeErrorMessage(e, "Could not start the PayPal subscription") });
+    }
+  });
+
+  app.post("/api/billing/paypal/confirm", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company is associated with this account" });
+      const subscriptionId = typeof req.body?.subscriptionId === "string" ? req.body.subscriptionId : "";
+      if (!subscriptionId) return res.status(400).json({ message: "subscriptionId is required" });
+      const subscription = await paypalRequest<{ id: string; status?: string; custom_id?: string; quantity?: string; billing_info?: { next_billing_time?: string } }>(
+        `/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}`,
+      );
+      if (subscription.custom_id !== user.companyId) return res.status(403).json({ message: "That PayPal subscription belongs to another company" });
+      const next = subscription.billing_info?.next_billing_time || null;
+      await db.execute(sql`
+        UPDATE companies
+        SET paypal_subscription_id = ${subscription.id},
+            paypal_quantity = ${Number(subscription.quantity || 0)},
+            paypal_next_billing_at = ${next},
+            payment_method_on_file = TRUE
+        WHERE id = ${user.companyId}
+      `);
+      const signal = mapPaypalEvent("BILLING.SUBSCRIPTION.UPDATED", subscription.status);
+      if (signal) await applyExternalBillingSignal(user.companyId, signal, "PayPal subscription confirmed by the subscriber.");
+      res.json({ status: subscription.status, signal });
+    } catch (e) {
+      res.status(502).json({ message: safeErrorMessage(e, "Could not confirm the PayPal subscription") });
+    }
+  });
+
+  app.post("/api/billing/paypal/cancel", requireAuth, requireRole("admin"), requireCsrfToken, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company is associated with this account" });
+      const current = await db.execute(sql`SELECT paypal_subscription_id FROM companies WHERE id = ${user.companyId}`);
+      const subscriptionId = (current.rows[0] as { paypal_subscription_id?: string } | undefined)?.paypal_subscription_id;
+      if (!subscriptionId) return res.status(409).json({ message: "This company has no PayPal subscription" });
+      await paypalRequest(`/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`, {
+        method: "POST",
+        body: { reason: "Cancelled by the company administrator in MyPayLink" },
+      });
+      await applyExternalBillingSignal(user.companyId, "cancelled", "Company administrator cancelled the PayPal subscription.");
+      res.json({ message: "PayPal subscription cancelled" });
+    } catch (e) {
+      res.status(502).json({ message: safeErrorMessage(e, "Could not cancel the PayPal subscription") });
+    }
+  });
+
+  app.post("/api/platform/paypal/catalog", requireAuth, requirePlatformRole(), requirePlatformAdminRole(), requireCsrfToken, async (req, res) => {
+    try {
+      const catalog = await ensurePaypalCatalog();
+      res.json({ ...catalog, message: "Save planId as PAYPAL_PLAN_ID. Sandbox is used unless PAYPAL_ENV=live." });
+    } catch (e) {
+      res.status(502).json({ message: safeErrorMessage(e, "Could not set up the PayPal catalog") });
+    }
+  });
+
+  app.post("/api/webhooks/paypal", async (req, res) => {
+    const headers = Object.fromEntries(Object.entries(req.headers).map(([key, value]) => [key.toLowerCase(), Array.isArray(value) ? value[0] : value]));
+    const result = await processPaypalWebhook(headers, req.body || {});
+    if (!result.ok) return res.status(result.status).json({ message: "PayPal webhook signature was not verified" });
+    res.status(200).json({ received: true, duplicate: !!result.duplicate });
   });
 
   // ══════════════════════════════════════════════════════════════════════

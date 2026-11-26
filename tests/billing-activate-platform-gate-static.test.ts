@@ -44,7 +44,10 @@ ok(
 );
 
 ok("billing.tsx no longer calls POST /api/billing/activate itself", !/apiRequest\("POST",\s*"\/api\/billing\/activate"/.test(billingPage));
-ok("billing.tsx routes the tenant to a human instead (mailto support link)", /mailto:support@mypaylink\.app/.test(billingPage));
+ok(
+  "billing.tsx subscribes through PayPal instead of the old mailto or a free self-activate",
+  /\/api\/billing\/paypal\/subscribe/.test(billingPage) && !/Contact Us to Activate/.test(billingPage)
+);
 
 ok("upgrade-modal.tsx no longer calls POST /api/billing/activate itself", !/apiRequest\("POST",\s*"\/api\/billing\/activate"/.test(upgradeModal));
 ok("upgrade-modal.tsx routes the tenant to a human instead (mailto support link)", /mailto:support@mypaylink\.app/.test(upgradeModal));
