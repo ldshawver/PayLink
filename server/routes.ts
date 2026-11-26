@@ -122,6 +122,7 @@ import {
   onboardingWorkerForCompany, canAccessWorkerPrivateDocs, privateDocsUnavailable, type PrivateDocKind,
 } from "./private-documents/service";
 import { PRIVATE_DOC_MAX_BYTES } from "./private-documents/store";
+import { normalizeEmergencyContact, getEmergencyContact, saveEmergencyContact } from "./contractor-onboarding/emergency-contact";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -3848,6 +3849,55 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/my-onboarding/government-id/:side failed:", (e as Error)?.message);
       res.status(500).json({ message: "Could not store the document. Please try again." });
+    }
+  });
+
+  // PR 5 — emergency contact. The contractor edits their own; same-company
+  // admins/managers can read it. Values never go into logs or audit rows.
+  app.get("/api/my-onboarding/emergency-contact", requireAuth, async (req, res) => {
+    try {
+      const me = await ownContractor(req);
+      if (!me) return res.status(404).json({ message: "Onboarding record not found." });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ contact: await getEmergencyContact(me.companyId, me.workerId) });
+    } catch (e) {
+      console.error("GET /api/my-onboarding/emergency-contact failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load your emergency contact" });
+    }
+  });
+
+  app.put("/api/my-onboarding/emergency-contact", requireAuth, requireCsrfToken, async (req, res) => {
+    try {
+      const me = await ownContractor(req);
+      if (!me) return res.status(404).json({ message: "Onboarding record not found." });
+      const parsed = normalizeEmergencyContact(req.body);
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const summary = await ownOnboardingSummary(me.companyId, me.workerId);
+      const result = await saveEmergencyContact({
+        companyId: me.companyId, workerId: me.workerId, onboardingId: summary?.onboardingId ?? null,
+        actorUserId: me.userId, actorType: "worker", value: parsed.value,
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ contact: parsed.value, changed: result.changed });
+    } catch (e) {
+      console.error("PUT /api/my-onboarding/emergency-contact failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not save your emergency contact." });
+    }
+  });
+
+  app.get("/api/contractor-onboarding/:id/emergency-contact", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      const target = companyId ? await onboardingWorkerForCompany(companyId, String(req.params.id)) : null;
+      if (!actingUser || !companyId || !target || !(await canAccessWorkerPrivateDocs(privateActor(actingUser), companyId, target.workerId))) {
+        return res.status(404).json({ message: "Onboarding record not found." });
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ contact: await getEmergencyContact(companyId, target.workerId) });
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/:id/emergency-contact failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load the emergency contact" });
     }
   });
 
