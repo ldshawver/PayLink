@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Mail, UserPlus } from "lucide-react";
+import { EsignTemplatesCard } from "@/components/contractor-onboarding/esign-templates-card";
+import { FileSignature, Loader2, Mail, UserPlus } from "lucide-react";
 
 type Step = { key: string; title: string; status: string; assignedToRole: string };
 type Row = {
@@ -82,6 +83,26 @@ export default function ContractorOnboardingPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding"] });
       toast({ title: "Invitation not sent", description: e.message, variant: "destructive" });
     },
+  });
+
+  const { data: esignState } = useQuery<Record<string, Partial<Record<"contractor_agreement" | "w9", string>>>>({
+    queryKey: ["/api/contractor-onboarding/esign-state"],
+  });
+  const esign = useMutation({
+    mutationFn: async ({ onboardingId, kind }: { onboardingId: string; kind: "contractor_agreement" | "w9" }) => {
+      const res = await fetch(`/api/contractor-onboarding/${encodeURIComponent(onboardingId)}/esign/${kind}`, {
+        method: "POST", credentials: "include", headers: { "x-csrf-token": getCsrfToken() ?? "" },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.message || "Could not send the document.");
+      return body as { outcome: "sent" | "already_sent" | "in_progress" };
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding/esign-state"] });
+      toast({ title: r.outcome === "sent" ? "Sent for signature" : "Already sent", description: r.outcome === "sent" ? "Documenso emailed the contractor a signing link." : "No second document was created." });
+    },
+    onError: (e: Error) => toast({ title: "Document not sent", description: e.message, variant: "destructive" }),
   });
 
   const submit = (e: React.FormEvent) => {
@@ -169,6 +190,23 @@ export default function ContractorOnboardingPage() {
                                 <Mail className="h-4 w-4 mr-1.5" />{r.status === "invited" ? "Resend" : "Send invitation"}
                               </Button>
                             )}
+                            {r.steps.some((s) => s.key === "account_setup" && s.status === "completed") && (
+                              <div className="flex flex-col gap-1.5">
+                                {([["contractor_agreement", "Agreement"], ["w9", "W-9"]] as const).map(([kind, label]) => {
+                                  const st = esignState?.[r.onboardingId]?.[kind];
+                                  const stepDone = r.steps.some((s) => s.key === kind && s.status === "completed");
+                                  if (stepDone) return <span key={kind} className="text-xs text-muted-foreground">{label}: signed</span>;
+                                  if (st) return <span key={kind} className="text-xs text-muted-foreground" data-testid={`text-esign-${kind}-${r.onboardingId}`}>{label}: {st === "creating" ? "sending…" : "sent"}</span>;
+                                  return (
+                                    <Button key={kind} size="sm" variant="outline" disabled={esign.isPending}
+                                      data-testid={`button-esign-${kind}-${r.onboardingId}`}
+                                      onClick={() => esign.mutate({ onboardingId: r.onboardingId, kind })}>
+                                      <FileSignature className="h-4 w-4 mr-1.5" />Send {label}
+                                    </Button>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </TableCell>
                         )}
                       </TableRow>
@@ -180,6 +218,8 @@ export default function ContractorOnboardingPage() {
           )}
         </CardContent>
       </Card>
+
+      {isAdmin && <EsignTemplatesCard />}
     </div>
   );
 }

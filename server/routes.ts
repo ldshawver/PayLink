@@ -113,6 +113,10 @@ import {
   createContractorForOnboarding, listContractorOnboarding, normalizeCreateInput as normalizeContractorCreateInput,
 } from "./contractor-onboarding/create";
 import { sendSetupInvite, completeAccountSetupStep as completeContractorAccountSetupStep } from "./contractor-onboarding/invite";
+import {
+  isEsignKind, listTemplateMappings, normalizeMappingInput, setTemplateMapping, startOnboardingSignature,
+  getOwnSigningLink, esignServerStatus, listEsignState, findOwnContractorOnboardingId,
+} from "./contractor-onboarding/esign";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -3709,6 +3713,104 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("GET /api/contractor-onboarding failed:", (e as Error)?.message);
       res.status(500).json({ message: "Failed to load contractor onboarding" });
+    }
+  });
+
+  // PR 3 — agreement + W-9 through per-company Documenso TEMPLATES. Real sending
+  // is OFF unless CONTRACTOR_ONBOARDING_ESIGN_ENABLED=true AND the company has an
+  // enabled (= administrator-approved) template for that document. Every refusal
+  // carries an administrator-readable message; nothing is half-sent.
+  app.get("/api/contractor-onboarding/esign-templates", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!companyId) return res.status(403).json({ message: "Sign in with a company administrator account." });
+      res.json({ server: await esignServerStatus(), templates: await listTemplateMappings(companyId) });
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/esign-templates failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load e-signature settings" });
+    }
+  });
+
+  app.put("/api/contractor-onboarding/esign-templates/:kind", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const kind = String(req.params.kind);
+      if (!isEsignKind(kind)) return res.status(404).json({ message: "Unknown document type." });
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!actingUser || !companyId) return res.status(403).json({ message: "Sign in with a company administrator account." });
+      const parsed = normalizeMappingInput(req.body);
+      if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+      const result = await setTemplateMapping({ companyId, actorUserId: actingUser.id, kind, input: parsed.value });
+      if (!result.ok) return res.status(result.status).json({ code: result.code, message: result.message });
+      res.json(result.mapping);
+    } catch (e) {
+      console.error("PUT /api/contractor-onboarding/esign-templates/:kind failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not save the template setting." });
+    }
+  });
+
+  app.get("/api/contractor-onboarding/esign-state", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      res.json(companyId ? await listEsignState(companyId) : {});
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/esign-state failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load signature status" });
+    }
+  });
+
+  app.post("/api/contractor-onboarding/:id/esign/:kind", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const kind = String(req.params.kind);
+      if (!isEsignKind(kind)) return res.status(404).json({ message: "Onboarding record not found." });
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!actingUser || !companyId) return res.status(404).json({ message: "Onboarding record not found." });
+      const result = await startOnboardingSignature({ companyId, onboardingId: String(req.params.id), kind, actor: { type: "admin", userId: actingUser.id } });
+      if (!result.ok) return res.status(result.status).json({ code: result.code, message: result.message });
+      res.status(result.outcome === "sent" ? 200 : 202).json(result);
+    } catch (e) {
+      console.error("POST /api/contractor-onboarding/:id/esign/:kind failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not send the document. Please try again." });
+    }
+  });
+
+  // The contractor's own documents: start (same idempotent path) and fetch the
+  // live signing link. Company and worker come from the session, never the request.
+  const ownContractor = async (req: any) => {
+    const u = await storage.getUser(req.session.userId!);
+    if (!u || u.role !== "contractor" || !u.workerId || !u.companyId) return null;
+    return { userId: u.id, workerId: u.workerId as string, companyId: u.companyId as string };
+  };
+  app.post("/api/my-onboarding/esign/:kind", requireAuth, requireCsrfToken, async (req, res) => {
+    try {
+      const kind = String(req.params.kind);
+      const me = await ownContractor(req);
+      if (!me || !isEsignKind(kind)) return res.status(404).json({ message: "Onboarding record not found." });
+      const onboardingId = await findOwnContractorOnboardingId(me.companyId, me.workerId);
+      if (!onboardingId) return res.status(404).json({ message: "Onboarding record not found." });
+      const result = await startOnboardingSignature({ companyId: me.companyId, onboardingId, kind, actor: { type: "worker", userId: me.userId, workerId: me.workerId } });
+      if (!result.ok) return res.status(result.status).json({ code: result.code, message: result.message });
+      res.status(result.outcome === "sent" ? 200 : 202).json({ ok: true, outcome: result.outcome });
+    } catch (e) {
+      console.error("POST /api/my-onboarding/esign/:kind failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not start signing. Please try again." });
+    }
+  });
+  app.get("/api/my-onboarding/esign/:kind/link", requireAuth, async (req, res) => {
+    try {
+      const kind = String(req.params.kind);
+      const me = await ownContractor(req);
+      if (!me || !isEsignKind(kind)) return res.status(404).json({ message: "There is no document waiting for your signature." });
+      const result = await getOwnSigningLink({ companyId: me.companyId, workerId: me.workerId, kind });
+      if (!result.ok) return res.status(result.status).json({ code: result.code, message: result.message });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ signingUrl: result.signingUrl });
+    } catch (e) {
+      console.error("GET /api/my-onboarding/esign/:kind/link failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not load the signing link." });
     }
   });
 

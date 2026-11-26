@@ -435,3 +435,42 @@ export function logDocumensoConfig(): void {
   console.log(`  Webhook Secret: ${config.webhookSecretConfigured ? "configured" : "MISSING — webhooks rejected"}`);
   console.log(`  Base URL:       ${getBaseUrl()}`);
 }
+
+// ── Template-based documents (contractor onboarding) ─────────────────────────
+// Creates a document from a Documenso TEMPLATE configured per company (never a
+// hard-coded id) and, when `distribute` is true, lets Documenso email the
+// signer. Only the template id, the template's recipient slot and the signer's
+// name + email are sent — no field values, no tax data.
+export interface TemplateDocumentRequest {
+  templateId: string;
+  recipients: Array<{ templateRecipientId: string | null; name: string; email: string }>;
+  distribute: boolean;
+}
+export interface TemplateDocumentResult {
+  documentId: string;
+  recipients: Array<{ id: string | null; email: string; signingUrl?: string }>;
+}
+const asApiId = (v: string) => (/^\d+$/.test(v) ? Number(v) : v);
+export async function createDocumentFromDocumensoTemplate(req: TemplateDocumentRequest): Promise<TemplateDocumentResult> {
+  if (!req.recipients.length) throw new Error("At least one Documenso recipient is required");
+  const doc = await apiJson<any>("POST", "/template/use", {
+    templateId: asApiId(req.templateId),
+    recipients: req.recipients.map((r) => ({
+      ...(r.templateRecipientId ? { id: asApiId(r.templateRecipientId) } : {}),
+      email: r.email,
+      name: r.name,
+    })),
+    distributeDocument: req.distribute,
+  });
+  const documentId = String(doc?.id ?? doc?.envelopeId ?? doc?.documentId ?? "");
+  if (!documentId) throw new DocumensoApiError("POST", "/template/use", 502, "no document id in response", null);
+  const publicBase = getDocumensoBaseUrlInfo().publicBaseUrl;
+  return {
+    documentId,
+    recipients: (doc?.recipients || []).map((r: any) => ({
+      id: r?.id != null ? String(r.id) : null,
+      email: String(r?.email || ""),
+      signingUrl: r?.signingUrl ?? (r?.token ? `${publicBase}/sign/${r.token}` : undefined),
+    })),
+  };
+}
