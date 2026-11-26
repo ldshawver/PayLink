@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EsignTemplatesCard } from "@/components/contractor-onboarding/esign-templates-card";
+import { PrivateDocsButton } from "@/components/contractor-onboarding/private-docs-dialog";
 import { FileSignature, Loader2, Mail, UserPlus } from "lucide-react";
 
 type Step = { key: string; title: string; status: string; assignedToRole: string };
@@ -189,6 +190,9 @@ export default function ContractorOnboardingPage() {
                                 onClick={() => invite.mutate(r.onboardingId)}>
                                 <Mail className="h-4 w-4 mr-1.5" />{r.status === "invited" ? "Resend" : "Send invitation"}
                               </Button>
+                            )}
+                            {r.steps.some((s) => s.key === "government_id" && (s.status === "submitted" || s.status === "completed")) && (
+                              <div className="mb-1.5"><PrivateDocsButton onboardingId={r.onboardingId} /></div>
                             )}
                             {r.steps.some((s) => s.key === "account_setup" && s.status === "completed") && (
                               <div className="flex flex-col gap-1.5">

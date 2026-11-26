@@ -64,6 +64,7 @@ const JobBoardPublicRoute = lazy(() => import("@/pages/job-board-public"));
 const ApplicantPortalPage = lazy(() => import("@/pages/applicant-portal"));
 const ContractorAccessRequestsPage = lazy(() => import("@/pages/contractor-access-requests"));
 const ContractorOnboardingPage = lazy(() => import("@/pages/contractor-onboarding"));
+const MyOnboardingPage = lazy(() => import("@/pages/my-onboarding"));
 const VendorManagementPage = lazy(() => import("@/pages/vendor-management"));
 const VendorPortalPage = lazy(() => import("@/pages/vendor-portal"));
 const NotificationSettingsPage = lazy(() => import("@/pages/notification-settings"));
@@ -307,6 +308,7 @@ function AuthenticatedRouter() {
         <Route path="/app/audit-log">{() => <PlatformRedirect to="/platform/audit-log" />}</Route>
         <Route path="/app/biz-docs" component={BizDocsPage} />
         <Route path="/app/contractor-hub/contracts/:id/sign">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorContractSigningPage /></FeatureGate>}</Route>
+        <Route path="/app/my-onboarding">{() => <RoleGuard roles={["contractor"]}><MyOnboardingPage /></RoleGuard>}</Route>
         <Route path="/app/contractor-hub/onboarding">{() => <RoleGuard roles={["admin", "manager"]}><ContractorOnboardingPage /></RoleGuard>}</Route>
         <Route path="/app/contractor-hub">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
         <Route path="/app/contractor-access-requests">{() => <RoleGuard roles={["admin", "manager"]}><ContractorAccessRequestsPage /></RoleGuard>}</Route>

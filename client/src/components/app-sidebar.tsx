@@ -201,6 +201,7 @@ const MAIN_NAV: NavGroup[] = [
           { title: "Profile & Branding",  url: "/app/contractor-hub?section=branding",         icon: Palette },
           { title: "Access Requests",     url: "/app/contractor-access-requests",              icon: UserCheck, roles: ["admin", "manager"] },
           { title: "Onboarding",          url: "/app/contractor-hub/onboarding",               icon: UserCheck, roles: ["admin", "manager"] },
+          { title: "My Onboarding",       url: "/app/my-onboarding",                           icon: UserCheck, roles: ["contractor"] },
           { title: "Settings",            url: "/app/contractor-hub?section=settings",         icon: Settings },
         ],
       },
