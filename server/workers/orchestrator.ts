@@ -175,16 +175,6 @@ async function jobTenantStatusMirrorReconcile(): Promise<void> {
 }
 
 /**
- * Trial expiry and grace-period suspension. Idempotent: companies already
- * past these states are left alone. Logged every run, including a zero count.
- */
-async function jobTrialGraceSweep(): Promise<void> {
-  const { runTrialAndGraceSweep } = await import("../trial-lifecycle.js");
-  const { trialsExpired, graceSuspended } = await runTrialAndGraceSweep();
-  console.log(`[Orchestrator][TrialGraceSweep] trialsExpired=${trialsExpired} graceSuspended=${graceSuspended}`);
-}
-
-/**
  * Contractor job board maintenance (migration 0029). Idempotent and row-scoped:
  * closes fixed-term recurring postings past their end date, links awarded bids
  * to the contract their proposal became, and sends one deadline reminder per
@@ -329,7 +319,6 @@ export function startWorkerOrchestrator(): void {
   scheduleJob("DocumentRetentionCleanup",    jobDocumentRetentionCleanup,    DAY_MS, 20_000);
   scheduleJob("TenantStatusMirrorReconcile", jobTenantStatusMirrorReconcile, DAY_MS, 25_000);
   scheduleJob("ContractorJobBoard",          jobContractorJobBoardMaintenance, 15 * MIN_MS, 30_000);
-  scheduleJob("TrialGraceSweep",             jobTrialGraceSweep,             HOUR_MS, 40_000);
 
   // ── Stub jobs (uncomment to activate) ─────────────────────────────────────
   // scheduleJob("PayrollReminders",     jobPayrollReminders,     DAY_MS,        30_000);
