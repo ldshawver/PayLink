@@ -29,7 +29,14 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const EMPLOYEE_INACTIVITY_MS = 5 * 60 * 1000;
+const DEFAULT_IDLE_MINUTES = 30;
+const TOUCH_INTERVAL_MS = 60 * 1000;
+
+function idleRedirect() {
+  const host = window.location.hostname;
+  const isLocal = host === "localhost" || host.includes(".repl.") || host.includes(".replit.") || host.includes(".replit.dev") || host.includes(".repl.co");
+  window.location.href = isLocal ? "/clock-in" : "https://mypaylink.app/";
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: user, isLoading } = useQuery<AuthUser | null>({
@@ -41,8 +48,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Server is authoritative (see enforceSessionControls). This timer mirrors
+  // the configured idle window for every role so the UI signs out without
+  // waiting for the next API call, and throttled touches roll the server clock
+  // while the person is actually using the page.
   useEffect(() => {
-    if (!user || user.role !== "employee") return;
+    if (!user) return;
+
+    let idleMinutes = DEFAULT_IDLE_MINUTES;
+    let cancelled = false;
+    let lastTouch = 0;
 
     function resetTimer() {
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
@@ -51,21 +66,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
         } catch (_) {}
         queryClient.clear();
-        const host = window.location.hostname;
-        const isLocal = host === "localhost" || host.includes(".repl.") || host.includes(".replit.") || host.includes(".replit.dev") || host.includes(".repl.co");
-        window.location.href = isLocal ? "/clock-in" : "https://mypaylink.app/";
-      }, EMPLOYEE_INACTIVITY_MS);
+        idleRedirect();
+      }, idleMinutes * 60 * 1000);
     }
 
+    function onActivity() {
+      resetTimer();
+      const now = Date.now();
+      if (now - lastTouch < TOUCH_INTERVAL_MS) return;
+      lastTouch = now;
+      fetch("/api/auth/session/touch", { method: "POST", credentials: "include" }).catch(() => {});
+    }
+
+    fetch("/api/auth/session-policy", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const n = Number(data?.idleMinutes);
+        if (Number.isFinite(n) && n > 0) idleMinutes = n;
+        resetTimer();
+      })
+      .catch(() => { if (!cancelled) resetTimer(); });
+
     const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "click"];
-    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
+    events.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
     resetTimer();
 
     return () => {
-      events.forEach((e) => window.removeEventListener(e, resetTimer));
+      cancelled = true;
+      events.forEach((e) => window.removeEventListener(e, onActivity));
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     };
-  }, [user?.id, user?.role]);
+  }, [user?.id]);
 
   const loginMutation = useMutation({
     mutationFn: async ({ username, password }: { username: string; password: string }) => {

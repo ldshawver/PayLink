@@ -367,6 +367,11 @@ export const users = pgTable("users", {
    * into it at creation.
    */
   emailVerificationRequired: boolean("email_verification_required").notNull().default(false),
+  /**
+   * Session hardening (migration 0037). Set to the current session id only
+   * when SINGLE_SESSION_PER_USER is enabled. NULL means no session is bound.
+   */
+  activeSessionId: text("active_session_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

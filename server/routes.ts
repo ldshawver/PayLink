@@ -16,6 +16,16 @@ import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { GRACE_SUBSCRIPTION_STATUSES, TRIAL_SUBSCRIPTION_STATUSES, isKnownSubscriptionStatus, normalizeSubscriptionStatus } from "./subscription-status";
 import { createRateLimiter, requireCsrfToken } from "./security-middleware";
+import {
+  clearSessionCookie,
+  clientIp,
+  grantAuthenticatedSession,
+  grantPendingMfaSession,
+  loginLockout,
+  passwordsMatch,
+  resolveSessionIdleMinutes,
+  singleSessionPerUserEnabled,
+} from "./session-security";
 import { withTenantContext, invalidateTenantCache, invalidateUserCompanyCache, assertUserCanAccessCompany, getTenantIdForCompany, mirrorTenantStatusFromCompany, mapSubscriptionStatusToTenantStatus } from "./tenant-context";
 import { applyTenantPatch } from "./tenant-status-admin";
 import { applyGateOverride } from "./tenant-gate-override";
@@ -2308,20 +2318,56 @@ export async function registerRoutes(
   app.use("/api/marketplace", requireAuth, marketplaceGate);
   app.use("/api/shift-offers", requireAuth, marketplaceGate);
 
+  async function bindActiveSessionIfEnabled(userId: string, sessionId: string): Promise<void> {
+    if (!singleSessionPerUserEnabled()) return;
+    await db.execute(sql`UPDATE users SET active_session_id = ${sessionId} WHERE id = ${userId}`);
+  }
+
+  function sessionBinder(): ((userId: string, sessionId: string) => Promise<void>) | undefined {
+    return singleSessionPerUserEnabled() ? bindActiveSessionIfEnabled : undefined;
+  }
+
+  function rejectIfLoginLocked(res: Response, account: string, ip: string): boolean {
+    if (!loginLockout.inspect(account, ip).locked) return false;
+    loginLockout.recordFailure(account, ip);
+    const decision = loginLockout.inspect(account, ip);
+    res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+    console.warn(`[auth] login locked scope=${decision.scope}`);
+    res.status(429).json({ message: "Too many login attempts. Please wait and try again." });
+    return true;
+  }
+
+  app.get("/api/auth/session-policy", (_req, res) => {
+    res.json({
+      idleMinutes: resolveSessionIdleMinutes(),
+      singleSessionPerUser: singleSessionPerUserEnabled(),
+    });
+  });
+
+  // Authenticated. The idle middleware has already rolled lastActivityAt or
+  // rejected an expired session before this handler runs.
+  app.post("/api/auth/session/touch", requireAuth, (req, res) => {
+    if (!req.session?.userId && !req.session?.pendingMfaUserId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    res.json({ ok: true });
+  });
+
   app.post("/api/auth/login", loginRateLimit, async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {
         return res.status(400).json({ message: "Username and password are required" });
       }
+      const ip = clientIp(req);
+      if (rejectIfLoginLocked(res, username, ip)) return;
       const user = await storage.getUserByUsername(username);
-      if (!user) {
+      const valid = await passwordsMatch(password, user?.password);
+      if (!user || !valid) {
+        loginLockout.recordFailure(username, ip);
         return res.status(401).json({ message: "Invalid username or password" });
       }
-      const valid = await bcrypt.compare(password, user.password);
-      if (!valid) {
-        return res.status(401).json({ message: "Invalid username or password" });
-      }
+      loginLockout.recordSuccess(username);
       if (user.isActive === false) {
         return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
       }
@@ -2351,33 +2397,27 @@ export async function registerRoutes(
       // limited session so the user can reach the MFA settings page to enroll.
       // The mfaEnrollmentRequired flag is returned so the UI can redirect them.
       if (mfaRow?.mfa_enforced_at && !mfaRow?.mfa_enabled) {
-        req.session.userId = user.id;
-        req.session.username = user.username;
-        req.session.mfaEnrollmentRequired = true;
-        return req.session.save((err: Error | null) => {
-          if (err) {
-            console.error("Session save error (mfa-enroll):", err);
-            return res.status(500).json({ message: "Login failed" });
-          }
-          res.json({
-            id: user.id, username: user.username, role: user.role,
-            companyId: user.companyId, workerId: user.workerId, worker: null,
-            mfaEnrollmentRequired: true,
-            message: "MFA enrollment required. You will be redirected to set up two-factor authentication.",
-          });
+        await grantAuthenticatedSession(req, {
+          userId: user.id,
+          username: user.username,
+          mfaEnrollmentRequired: true,
+        }, sessionBinder());
+        return res.json({
+          id: user.id, username: user.username, role: user.role,
+          companyId: user.companyId, workerId: user.workerId, worker: null,
+          mfaEnrollmentRequired: true,
+          message: "MFA enrollment required. You will be redirected to set up two-factor authentication.",
         });
       }
 
-      // If MFA is enrolled, do NOT create a full session yet — require a code
+      // If MFA is enrolled, do NOT create a full session yet — require a code.
+      // The session id is still rotated so the pending challenge is not fixed
+      // to a cookie the browser already held.
       if (mfaRow?.mfa_enabled) {
-        // Bind the challenge to this browser session so login-verify cannot be
-        // called without a prior successful password check
-        req.session.pendingMfaUserId = user.id;
+        await grantPendingMfaSession(req, user.id);
         return res.status(202).json({ mfaRequired: true, userId: user.id });
       }
 
-      req.session.userId = user.id;
-      req.session.username = user.username;
       // PR 1: record last sign-in (additive column; best-effort, never blocks login).
       db.execute(sql`UPDATE users SET last_login_at = NOW() WHERE id = ${user.id}`).catch(() => {});
       let workerInfo = null;
@@ -2385,13 +2425,8 @@ export async function registerRoutes(
         const w = await storage.getWorker(user.workerId);
         if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
       }
-      req.session.save((err: Error | null) => {
-        if (err) {
-          console.error("Session save error (login):", err);
-          return res.status(500).json({ message: "Login failed" });
-        }
-        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
-      });
+      await grantAuthenticatedSession(req, { userId: user.id, username: user.username }, sessionBinder());
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Login failed" });
@@ -2409,6 +2444,9 @@ export async function registerRoutes(
       if (!userId || !token) {
         return res.status(400).json({ message: "userId and token are required" });
       }
+      const ip = clientIp(req);
+      const mfaAccount = `mfa:${userId}`;
+      if (rejectIfLoginLocked(res, mfaAccount, ip)) return;
 
       // Reject if there is no password-validated pending challenge bound to this session
       if (!req.session.pendingMfaUserId || req.session.pendingMfaUserId !== userId) {
@@ -2430,27 +2468,21 @@ export async function registerRoutes(
         return res.status(500).json({ message: "MFA configuration error. Please contact support." });
       }
       if (!verifyTOTP(plainSecret, token)) {
+        loginLockout.recordFailure(mfaAccount, ip);
         return res.status(401).json({ message: "Invalid or expired authentication code" });
       }
+      loginLockout.recordSuccess(mfaAccount);
 
-      // Code verified — consume the pending challenge and grant a full session
-      delete req.session.pendingMfaUserId;
-      req.session.userId = user.id;
-      req.session.username = user.username;
-      // PR 1: record last sign-in (additive column; best-effort, never blocks login).
+      // Code verified — rotate again and grant a full session. regenerate
+      // drops the pending MFA marker that lived on the pre-rotation session.
       db.execute(sql`UPDATE users SET last_login_at = NOW() WHERE id = ${user.id}`).catch(() => {});
       let workerInfo = null;
       if (user.workerId) {
         const w = await storage.getWorker(user.workerId);
         if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
       }
-      req.session.save((err: Error | null) => {
-        if (err) {
-          console.error("Session save error (mfa-verify):", err);
-          return res.status(500).json({ message: "MFA verification failed" });
-        }
-        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
-      });
+      await grantAuthenticatedSession(req, { userId: user.id, username: user.username }, sessionBinder());
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
     } catch (e) {
       console.error("[MFA login-verify]", e);
       res.status(500).json({ message: "MFA verification failed" });
@@ -2487,9 +2519,13 @@ export async function registerRoutes(
   });
 
   app.post("/api/auth/logout", (req, res) => {
+    const userId = req.session?.userId;
+    const sid = req.sessionID;
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
-      const isProduction = process.env.NODE_ENV === "production";
+      if (userId && singleSessionPerUserEnabled()) {
+        db.execute(sql`UPDATE users SET active_session_id = NULL WHERE id = ${userId} AND active_session_id = ${sid}`).catch(() => {});
+      }
 
 const INDEPENDENT_CONTRACTOR_GROUPS = new Set(["hourly_contractor", "invoiced_contractor", "independent_contractor"]);
 function isIndependentContractorWorker(worker: any): boolean {
@@ -2502,12 +2538,7 @@ function hashSigningToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-      res.clearCookie("connect.sid", {
-        path: "/",
-        domain: isProduction ? ".mypaylink.app" : undefined,
-        sameSite: "lax",
-        secure: isProduction,
-      });
+      clearSessionCookie(res);
       const baseUrl = process.env.APP_BASE_URL
         ? process.env.APP_BASE_URL.replace(/\/+$/, "")
         : `${req.protocol}://${req.get("host")}`;
@@ -2603,10 +2634,15 @@ function hashSigningToken(token: string): string {
       if (!employeeNumber || !pin) {
         return res.status(400).json({ message: "Employee number and PIN are required" });
       }
+      const ip = clientIp(req);
+      const pinAccount = `pin:${employeeNumber}`;
+      if (rejectIfLoginLocked(res, pinAccount, ip)) return;
       const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
       if (!worker) {
+        loginLockout.recordFailure(pinAccount, ip);
         return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       }
+      loginLockout.recordSuccess(pinAccount);
       if (!worker.isActive) {
         return res.status(403).json({ message: "This employee account is inactive" });
       }
@@ -2625,16 +2661,9 @@ function hashSigningToken(token: string): string {
       if (user.isActive === false) {
         return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
       }
-      req.session.userId = user.id;
-      req.session.username = user.username;
       const workerInfo = { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, companyId: worker.companyId };
-      req.session.save((err: Error | null) => {
-        if (err) {
-          console.error("Session save error (pin-login):", err);
-          return res.status(500).json({ message: "Login failed" });
-        }
-        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
-      });
+      await grantAuthenticatedSession(req, { userId: user.id, username: user.username }, sessionBinder());
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Login failed" });
@@ -2642,7 +2671,7 @@ function hashSigningToken(token: string): string {
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/session-policy" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -28025,15 +28054,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       await consumeEmailVerification(verification.id, verification.userId);
 
-      req.session.userId = user.id;
-      req.session.username = user.username;
-      req.session.save((err: Error | null) => {
-        if (err) {
-          console.error("Session save error (verify-email):", err);
-          return res.status(500).json({ message: "Verified, but sign-in failed. Please log in manually." });
-        }
-        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId });
-      });
+      await grantAuthenticatedSession(req, { userId: user.id, username: user.username }, sessionBinder());
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId });
     } catch (e) {
       console.error("Verify-email error:", e);
       res.status(500).json({ message: safeErrorMessage(e, "Failed to verify email") });
