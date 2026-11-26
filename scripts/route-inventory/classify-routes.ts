@@ -268,6 +268,10 @@ const MANUAL_OVERRIDES: Record<string, { category: Category; justification: stri
     category: "public anonymous",
     justification: "Alternate credential-based session-establishment endpoint (employee PIN); pre-session by definition.",
   },
+  "POST /api/platform/paypal/catalog": {
+    category: "platform-console only",
+    justification: "Idempotent PayPal product and $1 unit plan setup. requireAuth, requirePlatformRole, requirePlatformAdminRole, and CSRF. Sandbox unless PAYPAL_ENV=live.",
+  },
   "GET /api/auth/me": {
     category: "authenticated global/self-service",
     justification: "Checks req.session.userId inline (401 if absent) rather than via requireAuth middleware; functionally equivalent gating, returns the caller's own identity only.",

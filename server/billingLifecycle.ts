@@ -395,6 +395,71 @@ export async function checkAndSuspendExpiredGracePeriods(): Promise<number> {
  * is recognisable to wasSuspendedByBilling(). Returns false when the company
  * is no longer in an expired grace period.
  */
+/**
+ * PayPal (and any future non-Stripe) billing signal. Suspended writes stay in
+ * this module so they keep the lifecycle_transition audit row. Cancelled
+ * companies are not reinstated here.
+ */
+export async function applyExternalBillingSignal(
+  companyId: string,
+  signal: "active_paid" | "past_due" | "grace_period" | "suspended" | "cancelled",
+  note: string,
+): Promise<"applied" | "ignored"> {
+  if (signal === "active_paid" && await reactivateFromBilling(companyId, note)) return "applied";
+
+  const outcome = await db.transaction(async (txRaw) => {
+    const tx = txRaw as unknown as Tx;
+    const locked = await lockCompany(tx, companyId);
+    if (!locked) return "ignored" as const;
+    if (signal === "grace_period") {
+      const graceEnd = new Date();
+      graceEnd.setDate(graceEnd.getDate() + DEFAULT_GRACE_PERIOD_DAYS);
+      const updated = await tx.execute(sql`
+        UPDATE companies
+        SET subscription_status = 'grace_period',
+            grace_period_end = ${graceEnd.toISOString()},
+            billing_active = FALSE
+        WHERE id = ${companyId}
+          AND subscription_status NOT IN ('suspended', 'cancelled', 'canceled', 'grace_period')
+      `);
+      if (!updated.rowCount) return "ignored" as const;
+      await insertLifecycleAudit(tx, companyId, "lifecycle_transition", locked.subscription_status ?? "", "grace_period", note);
+      return "applied" as const;
+    }
+    const check = checkSubscriptionTransition(locked.subscription_status, signal, locked.is_demo === true, { allowReinstatement: false });
+    if (!check.ok || check.noop) return "ignored" as const;
+    if (signal === "suspended") {
+      await tx.execute(sql`
+        UPDATE companies
+        SET subscription_status = 'suspended',
+            billing_active = FALSE,
+            grace_period_end = NULL
+        WHERE id = ${companyId}
+      `);
+    } else if (signal === "cancelled") {
+      await tx.execute(sql`
+        UPDATE companies SET subscription_status = 'cancelled', billing_active = FALSE
+        WHERE id = ${companyId}
+      `);
+    } else if (signal === "past_due") {
+      await tx.execute(sql`
+        UPDATE companies SET subscription_status = 'past_due', billing_active = FALSE
+        WHERE id = ${companyId}
+      `);
+    } else {
+      await tx.execute(sql`
+        UPDATE companies
+        SET subscription_status = 'active_paid', billing_active = TRUE, grace_period_end = NULL
+        WHERE id = ${companyId}
+      `);
+    }
+    await insertLifecycleAudit(tx, companyId, "lifecycle_transition", locked.subscription_status ?? "", signal, note);
+    return "applied" as const;
+  });
+  if (outcome === "applied") await mirrorTenantStatusFromCompany(companyId, signal);
+  return outcome;
+}
+
 export async function suspendExpiredGracePeriod(companyId: string): Promise<boolean> {
   return db.transaction(async (txRaw) => {
     const tx = txRaw as unknown as Tx;

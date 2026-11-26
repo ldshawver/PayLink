@@ -4284,6 +4284,19 @@ Thank you,
     await runInv("dam_documents.related_payroll_run_id", sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_payroll_run_id VARCHAR`);
     await runInv("dam_documents.finalized_by_user_id",   sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_by_user_id VARCHAR`);
     await runInv("dam_documents.finalized_at",           sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ`);
+
+    // PayPal tenant billing (migration 0041). Nullable. Stripe columns are untouched.
+    await runInv("companies.paypal_subscription_id", sqlInv`ALTER TABLE companies ADD COLUMN IF NOT EXISTS paypal_subscription_id TEXT`);
+    await runInv("companies.paypal_plan_id", sqlInv`ALTER TABLE companies ADD COLUMN IF NOT EXISTS paypal_plan_id TEXT`);
+    await runInv("companies.paypal_quantity", sqlInv`ALTER TABLE companies ADD COLUMN IF NOT EXISTS paypal_quantity INTEGER`);
+    await runInv("companies.paypal_next_billing_at", sqlInv`ALTER TABLE companies ADD COLUMN IF NOT EXISTS paypal_next_billing_at TIMESTAMP`);
+    await runInv("paypal_webhook_events table", sqlInv`CREATE TABLE IF NOT EXISTS paypal_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      company_id VARCHAR,
+      resource_id TEXT,
+      received_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
