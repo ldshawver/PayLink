@@ -126,6 +126,7 @@ import { normalizeEmergencyContact, getEmergencyContact, saveEmergencyContact } 
 import { handleOnboardingWebhook, completeOnboardingSignature, liveRequestForStep } from "./contractor-onboarding/esign-complete";
 import { assessOnboarding } from "./contractor-onboarding/adi";
 import { gateAllowsStoredContractor, makeContractorGate, GATE_ERROR_CODE } from "./contractor-onboarding/gate";
+import { completePasswordSetup, welcomeStatus } from "./contractor-onboarding/welcome";
 import { isContractorOnboarding, listReviewQueue, normalizeReviewInput, reauthenticateReviewer, reviewOnboarding } from "./contractor-onboarding/review";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
@@ -682,6 +683,16 @@ const platformPasswordRateLimit = createRateLimiter("platform-password", {
   windowMs: 60 * 60 * 1000,
   max: 20,
   message: "Too many password changes. Please try again later.",
+});
+// Contractor welcome password setup (public; the emailed token is the credential).
+const envInt = (name: string, dflt: number) => {
+  const n = Number.parseInt(process.env[name] || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+};
+const passwordSetupRateLimit = createRateLimiter("contractor-password-setup", {
+  windowMs: 15 * 60 * 1000,
+  max: envInt("PASSWORD_SETUP_RATE_LIMIT_MAX", 20),
+  message: "Too many attempts. Please wait 15 minutes and try again.",
 });
 const trialSignupRateLimit = createRateLimiter("trial-signup", {
   windowMs: 60 * 60 * 1000,
@@ -2770,6 +2781,7 @@ function hashSigningToken(token: string): string {
       || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
       || req.path === "/account-invites/validate" || req.path === "/account-invites/accept"
+      || req.path === "/contractor-onboarding/password-setup"
       || req.path === "/contractor-signup"
       || req.path.startsWith("/portal/")
       // Public, token-authenticated contract signing: the routes do their own signing-token
@@ -3855,6 +3867,35 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/webhooks/documenso/onboarding failed:", (e as Error)?.message);
       res.status(500).json({ error: "processing failed" });
+    }
+  });
+
+  // Welcome email delivery state for one onboarding (own company only; no address, token or error text).
+  app.get("/api/contractor-onboarding/:id/welcome-status", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      const st = companyId ? await welcomeStatus(companyId, String(req.params.id)) : null;
+      if (!st) return res.status(404).json({ message: "Not found." });
+      res.setHeader("Cache-Control", "no-store");
+      res.json(st);
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/:id/welcome-status failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load welcome status" });
+    }
+  });
+
+  // Public: set a password with the single-use link from the welcome email. The raw
+  // token is the credential; every invalid link gets the same answer.
+  app.post("/api/contractor-onboarding/password-setup", passwordSetupRateLimit, async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const r = await completePasswordSetup({ rawToken: (req.body as any)?.token, password: (req.body as any)?.password });
+      if (!r.ok) return res.status(r.status).json({ message: r.message });
+      res.json({ ok: true, redirect: "/login" });
+    } catch (e) {
+      console.error("[contractor-welcome] setup route failed:", (e as Error)?.name);
+      res.status(500).json({ message: "Could not set the password. Try again." });
     }
   });
 

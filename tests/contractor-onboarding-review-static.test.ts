@@ -118,7 +118,7 @@ export function scanForAiOrNetwork(fileName: string, text: string, opts: GuardOp
 }
 
 // ─── self-test: the guard sees what it must and ignores prose ────────────────
-const SERVER_ALLOW = /^(drizzle-orm|bcrypt|\.\/create|\.\/adi|\.\.\/db)$/;
+const SERVER_ALLOW = /^(drizzle-orm|bcrypt|\.\/create|\.\/adi|\.\/welcome-queue|\.\.\/db)$/;
 const CLIENT_ALLOW = /^(react|@tanstack\/react-query|lucide-react|@\/lib\/queryClient|@\/hooks\/[\w-]+|@\/components\/ui\/[\w-]+|\.\/[\w-]+)$/;
 const harmless = `
 import { sql } from "drizzle-orm";
@@ -170,11 +170,14 @@ check("self-test (client mode): relative /api fetch allowed, absolute fetch reje
 const read = (p: string) => fs.readFileSync(p, "utf8");
 const adi = read("server/contractor-onboarding/adi.ts");
 const rev = read("server/contractor-onboarding/review.ts");
+const welcomeQueue = read("server/contractor-onboarding/welcome-queue.ts");
 const ui = read("client/src/components/contractor-onboarding/review-queue.tsx");
 const routes = read("server/routes.ts");
 for (const [file, src, opts] of [
   ["server/contractor-onboarding/adi.ts", adi, { allowImports: /^(drizzle-orm|\.\/create)$/ }],
   ["server/contractor-onboarding/review.ts", rev, { allowImports: SERVER_ALLOW }],
+  // PR 9: the approval transaction queues the welcome email through a database-only module.
+  ["server/contractor-onboarding/welcome-queue.ts", welcomeQueue, { allowImports: /^drizzle-orm$/ }],
   ["client/src/components/contractor-onboarding/review-queue.tsx", ui, { allowImports: CLIENT_ALLOW, allowRelativeApiFetch: true }],
 ] as const) {
   const v = scanForAiOrNetwork(file, src, opts);
