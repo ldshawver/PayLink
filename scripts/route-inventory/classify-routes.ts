@@ -261,8 +261,24 @@ const MANUAL_OVERRIDES: Record<string, { category: Category; justification: stri
     justification: "Second factor of the login flow; runs before a full session exists (verifies a short-lived pending-MFA session state, not a normal session).",
   },
   "POST /api/auth/recover": {
+    category: "deprecated/legacy",
+    justification: "Retired shared-secret reset. Always responds 410. Replaced by the emailed single-use token and a platform-admin-only password set.",
+  },
+  "POST /api/auth/forgot-password": {
+    category: "public anonymous",
+    justification: "Starts a password reset before any session exists. The response is identical whether or not an account matched, and the route is rate-limited.",
+  },
+  "POST /api/auth/reset-password": {
     category: "public token-protected",
-    justification: "Gates on a mailed/issued recoveryToken value read from the request body, not a session cookie.",
+    justification: "Completes a password reset with a single-use hashed token from the request body. No session exists yet.",
+  },
+  "POST /api/platform/users/:userId/send-password-reset": {
+    category: "platform-console only",
+    justification: "Emails a single-use reset link for one user. requireAuth + requirePlatformAdminRole + CSRF. Does not accept a new password.",
+  },
+  "POST /api/platform/users/:userId/set-password": {
+    category: "platform-console only",
+    justification: "Emergency replacement for the shared RECOVERY_TOKEN. requireAuth + requirePlatformAdminRole + CSRF, writes an audit row, and never logs the password.",
   },
   "POST /api/auth/pin-login": {
     category: "public anonymous",

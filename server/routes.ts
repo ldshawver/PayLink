@@ -8,6 +8,18 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone, sendGenericNotificationEmail } from "./notifications";
 import { createEmailVerification, getLiveVerificationByToken, consumeEmailVerification } from "./email-verification";
+import {
+  FORGOT_PASSWORD_MESSAGE,
+  chooseResetUser,
+  consumePasswordReset,
+  createPasswordReset,
+  findResetUsers,
+  getLivePasswordReset,
+  passwordMeetsPolicy,
+  resetIdentifierLimit,
+  revokeUserSessions,
+  setPasswordByPlatformAdmin,
+} from "./password-reset";
 import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -633,6 +645,21 @@ const loginRateLimit = createRateLimiter("auth-login", {
   windowMs: 15 * 60 * 1000,
   max: 20,
   message: "Too many login attempts. Please wait 15 minutes and try again.",
+});
+const forgotPasswordRateLimit = createRateLimiter("auth-forgot-password", {
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: "Too many reset requests. Please try again later.",
+});
+const resetPasswordRateLimit = createRateLimiter("auth-reset-password", {
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: "Too many reset attempts. Please try again later.",
+});
+const platformPasswordRateLimit = createRateLimiter("platform-password", {
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: "Too many password changes. Please try again later.",
 });
 const trialSignupRateLimit = createRateLimiter("trial-signup", {
   windowMs: 60 * 60 * 1000,
@@ -2489,32 +2516,65 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/auth/recover", async (req, res) => {
+  // Deprecated. The old shared recovery secret could reset any account.
+  // Password resets are now the emailed single-use token below, with a
+  // platform-admin-only fallback at POST /api/platform/users/:userId/set-password.
+  app.post("/api/auth/recover", (_req, res) => {
+    res.status(410).json({
+      message: "Shared recovery tokens are disabled. Use Forgot password on the sign-in page, or ask a platform administrator to send a reset link.",
+    });
+  });
+
+  app.post("/api/auth/forgot-password", forgotPasswordRateLimit, async (req, res) => {
     try {
-      const { username, recoveryToken, newPassword } = req.body;
-      if (!username || !recoveryToken || !newPassword) {
-        return res.status(400).json({ message: "Username, recovery token, and new password are required" });
+      const identifier = typeof req.body?.identifier === "string" ? req.body.identifier.trim() : "";
+      if (!identifier || identifier.length > 200) {
+        return res.status(400).json({ message: "Username or email is required" });
       }
-      const envToken = process.env.RECOVERY_TOKEN;
-      if (!envToken) {
-        return res.status(503).json({ message: "Recovery is not enabled on this server. Set the RECOVERY_TOKEN environment variable to enable it." });
+      if (resetIdentifierLimit.allowed(identifier)) {
+        const user = chooseResetUser(await findResetUsers(identifier), identifier);
+        if (user?.email) {
+          const { rawToken } = await createPasswordReset(user.id);
+          const actionUrl = `${getAppBaseUrl(req)}/reset-password?token=${encodeURIComponent(rawToken)}`;
+          const recipientName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username;
+          const sent = await sendGenericNotificationEmail({
+            recipientName,
+            email: user.email,
+            title: "Reset your PayLink password",
+            body: "We received a request to reset your password. The link expires in one hour and works once. If you did not ask for this, you can ignore this email.",
+            actionUrl,
+          });
+          if (!sent.sent) console.error("[password-reset] reset email was not sent");
+        }
       }
-      if (recoveryToken !== envToken) {
-        return res.status(401).json({ message: "Invalid recovery token" });
-      }
-      if (newPassword.length < 6) {
-        return res.status(400).json({ message: "New password must be at least 6 characters" });
-      }
-      const user = await storage.getUserByUsername(username);
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-      await storage.updateUser(user.id, { password: hashedPassword });
-      res.json({ message: "Password reset successfully. You can now sign in with your new password." });
+      res.json({ message: FORGOT_PASSWORD_MESSAGE });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Recovery failed" });
+      console.error("[password-reset] request failed:", safeErrorMessage(error, "failed"));
+      res.json({ message: FORGOT_PASSWORD_MESSAGE });
+    }
+  });
+
+  app.post("/api/auth/reset-password", resetPasswordRateLimit, async (req, res) => {
+    try {
+      const token = typeof req.body?.token === "string" ? req.body.token : "";
+      const newPassword = req.body?.newPassword;
+      if (!token) return res.status(400).json({ message: "Reset token is required" });
+      if (!passwordMeetsPolicy(newPassword)) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+      const live = await getLivePasswordReset(token);
+      if (!live) return res.status(400).json({ message: "This reset link is invalid or has expired." });
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+      try {
+        await consumePasswordReset(live.id, live.userId, passwordHash);
+      } catch {
+        return res.status(400).json({ message: "This reset link is invalid or has expired." });
+      }
+      await revokeUserSessions(live.userId);
+      res.json({ message: "Password updated. You can sign in with your new password." });
+    } catch (error) {
+      console.error("[password-reset] consume failed:", safeErrorMessage(error, "failed"));
+      res.status(500).json({ message: "Password reset failed" });
     }
   });
 
@@ -2671,7 +2731,7 @@ function hashSigningToken(token: string): string {
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/session-policy" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/session-policy" || req.path === "/auth/token-restore" || req.path === "/auth/verify-email" || req.path === "/auth/resend-verification" || req.path === "/auth/forgot-password" || req.path === "/auth/reset-password" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -36208,6 +36268,63 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       res.json({ message: "Support session ended" });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to end support session") });
+    }
+  });
+
+  // Emergency replacement for the retired shared recovery token. Emails a
+  // single-use link; the admin never sees or chooses the new password.
+  app.post("/api/platform/users/:userId/send-password-reset", requireAuth, requirePlatformAdminRole(), platformPasswordRateLimit, requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+      const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+      if (!userId) return res.status(400).json({ message: "User id is required" });
+      const target = await storage.getUser(userId);
+      if (!target) return res.status(404).json({ message: "User not found" });
+      if (!target.email) {
+        return res.status(409).json({ message: "This account has no email address. A platform administrator can set a password directly instead." });
+      }
+      const { rawToken } = await createPasswordReset(target.id);
+      const actionUrl = `${getAppBaseUrl(req)}/reset-password?token=${encodeURIComponent(rawToken)}`;
+      const sent = await sendGenericNotificationEmail({
+        recipientName: target.username,
+        email: target.email,
+        title: "Reset your PayLink password",
+        body: "A platform administrator sent you a password reset link. It expires in one hour and works once.",
+        actionUrl,
+      });
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetUserId: target.id,
+        targetResource: "users",
+        changeType: "platform_admin_password_reset_email",
+        companyId: target.companyId,
+        note: sent.sent ? "reset email queued" : "reset email was not sent",
+      });
+      if (!sent.sent) return res.status(503).json({ message: "The reset link could not be emailed. SMTP is not available." });
+      res.json({ message: "Reset link sent." });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to send password reset") });
+    }
+  });
+
+  // Used when email is down. The new password is not written to the audit log.
+  app.post("/api/platform/users/:userId/set-password", requireAuth, requirePlatformAdminRole(), platformPasswordRateLimit, requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+      if (!passwordMeetsPolicy(req.body?.newPassword)) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+      const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+      if (!userId) return res.status(400).json({ message: "User id is required" });
+      const passwordHash = await bcrypt.hash(req.body.newPassword, 10);
+      const updated = await setPasswordByPlatformAdmin(actor.id, userId, passwordHash);
+      if (!updated) return res.status(404).json({ message: "User not found" });
+      await revokeUserSessions(userId);
+      res.json({ message: "Password updated." });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to set password") });
     }
   });
 
