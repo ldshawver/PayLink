@@ -2475,6 +2475,7 @@ function ProposalBuilder({
   open: boolean; onClose: () => void; proposal?: Proposal | null; isAdmin: boolean;
 }) {
   const { toast } = useToast();
+  const { data: aiStatus } = useQuery<{ available: boolean; message: string }>({ queryKey: ["/api/ai/status"], staleTime: 30_000, retry: false });
   const [tab, setTab] = useState(() => {
     if (!proposal) return "intake";
     const VALID_BUILDER_TABS = ["intake", "template", "details", "work", "scope", "pricing", "terms", "attachments", "ai", "history", "preview"];
@@ -3492,11 +3493,14 @@ function ProposalBuilder({
                   <h3 className="font-medium text-sm">AI Proposal Assistant</h3>
                 </div>
                 <p className="text-xs text-muted-foreground mb-4">AI helps you draft professional, accurate proposals. It will never invent facts — it flags missing information instead.</p>
+                {aiStatus && !aiStatus.available && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mb-3" data-testid="text-ai-unavailable">{aiStatus.message}</p>
+                )}
 
                 <Button
                   size="lg"
                   onClick={handleAiFillAll}
-                  disabled={aiLoading || !proposalId}
+                  disabled={aiLoading || !proposalId || aiStatus?.available === false}
                   className="w-full mb-4 bg-primary hover:bg-primary/90 text-primary-foreground"
                   data-testid="btn-ai-fill-all"
                 >
@@ -3519,7 +3523,7 @@ function ProposalBuilder({
                     { action: "flag_missing", label: "Flag Missing Info", icon: AlertTriangle },
                   ].map(({ action, label, icon: Icon }) => (
                     <Button key={action} size="sm" variant="outline" onClick={() => handleAi(action)}
-                      disabled={aiLoading || !proposalId} className="justify-start text-xs h-9" data-testid={`btn-ai-${action}`}>
+                      disabled={aiLoading || !proposalId || aiStatus?.available === false} className="justify-start text-xs h-9" data-testid={`btn-ai-${action}`}>
                       {aiLoading && aiAction === action ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : <Icon className="h-3 w-3 mr-2" />}
                       {label}
                     </Button>

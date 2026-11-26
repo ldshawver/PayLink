@@ -8,6 +8,8 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone, sendGenericNotificationEmail } from "./notifications";
 import { createEmailVerification, getLiveVerificationByToken, consumeEmailVerification } from "./email-verification";
+import { completeChat, readAiEndpoint } from "./ai-client";
+import { resolveAiAvailability, setCompanyAiEnabled, setPlatformAiEnabled } from "./ai-controls";
 import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -4948,24 +4950,21 @@ function hashSigningToken(token: string): string {
       else if (flags.some(f => f.severity === "warning")) overallRisk = "medium";
 
       // ── 7. AI summary (optional — summarizes rule results, does not invent) ─
-      const apiKey = process.env.OPENAI_API_KEY;
+      // Uses the self-hosted endpoint only. When it is off, the rule summary below is used.
       let summary = "";
-
-      if (apiKey && flags.length > 0) {
+      const preflightAi = await resolveAiAvailability(run.companyId, "text");
+      if (preflightAi.available && preflightAi.endpoint && flags.length > 0) {
         try {
-          const OpenAI = (await import("openai")).default;
-          const openai = new OpenAI({ apiKey });
           const ruleOutput = flags.map(f => `[${f.severity.toUpperCase()}] ${f.title}: ${f.detail}`).join("\n");
           const aiPrompt = `You are summarizing the results of a structured payroll preflight check. The rule engine found these issues:\n\n${ruleOutput}\n\nWrite a 1-2 sentence plain-English summary of what was found and what the payroll manager should do. Do not invent new issues. Do not repeat every flag — just give the overall picture.`;
-          const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+          summary = (await completeChat({
+            endpoint: preflightAi.endpoint,
             messages: [{ role: "user", content: aiPrompt }],
-            max_tokens: 200,
+            maxTokens: 200,
             temperature: 0.2,
-          });
-          summary = response.choices[0]?.message?.content?.trim() || "";
+          })).trim();
         } catch {
-          // AI summary failure is non-fatal
+          // A local-model failure is non-fatal. There is no external fallback.
         }
       }
 
@@ -11510,22 +11509,82 @@ function hashSigningToken(token: string): string {
     }
   });
 
+  app.get("/api/ai/status", requireAuth, async (req, res) => {
+    const user = await storage.getUser(req.session.userId!);
+    if (!user) return res.status(401).json({ message: "Not authenticated" });
+    const availability = await resolveAiAvailability(user.companyId || null, "text");
+    const vision = await resolveAiAvailability(user.companyId || null, "vision");
+    const canManageCompany = !!user.companyId && ["admin", "owner", "tenant_owner", "tenant_admin"].includes(user.role || "");
+    res.json({
+      available: availability.available,
+      visionAvailable: vision.available,
+      code: availability.available ? vision.code : availability.code,
+      message: availability.available ? (vision.available ? availability.message : vision.message) : availability.message,
+      platformEnabled: availability.platformEnabled,
+      companyEnabled: availability.companyEnabled,
+      canManageCompany,
+    });
+  });
+
+  app.patch("/api/platform/ai-settings", requireAuth, requirePlatformAdminRole(), requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+      if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ message: "enabled must be true or false" });
+      await setPlatformAiEnabled(req.body.enabled, actor.id);
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetResource: "ai_controls",
+        changeType: "platform_ai_enabled",
+        afterValue: String(req.body.enabled),
+        note: "Self-hosted AI platform switch. No customer content is included.",
+      });
+      res.json({ enabled: req.body.enabled });
+    } catch (e) {
+      res.status(503).json({ message: safeErrorMessage(e, "AI setting could not be saved. Apply migration 0040 and try again.") });
+    }
+  });
+
+  app.patch("/api/company/ai-settings", requireAuth, requireRole("admin"), requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor?.companyId) return res.status(400).json({ message: "No company is associated with this account" });
+      if (isPlatformUser(actor.role) && !actor.companyId) return res.status(400).json({ message: "Platform accounts use the platform AI switch" });
+      if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ message: "enabled must be true or false" });
+      await setCompanyAiEnabled(actor.companyId, req.body.enabled, actor.id);
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetResource: "ai_controls",
+        changeType: "company_ai_enabled",
+        companyId: actor.companyId,
+        afterValue: String(req.body.enabled),
+        note: "Company AI switch. No customer content is included.",
+      });
+      res.json({ enabled: req.body.enabled });
+    } catch (e) {
+      res.status(503).json({ message: safeErrorMessage(e, "AI setting could not be saved. Apply migration 0040 and try again.") });
+    }
+  });
+
   app.post("/api/receipts/ai-scan", requireAuth, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No receipt image provided" });
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) return res.status(500).json({ message: "OpenAI API key not configured" });
+      const scanUser = await storage.getUser(req.session.userId!);
+      const ai = await resolveAiAvailability(scanUser?.companyId || null, "vision");
+      if (!ai.available || !ai.endpoint?.visionModel) {
+        return res.status(503).json({ message: ai.message, code: ai.code });
+      }
 
       const fs = await import("fs");
       const imageBuffer = fs.readFileSync(req.file.path);
       const base64Image = imageBuffer.toString("base64");
       const mimeType = req.file.mimetype || "image/jpeg";
 
-      const OpenAI = (await import("openai")).default;
-      const openai = new OpenAI({ apiKey });
-
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
+      const content = await completeChat({
+        endpoint: ai.endpoint,
+        model: ai.endpoint.visionModel,
+        maxTokens: 2000,
+        json: true,
         messages: [
           {
             role: "system",
@@ -11553,10 +11612,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             ]
           }
         ],
-        max_tokens: 2000,
       });
-
-      const content = response.choices[0]?.message?.content || "{}";
       const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       const parsed = JSON.parse(cleaned);
 
@@ -11989,18 +12045,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const filePath = `/uploads/${req.file.filename}`;
-      const openaiKey = process.env.OPENAI_API_KEY;
-      if (!openaiKey) return res.status(500).json({ message: "AI not configured" });
+      const scanUser = await storage.getUser(req.session.userId!);
+      const ai = await resolveAiAvailability(scanUser?.companyId || null, "vision");
+      if (!ai.available || !ai.endpoint?.visionModel) {
+        return res.status(503).json({ message: ai.message, code: ai.code });
+      }
 
       const fs = await import("fs");
       const base64 = fs.readFileSync(req.file.path).toString("base64");
       const mimeType = req.file.mimetype || "image/jpeg";
 
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
-        body: JSON.stringify({
-          model: "gpt-4o",
+      let content = "{}";
+      try {
+        content = await completeChat({
+          endpoint: ai.endpoint,
+          model: ai.endpoint.visionModel,
+          maxTokens: 1500,
+          json: true,
           messages: [{
             role: "user",
             content: [
@@ -12008,17 +12069,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}`, detail: "high" } },
             ],
           }],
-          response_format: { type: "json_object" },
-          max_tokens: 1500,
-        }),
-      });
-
-      const result: any = await response.json();
-      if (!response.ok) {
-        console.error("AI scan OpenAI error:", result);
-        return res.status(502).json({ message: result?.error?.message || "AI extraction provider failed" });
+        });
+      } catch {
+        console.error("[AI] expense scan failed");
+        return res.status(502).json({ message: "The self-hosted AI service could not read this image." });
       }
-      const content = result.choices?.[0]?.message?.content || "{}";
       let extracted;
       try {
         const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || content.match(/\{[\s\S]*\}/);
@@ -16768,13 +16823,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const { action, context } = req.body;
       // action: draft_scope | improve_scope | suggest_exclusions | suggest_assumptions | suggest_line_items | suggest_payment_terms | generate_summary | flag_missing | suggest_warranty | fill_all
-      // Support both OpenAI (OPENAI_API_KEY) and xAI/Grok (XAI_API_KEY).
-      // xAI's API is OpenAI-SDK-compatible — only the baseURL and model differ.
-      const openaiApiKey = process.env.OPENAI_API_KEY;
-      const xaiApiKey = process.env.XAI_API_KEY;
-      const aiApiKey = openaiApiKey || xaiApiKey;
-      if (!aiApiKey) return res.status(503).json({ message: "AI assistance requires OPENAI_API_KEY or XAI_API_KEY" });
-      const useXai = !openaiApiKey && !!xaiApiKey;
 
       // Tenant/ownership guard — prevent IDOR. Uses the same access rules as
       // the rest of the proposal API: contractor owner OR same-tenant admin/manager.
@@ -16812,19 +16860,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "Unknown action" });
       }
 
-      const { default: OpenAI } = await import("openai");
-      const openai = new OpenAI({
-        apiKey: aiApiKey,
-        ...(useXai ? { baseURL: "https://api.x.ai/v1" } : {}),
-      });
-      const aiModel = useXai ? "grok-3-fast-beta" : "gpt-4o";
-      const completion = await openai.chat.completions.create({
-        model: aiModel,
+      const proposalAi = await resolveAiAvailability(access.prop?.company_id || null, "text");
+      if (!proposalAi.available || !proposalAi.endpoint) {
+        return res.status(503).json({ message: proposalAi.message, code: proposalAi.code });
+      }
+      const text = await completeChat({
+        endpoint: proposalAi.endpoint,
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
-        max_tokens: 1000,
+        maxTokens: 1000,
         temperature: 0.5,
       });
-      const text = completion.choices[0]?.message?.content || "";
 
       // For suggest_line_items, try to parse JSON
       if (action === "suggest_line_items") {
@@ -31362,48 +31407,6 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     return pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
   }
 
-  type AppDoctorAiProvider = "openai" | "xai";
-
-  type AppDoctorAiAttempt = {
-    provider: AppDoctorAiProvider;
-    apiKey?: string;
-    model: string;
-    baseURL?: string;
-  };
-
-  function getAppDoctorAiAttempts(): AppDoctorAiAttempt[] {
-    const openaiApiKey = (process.env.OPENAI_API_KEY || "").trim();
-    const xaiApiKey = (process.env.XAI_API_KEY || "").trim();
-    const preferredProvider = String(process.env.APP_DOCTOR_PROVIDER || "").toLowerCase();
-    const sharedModel = (process.env.APP_DOCTOR_MODEL || "").trim();
-    const attempts: AppDoctorAiAttempt[] = [];
-
-    if (openaiApiKey) {
-      attempts.push({
-        provider: "openai",
-        apiKey: openaiApiKey,
-        model: (process.env.APP_DOCTOR_OPENAI_MODEL || sharedModel || "gpt-4o-mini").trim(),
-      });
-    }
-
-    if (xaiApiKey) {
-      attempts.push({
-        provider: "xai",
-        apiKey: xaiApiKey,
-        model: (process.env.APP_DOCTOR_XAI_MODEL || sharedModel || "grok-3-mini").trim(),
-        baseURL: "https://api.x.ai/v1",
-      });
-    }
-
-    if (preferredProvider === "xai") {
-      attempts.sort((a, b) => (a.provider === "xai" ? -1 : b.provider === "xai" ? 1 : 0));
-    } else if (preferredProvider === "openai") {
-      attempts.sort((a, b) => (a.provider === "openai" ? -1 : b.provider === "openai" ? 1 : 0));
-    }
-
-    return attempts.filter((attempt) => !!attempt.apiKey && !!attempt.model);
-  }
-
   function parseAppDoctorAiJson(content: string | null | undefined): AppDoctorAnalysis {
     const text = String(content || "").trim();
     if (!text) throw new Error("AI provider returned an empty response");
@@ -31479,56 +31482,45 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     const report = pgRow<any>(await db.execute(sql`SELECT * FROM app_doctor_reports WHERE id = ${reportId}`));
     if (!report) return null;
 
-    const attempts = getAppDoctorAiAttempts();
     const failureReasons: string[] = [];
-
-    if (attempts.length === 0) {
-      failureReasons.push("OPENAI_API_KEY and XAI_API_KEY are not configured, or no App Doctor model was selected");
+    const doctorAi = await resolveAiAvailability(report.company_id || null, "text");
+    if (!doctorAi.available || !doctorAi.endpoint) {
+      failureReasons.push(doctorAi.message);
     } else {
-      const { default: OpenAI } = await import("openai");
-      const messages = buildAppDoctorAiMessages(report);
-
-      for (const attempt of attempts) {
-        try {
-          console.log(`[AppDoctor] analyzing report ${reportId} with ${attempt.provider}:${attempt.model}`);
-          const client = new OpenAI({
-            apiKey: attempt.apiKey,
-            ...(attempt.baseURL ? { baseURL: attempt.baseURL } : {}),
-          });
-          const completion = await client.chat.completions.create({
-            model: attempt.model,
-            response_format: { type: "json_object" },
-            messages,
-            temperature: 0.2,
-            max_tokens: 1800,
-          });
-          const parsed = parseAppDoctorAiJson(completion.choices?.[0]?.message?.content);
-          const saved = await saveAppDoctorAnalysis(reportId, {
-            summary: parsed.summary,
-            rootCause: parsed.rootCause,
-            suggestedFix: parsed.suggestedFix,
-            proposedPatch: parsed.proposedPatch,
-            recommendedFiles: parsed.recommendedFiles,
-            testsToRun: parsed.testsToRun,
-            riskLevel: parsed.riskLevel,
-            issueCategory: parsed.issueCategory,
-            severityClass: parsed.severityClass,
-            requiredApproverRole: parsed.requiredApproverRole,
-            testPlan: parsed.testPlan,
-            rollbackPlan: parsed.rollbackPlan,
-          });
-          // External AI succeeded — clear any previously recorded AI-outage state.
-          await db.execute(sql`UPDATE app_doctor_reports SET ai_last_error = NULL, ai_last_error_at = NULL WHERE id = ${reportId}::varchar`).catch(() => {});
-          return saved;
-        } catch (aiError: any) {
-          const reason = `${attempt.provider}:${attempt.model} failed (${aiError?.message || aiError})`;
-          failureReasons.push(reason);
-          console.error("[AppDoctor] external AI analysis failed; trying fallback if available:", reason);
-        }
+      try {
+        console.log(`[AppDoctor] analyzing report ${reportId} with the self-hosted model`);
+        const content = await completeChat({
+          endpoint: doctorAi.endpoint,
+          messages: buildAppDoctorAiMessages(report),
+          temperature: 0.2,
+          maxTokens: 1800,
+          json: true,
+        });
+        const parsed = parseAppDoctorAiJson(content);
+        const saved = await saveAppDoctorAnalysis(reportId, {
+          summary: parsed.summary,
+          rootCause: parsed.rootCause,
+          suggestedFix: parsed.suggestedFix,
+          proposedPatch: parsed.proposedPatch,
+          recommendedFiles: parsed.recommendedFiles,
+          testsToRun: parsed.testsToRun,
+          riskLevel: parsed.riskLevel,
+          issueCategory: parsed.issueCategory,
+          severityClass: parsed.severityClass,
+          requiredApproverRole: parsed.requiredApproverRole,
+          testPlan: parsed.testPlan,
+          rollbackPlan: parsed.rollbackPlan,
+        });
+        await db.execute(sql`UPDATE app_doctor_reports SET ai_last_error = NULL, ai_last_error_at = NULL WHERE id = ${reportId}::varchar`).catch(() => {});
+        return saved;
+      } catch (aiError: any) {
+        const reason = `self-hosted AI failed (${aiError?.message || "request failed"})`;
+        failureReasons.push(reason);
+        console.error("[AppDoctor] self-hosted AI analysis failed; using the local diagnosis:", reason);
       }
     }
 
-    const localReason = failureReasons.join("; ") || "AI providers failed";
+    const localReason = failureReasons.join("; ") || "Self-hosted AI is unavailable";
     // Record the AI outage SEPARATELY from issue validity — a failed AI call must
     // never archive an issue or block the local diagnostic path.
     await db.execute(sql`
@@ -32136,8 +32128,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         environment: getAppEnvironment(),
         version: getAppVersion(),
         aiConfig: {
-          provider: process.env.XAI_API_KEY ? "xai" : process.env.OPENAI_API_KEY ? "openai" : "none",
-          model: process.env.APP_DOCTOR_MODEL || "grok-3-mini",
+          provider: readAiEndpoint().endpoint ? "local" : "unavailable",
+          model: readAiEndpoint().endpoint?.model || "not configured",
           repairEnabled: process.env.APP_DOCTOR_REPAIR_ENABLED !== "false",
           prEnabled: process.env.APP_DOCTOR_PR_ENABLED === "true",
           githubConfigured: !!(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
@@ -37970,7 +37962,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       { id: "integration_bus", name: "Integration Event Bus (Webhooks)", module: "platform", enabled: true, gated: false },
       { id: "notifications", name: "Notifications (Email + SMS)", module: "platform", enabled: true, gated: !(process.env.SMTP_USER && process.env.SMTP_PASS), missingFor: [!process.env.SMTP_USER && "SMTP_USER", !process.env.SMTP_PASS && "SMTP_PASS", !process.env.TWILIO_ACCOUNT_SID && "TWILIO (SMS only)"].filter(Boolean) },
       { id: "stripe_billing", name: "Stripe Billing & Subscriptions", module: "billing", enabled: !!process.env.STRIPE_SECRET_KEY, gated: !process.env.STRIPE_SECRET_KEY, missingFor: [!process.env.STRIPE_SECRET_KEY && "STRIPE_SECRET_KEY"].filter(Boolean) },
-      { id: "ai_receipt_scan", name: "AI Receipt Scanning", module: "expense", enabled: !!process.env.OPENAI_API_KEY, gated: !process.env.OPENAI_API_KEY, missingFor: [!process.env.OPENAI_API_KEY && "OPENAI_API_KEY"].filter(Boolean) },
+      { id: "ai_receipt_scan", name: "AI Receipt Scanning", module: "expense", enabled: !!readAiEndpoint().endpoint?.visionModel, gated: !readAiEndpoint().endpoint?.visionModel, missingFor: [!process.env.AI_BASE_URL && "AI_BASE_URL", !process.env.AI_MODEL && "AI_MODEL", !process.env.AI_VISION_MODEL && "AI_VISION_MODEL"].filter(Boolean) },
       { id: "biometric_auth", name: "Biometric Authentication (Mobile)", module: "mobile", enabled: true, gated: false },
       { id: "push_notifications", name: "Push Notifications (Mobile)", module: "mobile", enabled: true, gated: false },
       { id: "pwa", name: "Progressive Web App (PWA)", module: "web", enabled: true, gated: false },
@@ -37985,7 +37977,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         { module: "notifications_email", requiresEnvVars: ["SMTP_USER", "SMTP_PASS"] },
         { module: "notifications_sms", requiresEnvVars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"] },
         { module: "stripe_billing", requiresEnvVars: ["STRIPE_SECRET_KEY"] },
-        { module: "ai_receipt_scan", requiresEnvVars: ["OPENAI_API_KEY"] },
+        { module: "ai_receipt_scan", requiresEnvVars: ["AI_BASE_URL", "AI_MODEL", "AI_VISION_MODEL"] },
       ],
     };
     res.json({ features, registries, count: features.length, generatedAt: new Date().toISOString() });
@@ -38345,7 +38337,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         { id: "invoicing", module: "billing", enabled: true },
         { id: "notifications", module: "platform", enabled: !!(smtpUser && smtpPass) },
         { id: "stripe_billing", module: "billing", enabled: !!process.env.STRIPE_SECRET_KEY },
-        { id: "ai_receipt_scan", module: "expense", enabled: !!process.env.OPENAI_API_KEY },
+        { id: "ai_receipt_scan", module: "expense", enabled: !!readAiEndpoint().endpoint?.visionModel },
         { id: "tenant_enforcement", module: "platform", enabled: true },
         { id: "platform_audit", module: "platform", enabled: true },
       ];
@@ -38383,7 +38375,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           twilio: { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioPhone), hasSid: !!process.env.TWILIO_ACCOUNT_SID, hasToken: !!process.env.TWILIO_AUTH_TOKEN, hasPhone: !!twilioPhone },
           stripe: { configured: !!process.env.STRIPE_SECRET_KEY, hasSecret: !!process.env.STRIPE_SECRET_KEY, hasWebhook: !!process.env.STRIPE_WEBHOOK_SECRET },
           db: { hasUrl: !!process.env.DATABASE_URL, connected: dbConnected, tableCount },
-          openai: { configured: !!process.env.OPENAI_API_KEY },
+          localAi: { configured: !!readAiEndpoint().endpoint, vision: !!readAiEndpoint().endpoint?.visionModel },
         },
         database: { tables },
         features,

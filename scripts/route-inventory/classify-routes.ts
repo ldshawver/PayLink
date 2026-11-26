@@ -268,6 +268,18 @@ const MANUAL_OVERRIDES: Record<string, { category: Category; justification: stri
     category: "public anonymous",
     justification: "Alternate credential-based session-establishment endpoint (employee PIN); pre-session by definition.",
   },
+  "GET /api/ai/status": {
+    category: "authenticated global/self-service",
+    justification: "Reports whether self-hosted AI is available for the signed-in user. requireAuth. No customer content is sent.",
+  },
+  "PATCH /api/platform/ai-settings": {
+    category: "platform-console only",
+    justification: "Platform on/off switch for the self-hosted AI service. requireAuth, requirePlatformAdminRole, and CSRF. No customer content.",
+  },
+  "PATCH /api/company/ai-settings": {
+    category: "authenticated tenant-scoped",
+    justification: "Company on/off switch. The company id is the session user's company, not a client-supplied id. requireAuth, requireRole(admin), and CSRF.",
+  },
   "GET /api/auth/me": {
     category: "authenticated global/self-service",
     justification: "Checks req.session.userId inline (401 if absent) rather than via requireAuth middleware; functionally equivalent gating, returns the caller's own identity only.",
