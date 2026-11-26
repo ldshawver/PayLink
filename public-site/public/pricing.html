@@ -39,7 +39,7 @@
     <div class="container">
       <span class="section-label fade-up">Pricing</span>
       <h1 class="fade-up stagger-1">One Plan. Everything Included.</h1>
-      <p class="fade-up stagger-2">Start with a free 30-day trial. No credit card required. Cancel anytime.</p>
+      <p class="fade-up stagger-2">Start with a free <span data-trial-days>30</span>-day trial. No credit card required. Cancel anytime.</p>
       <div class="fade-up stagger-3" style="display:flex;gap:12px;justify-content:center;margin-top:16px;">
         <a href="#starter" style="color:#fff;text-decoration:underline;font-size:14px;">Starter Plan</a>
         <span style="color:rgba(255,255,255,0.5);">&middot;</span>
@@ -61,7 +61,7 @@
         </div>
         <div class="price-per-employee">+ $4 per active employee / month</div>
         <div class="price-example">Example: 10 employees = $29 + $40 = <strong>$69/month</strong></div>
-        <a href="/signup" class="btn-primary btn-lg" data-testid="link-start-trial">Start Your Free 30-Day Trial →</a>
+        <a href="/signup" class="btn-primary btn-lg" data-testid="link-start-trial">Start Your Free <span data-trial-days>30</span>-Day Trial →</a>
         <p class="price-note">No credit card required &middot; Full access during trial</p>
 
         <div class="pricing-features-grid">
@@ -168,7 +168,7 @@
       <h2 class="section-title fade-up">Frequently Asked Questions</h2>
       <div style="max-width: 720px; margin: 32px auto 0; text-align: left;" class="fade-up stagger-1">
         <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-trial">
-          <summary style="cursor:pointer;font-weight:600;font-size:16px;">What happens during the 30-day free trial?</summary>
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">What happens during the <span data-trial-days>30</span>-day free trial?</summary>
           <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">You get full access to every feature — payroll processing, time tracking, scheduling, HR tools, and more. No credit card is required to start. At the end of your trial you can activate your subscription to keep your data and continue using PayLink.</p>
         </details>
         <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-pricing">
@@ -199,7 +199,7 @@
     <div class="container">
       <div class="cta-banner fade-up">
         <h2>Ready to Simplify Your Payroll?</h2>
-        <p>Start your free 30-day trial today. No credit card required.</p>
+        <p>Start your free <span data-trial-days>30</span>-day trial today. No credit card required.</p>
         <div class="hero-buttons" style="justify-content: center;">
           <a href="/signup" class="btn-primary">Start Free Trial →</a>
           <a href="/demo" class="btn-secondary">View Demo →</a>
@@ -278,5 +278,6 @@
       });
     });
   </script>
+  <script src="/js/trial-offer.js" defer></script>
 </body>
 </html>

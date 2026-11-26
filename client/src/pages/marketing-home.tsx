@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import { useTrialOffer } from "@/hooks/use-trial-offer";
 
 const FEATURES = [
   {
@@ -76,7 +77,6 @@ const HIGHLIGHTS = [
   "Role-based access control",
   "ACH direct deposit",
   "Contractor hub & CLM",
-  "Free 14-day trial",
 ];
 
 function LiveClock() {
@@ -274,6 +274,7 @@ function ClockInModal({ open, onClose }: { open: boolean; onClose: () => void })
 
 export default function MarketingHomePage() {
   const [, setLocation] = useLocation();
+  const { trialLengthDays } = useTrialOffer();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [clockInOpen, setClockInOpen] = useState(false);
   const [demoPending, setDemoPending] = useState(false);
@@ -403,7 +404,7 @@ export default function MarketingHomePage() {
             </div>
 
             <div className="mt-8 flex flex-wrap justify-center md:justify-start gap-2">
-              {HIGHLIGHTS.map((h) => (
+              {[...HIGHLIGHTS, `Free ${trialLengthDays}-day trial`].map((h) => (
                 <span key={h} className="flex items-center gap-1.5 bg-white/10 rounded-full px-3 py-1 text-sm text-white/90">
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0" /> {h}
                 </span>
@@ -499,7 +500,7 @@ export default function MarketingHomePage() {
       <section className="bg-gradient-to-r from-[hsl(184,96%,14%)] to-[hsl(200,70%,22%)] text-white py-16 px-4">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="text-3xl md:text-4xl font-bold mb-4">Ready to simplify your HR & payroll?</h2>
-          <p className="text-white/80 mb-8 text-lg">Start your free 14-day trial — no credit card required.</p>
+          <p className="text-white/80 mb-8 text-lg" data-testid="text-trial-offer">Start your free {trialLengthDays}-day trial — no credit card required.</p>
           <Button
             size="lg"
             className="bg-white text-[hsl(184,96%,19%)] hover:bg-gray-100 font-semibold shadow-lg"

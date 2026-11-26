@@ -8,6 +8,7 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone, sendGenericNotificationEmail } from "./notifications";
 import { createEmailVerification, getLiveVerificationByToken, consumeEmailVerification } from "./email-verification";
+import { getTrialLengthDays, parseTrialLengthDays, setTrialLengthDays, trialLengthMs, trialOfferCopy } from "./platform-settings";
 import { TWILIO_SMS_URLS, registerTwilioSmsWebhookRoutes } from "./twilio-sms-webhooks";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -2647,6 +2648,7 @@ function hashSigningToken(token: string): string {
       || req.path === "/webhooks/product-events" || req.path === "/webhooks/documenso" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
       || req.path === "/trial/signup"
+      || req.path === "/public/trial-offer"
       || req.path === "/analytics/event"
       || req.path === "/oauth/tiktok/callback"
       || req.path === "/license/request"
@@ -27857,6 +27859,40 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to save notification preference" }); }
   });
 
+  app.get("/api/public/trial-offer", async (_req, res) => {
+    const trialLengthDays = await getTrialLengthDays();
+    res.json({ trialLengthDays, summary: trialOfferCopy(trialLengthDays) });
+  });
+
+  app.get("/api/platform/settings", requireAuth, requirePlatformRole(), async (_req, res) => {
+    const trialLengthDays = await getTrialLengthDays();
+    res.json({ trialLengthDays, summary: trialOfferCopy(trialLengthDays) });
+  });
+
+  app.patch("/api/platform/settings", requireAuth, requirePlatformRole(), requirePlatformAdminRole(), requireCsrfToken, async (req, res) => {
+    try {
+      const actor = await storage.getUser(req.session.userId!);
+      if (!actor) return res.status(401).json({ message: "User not found" });
+      const trialLengthDays = parseTrialLengthDays(req.body?.trialLengthDays);
+      if (trialLengthDays == null) {
+        return res.status(400).json({ message: "Trial length must be a whole number of days from 1 to 365." });
+      }
+      const before = await getTrialLengthDays();
+      await setTrialLengthDays(trialLengthDays, actor.id);
+      await writeAuditLog({
+        actorUserId: actor.id,
+        targetResource: "platform_settings",
+        changeType: "trial_length_days",
+        beforeValue: String(before),
+        afterValue: String(trialLengthDays),
+        note: "Applies to new trials only. Existing trial_end dates are unchanged.",
+      });
+      res.json({ trialLengthDays, summary: trialOfferCopy(trialLengthDays) });
+    } catch (e) {
+      res.status(503).json({ message: safeErrorMessage(e, "Trial length could not be saved. Apply migration 0039 and try again.") });
+    }
+  });
+
   // ── Trial Signup (public, no auth) ─────────────────────────────────────
   class DuplicateTrialSignupError extends Error {}
 
@@ -27890,7 +27926,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       const now = new Date();
-      const trialEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const trialDays = await getTrialLengthDays();
+      const trialEnd = new Date(now.getTime() + trialLengthMs(trialDays));
 
       const baseUsername = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
       let username = baseUsername + Math.floor(Math.random() * 1000);
@@ -27986,7 +28023,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           recipientName: `${firstName} ${lastName}`,
           email,
           title: "Verify your email to activate your PayLink trial",
-          body: "Thanks for starting your PayLink trial! Click below to verify your email address and sign in.",
+          body: `Thanks for starting your ${trialDays}-day PayLink trial. No credit card is required. Click below to verify your email address and sign in.`,
           actionUrl: verifyUrl,
         });
         if (!sendResult.sent) {
