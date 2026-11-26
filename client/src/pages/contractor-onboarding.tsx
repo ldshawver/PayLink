@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, UserPlus } from "lucide-react";
+import { Loader2, Mail, UserPlus } from "lucide-react";
 
 type Step = { key: string; title: string; status: string; assignedToRole: string };
 type Row = {
@@ -19,6 +19,9 @@ type Row = {
 
 const STATUS_LABEL: Record<string, string> = {
   invite_pending: "Invitation not sent",
+  invite_sending: "Sending invitation…",
+  invite_failed: "Invitation failed — retry",
+  invited: "Invited",
   in_progress: "In progress",
   in_review: "Awaiting review",
   verified: "Verified",
@@ -57,6 +60,28 @@ export default function ContractorOnboardingPage() {
       toast({ title: "Contractor added", description: `Employee number ${r.employeeNumber}. No email has been sent yet.` });
     },
     onError: (e: Error) => setError(e.message),
+  });
+
+  const invite = useMutation({
+    mutationFn: async (onboardingId: string) => {
+      const res = await fetch(`/api/contractor-onboarding/${encodeURIComponent(onboardingId)}/invite`, {
+        method: "POST", credentials: "include", headers: { "x-csrf-token": getCsrfToken() ?? "" },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.message || "Could not send the invitation.");
+      return body as { outcome: "sent" | "already_sent" | "in_progress" };
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding"] });
+      toast({
+        title: r.outcome === "sent" ? "Invitation sent" : r.outcome === "already_sent" ? "Invitation already sent" : "Invitation is being sent",
+        description: r.outcome === "sent" ? "The link expires in 7 days and works once." : "No second email was sent.",
+      });
+    },
+    onError: (e: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-onboarding"] });
+      toast({ title: "Invitation not sent", description: e.message, variant: "destructive" });
+    },
   });
 
   const submit = (e: React.FormEvent) => {
@@ -119,7 +144,7 @@ export default function ContractorOnboardingPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Number</TableHead><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Checklist</TableHead>
+                    <TableHead>Number</TableHead><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Checklist</TableHead>{isAdmin && <TableHead />}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -136,6 +161,16 @@ export default function ContractorOnboardingPage() {
                             {r.steps.filter((s) => s.status !== "completed").map((s) => <li key={s.key}>• {s.title}</li>)}
                           </ul>
                         </TableCell>
+                        {isAdmin && (
+                          <TableCell>
+                            {["invite_pending", "invite_failed", "invited"].includes(r.status) && (
+                              <Button size="sm" variant="outline" disabled={invite.isPending} data-testid={`button-invite-${r.onboardingId}`}
+                                onClick={() => invite.mutate(r.onboardingId)}>
+                                <Mail className="h-4 w-4 mr-1.5" />{r.status === "invited" ? "Resend" : "Send invitation"}
+                              </Button>
+                            )}
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })}

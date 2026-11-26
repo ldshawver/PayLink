@@ -112,6 +112,7 @@ import { registerFeedbackRoutes } from "./feedback-routes";
 import {
   createContractorForOnboarding, listContractorOnboarding, normalizeCreateInput as normalizeContractorCreateInput,
 } from "./contractor-onboarding/create";
+import { sendSetupInvite, completeAccountSetupStep as completeContractorAccountSetupStep } from "./contractor-onboarding/invite";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -3551,13 +3552,20 @@ function hashSigningToken(token: string): string {
         return res.status(400).json({ message: "Username must be 3–40 characters (letters, numbers, . _ -)." });
       }
       const hashed = await bcrypt.hash(String(password), 10);
-      const result = await acceptInviteWithUser(String(token), String(username), hashed);
+      const result = await acceptInviteWithUser(String(token), String(username), hashed, async (tx, accepted) => {
+        if (accepted.relationshipKind === "contractor") {
+          await completeContractorAccountSetupStep(tx, { companyId: accepted.companyId, workerId: accepted.relationshipId, userId: accepted.userId });
+        }
+      });
       if (!result.ok) return res.status(result.status).json({ message: result.message });
-      // Establish the session immediately so the invitee lands signed in.
-      req.session.userId = result.userId;
-      (req.session as any).username = username;
-      req.session.save(() => {
-        res.status(201).json({ id: result.userId, username, companyId: result.companyId, redirect: "/app" });
+      // Establish a FRESH session (no fixation) so the invitee lands signed in.
+      req.session.regenerate((regenErr) => {
+        if (regenErr) return res.status(201).json({ id: result.userId, username, companyId: result.companyId, redirect: "/login" });
+        req.session.userId = result.userId;
+        (req.session as any).username = username;
+        req.session.save(() => {
+          res.status(201).json({ id: result.userId, username, companyId: result.companyId, redirect: "/app" });
+        });
       });
     } catch (e) {
       console.error("POST /api/account-invites/accept failed:", e);
@@ -3668,6 +3676,27 @@ function hashSigningToken(token: string): string {
     } catch (e) {
       console.error("POST /api/contractor-onboarding failed:", (e as Error)?.message);
       res.status(500).json({ message: "Could not add the contractor. Please try again." });
+    }
+  });
+
+  // PR 2 — expiring account-setup invitation. Idempotent: a double click or a
+  // concurrent request sends at most one email; a failed send can be retried.
+  // The base URL must come from APP_BASE_URL in production (never from the
+  // request's Host header, which a proxy may pass through).
+  app.post("/api/contractor-onboarding/:id/invite", requireAuth, requireRole("admin"), requireCsrfToken, blockDemoWrites, async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      if (!actingUser || !companyId) return res.status(404).json({ message: "Onboarding record not found." });
+      const baseUrl = process.env.APP_BASE_URL
+        ? process.env.APP_BASE_URL
+        : (process.env.NODE_ENV === "production" ? null : getAppBaseUrl(req));
+      const result = await sendSetupInvite({ companyId, onboardingId: String(req.params.id), actorUserId: actingUser.id, baseUrl });
+      if (!result.ok) return res.status(result.status).json({ code: result.code, message: result.message });
+      res.status(result.outcome === "sent" ? 200 : 202).json(result);
+    } catch (e) {
+      console.error("POST /api/contractor-onboarding/:id/invite failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not send the invitation. Please try again." });
     }
   });
 
