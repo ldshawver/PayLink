@@ -13,19 +13,33 @@ import fs from "fs";
 import { startWorkerOrchestrator, shutdownOrchestrator } from "./workers/orchestrator";
 import { requestDiagnostics, registerDiagnosticsRoutes, globalErrorHandler } from "./diagnostics";
 import { issueCsrfToken } from "./security-middleware";
+import {
+  enforceSessionControls,
+  resolveSessionSecret,
+  sessionIdleMs,
+  singleSessionPerUserEnabled,
+  ProductionSessionSecretError,
+} from "./session-security";
 
 const isProduction = process.env.NODE_ENV === "production";
 
-if (isProduction) {
-  const requiredVars = ["DATABASE_URL", "SESSION_SECRET"];
-  const missing = requiredVars.filter((v) => !process.env[v]);
-  if (missing.length > 0) {
-    console.error(`FATAL: Missing required environment variables: ${missing.join(", ")}`);
+if (isProduction && !process.env.DATABASE_URL) {
+  console.error("FATAL: Missing required environment variables: DATABASE_URL");
+  process.exit(1);
+}
+if (isProduction && !process.env.APP_BASE_URL) {
+  console.warn("WARNING: APP_BASE_URL is not set. Email/SMS links will fall back to request headers.");
+}
+
+let sessionSecret: string;
+try {
+  sessionSecret = resolveSessionSecret();
+} catch (err) {
+  if (err instanceof ProductionSessionSecretError) {
+    console.error(err.message);
     process.exit(1);
   }
-  if (!process.env.APP_BASE_URL) {
-    console.warn("WARNING: APP_BASE_URL is not set. Email/SMS links will fall back to request headers.");
-  }
+  throw err;
 }
 
 const app = express();
@@ -90,6 +104,8 @@ declare module "express-session" {
     /** Set when the user's company has MFA enforced but this user hasn't enrolled yet.
      *  Grants a limited session so the user can reach /app/mfa-settings to enroll. */
     mfaEnrollmentRequired: boolean;
+    /** Epoch ms of the last authenticated API request. Rolling idle timeout. */
+    lastActivityAt?: number;
   }
 }
 
@@ -271,7 +287,7 @@ const sessionMiddleware = session({
     conString: process.env.DATABASE_URL,
     createTableIfMissing: true,
   }),
-  secret: process.env.SESSION_SECRET || "paylink-dev-secret",
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -298,6 +314,24 @@ app.use((req, res, next) => {
 // Concierge Launch Option A, blocker 3 — issue the CSRF double-submit cookie
 // for every session-authenticated request (no-op once a token exists).
 app.use(issueCsrfToken);
+
+// Rolling idle timeout for every role, and the optional one-session-per-user
+// check. Mounted on /api only so static assets neither extend nor write the
+// session. A missing lastActivityAt (sessions issued before this shipped)
+// starts the clock on the next request instead of signing everyone out.
+app.use("/api", (req, res, next) => {
+  enforceSessionControls(req, res, next, {
+    idleMs: sessionIdleMs(),
+    singleSession: singleSessionPerUserEnabled(),
+    loadActiveSessionId: async (userId) => {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const result = await db.execute(sql`SELECT active_session_id FROM users WHERE id = ${userId}`);
+      const value = (result.rows[0] as { active_session_id?: string | null } | undefined)?.active_session_id;
+      return value ?? null;
+    },
+  }).catch((err) => next(err));
+});
 
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -3371,6 +3405,9 @@ Thank you,
     // Concierge Launch Option A, blocker 5. Additive-only; defaults FALSE so
     // no pre-existing account is affected — see server/email-verification.ts.
     await run("users.email_verification_required", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_required BOOLEAN NOT NULL DEFAULT FALSE`);
+    // Session hardening (migration 0037). Nullable; only written when
+    // SINGLE_SESSION_PER_USER is enabled. See server/session-security.ts.
+    await run("users.active_session_id", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_id TEXT`);
     await run("email_verifications table", sql`CREATE TABLE IF NOT EXISTS email_verifications (
       id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id     VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
