@@ -5,7 +5,7 @@
       "description": "Deterministic unit/static tests. No database, no network, no external service, no live server. Safe to run on every PR with zero configuration. This is the GitHub Actions required check.",
       "blocksMerge": true,
       "prerequisites": [],
-      "fileCount": 143,
+      "fileCount": 144,
       "files": [
         "server/__tests__/api-json-guard.test.ts",
         "server/__tests__/auth-guard.test.ts",
@@ -149,7 +149,8 @@
         "tests/private-documents-static.test.ts",
         "tests/contractor-onboarding-emergency-contact-static.test.ts",
         "tests/contractor-onboarding-esign-complete-static.test.ts",
-        "tests/contractor-onboarding-review-static.test.ts"
+        "tests/contractor-onboarding-review-static.test.ts",
+        "tests/contractor-onboarding-gate-static.test.ts"
       ]
     },
     "db": {
@@ -158,7 +159,7 @@
       "prerequisites": [
         "TEST_DATABASE_URL (disposable database only)"
       ],
-      "fileCount": 55,
+      "fileCount": 56,
       "files": [
         "tests/contractor-invoice-exactly-once-db.test.ts",
         "tests/vendor-expense-cut-check-db.test.ts",
@@ -214,7 +215,8 @@
         "tests/private-documents-db.test.ts",
         "tests/contractor-onboarding-emergency-contact-db.test.ts",
         "tests/contractor-onboarding-esign-complete-db.test.ts",
-        "tests/contractor-onboarding-review-db.test.ts"
+        "tests/contractor-onboarding-review-db.test.ts",
+        "tests/contractor-onboarding-gate-db.test.ts"
       ]
     },
     "e2e": {

@@ -34,6 +34,7 @@ import crypto from "node:crypto";
 import bcrypt from "bcrypt";
 import { startTestServer, login, apiRequest, type TestServer, type Session } from "../scripts/cross-tenant-negative-tests/server-harness";
 import { cascadeDelete, verifyZeroResidue } from "../scripts/cross-tenant-negative-tests/cascade-cleanup";
+import { markContractorOnboardingVerified } from "./__fixtures__/verified-contractor";
 
 const FORBIDDEN_PATTERNS = [/staging/i, /production/i, /^prod$/i, /apppaylinkstaging/i, /apppaylinkmain/i];
 
@@ -516,10 +517,17 @@ async function main() {
         return id;
       };
       const tokA = crypto.randomBytes(32).toString("hex"), tokB = crypto.randomBytes(32).toString("hex"), tokX = crypto.randomBytes(32).toString("hex");
-      const pA = await mkProp(A1, W.A1, "sent", tokA);
-      const pB = await mkProp(B1, W.B1, "sent", tokB);
-      const pX = await mkProp(B1, W.B1, "superseded", tokX);
-      const pN = await mkProp(B1, W.B1, "sent", null);
+      // Proposals belong to verified contractors (PR 8 gate): one per company, fully onboarded.
+      const CW: Record<string, string> = {};
+      for (const [key, co] of [["A1", A1], ["B1", B1]] as const) {
+        const id = uid(); CW[key] = id;
+        await q(`INSERT INTO workers (id,company_id,first_name,last_name,worker_type,status) VALUES ($1,$2,$3,'Fixture','contractor','active')`, [id, co, `PR2C${key}`]);
+        await markContractorOnboardingVerified(pool, { companyId: co, workerId: id });
+      }
+      const pA = await mkProp(A1, CW.A1, "sent", tokA);
+      const pB = await mkProp(B1, CW.B1, "sent", tokB);
+      const pX = await mkProp(B1, CW.B1, "superseded", tokX);
+      const pN = await mkProp(B1, CW.B1, "sent", null);
       const statusOf = async (id: string) => (await q(`SELECT status, approval_name FROM contractor_proposals WHERE id=$1`, [id])).rows[0];
       // /api/contractor-proposals/* sits behind the global session gate, so the live
       // defect was: ANY authenticated user (any tenant, any role) could approve ANY

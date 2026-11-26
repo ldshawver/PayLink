@@ -66,7 +66,7 @@ ok(
 // ── Resend reconciles remote status before acting, and blocks active contracts ─
 {
   const resendStart = routes.indexOf('app.post("/api/contractor-contracts/:id/resend-signing-request"');
-  const resendBody = routes.slice(resendStart, resendStart + 1500);
+  const resendBody = routes.slice(resendStart, resendStart + 1700);
   ok(
     "resend-signing-request calls syncDocumensoContractStatus before selecting pending signers",
     resendStart >= 0 && resendBody.includes("await syncDocumensoContractStatus(req.params.id)") && resendBody.indexOf("await syncDocumensoContractStatus") < resendBody.indexOf("const pending = ")
@@ -80,7 +80,7 @@ ok(
 // ── Manual Activate is unavailable for Documenso-backed contracts ──────────
 {
   const activateStart = routes.indexOf('app.post("/api/contractor-contracts/:id/activate"');
-  const activateBody = routes.slice(activateStart, activateStart + 3200);
+  const activateBody = routes.slice(activateStart, activateStart + 3400);
   ok(
     "activate route rejects Documenso-backed contracts before checking status",
     activateStart >= 0 && activateBody.includes("documensoBacked?.id") && activateBody.indexOf("documensoBacked?.id") < activateBody.indexOf('!["pending", "sent", "partially_signed", "fully_signed"]')
@@ -123,7 +123,7 @@ ok(
 // ── Legacy/manual send is gated to non-Documenso contracts and requires a reason ─
 {
   const legacySendStart = routes.indexOf('app.post("/api/contractor-contracts/:id/send",');
-  const legacySendBody = routes.slice(legacySendStart, legacySendStart + 1200);
+  const legacySendBody = routes.slice(legacySendStart, legacySendStart + 1400);
   ok(
     "legacy send is blocked once the contract is connected to Documenso",
     legacySendStart >= 0 && legacySendBody.includes("documensoBacked?.id) return res.status(400)")
