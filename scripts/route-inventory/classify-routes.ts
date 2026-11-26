@@ -288,6 +288,14 @@ const MANUAL_OVERRIDES: Record<string, { category: Category; justification: stri
     category: "authenticated global/self-service",
     justification: "Checks req.session.userId inline (401 if absent) rather than via requireAuth middleware; functionally equivalent gating, returns the caller's own identity only.",
   },
+  "GET /api/auth/session-policy": {
+    category: "public anonymous",
+    justification: "Publishes the idle-timeout and single-session settings (no secrets, no user data) so the client timer can match the server. Registered before the global auth gate, so it cannot inherit that gate.",
+  },
+  "POST /api/auth/session/touch": {
+    category: "authenticated global/self-service",
+    justification: "Rolls the caller's own idle timer. requireAuth plus the session idle middleware; no company data is read or written.",
+  },
 };
 
 type Category =
