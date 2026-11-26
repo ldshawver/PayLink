@@ -58,6 +58,7 @@ const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
 const LoginPage = lazy(() => import("@/pages/login"));
 const AcceptInvitePage = lazy(() => import("@/pages/accept-invite"));
 const VerifyEmailPage = lazy(() => import("@/pages/verify-email"));
+const ResetPasswordPage = lazy(() => import("@/pages/reset-password"));
 const ContractorSignupPage = lazy(() => import("@/pages/contractor-signup"));
 const JobBoardPublicRoute = lazy(() => import("@/pages/job-board-public"));
 const ApplicantPortalPage = lazy(() => import("@/pages/applicant-portal"));
@@ -744,6 +745,14 @@ function AppContent() {
     return (
       <Suspense fallback={<PageLoader />}>
         <VerifyEmailPage />
+      </Suspense>
+    );
+  }
+
+  if (location === "/reset-password") {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ResetPasswordPage />
       </Suspense>
     );
   }
