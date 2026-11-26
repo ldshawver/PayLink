@@ -156,11 +156,9 @@ function AdminLoginForm() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
-  const [recoveryUsername, setRecoveryUsername] = useState("");
-  const [recoveryToken, setRecoveryToken] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [recoveryIdentifier, setRecoveryIdentifier] = useState("");
   const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoverySent, setRecoverySent] = useState(false);
 
   // MFA step-up state — set when the server returns 202 mfaRequired
   const [mfaPending, setMfaPending] = useState<{ userId: string } | null>(null);
@@ -249,39 +247,29 @@ function AdminLoginForm() {
 
   async function handleRecovery(e: React.FormEvent) {
     e.preventDefault();
-    if (!recoveryUsername || !recoveryToken || !newPassword) {
-      toast({ title: "All fields are required", variant: "destructive" });
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast({ title: "Passwords do not match", variant: "destructive" });
-      return;
-    }
-    if (newPassword.length < 6) {
-      toast({ title: "Password must be at least 6 characters", variant: "destructive" });
+    if (!recoveryIdentifier.trim()) {
+      toast({ title: "Enter your username or email", variant: "destructive" });
       return;
     }
     setRecoveryLoading(true);
     try {
-      const res = await apiRequest("POST", "/api/auth/recover", {
-        username: recoveryUsername,
-        recoveryToken,
-        newPassword,
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: recoveryIdentifier.trim() }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        toast({ title: "Recovery failed", description: data.message, variant: "destructive" });
-      } else {
-        toast({ title: "Password reset", description: data.message });
-        setShowRecovery(false);
-        setUsername(recoveryUsername);
-        setRecoveryUsername("");
-        setRecoveryToken("");
-        setNewPassword("");
-        setConfirmPassword("");
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 429) {
+        toast({ title: "Please wait", description: data.message || "Too many reset requests.", variant: "destructive" });
+        return;
       }
+      if (!res.ok) {
+        toast({ title: "Could not send reset link", description: data.message, variant: "destructive" });
+        return;
+      }
+      setRecoverySent(true);
     } catch {
-      toast({ title: "Recovery failed", description: "Could not connect to server", variant: "destructive" });
+      toast({ title: "Could not send reset link", description: "Could not connect to server", variant: "destructive" });
     } finally {
       setRecoveryLoading(false);
     }
@@ -406,66 +394,39 @@ function AdminLoginForm() {
 
         {showRecovery && (
           <form onSubmit={handleRecovery} className="mt-3 space-y-3 p-3 rounded-lg bg-muted/50 border">
-            <p className="text-xs text-muted-foreground">
-              To reset a password, your server administrator must set a <code className="bg-muted px-1 rounded text-xs">RECOVERY_TOKEN</code> environment variable. Enter that token below along with the username and new password.
-            </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="rec-username" className="text-xs text-muted-foreground uppercase tracking-wider">Username</Label>
-              <Input
-                id="rec-username"
-                value={recoveryUsername}
-                onChange={(e) => setRecoveryUsername(e.target.value)}
-                placeholder="e.g. admin"
-                autoComplete="off"
-                data-testid="input-recovery-username"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rec-token" className="text-xs text-muted-foreground uppercase tracking-wider">Recovery Token</Label>
-              <Input
-                id="rec-token"
-                value={recoveryToken}
-                onChange={(e) => setRecoveryToken(e.target.value)}
-                placeholder="Token set by server admin"
-                autoComplete="off"
-                data-testid="input-recovery-token"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rec-newpw" className="text-xs text-muted-foreground uppercase tracking-wider">New Password</Label>
-              <Input
-                id="rec-newpw"
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Min. 6 characters"
-                autoComplete="new-password"
-                data-testid="input-recovery-new-password"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rec-confirmpw" className="text-xs text-muted-foreground uppercase tracking-wider">Confirm New Password</Label>
-              <Input
-                id="rec-confirmpw"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Re-enter new password"
-                autoComplete="new-password"
-                data-testid="input-recovery-confirm-password"
-              />
-            </div>
-            <Button
-              type="submit"
-              size="sm"
-              variant="secondary"
-              className="w-full"
-              disabled={recoveryLoading || !recoveryUsername || !recoveryToken || !newPassword || !confirmPassword}
-              data-testid="button-recovery-submit"
-            >
-              <KeyRound className="h-3.5 w-3.5 mr-1.5" />
-              {recoveryLoading ? "Resetting..." : "Reset Password"}
-            </Button>
+            {recoverySent ? (
+              <p className="text-xs text-muted-foreground" data-testid="text-forgot-sent">
+                If an account matches that username or email, a reset link is on its way. The link expires in one hour.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Enter your username or email. If an account matches, we will email a one-time reset link.
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rec-identifier" className="text-xs text-muted-foreground uppercase tracking-wider">Username or email</Label>
+                  <Input
+                    id="rec-identifier"
+                    value={recoveryIdentifier}
+                    onChange={(e) => setRecoveryIdentifier(e.target.value)}
+                    placeholder="you@company.com"
+                    autoComplete="username"
+                    data-testid="input-forgot-identifier"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="secondary"
+                  className="w-full"
+                  disabled={recoveryLoading || !recoveryIdentifier.trim()}
+                  data-testid="button-forgot-submit"
+                >
+                  <KeyRound className="h-3.5 w-3.5 mr-1.5" />
+                  {recoveryLoading ? "Sending..." : "Email reset link"}
+                </Button>
+              </>
+            )}
           </form>
         )}
       </div>
