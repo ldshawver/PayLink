@@ -40,16 +40,16 @@ ok(
     /isValidContractorType/.test(routesSrc),
 );
 ok(
-  "POST /api/workers independently validates worker_type before calling storage.createWorker",
-  /app\.post\("\/api\/workers",[\s\S]{0,2000}?isValidWorkerType\(req\.body\.workerType\)[\s\S]{0,2000}?storage\.createWorker\(/.test(routesSrc),
+  "POST /api/workers independently validates worker_type before inserting the worker",
+  /app\.post\("\/api\/workers",[\s\S]{0,2500}?isValidWorkerType\(req\.body\.workerType\)[\s\S]{0,2500}?tx\.insert\(workers\)/.test(routesSrc),
 );
 ok(
-  "POST /api/workers independently validates contractor_type before calling storage.createWorker",
-  /app\.post\("\/api\/workers",[\s\S]{0,2000}?isValidContractorType\(req\.body\.contractorType\)[\s\S]{0,2000}?storage\.createWorker\(/.test(routesSrc),
+  "POST /api/workers independently validates contractor_type before inserting the worker",
+  /app\.post\("\/api\/workers",[\s\S]{0,2500}?isValidContractorType\(req\.body\.contractorType\)[\s\S]{0,2500}?tx\.insert\(workers\)/.test(routesSrc),
 );
 ok(
-  "POST /api/workers calls normalizeWorkerPayRate before calling storage.createWorker",
-  /app\.post\("\/api\/workers",[\s\S]{0,2000}?normalizeWorkerPayRate\(req\.body\)[\s\S]{0,2000}?storage\.createWorker\(/.test(routesSrc),
+  "POST /api/workers calls normalizeWorkerPayRate before inserting the worker",
+  /app\.post\("\/api\/workers",[\s\S]{0,2500}?normalizeWorkerPayRate\(req\.body\)[\s\S]{0,2500}?tx\.insert\(workers\)/.test(routesSrc),
 );
 
 console.log("\nClient: employee.tsx uses the SAME shared rule, not a local reimplementation");

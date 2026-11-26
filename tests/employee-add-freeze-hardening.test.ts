@@ -83,13 +83,13 @@ ok("the boundary exposes a working Close control", /data-testid="button-employee
 console.log("\nserver wiring (server/routes.ts — POST /api/workers)");
 const routes = fs.readFileSync("server/routes.ts", "utf8");
 const postWorkers = routes.slice(routes.indexOf('app.post("/api/workers"'), routes.indexOf('app.patch("/api/workers/:id"'));
-ok("employee-number generation scopes getWorkers to the target company",
-  /storage\.getWorkers\(req\.body\.companyId\)/.test(postWorkers));
+ok("employee number is allocated for the target company inside the insert transaction",
+  /allocateEmployeeNumber\(tx as any, values\.companyId\)/.test(postWorkers)
+  && /tx\.insert\(workers\)/.test(postWorkers));
 ok("no unbounded storage.getWorkers() in the create path",
   !/storage\.getWorkers\(\)\s*;/.test(postWorkers) && !/await storage\.getWorkers\(\)\s*\n/.test(postWorkers));
-ok("uses reduce (not a variadic Math.max spread) for the highest number",
-  /companyWorkers\.reduce\(/.test(postWorkers) && !/Math\.max\(\.\.\.\w/.test(postWorkers));
-ok("still falls back to 1001 for the first employee", /1001/.test(postWorkers));
+ok("does not scan the company roster or fall back to 1001",
+  !/storage\.getWorkers\(req\.body\.companyId\)/.test(postWorkers) && !/1001/.test(postWorkers));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

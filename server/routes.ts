@@ -77,6 +77,8 @@ import {
 } from "./auth/stored-resource-guard.js";
 import type { User } from "@shared/schema";
 import { db } from "./db";
+import { workers } from "@shared/schema";
+import { allocateEmployeeNumber, EmployeeNumberExhaustedError, isEmployeeNumberConflict, EMPLOYEE_NUMBER_CONFLICT_MESSAGE } from "./employee-numbers";
 import { createUploadsHandler, findUploadOwners } from "./uploads-access";
 import { isApplicantApiAllowed } from "./job-board/applicant-api-allowlist";
 import { getAppEnvironment, getAppVersion, getCommitHash } from "./app-metadata";
@@ -3340,19 +3342,20 @@ function hashSigningToken(token: string): string {
         return res.status(400).json({ message: payRateResult.message });
       }
       req.body.payRate = payRateResult.payRate;
-      // Auto-generate employee number if not provided. Scoped to the target
-      // company (companyId is required above) — never load every tenant's
-      // workers; reduce (not a Math.max variadic spread) avoids a RangeError.
-      if (!req.body.employeeNumber) {
-        const companyWorkers = await storage.getWorkers(req.body.companyId);
-        const highest = companyWorkers.reduce((max: number, w: any) => {
-          const n = parseInt(w.employeeNumber || "0", 10);
-          return !isNaN(n) && n > max ? n : max;
-        }, 0);
-        const nextNum = highest > 0 ? highest + 1 : 1001;
-        req.body.employeeNumber = String(nextNum);
-      }
-      const worker = await storage.createWorker(req.body);
+      // Auto-generate a per-company YYNN when none is supplied. Allocation and
+      // the insert share one transaction so the counter lock (or the pre-0041
+      // advisory lock) covers the write. A supplied number is kept as-is.
+      const suppliedNumber = typeof req.body.employeeNumber === "string" ? req.body.employeeNumber.trim() : "";
+      const values: any = { ...req.body };
+      const worker = await db.transaction(async (tx) => {
+        if (!suppliedNumber) {
+          values.employeeNumber = await allocateEmployeeNumber(tx as any, values.companyId);
+        } else {
+          values.employeeNumber = suppliedNumber;
+        }
+        const [created] = await tx.insert(workers).values(values).returning();
+        return created;
+      });
       await writeAuditLog({
         actorUserId: req.session.userId!, targetResource: "workers", changeType: "worker_created",
         afterValue: `${worker.firstName} ${worker.lastName} (${worker.employeeNumber})`,
@@ -3415,6 +3418,12 @@ function hashSigningToken(token: string): string {
       res.status(201).json({ ...worker, account });
     } catch (error: any) {
       console.error("Failed to create worker:", error);
+      if (error instanceof EmployeeNumberExhaustedError) {
+        return res.status(409).json({ message: error.message });
+      }
+      if (isEmployeeNumberConflict(error)) {
+        return res.status(409).json({ message: EMPLOYEE_NUMBER_CONFLICT_MESSAGE });
+      }
       if (error?.code === "23502" && error?.column) {
         // Postgres not-null violation — surface which field was missing
         // instead of a generic failure, without leaking query/schema detail.
