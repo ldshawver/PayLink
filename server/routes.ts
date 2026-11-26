@@ -117,6 +117,11 @@ import {
   isEsignKind, listTemplateMappings, normalizeMappingInput, setTemplateMapping, startOnboardingSignature,
   getOwnSigningLink, esignServerStatus, listEsignState, findOwnContractorOnboardingId,
 } from "./contractor-onboarding/esign";
+import {
+  UPLOADABLE_KINDS, listWorkerPrivateDocs, storePrivateDocument, openPrivateDocument, ownOnboardingSummary,
+  onboardingWorkerForCompany, canAccessWorkerPrivateDocs, privateDocsUnavailable, type PrivateDocKind,
+} from "./private-documents/service";
+import { PRIVATE_DOC_MAX_BYTES } from "./private-documents/store";
 import { provisionDemoTenant } from "./demo-seed";
 import { copyPublishedScheduleWeek } from "./schedule-copy-week";
 import { autoCreateProposalBackedInvoice, buildContractDocumensoReturnUrl, buildContractSigningUrl, canSignContract, findSignerSpecificDocumensoLink, resolveDocumensoSenderIdentity } from "./contract-signing-flow";
@@ -3799,6 +3804,89 @@ function hashSigningToken(token: string): string {
       res.status(500).json({ message: "Could not start signing. Please try again." });
     }
   });
+  // PR 4 — private personnel documents (government ID). Encrypted at rest in a
+  // private folder, no URL; opened only through the audited route below by the
+  // worker themself or an admin/manager of the same company.
+  const privateDocUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: PRIVATE_DOC_MAX_BYTES, files: 1, fields: 2 } });
+  const privateActor = (u: any) => ({ id: u.id as string, role: String(u.role || ""), companyId: (u.companyId ?? null) as string | null, workerId: (u.workerId ?? null) as string | null });
+
+  app.get("/api/my-onboarding", requireAuth, async (req, res) => {
+    try {
+      const me = await ownContractor(req);
+      if (!me) return res.status(404).json({ message: "Onboarding record not found." });
+      const summary = await ownOnboardingSummary(me.companyId, me.workerId);
+      if (!summary) return res.status(404).json({ message: "Onboarding record not found." });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ...summary, documents: await listWorkerPrivateDocs(me.companyId, me.workerId) });
+    } catch (e) {
+      console.error("GET /api/my-onboarding failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load your onboarding" });
+    }
+  });
+
+  app.post("/api/my-onboarding/government-id/:side", requireAuth, requireCsrfToken, (req, res, next) => {
+    privateDocUpload.single("file")(req, res, (err: any) => {
+      if (err?.code === "LIMIT_FILE_SIZE") return res.status(413).json({ code: "too_large", message: "The file is larger than 10 MB." });
+      if (err) return res.status(400).json({ code: "bad_upload", message: "Upload one file in the 'file' field." });
+      next();
+    });
+  }, async (req, res) => {
+    try {
+      const side = String(req.params.side);
+      const kind = (`government_id_${side}`) as PrivateDocKind;
+      const me = await ownContractor(req);
+      if (!me || !UPLOADABLE_KINDS.includes(kind)) return res.status(404).json({ message: "Onboarding record not found." });
+      const summary = await ownOnboardingSummary(me.companyId, me.workerId);
+      if (!summary) return res.status(404).json({ message: "Onboarding record not found." });
+      const user = await storage.getUser(req.session.userId!);
+      const result = await storePrivateDocument({
+        actor: privateActor(user), companyId: me.companyId, workerId: me.workerId, kind,
+        file: (req as any).file?.buffer, onboardingId: summary.onboardingId,
+      });
+      if (!result.ok) return res.status(result.status).json({ code: result.code, message: result.message });
+      res.status(201).json(result.document);
+    } catch (e) {
+      console.error("POST /api/my-onboarding/government-id/:side failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not store the document. Please try again." });
+    }
+  });
+
+  app.get("/api/contractor-onboarding/:id/private-documents", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const companyId = await resolveTenantCompanyId(actingUser);
+      const target = companyId ? await onboardingWorkerForCompany(companyId, String(req.params.id)) : null;
+      if (!actingUser || !companyId || !target || !(await canAccessWorkerPrivateDocs(privateActor(actingUser), companyId, target.workerId))) {
+        return res.status(404).json({ message: "Onboarding record not found." });
+      }
+      const unavailable = await privateDocsUnavailable();
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ available: !unavailable, message: unavailable?.message ?? null, documents: await listWorkerPrivateDocs(companyId, target.workerId) });
+    } catch (e) {
+      console.error("GET /api/contractor-onboarding/:id/private-documents failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Failed to load documents" });
+    }
+  });
+
+  app.get("/api/private-documents/:docId", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(404).json({ message: "Document not found." });
+      const disposition = req.query.download === "1" ? "download" : "view";
+      const result = await openPrivateDocument({ actor: privateActor(user), documentId: String(req.params.docId), disposition });
+      if (!result.ok) return res.status(result.status).json({ message: result.message });
+      res.setHeader("Cache-Control", "no-store, private");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+      res.setHeader("Content-Type", result.mimeType);
+      res.setHeader("Content-Disposition", `${disposition === "download" ? "attachment" : "inline"}; filename="${result.filename}"`);
+      res.send(result.body);
+    } catch (e) {
+      console.error("GET /api/private-documents/:docId failed:", (e as Error)?.message);
+      res.status(500).json({ message: "Could not open the document." });
+    }
+  });
+
   app.get("/api/my-onboarding/esign/:kind/link", requireAuth, async (req, res) => {
     try {
       const kind = String(req.params.kind);
