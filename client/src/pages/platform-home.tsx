@@ -1,13 +1,7 @@
-import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { useAuth } from "@/hooks/use-auth";
-import { apiRequest } from "@/lib/queryClient";
 import {
   FileBadge, ClipboardCheck, Rss, ServerCog, ShieldCheck,
   CreditCard, ArrowRight, TrendingUp, Users, Building2, AlertTriangle
@@ -62,66 +56,6 @@ function ModuleCard({ title, description, href, items, badge }: {
         </CardContent>
       </Card>
     </Link>
-  );
-}
-
-function TrialLengthSetting() {
-  const { user } = useAuth();
-  const canEdit = user?.role === "platform_super_admin" || user?.role === "platform_admin";
-  const { data } = useQuery<{ trialLengthDays: number; summary: string }>({ queryKey: ["/api/platform/settings"] });
-  const [days, setDays] = useState("30");
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-
-  useEffect(() => {
-    if (data?.trialLengthDays) setDays(String(data.trialLengthDays));
-  }, [data?.trialLengthDays]);
-
-  async function save() {
-    setSaving(true);
-    setMessage("");
-    try {
-      const res = await apiRequest("PATCH", "/api/platform/settings", { trialLengthDays: Number(days) });
-      const body = await res.json();
-      setDays(String(body.trialLengthDays));
-      setMessage("Saved. New trials use this length. Existing trial end dates stay as they are.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save the trial length.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card data-testid="card-trial-length">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold">Trial length</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {data?.summary || "30-day trial, no credit card"}. This applies to new signups only.
-        </p>
-      </CardHeader>
-      <CardContent className="flex flex-col sm:flex-row sm:items-end gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="trial-length-days">Days</Label>
-          <Input
-            id="trial-length-days"
-            type="number"
-            min={1}
-            max={365}
-            value={days}
-            onChange={(e) => setDays(e.target.value)}
-            disabled={!canEdit}
-            data-testid="input-trial-length-days"
-          />
-        </div>
-        {canEdit && (
-          <Button type="button" onClick={save} disabled={saving} data-testid="button-save-trial-length">
-            {saving ? "Saving..." : "Save"}
-          </Button>
-        )}
-        {message && <p className="text-xs text-muted-foreground" data-testid="text-trial-length-status">{message}</p>}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -196,8 +130,6 @@ export default function PlatformHomePage() {
             />
           </div>
         </div>
-
-        <TrialLengthSetting />
 
         {/* Architecture Notice */}
         <div className="border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 rounded-lg p-4">
