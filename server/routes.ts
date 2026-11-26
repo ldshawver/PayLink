@@ -36277,7 +36277,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const actor = await storage.getUser(req.session.userId!);
       if (!actor) return res.status(401).json({ message: "User not found" });
-      const target = await storage.getUser(req.params.userId);
+      const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+      if (!userId) return res.status(400).json({ message: "User id is required" });
+      const target = await storage.getUser(userId);
       if (!target) return res.status(404).json({ message: "User not found" });
       if (!target.email) {
         return res.status(409).json({ message: "This account has no email address. A platform administrator can set a password directly instead." });
@@ -36314,10 +36316,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!passwordMeetsPolicy(req.body?.newPassword)) {
         return res.status(400).json({ message: "Password must be at least 8 characters" });
       }
+      const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+      if (!userId) return res.status(400).json({ message: "User id is required" });
       const passwordHash = await bcrypt.hash(req.body.newPassword, 10);
-      const updated = await setPasswordByPlatformAdmin(actor.id, req.params.userId, passwordHash);
+      const updated = await setPasswordByPlatformAdmin(actor.id, userId, passwordHash);
       if (!updated) return res.status(404).json({ message: "User not found" });
-      await revokeUserSessions(req.params.userId);
+      await revokeUserSessions(userId);
       res.json({ message: "Password updated." });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to set password") });
