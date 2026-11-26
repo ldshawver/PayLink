@@ -5889,6 +5889,15 @@ export const jobPostAccessGrants = pgTable("job_post_access_grants", {
   revokedByUserId: varchar("revoked_by_user_id"),
 });
 
+/** Self-hosted AI switches (migration 0040). subject_id is "platform" or a company id. */
+export const aiControls = pgTable("ai_controls", {
+  subjectId: varchar("subject_id").primaryKey(),
+  scope: text("scope").notNull(),
+  enabled: boolean("enabled").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedBy: varchar("updated_by"),
+});
+
 export const jobBoardAccessEvents = pgTable("job_board_access_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull(),

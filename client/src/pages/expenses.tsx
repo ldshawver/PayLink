@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { AiUnavailableNotice, useAiStatus } from "@/components/ai-status-banner";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,6 +114,7 @@ function normalizeExpensePaymentMethod(value: any): string {
 }
 
 function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }: any) {
+  const { data: aiStatus } = useAiStatus();
   const { toast } = useToast();
   const [form, setForm] = useState({
     companyId: "", categoryId: "", expenseDate: new Date().toISOString().split("T")[0],
@@ -152,7 +154,10 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/expenses/ai-scan", { method: "POST", credentials: "include", body: fd });
-      if (!res.ok) throw new Error("AI scan failed");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.message || "AI scan failed");
+      }
       const data = await res.json();
       setAiResult(data.extracted);
       if (data.extracted) {
@@ -176,7 +181,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
         if (matchCat) setForm(f => ({ ...f, categoryId: matchCat.id }));
       }
       toast({ title: "AI extraction complete" });
-    } catch { toast({ title: "AI scan failed", variant: "destructive" }); }
+    } catch (error) { toast({ title: "AI scan failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" }); }
     setAiLoading(false);
   };
 
@@ -191,6 +196,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
         </div>
       </div>
 
+      <AiUnavailableNotice vision />
       <div className="border border-dashed rounded-lg p-4 text-center space-y-2">
         <div className="flex items-center justify-center gap-3">
           <label className="cursor-pointer">
@@ -210,7 +216,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
           <div className="flex items-center justify-center gap-2">
             <FileText className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm">{file.name}</span>
-            <Button size="sm" variant="outline" onClick={handleAiScan} disabled={aiLoading} data-testid="button-ai-scan">
+            <Button size="sm" variant="outline" onClick={handleAiScan} disabled={aiLoading || aiStatus?.visionAvailable === false} data-testid="button-ai-scan">
               {aiLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
               {aiLoading ? "Scanning..." : "AI Extract"}
             </Button>
@@ -328,6 +334,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
 }
 
 function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
+  const { data: aiStatus } = useAiStatus();
   const { toast } = useToast();
   const [form, setForm] = useState({
     companyId: "", invoiceNumber: "", invoiceDate: new Date().toISOString().split("T")[0],
@@ -366,7 +373,10 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/expenses/ai-scan", { method: "POST", credentials: "include", body: fd });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.message || "AI scan failed");
+      }
       const data = await res.json();
       if (data.extracted) {
         const extracted = data.extracted;
@@ -381,12 +391,13 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
         }));
       }
       toast({ title: "AI extraction complete" });
-    } catch { toast({ title: "AI scan failed", variant: "destructive" }); }
+    } catch (error) { toast({ title: "AI scan failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" }); }
     setAiLoading(false);
   };
 
   return (
     <div className="space-y-4">
+      <AiUnavailableNotice vision />
       <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded p-3">
         <div className="flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
@@ -412,7 +423,7 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
         {file && (
           <div className="flex items-center justify-center gap-2">
             <FileText className="h-4 w-4" /><span className="text-sm">{file.name}</span>
-            <Button size="sm" variant="outline" onClick={handleAiScan} disabled={aiLoading} data-testid="button-invoice-ai-scan">
+            <Button size="sm" variant="outline" onClick={handleAiScan} disabled={aiLoading || aiStatus?.visionAvailable === false} data-testid="button-invoice-ai-scan">
               {aiLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
               AI Extract
             </Button>

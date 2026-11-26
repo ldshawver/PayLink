@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { PlatformAiSwitch } from "@/components/ai-status-banner";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -130,6 +131,8 @@ export default function PlatformHomePage() {
             />
           </div>
         </div>
+
+        <PlatformAiSwitch />
 
         {/* Architecture Notice */}
         <div className="border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 rounded-lg p-4">

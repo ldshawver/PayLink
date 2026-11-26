@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { CompanyAiSwitch } from "@/components/ai-status-banner";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -831,6 +832,7 @@ export default function SettingsPage() {
       </div>
 
       <SaasPlatformSection />
+      <CompanyAiSwitch />
 
       <div>
         <div className="flex items-center gap-2 mb-4">

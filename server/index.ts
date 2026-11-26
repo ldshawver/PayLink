@@ -4296,6 +4296,19 @@ Thank you,
     await runInv("dam_documents.related_payroll_run_id", sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_payroll_run_id VARCHAR`);
     await runInv("dam_documents.finalized_by_user_id",   sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_by_user_id VARCHAR`);
     await runInv("dam_documents.finalized_at",           sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ`);
+
+    // Self-hosted AI switches (migration 0040). Missing platform row means off.
+    await runInv("ai_controls table", sqlInv`CREATE TABLE IF NOT EXISTS ai_controls (
+      subject_id VARCHAR PRIMARY KEY,
+      scope TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_by VARCHAR,
+      CONSTRAINT ai_controls_scope_check CHECK (
+        (scope = 'platform' AND subject_id = 'platform') OR
+        (scope = 'company' AND subject_id <> 'platform')
+      )
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
