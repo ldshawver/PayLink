@@ -4296,6 +4296,14 @@ Thank you,
     await runInv("dam_documents.related_payroll_run_id", sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS related_payroll_run_id VARCHAR`);
     await runInv("dam_documents.finalized_by_user_id",   sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_by_user_id VARCHAR`);
     await runInv("dam_documents.finalized_at",           sqlInv`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ`);
+
+    // Platform settings (migration 0039). A missing row keeps the 30-day default.
+    await runInv("platform_settings table", sqlInv`CREATE TABLE IF NOT EXISTS platform_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_by VARCHAR
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

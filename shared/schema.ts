@@ -5889,6 +5889,14 @@ export const jobPostAccessGrants = pgTable("job_post_access_grants", {
   revokedByUserId: varchar("revoked_by_user_id"),
 });
 
+/** Platform-wide settings (migration 0039). A missing trial_length_days row means 30 days. */
+export const platformSettings = pgTable("platform_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedBy: varchar("updated_by"),
+});
+
 export const jobBoardAccessEvents = pgTable("job_board_access_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id").notNull(),

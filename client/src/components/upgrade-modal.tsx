@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useTrial } from "@/hooks/use-trial";
+import { useTrialOffer } from "@/hooks/use-trial-offer";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Check, Mail, Shield, Zap } from "lucide-react";
@@ -14,6 +15,7 @@ import { Check, Mail, Shield, Zap } from "lucide-react";
 export function UpgradeModal() {
   const [open, setOpen] = useState(false);
   const { isTrialExpired } = useTrial();
+  const { trialLengthDays } = useTrialOffer();
 
   useEffect(() => {
     const handler = () => setOpen(true);
@@ -38,7 +40,7 @@ export function UpgradeModal() {
           </DialogTitle>
           <DialogDescription>
             {isTrialExpired
-              ? "Your 30-day trial has expired. Subscribe to continue using PayLink — your data is safe and waiting."
+              ? `Your ${trialLengthDays}-day trial has expired. Subscribe to continue using PayLink — your data is safe and waiting.`
               : "Unlock PayLink with simple, transparent pricing."
             }
           </DialogDescription>
