@@ -3419,6 +3419,18 @@ Thank you,
     await run("email_verifications.token_hash uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_email_verifications_token_hash ON email_verifications (token_hash)`);
     await run("email_verifications.user_id idx", sql`CREATE INDEX IF NOT EXISTS idx_email_verifications_user_id ON email_verifications (user_id)`);
 
+    // Per-user password reset (migration 0038). Raw tokens are never stored.
+    await run("password_reset_tokens table", sql`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id     VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash  TEXT NOT NULL,
+      expires_at  TIMESTAMP NOT NULL,
+      consumed_at TIMESTAMP,
+      created_at  TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("password_reset_tokens.token_hash uq", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_password_reset_tokens_token_hash ON password_reset_tokens (token_hash)`);
+    await run("password_reset_tokens.user_id idx", sql`CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens (user_id)`);
+
     await run("account_invites table", sql`CREATE TABLE IF NOT EXISTS account_invites (
       id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id         VARCHAR,
