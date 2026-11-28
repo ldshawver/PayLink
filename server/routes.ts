@@ -2840,6 +2840,7 @@ function hashSigningToken(token: string): string {
   app.get("/api/payroll-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { year, quarter, companyId } = req.query;
+      const reconcileApproved = req.query.report === "1099-nec";
       // ── Tenant isolation: non-platform users are ALWAYS scoped to their own company.
       // A tenant admin must never see another company's payroll summary, regardless
       // of what ?companyId is passed.  Platform users may filter by ?companyId param.
@@ -2855,18 +2856,23 @@ function hashSigningToken(token: string): string {
       // seed data doesn't pollute real aggregates.
       const isDemo = (r: typeof allRuns[0]) => (r as any).isDemo === true;
       const allRunsClean = isTenantSummaryUser ? allRuns : allRuns.filter(r => !isDemo(r));
-      const processedRuns = allRunsClean.filter(r => r.status === "processed" || r.status === "paid");
+      const processedRuns = allRunsClean.filter(r => r.status === "processed" || r.status === "paid" ||
+        (reconcileApproved && r.status === "approved" && !r.voidedAt && !r.reversedAt));
 
       let filteredRuns = processedRuns;
+      const reportDate = (run: typeof processedRuns[number]) =>
+        reconcileApproved && run.status === "approved"
+          ? new Date(`${run.payDate ?? run.periodEnd}T12:00:00`)
+          : new Date(run.periodEnd);
       if (year) {
         filteredRuns = filteredRuns.filter(r => {
-          const d = new Date(r.periodEnd);
+          const d = reportDate(r);
           return d.getFullYear() === parseInt(year as string);
         });
       }
       if (quarter && quarter !== "") {
         filteredRuns = filteredRuns.filter(r => {
-          const d = new Date(r.periodEnd);
+          const d = reportDate(r);
           const m = d.getMonth();
           const q = m < 3 ? "Q1" : m < 6 ? "Q2" : m < 9 ? "Q3" : "Q4";
           return q === quarter;
@@ -2886,9 +2892,15 @@ function hashSigningToken(token: string): string {
         deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number;
       }> = {};
 
+      const approvedPendingByWorker: Record<string, number> = Object.create(null);
       for (const run of filteredRuns) {
         const items = await storage.getPayrollItems(run.id);
         for (const item of items) {
+          if (run.status === "approved" && !(run.payDate && run.achStatus === "settled" && run.achSettledAt &&
+            (item.paymentMethod === "direct_deposit" || item.paymentMethod === "ach"))) {
+            approvedPendingByWorker[item.workerId] = (approvedPendingByWorker[item.workerId] ?? 0) + Number(item.grossPay ?? 0);
+            continue;
+          }
           if (!workerTotals[item.workerId]) {
             workerTotals[item.workerId] = { workerId: item.workerId, grossPay: 0, regularPay: 0, overtimePay: 0, doubleTimePay: 0, deductions: 0, netPay: 0, regularHours: 0, overtimeHours: 0, doubleTimeHours: 0 };
           }
@@ -2976,7 +2988,8 @@ function hashSigningToken(token: string): string {
         ssTaxableWages: enhancedTotals.reduce((s, t) => s + t.ssTaxableWages, 0),
       };
 
-      res.json({ workerTotals: enhancedTotals, grandTotal, runCount: filteredRuns.length });
+      res.json({ workerTotals: enhancedTotals, grandTotal, runCount: filteredRuns.length,
+        ...(reconcileApproved ? { approvedPendingByWorker } : {}) });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to get payroll summary" });

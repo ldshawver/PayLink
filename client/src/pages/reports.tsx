@@ -1802,7 +1802,7 @@ type PayrollSummaryGrandTotal = {
   ssTaxableWages: number; futaTaxableWages: number; futaTax: number;
   suiTaxableWages: number; suiTax: number; ettTax: number;
 };
-type PayrollSummary = { workerTotals: PayrollSummaryWorker[]; grandTotal: PayrollSummaryGrandTotal; runCount: number };
+type PayrollSummary = { workerTotals: PayrollSummaryWorker[]; grandTotal: PayrollSummaryGrandTotal; runCount: number; approvedPendingByWorker?: Record<string, number> };
 
 function usePayrollData(open: boolean) {
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"], enabled: open });
@@ -1812,8 +1812,9 @@ function usePayrollData(open: boolean) {
   return { workers, companies, payrollRuns, deductions };
 }
 
-function usePayrollSummary(open: boolean, year: string, quarter: string, companyId: string) {
+function usePayrollSummary(open: boolean, year: string, quarter: string, companyId: string, report?: "1099-nec"): PayrollSummary {
   const params = new URLSearchParams({ year });
+  if (report) params.set("report", report);
   if (quarter) params.set("quarter", quarter);
   if (companyId && companyId !== "all") params.set("companyId", companyId);
   const { data } = useQuery<PayrollSummary>({ queryKey: ["/api/payroll-summary?" + params.toString()], enabled: open });
@@ -2016,7 +2017,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
   const [companyId, setCompanyId] = useState("all");
   const [reportType, setReportType] = useState<"annual" | "quarterly">("annual");
   const { workers, companies } = usePayrollData(open);
-  const summary = usePayrollSummary(open, year, reportType === "quarterly" ? quarter : "", companyId);
+  const summary = usePayrollSummary(open, year, reportType === "quarterly" ? quarter : "", companyId, "1099-nec");
 
   const contractors = workers.filter(w => w.workerType === "contractor" && w.isActive);
   const filtered = companyId === "all" ? contractors : contractors.filter(w => w.companyId === companyId);
@@ -2060,7 +2061,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-1099"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-1099"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="1099-nec" category="tax" defaultName="Form 1099-NEC" headers={["Contractor", "TIN", "Compensation"]} rows={contractors.map(c => [c.firstName + " " + c.lastName, c.ssn || "", "$" + (Number(c.payRate || 0) * 2080).toFixed(2)])} />
+          <SaveReportButton reportType="1099-nec" category="tax" defaultName="Form 1099-NEC" headers={["Contractor", "TIN", "Compensation"]} rows={filtered.map(c => [c.firstName + " " + c.lastName, c.ssn || "", "$" + getContractorPay(c).toFixed(2)])} />
         </div>
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-1099">No contractors found for the selected period.</p>
@@ -2071,6 +2072,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
               <TableRow>
                 <TableHead>Contractor</TableHead><TableHead>TIN/SSN</TableHead>
                 <TableHead className="text-right">Non-Employee Compensation</TableHead>
+                <TableHead className="text-right">Approved, payment unverified</TableHead>
                 <TableHead>SE Tax (Reference)</TableHead>
               </TableRow>
             </TableHeader>
@@ -2083,6 +2085,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
                     <TableCell className="font-medium">{w.firstName} {w.lastName}</TableCell>
                     <TableCell>{w.ssn ? `***-**-${w.ssn.slice(-4)}` : "N/A"}</TableCell>
                     <TableCell className="text-right">${comp.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${(summary.approvedPendingByWorker?.[w.id] ?? 0).toFixed(2)}</TableCell>
                     <TableCell className="text-right text-muted-foreground">${seTax.toFixed(2)}</TableCell>
                   </TableRow>
                 );
@@ -2090,6 +2093,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
               <TableRow className="font-bold border-t-2">
                 <TableCell colSpan={2}>Total</TableCell>
                 <TableCell className="text-right">${filtered.reduce((s, w) => s + getContractorPay(w), 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${filtered.reduce((s, w) => s + (summary.approvedPendingByWorker?.[w.id] ?? 0), 0).toFixed(2)}</TableCell>
                 <TableCell></TableCell>
               </TableRow>
             </TableBody>
