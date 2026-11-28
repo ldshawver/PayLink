@@ -175,6 +175,17 @@ async function main() {
     ok("A3 (trades) sees the trades-only posting", (await svc.listAvailablePosts(deps, CA3) as any).body.some((p: any) => p.id === tradesOnly.id));
     okR("A1 → B posting by id is 404", await svc.getPost(deps, CA1, postB.id), 404);
     okR("B1 → A posting by id is 404", await svc.getPost(deps, CB1, oneTime.id), 404);
+    await pool.query(`UPDATE tenant_companies SET tenant_id = $1, is_primary = false WHERE company_id = $2`, [tenantA, ids.coB]);
+    try {
+      const shared = (await svc.listAvailablePosts(deps, CB1) as any).body;
+      ok("same-tenant contractor sees a sibling-company posting", shared.some((p: any) => p.id === oneTime.id));
+      ok("sibling-company discovery preserves invite-only visibility", !shared.some((p: any) => p.id === invitedOnly.id));
+      const detail = (await svc.getPost(deps, CB1, oneTime.id) as any).body;
+      ok("sibling-company detail is browse-only and omits attachments", detail?.id === oneTime.id &&
+        detail.acceptingSubmissions === false && detail.attachments.length === 0);
+    } finally {
+      await pool.query(`UPDATE tenant_companies SET tenant_id = $1, is_primary = true WHERE company_id = $2`, [tenantB, ids.coB]);
+    }
     okR("admin B → A posting is 404", await svc.getPost(deps, ADMIN_B, oneTime.id), 404);
     okR("admin B cannot list A's bids", await svc.listBidsForPost(deps, ADMIN_B, oneTime.id), 404);
     okR("admin B cannot edit A's posting", await svc.updatePost(deps, ADMIN_B, oneTime.id, { title: "pwned" }), 404);

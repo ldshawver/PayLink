@@ -178,14 +178,26 @@ async function isInvited(q: Q, postId: string, workerId: string): Promise<boolea
  * of the posting's own kind (bid for contractor work, application for an
  * employee position) — which keeps it visible after the posting closes.
  */
-export async function workerCanSeePost(q: Q, post: any, who: WorkerIdentity, userId: string): Promise<{ eligible: boolean; hasBid: boolean }> {
-  if (!who.companyId || who.companyId !== post.company_id) return { eligible: false, hasBid: false };
+export async function workerCanSeePost(q: Q, post: any, who: WorkerIdentity, userId: string, allowTenantDiscovery = false): Promise<{ eligible: boolean; hasBid: boolean }> {
+  if (!who.companyId) return { eligible: false, hasBid: false };
+  if (who.companyId !== post.company_id) {
+    if (!allowTenantDiscovery || who.workerType !== "contractor" || post.worker_classification !== "contractor" || !post.tenant_id) {
+      return { eligible: false, hasBid: false };
+    }
+    const membership = await q.query(
+      `SELECT company_id FROM tenant_companies WHERE company_id IN ($1, $2)
+       GROUP BY company_id HAVING count(DISTINCT tenant_id) = 1 AND bool_and(tenant_id = $3)`,
+      [who.companyId, post.company_id, post.tenant_id],
+    );
+    if (membership.rows.length !== 2) return { eligible: false, hasBid: false };
+  }
   const mine = post.worker_classification === "employee"
     ? await q.query(`SELECT 1 FROM employment_applications WHERE job_post_id = $1 AND applicant_user_id = $2 LIMIT 1`, [post.id, userId])
     : await q.query(`SELECT 1 FROM contractor_job_bids WHERE job_post_id = $1 AND contractor_id = $2 LIMIT 1`, [post.id, who.workerId]);
   const hasBid = mine.rows.length > 0;
   const invited = post.worker_classification === "contractor" ? await isInvited(q, post.id, who.workerId) : false;
-  const eligible = post.status === "published" && workerEligibleForPost(post, who, invited);
+  const eligible = post.status === "published" &&
+    workerEligibleForPost(post, { ...who, companyId: post.company_id }, invited);
   return { eligible, hasBid };
 }
 
@@ -403,15 +415,16 @@ export function getPost(deps: JobBoardDeps, actor: JobBoardActor, id: string) {
     }
     const who = actor.worker;
     if (!who) fail(404, NOT_FOUND_POST);
-    const vis = await workerCanSeePost(deps.pool, post, who!, actor.userId);
+    const vis = await workerCanSeePost(deps.pool, post, who, actor.userId, true);
     if (!vis.eligible && !vis.hasBid) fail(404, NOT_FOUND_POST);
     if (!vis.hasBid) {
       const g = await deps.tenantGate(post.company_id).catch(() => ({ allowed: false }));
       if (!g.allowed) fail(404, NOT_FOUND_POST);
     }
     const company = await deps.pool.query(`SELECT name FROM companies WHERE id = $1`, [post.company_id]);
-    const accepting = submissionsOpen(post, deps.now?.()).ok && vis.eligible;
-    const base = { ...projectPostForWorker({ ...post, company_name: company.rows[0]?.name }), attachments: att, acceptingSubmissions: accepting, viewer: "worker" };
+    const ownCompany = who.companyId === post.company_id;
+    const accepting = ownCompany && submissionsOpen(post, deps.now?.()).ok && vis.eligible;
+    const base = { ...projectPostForWorker({ ...post, company_name: company.rows[0]?.name }), attachments: ownCompany ? att : [], acceptingSubmissions: accepting, viewer: "worker" };
     if (post.worker_classification === "employee") {
       const mine = await deps.pool.query(
         `SELECT * FROM employment_applications WHERE job_post_id = $1 AND applicant_user_id = $2 ORDER BY (status = 'withdrawn'), updated_at DESC LIMIT 1`,
@@ -654,7 +667,15 @@ export function listAvailablePosts(deps: JobBoardDeps, actor: JobBoardActor, fil
          JOIN companies c ON c.id = p.company_id
          LEFT JOIN contractor_job_bids b ON b.job_post_id = p.id AND b.contractor_id = $2 AND b.status <> 'withdrawn'
          LEFT JOIN employment_applications a ON a.job_post_id = p.id AND a.applicant_user_id = $3 AND a.status <> 'withdrawn'
-        WHERE p.company_id = $1 AND p.status = 'published'
+        WHERE (p.company_id = $1 OR (
+          $9::boolean AND p.worker_classification = 'contractor' AND p.tenant_id IS NOT NULL
+          AND (SELECT count(*) FROM (
+            SELECT tc.company_id FROM tenant_companies tc
+            WHERE tc.company_id IN ($1, p.company_id)
+            GROUP BY tc.company_id
+            HAVING count(DISTINCT tc.tenant_id) = 1 AND bool_and(tc.tenant_id = p.tenant_id)
+          ) AS members) = 2
+        )) AND p.status = 'published'
           AND ($4::text IS NULL OR p.opportunity_type = $4)
           AND ($5::text IS NULL OR p.schedule_type = $5)
           AND ($6::text IS NULL OR p.worker_classification = $6)
@@ -662,18 +683,22 @@ export function listAvailablePosts(deps: JobBoardDeps, actor: JobBoardActor, fil
           AND ($8::text IS NULL OR p.compensation_type = $8)
         ORDER BY p.application_deadline NULLS LAST, p.published_at DESC LIMIT 500`,
       [who.companyId, who.workerId, actor.userId, f(filters.opportunityType), f(filters.scheduleType), f(filters.classification),
-        f(filters.workLocationType), f(filters.compensationType)],
+        f(filters.workLocationType), f(filters.compensationType), who.workerType === "contractor"],
     );
     const now = deps.now?.() ?? new Date();
     const rows = [];
     for (const p of r.rows) {
       if (p.tenant_id && (await deps.tenantIdForCompany(p.company_id)) !== p.tenant_id) continue;
-      if (!workerEligibleForPost(p, who, p.invited)) continue;
+      if (!workerEligibleForPost(p, { ...who, companyId: p.company_id }, p.invited)) continue;
+      if (p.company_id !== who.companyId) {
+        const gate = await deps.tenantGate(p.company_id).catch(() => ({ allowed: false }));
+        if (!gate.allowed) continue;
+      }
       const open = submissionsOpen(p, now).ok;
       const mineId = p.worker_classification === "employee" ? p.my_application_id : p.my_bid_id;
       if (!open && !mineId) continue;
       rows.push({
-        ...projectPostForWorker(p), acceptingSubmissions: open, invited: p.worker_classification === "contractor" ? p.invited : false,
+        ...projectPostForWorker(p), acceptingSubmissions: open && p.company_id === who.companyId, invited: p.worker_classification === "contractor" ? p.invited : false,
         myBidId: p.worker_classification === "contractor" ? p.my_bid_id : null,
         myBidStatus: p.worker_classification === "contractor" ? p.my_bid_status : null,
         myApplicationId: p.worker_classification === "employee" ? p.my_application_id : null,
